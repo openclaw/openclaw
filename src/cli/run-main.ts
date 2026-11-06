@@ -1,0 +1,1336 @@
+import process from "node:process";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
+import { resolveGatewayPort } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
+import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
+import { normalizeEnv } from "../infra/env.js";
+import {
+  withGatewayServiceInstallation,
+  type GatewayServiceInstallationContext,
+} from "../infra/gateway-service-installation-context.js";
+import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
+import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
+import { getPluginCache } from "../plugins/plugin-cache.js";
+import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import {
+  normalizeGeneratedHelpCommandArgv,
+  normalizeRootHelpTargetArgv,
+  normalizeRootLogLevelArgv,
+  normalizeRootNoColorArgv,
+  rewriteUpdateFlagArgv,
+} from "./argv.js";
+import {
+  isReservedNonPluginCommandRoot,
+  shouldSkipPluginCommandRegistration,
+} from "./command-registration-policy.js";
+import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
+import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
+import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
+import {
+  isGatewayRunInvocationArgv,
+  resolveGatewayCommandPath,
+  resolveGatewayRunPreBootstrapOptions,
+} from "./gateway-run-argv.js";
+import {
+  hasJsonOutputFlag,
+  isJsonOutputModeActive,
+  withConsoleLogsRoutedToStderr,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
+import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { getCoreCliCommandDescriptors } from "./program/core-command-descriptors.js";
+import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
+import {
+  findSubcommand,
+  normalizeRootNoColorArgvForProgram,
+  resolveRootOptionRole,
+} from "./run-main-options.js";
+import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
+import {
+  isAgentExecInvocation,
+  isGatewayRunFastPathArgv,
+  isRemoteAgentDispatchInvocation,
+  resolveBareRootLaunchPolicy,
+  resolveMissingPluginCommandMessage,
+  shouldHandleBareRoot,
+  shouldBootstrapCliProxyBeforeFastPath,
+  shouldEnsureCliPath,
+  shouldLoadCliDotEnv,
+  shouldStartProxyForCli,
+  shouldUseRootHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
+  TUI_REQUIRES_TTY,
+} from "./run-main-policy.js";
+import {
+  bootstrapCliProxyCaptureAndDispatcher,
+  ensureCliEnvProxyDispatcher,
+} from "./run-main-proxy.js";
+import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
+import type {
+  BareRootLaunchTarget,
+  GatewayLaunchTarget,
+  GatewayProbeAuth,
+  GatewayProbeTarget,
+  GatewayResolution,
+  ReachableGateway,
+} from "./run-main.gateway-types.js";
+import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
+import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
+import { exitAfterSignalExitBarriers, registerSignalExitBarrier } from "./signal-exit-barrier.js";
+import {
+  configureCliStartupDiagnostics,
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayDispatchStartupTrace,
+} from "./startup-trace.js";
+import { normalizeWindowsArgv } from "./windows-argv.js";
+
+const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
+
+function requireInteractiveTty(message: string): boolean {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    return true;
+  }
+  console.error(message);
+  process.exitCode = 1;
+  return false;
+}
+
+async function tryRunGatewayRunFastPath(
+  argv: string[],
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
+): Promise<boolean> {
+  if (!isGatewayRunFastPathArgv(argv)) {
+    return false;
+  }
+  const [
+    { Command },
+    { addGatewayRunCommand, bootstrapGatewayRun },
+    { VERSION },
+    { emitCliBanner },
+    { defaultRuntime },
+  ] = await startupTrace.measure("gateway-run-imports", () =>
+    Promise.all([
+      import("commander"),
+      import("./gateway-cli/run-command.js"),
+      import("../version.js"),
+      import("./banner.js"),
+      import("../runtime.js"),
+    ]),
+  );
+  const commandPath = resolveGatewayCommandPath(argv) ?? ["gateway"];
+  const startupPolicy = resolveCliStartupPolicyForArgv({
+    argv,
+    commandPath,
+    jsonOutputMode: hasJsonOutputFlag(argv),
+  });
+  if (!startupPolicy.hideBanner) {
+    emitCliBanner(VERSION, { argv });
+  }
+  const program = new Command();
+  program.name("openclaw");
+  program.enablePositionalOptions();
+  program.option("--no-color", "Disable ANSI colors", false);
+  program.exitOverride((err) => {
+    process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
+    throw err;
+  });
+  const beforeRun = (opts: { force?: boolean; reset?: boolean }) =>
+    bootstrapGatewayRun({
+      opts,
+      runtime: defaultRuntime,
+      commandPath,
+      startupPolicy,
+      startupTrace,
+    });
+  const gateway = addGatewayRunCommand(
+    program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
+    { beforeRun },
+  );
+  addGatewayRunCommand(
+    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+    { beforeRun },
+  );
+  const parseArgv = normalizeRootNoColorArgvForProgram(argv, program);
+  try {
+    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(parseArgv), {
+      timeline: false,
+    });
+  } catch (error) {
+    if (!isCommanderParseExit(error)) {
+      throw error;
+    }
+    process.exitCode = error.exitCode;
+  }
+  return true;
+}
+
+async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  await readConfigSnapshotForEngineSelection();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (await shouldStartLocalOnboarding(snapshot)) {
+    return { kind: "onboarding" };
+  }
+  if (!snapshot.valid) {
+    return { kind: "onboarding", classic: true };
+  }
+  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig, {
+    hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
+  });
+}
+
+async function resolveConfiguredTuiLaunchTarget(
+  config: OpenClawConfig,
+  options: { hasConfiguredGateway: boolean },
+): Promise<BareRootLaunchTarget> {
+  const gatewayResolution = await resolveReachableGateway(config, options);
+  if (gatewayResolution.kind !== "unreachable") {
+    const { url, remote, ...auth } = gatewayResolution.gateway;
+    const target: GatewayLaunchTarget = {
+      config,
+      gatewayUrl: url,
+      ...(remote ? { configuredRemote: true } : {}),
+      ...auth,
+    };
+    if (gatewayResolution.kind !== "missing-configured-model") {
+      return { kind: "tui", local: false, ...target };
+    }
+    // The connected Gateway is authoritative. Never fall back to a model in
+    // this client's local config when that server still needs inference.
+    return remote ? { kind: "remote-gateway-inference", target } : { kind: "onboarding" };
+  }
+  const { listAgentIds, resolveAgentEffectiveModelPrimary } =
+    await import("../agents/agent-scope.js");
+  if (!listAgentIds(config).some((agentId) => resolveAgentEffectiveModelPrimary(config, agentId))) {
+    return { kind: "onboarding" };
+  }
+  return { kind: "tui", local: true };
+}
+
+function toReachableGateway(target: GatewayProbeTarget, auth: GatewayProbeAuth): ReachableGateway {
+  return {
+    url: target.url,
+    remote: target.scope === "remote",
+    ...(auth.token ? { token: auth.token } : {}),
+    ...(auth.password ? { password: auth.password } : {}),
+    ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
+  };
+}
+
+async function resolveReachableGateway(
+  config: OpenClawConfig,
+  options: { hasConfiguredGateway: boolean },
+): Promise<GatewayResolution> {
+  const { targets, auth } = await resolveGatewayProbePlan(config);
+  if (targets.length === 0) {
+    return { kind: "unreachable" };
+  }
+  const { probeGatewayConfiguredModel } = await import("../commands/onboard-helpers.js");
+  let missingModelGateway: ReachableGateway | undefined;
+  let reachableUnverifiedGateway: ReachableGateway | undefined;
+  let configuredGateway: ReachableGateway | undefined;
+  for (const target of targets) {
+    if (!isSafeGatewayProbeTarget(target)) {
+      continue;
+    }
+    const gateway = toReachableGateway(target, auth);
+    // A cold-restarting configured Gateway remains the authoritative route.
+    // Keep its safe endpoint so one failed probe cannot reopen local onboarding.
+    if (options.hasConfiguredGateway && !configuredGateway) {
+      configuredGateway = gateway;
+    }
+    const { remote, ...connection } = gateway;
+    const probe = await probeGatewayConfiguredModel({
+      ...connection,
+      // A configured remote origin stays remote through a loopback tunnel.
+      ...(remote ? { config, originScopedDeviceAuth: true, configuredRemote: true } : {}),
+      ...(config.gateway?.remote?.edgeAuth ? { config } : {}),
+      ...(target.preauthHandshakeTimeoutMs
+        ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
+        : {}),
+    });
+    if (probe === "configured") {
+      return { kind: "configured", gateway };
+    }
+    if (probe === "missing-configured-model") {
+      missingModelGateway ??= gateway;
+      continue;
+    }
+    if (probe === "reachable-unverified" && !reachableUnverifiedGateway) {
+      reachableUnverifiedGateway = gateway;
+    }
+  }
+  if (missingModelGateway) {
+    return { kind: "missing-configured-model", gateway: missingModelGateway };
+  }
+  if (reachableUnverifiedGateway) {
+    return { kind: "reachable-unverified", gateway: reachableUnverifiedGateway };
+  }
+  if (configuredGateway) {
+    return { kind: "configured-unreachable", gateway: configuredGateway };
+  }
+  return { kind: "unreachable" };
+}
+
+async function resolveGatewayProbePlan(
+  config: OpenClawConfig,
+): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
+  const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
+  if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
+    try {
+      const { resolveGatewayClientBootstrap } = await import("../gateway/client-bootstrap.js");
+      const bootstrap = await resolveGatewayClientBootstrap({
+        config,
+        authPolicy: "probe",
+        modeOverride: "remote",
+        ignoreEnvUrlOverride: true,
+      });
+      return {
+        targets: [
+          {
+            url: bootstrap.url,
+            scope: "remote",
+            ...(bootstrap.tlsFingerprint ? { tlsFingerprint: bootstrap.tlsFingerprint } : {}),
+          },
+        ],
+        auth: bootstrap.auth,
+      };
+    } catch {
+      return { targets: [], auth: {} };
+    }
+  }
+  return resolveLocalGatewayProbeTargets(config);
+}
+
+function isSafeGatewayProbeTarget(target: GatewayProbeTarget): boolean {
+  if (target.scope === "remote") {
+    return isSafeRemoteGatewayProbeUrl(target.url);
+  }
+  return isSecureWebSocketUrl(target.url, {
+    allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
+  });
+}
+
+function isSafeRemoteGatewayProbeUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
+  if (protocol === "wss:") {
+    return true;
+  }
+  if (protocol !== "ws:") {
+    return false;
+  }
+  if (isLoopbackHost(parsed.hostname.replace(/\.+$/, ""))) {
+    return true;
+  }
+  return (
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1" &&
+    isSecureWebSocketUrl(url, { allowPrivateWs: true })
+  );
+}
+
+async function resolveLocalGatewayProbeTargets(
+  config: OpenClawConfig,
+): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
+  const [
+    { resolveControlUiLinks },
+    { resolveGatewayClientBootstrap },
+    { readActiveGatewayLockPort },
+  ] = await Promise.all([
+    import("../gateway/control-ui-links.js"),
+    import("../gateway/client-bootstrap.js"),
+    import("../infra/gateway-lock.js"),
+  ]);
+  const gateway = config.gateway;
+  const configuredPort = resolveGatewayPort(config);
+  const hasExplicitPort = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PORT));
+  const activePort = hasExplicitPort ? undefined : await readActiveGatewayLockPort();
+  const port = activePort ?? configuredPort;
+  // Supplying the selected local port keeps inherited remote URL overrides out
+  // of bare-root routing while reusing canonical local TLS/fingerprint logic.
+  const connection = await resolveGatewayClientBootstrap({
+    config,
+    authPolicy: "probe",
+    modeOverride: "local",
+    ignoreEnvUrlOverride: true,
+    localPortOverride: port,
+  });
+  const baseParams = {
+    port,
+    basePath: gateway?.controlUi?.basePath,
+    tlsEnabled: gateway?.tls?.enabled === true,
+  };
+  const sharedTarget = {
+    ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
+    ...(connection.preauthHandshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs }
+      : {}),
+  };
+  const loopbackTarget: GatewayProbeTarget = {
+    ...sharedTarget,
+    url: connection.url,
+    scope: "local-loopback",
+  };
+  const bind = gateway?.bind;
+  if (bind !== "tailnet" && bind !== "custom") {
+    return { targets: [loopbackTarget], auth: connection.auth };
+  }
+  const configuredLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind,
+    customBindHost: gateway?.customBindHost,
+  });
+  const targets =
+    configuredLinks.wsUrl === connection.url
+      ? [loopbackTarget]
+      : [
+          loopbackTarget,
+          {
+            ...sharedTarget,
+            url: configuredLinks.wsUrl,
+            scope: "local-configured" as const,
+          },
+        ];
+  return { targets, auth: connection.auth };
+}
+
+function pauseNonTtyStdinForCliExit(): void {
+  const stdin = process.stdin;
+  if (stdin.isTTY) {
+    return;
+  }
+  try {
+    stdin.pause();
+  } catch {
+    // Best-effort cleanup for command paths that only inspected stdin.
+  }
+}
+
+function isCommanderParseExit(error: unknown): error is { exitCode: number } {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { code?: unknown; exitCode?: unknown };
+  return (
+    typeof candidate.exitCode === "number" &&
+    Number.isInteger(candidate.exitCode) &&
+    typeof candidate.code === "string" &&
+    candidate.code.startsWith("commander.")
+  );
+}
+
+function findBuiltInCommandDescriptor(primary: string) {
+  return [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()].find(
+    (entry) => entry.name === primary,
+  );
+}
+
+function resolvesMachineOutput(
+  descriptor: {
+    machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
+  },
+  argv: readonly string[],
+): boolean {
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: process.stdout.isTTY || false }) ?? false;
+}
+
+function resolveBuiltInMachineOutput({
+  argv,
+  primary,
+}: ReturnType<typeof resolveCliArgvInvocation>): boolean {
+  const descriptor = primary ? findBuiltInCommandDescriptor(primary) : undefined;
+  return descriptor ? resolvesMachineOutput(descriptor, argv) : false;
+}
+
+async function resolvePluginMachineOutput(params: {
+  argv: string[];
+  config: OpenClawConfig;
+  session?: PluginCliLoadSession;
+}): Promise<boolean> {
+  const { primary } = resolveCliArgvInvocation(params.argv);
+  if (!primary || findBuiltInCommandDescriptor(primary)) {
+    return false;
+  }
+  const { loadPluginCliDescriptors } = await import("../plugins/cli-registry-loader.js");
+  const descriptors = await loadPluginCliDescriptors({
+    cfg: params.config,
+    env: process.env,
+    primaryCommand: primary,
+    session: params.session,
+  });
+  const descriptor = descriptors.find((entry) => entry.name === primary);
+  const resolveOutput = () => (descriptor ? resolvesMachineOutput(descriptor, params.argv) : false);
+  return params.session ? params.session.withCache(resolveOutput) : resolveOutput();
+}
+
+async function isPluginCliRoot(params: {
+  primary: string;
+  config: OpenClawConfig;
+  session?: PluginCliLoadSession;
+}): Promise<boolean | null> {
+  try {
+    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
+    const ownerIds = await resolvePluginCliRootOwnerIds({
+      cfg: params.config,
+      env: process.env,
+      primaryCommand: params.primary,
+      session: params.session,
+    });
+    return ownerIds === null ? null : ownerIds.length > 0;
+  } catch {
+    return null;
+  }
+}
+
+function createAllowlistAgnosticCliLookupConfig(config: OpenClawConfig): OpenClawConfig {
+  if (!Array.isArray(config.plugins?.allow) || config.plugins.allow.length === 0) {
+    return config;
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      allow: [],
+    },
+  };
+}
+
+async function resolveCliCommandSurfaceOwner(params: {
+  primary: string;
+  config: OpenClawConfig;
+}): Promise<string | undefined> {
+  const { resolveManifestCliCommandSurfaceOwner } =
+    await import("../plugins/manifest-command-aliases.runtime.js");
+  const manifestOwner = resolveManifestCliCommandSurfaceOwner({
+    command: params.primary,
+    config: params.config,
+  });
+  if (manifestOwner) {
+    return manifestOwner;
+  }
+  try {
+    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
+    return (
+      await resolvePluginCliRootOwnerIds({
+        cfg: createAllowlistAgnosticCliLookupConfig(params.config),
+        env: process.env,
+        primaryCommand: params.primary,
+      })
+    )?.[0];
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(argv));
+  const { primary } = invocation;
+  if (
+    !primary ||
+    primary === "help" ||
+    isReservedNonPluginCommandRoot(primary) ||
+    findBuiltInCommandDescriptor(primary)
+  ) {
+    return null;
+  }
+  return primary;
+}
+
+async function assertCliPrimaryOwned(params: {
+  argv: string[];
+  config: OpenClawConfig;
+  session?: PluginCliLoadSession;
+}): Promise<void> {
+  const primary = resolveUnownedCliPrimaryCandidate(params.argv);
+  if (!primary) {
+    return;
+  }
+  const pluginRoot = await isPluginCliRoot({
+    primary,
+    config: params.config,
+    session: params.session,
+  });
+  if (pluginRoot !== false) {
+    return;
+  }
+  const pluginPolicyError = await resolveExpectedPluginPolicyError({
+    primary,
+    config: params.config,
+  });
+  if (pluginPolicyError) {
+    throw pluginPolicyError;
+  }
+  const sanitizedPrimary = sanitizeTerminalText(primary);
+  const displayPrimary =
+    sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
+      ? sanitizedPrimary
+      : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
+  const { createCliUnknownCommandError } = await import("./program/error-output.js");
+  throw createCliUnknownCommandError(displayPrimary, {
+    argv: params.argv,
+    ...(displayPrimary === primary ? {} : { commandNames: [] }),
+  });
+}
+
+async function resolveExpectedPluginPolicyError(params: {
+  primary: string;
+  config: OpenClawConfig;
+}): Promise<Error | undefined> {
+  const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
+    await import("../plugins/manifest-command-aliases.runtime.js");
+  const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
+  const message = resolveMissingPluginCommandMessage(params.primary, params.config, {
+    resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+    resolveToolOwner: resolveManifestToolOwner,
+    resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
+  });
+  if (!message) {
+    return undefined;
+  }
+  const { ExpectedCliError } = await import("./expected-cli-error.js");
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
+
+export async function runCli(
+  argv: string[] = process.argv,
+  options: {
+    additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
+    retainConsoleRoutingUntilProcessExit?: boolean;
+    runtimeRecoveryEnv?: NodeJS.ProcessEnv;
+  } = {},
+) {
+  const runtimeRecoveryEnv = options.runtimeRecoveryEnv ?? { ...process.env };
+  const originalArgv = normalizeWindowsArgv(argv);
+  const originalInvocation = resolveCliArgvInvocation(originalArgv);
+  if (await tryRunUpdateAdmissionBeforeStartup(originalInvocation)) {
+    return;
+  }
+  const builtInMachineOutput = resolveBuiltInMachineOutput(originalInvocation);
+  const invoke = () =>
+    withConsoleLogsRoutedToStderrForJson(
+      originalArgv,
+      () => {
+        const run = async (harnessCleanup?: CliHarnessCleanup) => {
+          const serviceInstallation: GatewayServiceInstallationContext = {};
+          let gatewayCleanup: "drained" | "retained" | undefined;
+          try {
+            const invokeCommand = () =>
+              withGatewayServiceInstallation(serviceInstallation, () =>
+                withDoctorSnapshotReuse(originalInvocation.primary, () =>
+                  runCliWithPreparedOutputMode(originalArgv, {
+                    ...options,
+                    runtimeRecoveryEnv,
+                    builtInMachineOutput,
+                    harnessCleanup,
+                    serviceInstallation,
+                    onGatewayResourcesSettled: (outcome) => {
+                      gatewayCleanup = outcome;
+                    },
+                  }),
+                ),
+              );
+            const resources = harnessCleanup?.pluginResources;
+            return await (resources ? resources.run(invokeCommand) : invokeCommand());
+          } catch (error) {
+            // Selection and Commander preactions run before the Gateway action's failure boundary.
+            if (isGatewayRunInvocationArgv(originalArgv) && !originalInvocation.hasHelpOrVersion) {
+              const { handleGatewayStartupMaintenance } =
+                await import("./gateway-cli/startup-maintenance.js");
+              if (await handleGatewayStartupMaintenance(error)) {
+                return;
+              }
+            }
+            throw error;
+          } finally {
+            // Includes preflight failures before runtime dispatch installs its hooks.
+            // Once Gateway custody reports a disposition, it remains that owner
+            // even after failed cleanup; never retry it with an unscoped sweep.
+            const resources = harnessCleanup?.pluginResources;
+            try {
+              if (gatewayCleanup === undefined) {
+                await closeCliResources(harnessCleanup);
+              }
+            } finally {
+              if (resources) {
+                await runCliDisposer("plugin-registration-resources", () => resources.release());
+              }
+              pauseNonTtyStdinForCliExit();
+            }
+          }
+        };
+        // Nested registrars and late actions share this lightweight owner, even when no
+        // top-level plugin preparation is needed. Gateway retains its boot/process owner.
+        const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
+        return withCliPluginInvocation(gatewayRun, run);
+      },
+      {
+        machineOutput: builtInMachineOutput,
+        restoreChanges: true,
+        retainRoutingUntilProcessExit: options.retainConsoleRoutingUntilProcessExit,
+      },
+    );
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
+  return !invocation.hasHelpOrVersion &&
+    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
+    ? await withDeferredDebugProxyCapture(invoke)
+    : await invoke();
+}
+
+async function withDoctorSnapshotReuse<T>(
+  primary: string | null | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (primary !== "doctor") {
+    return run();
+  }
+  const { withSqliteSnapshotReuse } = await import("../infra/sqlite-snapshot-reuse.js");
+  return withSqliteSnapshotReuse(run);
+}
+
+async function runCliWithPreparedOutputMode(
+  originalArgv: string[],
+  options: {
+    additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
+    builtInMachineOutput: boolean;
+    harnessCleanup?: CliHarnessCleanup;
+    onGatewayResourcesSettled: (outcome: "drained" | "retained") => void;
+    runtimeRecoveryEnv: NodeJS.ProcessEnv;
+    serviceInstallation: GatewayServiceInstallationContext;
+  },
+) {
+  const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
+  const earlyProfile = parseCliProfileArgs(originalArgv);
+  if (earlyProfile.ok && earlyProfile.profile) {
+    applyCliProfileEnv({ profile: earlyProfile.profile });
+  }
+  const originalInvocation = resolveCliArgvInvocation(originalArgv);
+  let consoleCaptureInstalled = false;
+  const installConsoleCapture = async () => {
+    if (consoleCaptureInstalled) {
+      return;
+    }
+    const { enableConsoleCapture } = await import("../logging/console.js");
+    enableConsoleCapture();
+    consoleCaptureInstalled = true;
+  };
+  const configureStartupTraces = async () => {
+    await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+    if (options.additionalStartupTrace) {
+      await configureGatewayStartupTraceConsoleFormatting(options.additionalStartupTrace);
+    }
+  };
+  const parsedContainer = parseCliContainerArgs(originalArgv);
+  if (!parsedContainer.ok) {
+    await installConsoleCapture();
+    await configureStartupTraces();
+    throw new Error(parsedContainer.error);
+  }
+  const parsedProfile = parseCliProfileArgs(parsedContainer.argv);
+  const containerTargetName =
+    parsedContainer.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER) ?? null;
+  const hasPreHelpValidationError =
+    !parsedProfile.ok || (containerTargetName !== null && parsedProfile.profile !== null);
+  // Console formatting is a process-wide invariant. Install capture before
+  // container dispatch or validation can bypass the pure help/version path.
+  if (
+    !originalInvocation.hasHelpOrVersion ||
+    containerTargetName !== null ||
+    hasPreHelpValidationError
+  ) {
+    await installConsoleCapture();
+  }
+  if (!parsedProfile.ok) {
+    await configureStartupTraces();
+    throw new Error(parsedProfile.error);
+  }
+  if (parsedProfile.profile) {
+    applyCliProfileEnv({ profile: parsedProfile.profile });
+  }
+  if (containerTargetName && parsedProfile.profile) {
+    await configureStartupTraces();
+    throw new Error("--container cannot be combined with --profile/--dev");
+  }
+
+  let containerTarget: ReturnType<typeof maybeRunCliInContainer>;
+  try {
+    containerTarget = maybeRunCliInContainer(originalArgv);
+  } catch (error) {
+    await configureStartupTraces();
+    throw error;
+  }
+  if (containerTarget.handled) {
+    await configureStartupTraces();
+    if (containerTarget.exitCode !== 0) {
+      process.exitCode = containerTarget.exitCode;
+    }
+    return;
+  }
+  const normalizedArgv = rewriteUpdateFlagArgv(
+    normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv)),
+  );
+  const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
+  const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
+  const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
+  const isDatabaseInvocation = normalizedInvocation.commandPath[0] === "database";
+  // Gateway pre-bootstrap owns state/config dotenv selection. This phase only
+  // needs the workspace file, so avoid importing the loader when it is absent.
+  const loadGlobalEnv = !isGatewayRunInvocation;
+  startupTrace.mark("argv");
+
+  // Enforce the minimum supported runtime before gateway selection can read or recover config.
+  const { assertSupportedRuntime, isCurrentRuntimeSupported } =
+    await import("../infra/runtime-guard.js");
+  await assertSupportedRuntime(
+    undefined,
+    undefined,
+    normalizedArgv,
+    true,
+    options.runtimeRecoveryEnv,
+  );
+
+  if (await tryRunGatewayServiceUpdateCapabilityProbe(normalizedArgv)) {
+    return;
+  }
+
+  if (
+    !isHelpOrVersionInvocation &&
+    (isGatewayRunInvocation ||
+      normalizedInvocation.primary === "worker" ||
+      (normalizedInvocation.primary === "node" &&
+        (normalizedInvocation.commandPath[1] === "run" ||
+          normalizedInvocation.commandPath[1] === "worker")))
+  ) {
+    // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
+    const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+    await initializeSqliteRuntime();
+  }
+
+  if (
+    !isHelpOrVersionInvocation &&
+    !isDatabaseInvocation &&
+    !isAgentExecInvocation(normalizedInvocation.commandPath) &&
+    shouldLoadCliDotEnv(loadGlobalEnv)
+  ) {
+    await startupTrace.measure("dotenv", async () => {
+      if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
+        const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
+        await loadGatewayDispatchCliDotEnv();
+      } else {
+        const { loadCliDotEnv } = await import("./dotenv.js");
+        loadCliDotEnv({ loadGlobalEnv });
+      }
+    });
+  }
+  if (!isHelpOrVersionInvocation) {
+    const { inspectCliGatewayServiceInstallation } =
+      await import("./run-main-service-installation.js");
+    options.serviceInstallation.installation = await inspectCliGatewayServiceInstallation(
+      process.env,
+    );
+  }
+  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
+  const selectionHandled = await startupTrace.measure("database-engine-selection", () =>
+    prepareCliDatabaseEngine(normalizedArgv),
+  );
+  if (selectionHandled) {
+    return;
+  }
+  let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
+  if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
+    const { prepareDoctorCliStartup } = await import("./run-main-doctor-startup.js");
+    const startup = await prepareDoctorCliStartup(normalizedArgv, {
+      json: options.builtInMachineOutput,
+    });
+    if (startup.handled) {
+      return;
+    }
+    doctorDatabasePreflight = startup.preflight;
+  }
+  await configureStartupTraces();
+  if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+    await startupTrace.measure("gateway-run-select-environment", async () => {
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await startupTrace.measure(
+        "gateway-run-select-environment-imports",
+        () => Promise.all([import("./gateway-cli/pre-bootstrap.js"), import("../runtime.js")]),
+      );
+      const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
+      await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
+    });
+  }
+  normalizeEnv();
+  if (shouldEnsureCliPath(normalizedArgv)) {
+    const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
+    ensureOpenClawCliOnPath();
+  }
+  // Cheap import gate only. Session-ref owns the authoritative URL/options parse.
+  const mayContainBareSessionUrl = normalizedArgv.slice(2).some((arg) => arg.includes("://"));
+  const bareSessionInvocation =
+    !isHelpOrVersionInvocation && mayContainBareSessionUrl
+      ? (await import("./session-ref.js")).parseBareSessionInvocation(normalizedArgv)
+      : null;
+
+  // Activate operator-managed proxy routing for network-capable commands.
+  // Local Gateway/control-plane commands keep direct loopback access while
+  // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
+  let proxyHandle: ProxyHandle | null = null;
+  let proxyStopPromise: Promise<void> | undefined;
+  let proxySignalHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
+  let unregisterProxySignalExitBarrier: (() => void) | null = null;
+  let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
+  let pluginCliSession: PluginCliLoadSession | undefined;
+  const getPluginCliSession = async () => {
+    pluginCliSession ??= (
+      await import("../plugins/cli-registry-loader.js")
+    ).createPluginCliLoadSession(getPluginCache());
+    return pluginCliSession;
+  };
+  const isolateProxyConfigEnv = isGatewayRunInvocation;
+  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
+    argv: normalizedArgv,
+    commandPath: normalizedInvocation.commandPath,
+    jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
+    env: process.env,
+  });
+  const useSourceOnlyBestEffortConfig =
+    !(await isCurrentRuntimeSupported()) ||
+    normalizedInvocation.primary === "update" ||
+    normalizedInvocation.primary === "doctor";
+  const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
+    if (!bestEffortConfigPromise) {
+      bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
+        if (useSourceOnlyBestEffortConfig) {
+          return configIo.readSourceConfigBestEffort();
+        }
+        const readOptions: Parameters<typeof configIo.readBestEffortConfig>[0] = {
+          // Routing must not create state before Doctor decides whether migrations are needed.
+          observe: false,
+          ...(isolateProxyConfigEnv ? { isolateEnv: true } : {}),
+          ...(bestEffortConfigStartupPolicy.validateConfigOnly || isGatewayRunInvocation
+            ? { pluginValidation: "core-only" }
+            : { skipPluginValidation: true }),
+        };
+        if (!resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
+          return configIo.readBestEffortConfig(readOptions);
+        }
+        const session = await getPluginCliSession();
+        const snapshot = await session.readConfig(() =>
+          configIo.readBestEffortConfigSnapshot(readOptions),
+        );
+        if (snapshot.configDiagnostics) {
+          const { path: configPath, issues } = snapshot.configDiagnostics;
+          throw createInvalidConfigError(configPath, formatInvalidConfigDetails(issues));
+        }
+        return snapshot.config;
+      });
+    }
+    return await bestEffortConfigPromise;
+  };
+  const uninstallProxySignalHandlers = () => {
+    for (const [signal, handler] of proxySignalHandlers) {
+      process.off(signal, handler);
+    }
+    proxySignalHandlers = [];
+  };
+  const stopStartedProxy = () => {
+    if (proxyStopPromise) {
+      return proxyStopPromise;
+    }
+    unregisterProxySignalExitBarrier?.();
+    unregisterProxySignalExitBarrier = null;
+    uninstallProxySignalHandlers();
+    const handle = proxyHandle;
+    proxyHandle = null;
+    const stop = async () => {
+      if (handle) {
+        const { stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+        await stopProxy(handle);
+      }
+    };
+    const resources = options.harnessCleanup?.pluginResources;
+    proxyStopPromise = Promise.resolve().then(() =>
+      resources ? resources.runCleanup(stop) : stop(),
+    );
+    return proxyStopPromise;
+  };
+  const killStartedProxy = () => {
+    const handle = proxyHandle;
+    proxyHandle = null;
+    handle?.kill("SIGTERM");
+  };
+  const installProxySignalHandlers = () => {
+    if (!proxyHandle || proxySignalHandlers.length > 0) {
+      return;
+    }
+    unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
+    proxySignalHandlers = [
+      ["SIGTERM", () => exitAfterSignalExitBarriers(143, "SIGTERM")],
+      ["SIGINT", () => exitAfterSignalExitBarriers(130, "SIGINT")],
+      ["exit", killStartedProxy],
+    ];
+    for (const [signal, handler] of proxySignalHandlers) {
+      process.once(signal, handler);
+    }
+  };
+  const replaceStartedProxy = async (config: OpenClawConfig["proxy"]) => {
+    await stopStartedProxy();
+    const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    proxyHandle = await startProxy(config);
+    proxyStopPromise = undefined;
+    installProxySignalHandlers();
+  };
+  let uninstallGatewayRunRuntimeHooks: (() => void) | null = null;
+  let unhandledRejectionHandlerInstalled = false;
+  if (options.harnessCleanup) {
+    // The outer owner joins admitted tails after this tracked invocation unwinds.
+    options.harnessCleanup.releaseManagedProxy = stopStartedProxy;
+  }
+
+  try {
+    if (!isDatabaseInvocation) {
+      await configureCliStartupDiagnostics(
+        [startupTrace, options.additionalStartupTrace],
+        isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
+      );
+    }
+    if (
+      !isHelpOrVersionInvocation &&
+      !bareSessionInvocation &&
+      normalizedInvocation.primary &&
+      !findBuiltInCommandDescriptor(normalizedInvocation.primary)
+    ) {
+      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+      if (
+        await withConsoleLogsRoutedToStderr(() =>
+          resolvePluginMachineOutput({ argv: normalizedArgv, config, session: pluginCliSession }),
+        )
+      ) {
+        const { routeLogsToStderr } = await import("../logging/console.js");
+        routeLogsToStderr();
+      }
+    }
+    if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
+      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+      if (!bareSessionInvocation) {
+        await assertCliPrimaryOwned({
+          argv: normalizedArgv,
+          config,
+          session: pluginCliSession,
+        });
+      }
+      await replaceStartedProxy(config?.proxy ?? undefined);
+    }
+
+    if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+      const { installGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
+      uninstallGatewayRunRuntimeHooks = installGatewayRunRuntimeHooks({
+        onProcessResourcesSettled: options.onGatewayResourcesSettled,
+        releaseManagedProxy: stopStartedProxy,
+        refreshManagedProxy: replaceStartedProxy,
+      });
+    }
+
+    if (shouldUseRootHelpFastPath(normalizedArgv)) {
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await import("./root-help-live-config.js");
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+        if (outputPrecomputedRootHelpText()) {
+          return;
+        }
+      }
+      const { outputRootHelp } = await import("./program/root-help.js");
+      await outputRootHelp(liveRootHelpOptions ?? undefined);
+      return;
+    }
+
+    if (await tryOutputPrecomputedCommandHelp(normalizedArgv)) {
+      return;
+    }
+
+    if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
+      const { tryOutputSetupOnboardConfigureHelp } =
+        await import("./setup-onboard-configure-help-fast-path.js");
+      if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) {
+        return;
+      }
+    }
+
+    // Genuine help fast paths have returned. Any remaining help/version-shaped
+    // invocation can still fail validation and must honor the console style.
+    await installConsoleCapture();
+
+    if (bareSessionInvocation) {
+      if (!requireInteractiveTty(TUI_REQUIRES_TTY)) {
+        return;
+      }
+      const { runTuiCliAction } = await import("./tui-cli.js");
+      await runTuiCliAction(bareSessionInvocation.target, bareSessionInvocation.options);
+      return;
+    }
+
+    // Reject unowned command roots before help/version routing, so that
+    // `openclaw <typo> --help` surfaces the same Unknown command error as
+    // `openclaw <typo>` instead of silently showing generic top-level help.
+    // Runs after legitimate precomputed help fast paths so known help commands
+    // still dispatch normally. See #81077.
+    if (resolveUnownedCliPrimaryCandidate(normalizedArgv)) {
+      const config = await readBestEffortCliConfig();
+      await assertCliPrimaryOwned({
+        argv: normalizedArgv,
+        config,
+        session: pluginCliSession,
+      });
+    }
+
+    const shouldRunBareRootCommand = shouldHandleBareRoot(normalizedArgv);
+    if (shouldRunBareRootCommand) {
+      await ensureCliEnvProxyDispatcher();
+    }
+    const bareRootLaunchTarget = shouldRunBareRootCommand
+      ? await resolveBareRootLaunchTarget()
+      : null;
+
+    if (bareRootLaunchTarget) {
+      const launchPolicy = resolveBareRootLaunchPolicy(bareRootLaunchTarget);
+      if (!requireInteractiveTty(launchPolicy.ttyMessage)) {
+        return;
+      }
+      if (launchPolicy.startProxy) {
+        const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+        await replaceStartedProxy(config?.proxy ?? undefined);
+      }
+      if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
+        const { runRemoteGatewayInferenceOnboarding } =
+          await import("../commands/onboard-remote-gateway.js");
+        await runRemoteGatewayInferenceOnboarding(bareRootLaunchTarget.target);
+        return;
+      }
+      if (bareRootLaunchTarget.kind === "onboarding") {
+        const { setupWizardCommand } = await import("../commands/onboard.js");
+        await setupWizardCommand(bareRootLaunchTarget.classic ? { classic: true } : {});
+        return;
+      }
+      const { runTui } = await import("../tui/tui.js");
+      await runTui({
+        deliver: false,
+        ...(bareRootLaunchTarget.local
+          ? { local: true }
+          : {
+              config: bareRootLaunchTarget.config,
+              boundGateway: {
+                url: bareRootLaunchTarget.gatewayUrl,
+                ...(bareRootLaunchTarget.configuredRemote ? { configuredRemote: true } : {}),
+                ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
+                ...(bareRootLaunchTarget.password
+                  ? { password: bareRootLaunchTarget.password }
+                  : {}),
+                ...(bareRootLaunchTarget.tlsFingerprint
+                  ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
+                  : {}),
+              },
+            }),
+      });
+      return;
+    }
+
+    const shouldUseCliEnvProxy =
+      !isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv);
+    const bootstrapProxyBeforeFastPath =
+      shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
+    // Gateway execution can return before full CLI bootstrap, so install the
+    // shared process policy before the fast path can start asynchronous work.
+    if (isGatewayRunFastPathArgv(normalizedArgv)) {
+      const { installUnhandledRejectionHandler } = await startupTrace.measure(
+        "unhandled-rejection-handler-import",
+        () => import("../infra/unhandled-rejections.js"),
+      );
+      installUnhandledRejectionHandler();
+      unhandledRejectionHandlerInstalled = true;
+    }
+    if (
+      !bootstrapProxyBeforeFastPath &&
+      (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
+    ) {
+      return;
+    }
+
+    if (!isHelpOrVersionInvocation && !isDatabaseInvocation) {
+      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, shouldUseCliEnvProxy);
+    }
+
+    if (
+      bootstrapProxyBeforeFastPath &&
+      (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
+    ) {
+      return;
+    }
+
+    if (!isHelpOrVersionInvocation) {
+      const route = await startupTrace.measure("route-import", () => import("./route.js"));
+      const routed = await startupTrace.measure(
+        "route",
+        () =>
+          options.builtInMachineOutput
+            ? route.tryRouteCli(normalizedArgv, { machineOutput: true })
+            : route.tryRouteCli(normalizedArgv),
+        { timeline: false },
+      );
+      if (routed) {
+        return;
+      }
+    }
+
+    let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
+    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
+    const { createCliProgress } = await import("./progress.js");
+    const startupProgress = createCliProgress({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      ...(suppressStartupProgress ? { enabled: false } : {}),
+    });
+    try {
+      const [
+        { buildProgram },
+        { handleCliUncaughtException },
+        { installUnhandledRejectionHandler },
+      ] = await startupTrace.measure("core-imports", () =>
+        Promise.all([
+          import("./program/build-program.js"),
+          import("./failure-output.js"),
+          import("../infra/unhandled-rejections.js"),
+        ]),
+      );
+      const program = await startupTrace.measure("build-program", () =>
+        buildProgram({ doctorDatabasePreflight, runtimeRecoveryEnv: options.runtimeRecoveryEnv }),
+      );
+      await options.harnessCleanup?.pluginResources?.waitForRegistrations();
+
+      if (!unhandledRejectionHandlerInstalled) {
+        installUnhandledRejectionHandler();
+      }
+
+      process.on("uncaughtException", (error) => {
+        handleCliUncaughtException(error, normalizedArgv);
+      });
+
+      const invocation = resolveCliArgvInvocation(parseArgv);
+      // Register the primary command (builtin or subcli) so help and command parsing
+      // are correct even with lazy command registration.
+      const { primary } = invocation;
+      if (primary) {
+        await startupTrace.measure("register-primary", async () => {
+          const { getProgramContext } = await import("./program/program-context.js");
+          const ctx = getProgramContext(program);
+          if (ctx) {
+            const { registerCoreCliByName } = await import("./program/command-registry-core.js");
+            await registerCoreCliByName(program, ctx, primary);
+          }
+          const { registerSubCliByName } = await import("./program/register.subclis.js");
+          await registerSubCliByName(program, primary, parseArgv);
+        });
+      }
+
+      const hasBuiltinPrimary = primary !== null && findSubcommand(program, primary) !== undefined;
+      const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
+        argv: parseArgv,
+        primary,
+        hasBuiltinPrimary,
+      });
+      if (!shouldSkipPluginRegistration) {
+        const config = await startupTrace.measure("register-plugin-commands", async () => {
+          const { registerPluginCliCommandsFromValidatedConfig } =
+            await import("../plugins/cli.js");
+          const startupPolicy = resolveCliStartupPolicyForArgv({
+            argv: parseArgv,
+            commandPath: invocation.commandPath,
+            jsonOutputMode: suppressStartupProgress,
+          });
+          return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+            mode: "lazy",
+            primary,
+            skipPluginValidation: startupPolicy.skipConfigGuard,
+            session: await getPluginCliSession(),
+          });
+        });
+        if (primary && !findSubcommand(program, primary)) {
+          const error = await resolveExpectedPluginPolicyError({ primary, config });
+          if (error) {
+            throw error;
+          }
+        }
+      }
+
+      parseArgv = normalizeRootLogLevelArgv(
+        normalizeRootNoColorArgvForProgram(parseArgv, program),
+        {
+          shouldPreserveLogLevel: ({ remainingArgs, logLevelIndex }) =>
+            resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
+        },
+      );
+      startupProgress.done();
+
+      let completedHelpOrVersion = false;
+      try {
+        const resources = options.harnessCleanup?.pluginResources;
+        await resources?.waitForRegistrations();
+        pluginCliSession?.close();
+        // The invocation's cache scope survives closed preparation through action completion.
+        const parse = () =>
+          startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
+            timeline: false,
+          });
+        await (resources ? resources.run(parse) : parse());
+        await resources?.waitForRegistrations();
+        completedHelpOrVersion = isHelpOrVersionInvocation;
+      } catch (error) {
+        if (!isCommanderParseExit(error)) {
+          throw error;
+        }
+        if (isJsonOutputModeActive(parseArgv) && error.exitCode !== 0) {
+          throw error;
+        }
+        process.exitCode = error.exitCode;
+        completedHelpOrVersion = isHelpOrVersionInvocation && error.exitCode === 0;
+      }
+      if (completedHelpOrVersion) {
+        // Lazy command-group registrars can import native/runtime resources solely to
+        // render complete help. Request an exit now; the top-level finally flushes it
+        // after shared async teardown completes.
+        requestExitAfterOneShotOutput();
+      }
+    } finally {
+      startupProgress.done();
+    }
+  } finally {
+    pluginCliSession?.close();
+    uninstallGatewayRunRuntimeHooks?.();
+    if (!options.harnessCleanup) {
+      // Gateway hooks and borrowed calls retain their existing proxy lifetime.
+      await runCliDisposer("managed-proxy", stopStartedProxy);
+    }
+  }
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

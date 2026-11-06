@@ -1,0 +1,102 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+
+type McpAppUnmountTarget = Element & {
+  restartAfterTeardown(): void;
+  teardown(): Promise<void>;
+};
+type McpAppUnmountKey = string | readonly string[];
+
+const registeredTargets = new Set<McpAppUnmountTarget>();
+
+/** Each mounted App owns its registration until its rendering owner disposes. */
+export function registerMcpAppUnmountTarget(target: McpAppUnmountTarget): () => void {
+  registeredTargets.add(target);
+  return () => {
+    registeredTargets.delete(target);
+  };
+}
+
+export function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
+  const leavingRoots = [...roots];
+  return [...registeredTargets].filter((target) =>
+    leavingRoots.some((root) => root.contains(target)),
+  );
+}
+
+/** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
+export function createMcpAppUnmountGate<Value = unknown>(invalidate?: () => void) {
+  let renderedKey: McpAppUnmountKey | null = null;
+  let renderedValue: Value;
+  let pending = false;
+  let restartTargets: McpAppUnmountTarget[] | null = null;
+  const listeners = createChangeListeners();
+
+  function apply(key: McpAppUnmountKey, renderValue: () => Value): Value {
+    renderedValue = renderValue();
+    renderedKey = key;
+    return renderedValue;
+  }
+
+  function render(
+    key: McpAppUnmountKey,
+    renderValue: () => Value,
+    leavingRoots: () => Iterable<ParentNode>,
+    options: { retainRenderedValue?: boolean; afterCommit?: (effect: () => void) => void } = {},
+  ): Value {
+    if (pending) {
+      return renderedValue;
+    }
+    const restarting = restartTargets;
+    if (restarting) {
+      restartTargets = null;
+      // Restart only torn-down views that survived the owning renderer's commit.
+      const restart = () => {
+        for (const target of restarting) {
+          if (target.isConnected) {
+            target.restartAfterTeardown();
+          }
+        }
+      };
+      if (options.afterCommit) {
+        options.afterCommit(restart);
+      } else {
+        queueMicrotask(restart);
+      }
+    }
+    const sameKey =
+      renderedKey === key ||
+      (renderedKey !== null &&
+        typeof renderedKey !== "string" &&
+        typeof key !== "string" &&
+        renderedKey.length === key.length &&
+        renderedKey.every((part, index) => part === key[index]));
+    if (sameKey && options.retainRenderedValue) {
+      return renderedValue;
+    }
+    if (restarting || renderedKey === null || sameKey) {
+      return apply(key, renderValue);
+    }
+
+    const targets = findMcpAppUnmountTargets(leavingRoots());
+    if (targets.length === 0) {
+      return apply(key, renderValue);
+    }
+
+    pending = true;
+    void Promise.allSettled(targets.map((target) => target.teardown())).then(() => {
+      pending = false;
+      restartTargets = targets;
+      invalidate?.();
+      listeners.publish();
+    });
+    return renderedValue;
+  }
+
+  return {
+    render,
+    subscribe: listeners.subscribe,
+    get retiring() {
+      return pending || restartTargets !== null;
+    },
+  };
+}

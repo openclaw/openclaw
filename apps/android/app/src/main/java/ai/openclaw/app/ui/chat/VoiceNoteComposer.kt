@@ -1,0 +1,201 @@
+package ai.openclaw.app.ui.chat
+
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.AndroidVoiceNoteRecordingEngine
+import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.VoiceNoteRecorderController
+import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@Composable
+internal fun rememberVoiceNoteRecorderController(
+  viewModel: MainViewModel,
+  ownerKey: ChatComposerOwner,
+  mainSessionKey: String,
+  onFinished: (String, PendingAttachment) -> Unit,
+): VoiceNoteRecorderController {
+  val context = LocalContext.current.applicationContext
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val scope = rememberCoroutineScope()
+  val currentOnFinished by rememberUpdatedState(onFinished)
+  val ownerTracker = remember { VoiceNoteRecorderOwnerTracker(ownerKey) }
+  lateinit var controller: VoiceNoteRecorderController
+  controller =
+    remember(context, viewModel, scope) {
+      VoiceNoteRecorderController(
+        scope = scope,
+        outputDirectory = context.cacheDir,
+        engine = AndroidVoiceNoteRecordingEngine(context),
+        requestPermission = viewModel::requestRecordAudioPermission,
+        acquireMic = viewModel::tryAcquireVoiceNoteMic,
+        releaseMic = viewModel::releaseVoiceNoteMic,
+        onFinished = { recording ->
+          scope.launch(Dispatchers.IO) {
+            val attachment = runCatching { stageVoiceNoteAttachment(recording) }
+            withContext(Dispatchers.Main) {
+              if (!controller.canCommitPreparation(recording.id)) return@withContext
+              attachment.fold(
+                onSuccess = {
+                  currentOnFinished(recording.id, it)
+                  controller.completePreparation()
+                },
+                onFailure = { controller.reportFailure("Could not prepare voice note.") },
+              )
+            }
+          }
+        },
+      )
+    }
+  LaunchedEffect(controller, ownerKey, mainSessionKey) {
+    if (!ownerTracker.moveTo(ownerKey, mainSessionKey)) controller.cancel()
+  }
+  DisposableEffect(controller, lifecycleOwner) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_STOP) controller.cancel()
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      controller.cancel()
+    }
+  }
+  return controller
+}
+
+internal class VoiceNoteRecorderOwnerTracker(
+  initialOwner: ChatComposerOwner,
+) {
+  private var owner = initialOwner
+
+  /** Returns false only when the next owner represents a genuinely different chat. */
+  fun moveTo(
+    next: ChatComposerOwner,
+    mainSessionKey: String,
+  ): Boolean {
+    val retain = owner == next || shouldMigrateComposerDraft(owner, next, mainSessionKey)
+    owner = next
+    return retain
+  }
+}
+
+@Composable
+internal fun voiceNoteRecordLabel(): String = nativeString("Record voice note")
+
+@Composable
+internal fun VoiceNoteControls(
+  preparing: Boolean,
+  elapsedMs: Long,
+  level: Float,
+  onCancel: () -> Unit,
+  onDone: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
+    shape = RoundedCornerShape(ClawTheme.radii.control),
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = if (preparing) ClawTheme.colors.textSubtle else ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = if (preparing) 12.dp else 10.dp, vertical = if (preparing) 8.dp else 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      if (preparing) {
+        Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
+        Text(text = nativeString("Preparing voice note…"), style = ClawTheme.type.label)
+      } else {
+        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.danger, CircleShape))
+        Text(
+          text = formatVoiceNoteDuration(elapsedMs),
+          style = ClawTheme.type.label.copy(fontWeight = FontWeight.SemiBold),
+        )
+        TalkWaveform(
+          phase = TalkWaveformPhase.Listening(level = level, speechActive = false),
+          modifier = Modifier.weight(1f).height(30.dp),
+        )
+        ChatRoundButton(onCancel, contentColor = ClawTheme.colors.text, background = ClawTheme.colors.canvas) {
+          Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
+        }
+        ChatRoundButton(onDone, contentColor = ClawTheme.colors.primaryText, background = ClawTheme.colors.primary) {
+          Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
+        }
+      }
+    }
+  }
+}
+
+@Composable
+internal fun VoiceNoteRecorderError(state: VoiceNoteRecorderState) {
+  val message = (state as? VoiceNoteRecorderState.Failure)?.message ?: return
+  Text(text = message, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
+}
+
+internal fun ChatMessageContent.isAudioAttachment(): Boolean = type == "audio" || mimeType?.startsWith("audio/") == true
+
+@Composable
+internal fun ChatRoundButton(
+  onClick: () -> Unit,
+  contentColor: Color,
+  background: Color,
+  modifier: Modifier = Modifier,
+  enabled: Boolean = true,
+  content: @Composable () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget).then(modifier),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = contentColor,
+  ) {
+    Box(modifier = Modifier.padding(8.dp).background(background, CircleShape), contentAlignment = Alignment.Center) {
+      content()
+    }
+  }
+}

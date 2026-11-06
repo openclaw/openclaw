@@ -1,0 +1,17 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isAcpEnabledByPolicy } from "../policy.js";
+import { getAcpRuntimeBackend, isAcpRuntimeBackendHealthy } from "./registry.js";
+
+export function isAcpRuntimeSpawnAvailable(params: {
+  config?: OpenClawConfig;
+  sandboxed?: boolean;
+}): boolean {
+  if (params.sandboxed === true) {
+    return false;
+  }
+  if (params.config && !isAcpEnabledByPolicy(params.config)) {
+    return false;
+  }
+  const backend = getAcpRuntimeBackend(params.config?.acp?.backend);
+  return backend !== null && isAcpRuntimeBackendHealthy(backend);
+}

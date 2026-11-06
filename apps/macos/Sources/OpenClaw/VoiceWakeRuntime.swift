@@ -1,0 +1,723 @@
+import AVFoundation
+import Foundation
+import OSLog
+import Speech
+import SwabbleKit
+#if canImport(AppKit)
+import AppKit
+#endif
+
+actor VoiceWakeRuntime {
+    private let state: AppVoiceRuntime.State
+    private let sessions: VoiceSessionCoordinator
+    private let permissions: VoicePermissions
+    private let prepareForward: AppVoiceRuntime.PrepareForward
+    private let forward: AppVoiceRuntime.Forward
+
+    init(
+        state: @escaping AppVoiceRuntime.State,
+        sessions: VoiceSessionCoordinator,
+        permissions: VoicePermissions,
+        prepareForward: @escaping AppVoiceRuntime.PrepareForward,
+        forward: @escaping AppVoiceRuntime.Forward)
+    {
+        self.state = state
+        self.sessions = sessions
+        self.permissions = permissions
+        self.prepareForward = prepareForward
+        self.forward = forward
+    }
+
+    private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
+
+    private let capture = SpeechCaptureResources(mode: .voiceWake)
+    private var recognitionGeneration: Int = 0 // drop stale callbacks after restarts
+    private var lastHeard: Date?
+    private var noiseFloorRMS: Double = 1e-4
+    private var captureStartedAt: Date?
+    private var captureTask: Task<Void, Never>?
+    private var capturedTranscript: String = ""
+    private var isCapturing: Bool {
+        self.captureStartedAt != nil
+    }
+
+    private var heardBeyondTrigger: Bool = false
+    private var committedTranscript: String = ""
+    private var volatileTranscript: String = ""
+    private var cooldownUntil: Date?
+    private var currentConfig: RuntimeConfig?
+    private var overlayToken: UUID?
+    private var activeTriggerEndTime: TimeInterval?
+    private var activeTriggerWord: String?
+    private var scheduledRestartTask: Task<Void, Never>?
+    private var lastTranscript: String?
+    private var lastTranscriptAt: Date?
+    private var pauseCheckTask: Task<Void, Never>?
+    private var pauseLeases: Set<UUID> = []
+    private var refreshGeneration: UInt64 = 0
+    private var diagnostic: Diagnostic?
+
+    private struct Diagnostic {
+        let id: UUID
+        var update: (@MainActor @Sendable (VoiceWakeTestState) -> Void)?
+    }
+
+    /// Silence threshold once we've captured user speech (post-trigger).
+    private let silenceWindow: TimeInterval = 2.0
+    /// Silence threshold when we only heard the trigger but no post-trigger speech yet.
+    private let triggerOnlySilenceWindow: TimeInterval = 5.0
+    // Maximum capture duration from trigger until we force-send, to avoid runaway sessions.
+    private let captureHardStop: TimeInterval = 120.0
+    private let debounceAfterSend: TimeInterval = 0.35
+    // Voice activity detection parameters (RMS-based).
+    private let minSpeechRMS: Double = 1e-3
+    private let speechBoostFactor: Double = 6.0 // how far above noise floor we require to mark speech
+    private let preDetectSilenceWindow: TimeInterval = 1.0
+    private let triggerPauseWindow: TimeInterval = 0.55
+
+    /// Stops the active Speech pipeline without clearing the stored config, so we can restart cleanly.
+    private func haltRecognitionPipeline() {
+        // Bump generation first so any in-flight callbacks from the cancelled task get dropped.
+        self.recognitionGeneration &+= 1
+        self.capture.stop()
+    }
+
+    struct RuntimeConfig: Equatable {
+        let triggers: [String]
+        let micID: String?
+        let localeID: String?
+        let triggerChime: VoiceWakeChime
+        let sendChime: VoiceWakeChime
+        let triggersTalkMode: Bool
+    }
+
+    func refresh(state: AppState) async {
+        self.refreshGeneration &+= 1
+        let generation = self.refreshGeneration
+        let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig) in
+            let enabled = state.swabbleEnabled
+            let config = RuntimeConfig(
+                triggers: sanitizeVoiceWakeTriggers(state.swabbleTriggerWords),
+                micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
+                localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID,
+                triggerChime: state.voiceWakeTriggerChime,
+                sendChime: state.voiceWakeSendChime,
+                triggersTalkMode: state.voiceWakeTriggersTalkMode)
+            return (enabled, config)
+        }
+        guard generation == self.refreshGeneration, self.pauseLeases.isEmpty, self.diagnostic == nil else { return }
+
+        guard snapshot.0 else {
+            self.stop()
+            return
+        }
+
+        guard self.permissions.granted() else {
+            self.logger.debug("voicewake runtime not starting: permissions missing")
+            self.stop()
+            return
+        }
+
+        let config = snapshot.1
+
+        if self.scheduledRestartTask != nil, config == self.currentConfig, !self.capture.isRunning {
+            return
+        }
+
+        SimpleTaskSupport.stop(task: &self.scheduledRestartTask)
+
+        if config == self.currentConfig, self.capture.isRunning {
+            return
+        }
+
+        self.stop()
+        self.start(with: config)
+    }
+
+    private func start(with config: RuntimeConfig) {
+        // Scheduled restarts also enter here, without passing through refresh.
+        guard self.pauseLeases.isEmpty else { return }
+        do {
+            self.recognitionGeneration &+= 1
+            let generation = self.recognitionGeneration
+
+            try self.capture.start(
+                localeID: config.localeID ?? Locale.current.identifier,
+                onAudioLevel: { [weak self] rms in
+                    Task.detached { [weak self] in
+                        await self?.noteAudioLevel(rms: rms)
+                    }
+                },
+                onUpdate: { [weak self, generation] update in
+                    guard let self else { return }
+                    Task { await self.handleRecognition(update, generation: generation, config: config) }
+                })
+
+            self.currentConfig = config
+            self.lastHeard = Date()
+            // Preserve any existing cooldownUntil so the debounce after send isn't wiped by a restart.
+
+            let preferred = config.micID ?? "system-default"
+            self.logger.info(
+                "voicewake runtime input preferred=\(preferred, privacy: .public) " +
+                    "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
+            self.logger.info("voicewake runtime started")
+            self.updateDiagnostic(.listening)
+            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "started", fields: [
+                "locale": config.localeID ?? "",
+                "micID": config.micID ?? "",
+            ])
+        } catch {
+            self.logger.error("voicewake runtime failed to start: \(error.localizedDescription, privacy: .public)")
+            if self.diagnostic != nil {
+                self.finishDiagnostic(.failed(error.localizedDescription))
+            } else {
+                self.stop()
+            }
+        }
+    }
+
+    func startDiagnostic(
+        id: UUID,
+        triggers: [String],
+        micID: String?,
+        localeID: String?,
+        onUpdate: @escaping @MainActor @Sendable (VoiceWakeTestState) -> Void) async throws
+    {
+        try Task.checkCancellation()
+        guard self.diagnostic == nil, self.pauseLeases.isEmpty, !self.isCapturing else {
+            throw NSError(domain: "VoiceWakeRuntime", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Microphone is in use",
+            ])
+        }
+        self.refreshGeneration &+= 1
+        self.stop(dismissOverlay: false)
+        self.diagnostic = Diagnostic(id: id, update: onUpdate)
+        do {
+            try self.capture.validatePassiveVoiceWake(localeID: localeID ?? Locale.current.identifier)
+            let privacyKeys = ["NSSpeechRecognitionUsageDescription", "NSMicrophoneUsageDescription"]
+            guard privacyKeys
+                .allSatisfy({ (Bundle.main.object(forInfoDictionaryKey: $0) as? String)?.isEmpty == false })
+            else {
+                throw NSError(domain: "VoiceWakeRuntime", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: """
+                    Missing mic/speech privacy strings. Rebuild the mac app (scripts/restart-mac.sh) \
+                    to include usage descriptions.
+                    """,
+                ])
+            }
+            let granted = try await self.ensureDiagnosticPermissions(id: id)
+            try Task.checkCancellation()
+            guard self.diagnostic?.id == id, self.diagnostic?.update != nil, self.pauseLeases.isEmpty else {
+                throw CancellationError()
+            }
+            guard granted else {
+                throw NSError(domain: "VoiceWakeRuntime", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "Microphone or speech permission denied",
+                ])
+            }
+            self.start(with: RuntimeConfig(
+                triggers: triggers,
+                micID: micID,
+                localeID: localeID,
+                triggerChime: .none,
+                sendChime: .none,
+                triggersTalkMode: false))
+        } catch {
+            await self.stopDiagnostic(id: id)
+            throw error
+        }
+    }
+
+    func finalizeDiagnostic(id: UUID) {
+        guard self.diagnostic?.id == id, self.diagnostic?.update != nil else { return }
+        self.capture.finishAudio()
+        self.updateDiagnostic(.finalizing)
+        self.captureTask = Task { [weak self] in
+            guard await SimpleTaskSupport.waitForNextOperation(interval: 1.5) else { return }
+            await self?.finishDiagnosticDrain(id: id)
+        }
+    }
+
+    private func finishDiagnosticDrain(id: UUID) {
+        guard self.diagnostic?.id == id else { return }
+        self.stop(dismissOverlay: false)
+        self.diagnostic?.update = nil
+    }
+
+    func stopDiagnostic(id: UUID) async {
+        guard self.diagnostic?.id == id else { return }
+        self.diagnostic = nil
+        self.stop(dismissOverlay: false)
+        if let state = await self.state() {
+            await self.refresh(state: state)
+        }
+    }
+
+    private func updateDiagnostic(_ state: VoiceWakeTestState) {
+        guard let update = self.diagnostic?.update else { return }
+        Task { @MainActor in update(state) }
+    }
+
+    private func finishDiagnostic(_ state: VoiceWakeTestState) {
+        guard self.diagnostic?.update != nil else { return }
+        self.stop(dismissOverlay: false)
+        self.updateDiagnostic(state)
+        self.diagnostic?.update = nil
+    }
+
+    private func ensureDiagnosticPermissions(id: UUID) async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            let granted = PermissionManager.voiceWakePermissionsGranted()
+            if !granted { PermissionManager.reportDeferredRequest() }
+            return granted
+        }
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        if speechStatus == .notDetermined {
+            let granted = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: status == .authorized)
+                }
+            }
+            guard granted else { return false }
+        } else if speechStatus != .authorized {
+            return false
+        }
+        try Task.checkCancellation()
+        guard self.diagnostic?.id == id, self.diagnostic?.update != nil, self.pauseLeases.isEmpty else {
+            throw CancellationError()
+        }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        default: return false
+        }
+    }
+
+    private func stop(dismissOverlay: Bool = true) {
+        SimpleTaskSupport.stop(task: &self.scheduledRestartTask)
+        SimpleTaskSupport.stop(task: &self.captureTask)
+        self.capturedTranscript = ""
+        self.captureStartedAt = nil
+        self.lastTranscript = nil
+        self.lastTranscriptAt = nil
+        SimpleTaskSupport.stop(task: &self.pauseCheckTask)
+        self.haltRecognitionPipeline()
+        self.currentConfig = nil
+        self.activeTriggerEndTime = nil
+        self.activeTriggerWord = nil
+        self.logger.debug("voicewake runtime stopped")
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "stopped")
+
+        let token = self.overlayToken
+        self.overlayToken = nil
+        // Wake cleanup owns only its capture token, never a PTT or finalized send overlay.
+        guard dismissOverlay, let token else { return }
+        Task { @MainActor [sessions] in
+            sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
+        }
+    }
+
+    private func handleRecognition(
+        _ update: SpeechCaptureResources.Update,
+        generation: Int,
+        config: RuntimeConfig) async
+    {
+        if generation != self.recognitionGeneration {
+            return // stale callback from a superseded recognizer session
+        }
+        if let error = update.error {
+            self.logger.debug("voicewake recognition error: \(error.localizedDescription, privacy: .public)")
+        }
+
+        guard update.transcript != nil || self.diagnostic != nil else { return }
+        let transcript = update.transcript ?? ""
+
+        let now = Date()
+        if !transcript.isEmpty {
+            self.lastHeard = now
+            if !self.isCapturing {
+                self.lastTranscript = transcript
+                self.lastTranscriptAt = now
+            }
+            if self.isCapturing {
+                let trimmed = Self.commandAfterTrigger(
+                    transcript: transcript,
+                    segments: update.segments,
+                    triggerEndTime: self.activeTriggerEndTime,
+                    triggers: config.triggers)
+                self.capturedTranscript = trimmed
+                if !trimmed.isEmpty {
+                    self.heardBeyondTrigger = true
+                }
+                if update.isFinal {
+                    self.committedTranscript = trimmed
+                    self.volatileTranscript = ""
+                } else {
+                    self.volatileTranscript = VoiceOverlayTextFormatting.delta(
+                        after: self.committedTranscript,
+                        current: trimmed)
+                }
+
+                let attributed = VoiceOverlayTextFormatting.makeAttributed(
+                    committed: self.committedTranscript,
+                    volatile: self.volatileTranscript,
+                    isFinal: update.isFinal)
+                let snapshot = self.committedTranscript + self.volatileTranscript
+                if let token = self.overlayToken {
+                    await MainActor.run {
+                        self.sessions.updatePartial(
+                            token: token,
+                            text: snapshot,
+                            attributed: attributed)
+                    }
+                }
+            }
+        }
+
+        if self.isCapturing { return }
+
+        let gateConfig = WakeWordGateConfig(triggers: config.triggers)
+        var usedFallback = false
+        var match = WakeWordGate.match(transcript: transcript, segments: update.segments, config: gateConfig)
+        if match == nil, update.isFinal {
+            match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+                transcript: transcript,
+                triggers: config.triggers,
+                config: gateConfig,
+                trimWake: self.diagnostic == nil ? Self.trimmedAfterTrigger : WakeWordGate.stripWake)
+            usedFallback = match != nil
+        }
+
+        if self.diagnostic != nil {
+            let triggerOnlyMatch = match == nil
+                ? VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
+                    transcript: transcript, triggers: config.triggers, trimWake: WakeWordGate.stripWake)
+                : nil
+            match = match.flatMap { $0.command.isEmpty ? nil : $0 } ?? triggerOnlyMatch
+            if let match {
+                self.finishDiagnostic(.detected(match.command.isEmpty ? (match.trigger ?? transcript) : match.command))
+            } else if let error = update.error {
+                self.finishDiagnostic(.failed(error.localizedDescription))
+            } else if update.isFinal {
+                self
+                    .finishDiagnostic(.failed(transcript
+                            .isEmpty ? "No speech detected" : "No trigger heard: “\(transcript)”"))
+            } else {
+                self.updateDiagnostic(transcript.isEmpty ? .listening : .hearing(transcript))
+                if !transcript.isEmpty { self.schedulePauseCheck(triggerOnly: false, config: config) }
+            }
+            return
+        }
+
+        if let match {
+            if let cooldown = cooldownUntil, now < cooldown {
+                return
+            }
+            if usedFallback {
+                self.logger.info("voicewake runtime detected (text-only fallback) len=\(match.command.count)")
+            } else {
+                self.logger.info("voicewake runtime detected len=\(match.command.count)")
+            }
+            await self.beginCapture(
+                command: match.command,
+                triggerEndTime: match.triggerEndTime,
+                triggerWord: match.trigger,
+                config: config)
+        } else if !transcript.isEmpty, update.error == nil {
+            self.schedulePauseCheck(
+                triggerOnly: Self.isTriggerOnlyText(transcript: transcript, triggers: config.triggers),
+                config: config)
+        }
+    }
+
+    private func schedulePauseCheck(triggerOnly: Bool, config: RuntimeConfig) {
+        self.pauseCheckTask?.cancel()
+        let lastSeenAt = self.lastTranscriptAt
+        let lastText = self.lastTranscript
+        let window = triggerOnly ? self.triggerPauseWindow : self.preDetectSilenceWindow
+        self.pauseCheckTask = Task { [weak self] in
+            guard await SimpleTaskSupport.waitForNextOperation(interval: window) else { return }
+            await self?.checkPause(
+                lastSeenAt: lastSeenAt,
+                lastText: lastText,
+                triggerOnly: triggerOnly,
+                config: config)
+        }
+    }
+
+    private func checkPause(
+        lastSeenAt: Date?,
+        lastText: String?,
+        triggerOnly: Bool,
+        config: RuntimeConfig) async
+    {
+        guard !Task.isCancelled, !self.isCapturing,
+              let lastSeenAt, let lastText,
+              self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText
+        else { return }
+        let command: String
+        let triggerEndTime: TimeInterval?
+        let triggerWord: String?
+        if triggerOnly {
+            guard Self.isTriggerOnlyText(transcript: lastText, triggers: config.triggers) else { return }
+            command = ""
+            triggerEndTime = nil
+            triggerWord = VoiceWakeTextUtils.matchedTriggerWord(transcript: lastText, triggers: config.triggers)
+        } else {
+            guard let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+                transcript: lastText,
+                triggers: config.triggers,
+                config: WakeWordGateConfig(triggers: config.triggers),
+                trimWake: self.diagnostic == nil ? Self.trimmedAfterTrigger : WakeWordGate.stripWake)
+            else { return }
+            command = match.command
+            triggerEndTime = match.triggerEndTime
+            triggerWord = match.trigger
+        }
+        if self.diagnostic != nil {
+            self.finishDiagnostic(.detected(command.isEmpty ? (triggerWord ?? lastText) : command))
+            return
+        }
+        if let cooldown = self.cooldownUntil, Date() < cooldown {
+            return
+        }
+        if triggerOnly {
+            self.logger.info("voicewake runtime detected (trigger-only pause)")
+        } else {
+            self.logger.info("voicewake runtime detected (silence fallback) len=\(command.count)")
+        }
+        await self.beginCapture(
+            command: command,
+            triggerEndTime: triggerEndTime,
+            triggerWord: triggerWord,
+            config: config)
+    }
+
+    static func isTriggerOnlyText(transcript: String, triggers: [String]) -> Bool {
+        VoiceWakeTextUtils.isTriggerOnly(
+            transcript: transcript,
+            triggers: triggers,
+            trimWake: self.trimmedAfterTrigger)
+    }
+
+    private func beginCapture(
+        command: String,
+        triggerEndTime: TimeInterval?,
+        triggerWord: String?,
+        config: RuntimeConfig) async
+    {
+        // When "Trigger Talk Mode" is enabled, skip the capture/overlay flow entirely
+        // and activate Talk Mode immediately. Talk Mode handles its own STT pipeline.
+        // Pause the wake listener to avoid two audio pipelines competing on the mic
+        // (mirrors the push-to-talk coordination pattern).
+        if config.triggersTalkMode {
+            self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
+            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
+            let lease = UUID()
+            self.pauseForPushToTalk(lease: lease)
+            if config.triggerChime != .none {
+                await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
+            }
+            await self.state()?.setTalkEnabled(true)
+            await self.resumeAfterPushToTalk(lease: lease)
+            return
+        }
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
+        self.capturedTranscript = command
+        self.committedTranscript = ""
+        self.volatileTranscript = command
+        self.captureStartedAt = Date()
+        self.cooldownUntil = nil
+        self.heardBeyondTrigger = !command.isEmpty
+        self.activeTriggerEndTime = triggerEndTime
+        self.activeTriggerWord = triggerWord
+        SimpleTaskSupport.stop(task: &self.pauseCheckTask)
+
+        if config.triggerChime != .none {
+            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
+        }
+
+        let snapshot = self.committedTranscript + self.volatileTranscript
+        let attributed = VoiceOverlayTextFormatting.makeAttributed(
+            committed: self.committedTranscript,
+            volatile: self.volatileTranscript,
+            isFinal: false)
+        self.overlayToken = await MainActor.run {
+            guard self.state() != nil else { return nil as UUID? }
+            return self.sessions.startSession(
+                text: snapshot,
+                attributed: attributed,
+                forwardEnabled: true,
+                voiceWakeTrigger: triggerWord)
+        }
+
+        // Keep the "ears" boosted for the capture window so the status icon animates while recording.
+        await MainActor.run { self.state()?.earBoostActive = true }
+
+        self.captureTask?.cancel()
+        self.captureTask = Task { [weak self] in
+            await self?.monitorCapture(config: config)
+        }
+    }
+
+    private func monitorCapture(config: RuntimeConfig) async {
+        let start = self.captureStartedAt ?? Date()
+        let hardStop = start.addingTimeInterval(self.captureHardStop)
+
+        while self.isCapturing {
+            let now = Date()
+            let silenceThreshold = self.heardBeyondTrigger ? self.silenceWindow : self.triggerOnlySilenceWindow
+            let silent = self.lastHeard.map { now.timeIntervalSince($0) >= silenceThreshold } ?? false
+            if now >= hardStop || silent {
+                await self.finalizeCapture(config: config)
+                return
+            }
+
+            guard await SimpleTaskSupport.waitForNextOperation(interval: 0.2) else { return }
+        }
+    }
+
+    private func finalizeCapture(config: RuntimeConfig) async {
+        guard self.isCapturing else { return }
+        self.captureStartedAt = nil
+        // Disarm trigger matching immediately (before halting recognition) to avoid double-trigger
+        // races from late callbacks that arrive after isCapturing is cleared.
+        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
+        SimpleTaskSupport.stop(task: &self.captureTask)
+
+        let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "finalizeCapture", fields: [
+            "finalLen": "\(finalTranscript.count)",
+        ])
+        // Stop further recognition events so we don't retrigger immediately with buffered audio.
+        self.haltRecognitionPipeline()
+        self.capturedTranscript = ""
+        self.lastHeard = nil
+        self.heardBeyondTrigger = false
+        let triggerWord = self.activeTriggerWord
+        self.activeTriggerEndTime = nil
+        self.activeTriggerWord = nil
+        self.lastTranscript = nil
+        self.lastTranscriptAt = nil
+        SimpleTaskSupport.stop(task: &self.pauseCheckTask)
+
+        await MainActor.run { self.state()?.earBoostActive = false }
+        if let token = self.overlayToken {
+            await MainActor.run { self.sessions.updateLevel(token: token, 0) }
+        }
+
+        let sendChime = finalTranscript.isEmpty ? .none : config.sendChime
+        if let token = self.overlayToken {
+            await MainActor.run {
+                self.sessions.finalize(
+                    token: token,
+                    text: finalTranscript,
+                    sendChime: sendChime,
+                    autoSendAfter: 0,
+                    voiceWakeTrigger: triggerWord)
+            }
+        } else if !finalTranscript.isEmpty {
+            Task.detached { [prepareForward, forward] in
+                let invocation = await prepareForward(finalTranscript, triggerWord)
+                if case .success = await forward(invocation), sendChime != .none {
+                    await MainActor.run { VoiceWakeChimePlayer.play(sendChime) }
+                }
+            }
+        }
+        self.overlayToken = nil
+        self.scheduleRestartRecognizer()
+    }
+
+    // MARK: - Audio level handling
+
+    private func noteAudioLevel(rms: Double) {
+        guard self.isCapturing else { return }
+
+        // Update adaptive noise floor: faster when lower energy (quiet), slower when loud.
+        let alpha: Double = rms < self.noiseFloorRMS ? 0.08 : 0.01
+        self.noiseFloorRMS = max(1e-7, self.noiseFloorRMS + (rms - self.noiseFloorRMS) * alpha)
+
+        let threshold = max(self.minSpeechRMS, self.noiseFloorRMS * self.speechBoostFactor)
+        if rms >= threshold {
+            self.lastHeard = Date()
+        }
+
+        // Normalize against the adaptive threshold so the UI meter stays roughly 0...1 across devices.
+        let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
+        if let token = self.overlayToken {
+            Task { @MainActor [sessions] in
+                sessions.updateLevel(token: token, clamped)
+            }
+        }
+    }
+
+    private func restartRecognizer() {
+        // Restart the recognizer so we listen for the next trigger with a clean buffer.
+        let current = self.currentConfig
+        self.stop(dismissOverlay: false)
+        if let current {
+            self.start(with: current)
+        }
+    }
+
+    private func restartRecognizerIfIdleAndOverlayHidden() {
+        guard !Task.isCancelled, self.pauseLeases.isEmpty, !self.isCapturing else { return }
+        self.scheduledRestartTask = nil
+        self.restartRecognizer()
+    }
+
+    private func scheduleRestartRecognizer() {
+        self.scheduledRestartTask?.cancel()
+        self.scheduledRestartTask = Task { [weak self] in
+            guard await SimpleTaskSupport.waitForNextOperation(interval: 0.7) else { return }
+            guard let self else { return }
+            await self.restartRecognizerIfIdleAndOverlayHidden()
+        }
+    }
+
+    func pauseForPushToTalk(lease: UUID) {
+        guard self.pauseLeases.insert(lease).inserted else { return }
+        self.refreshGeneration &+= 1
+        self.finishDiagnostic(.failed(String(localized: "Stopped")))
+        self.stop(dismissOverlay: false)
+    }
+
+    func resumeAfterPushToTalk(lease: UUID) async {
+        guard self.pauseLeases.remove(lease) != nil else { return }
+        self.refreshGeneration &+= 1
+        guard self.pauseLeases.isEmpty else { return }
+        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
+        if let state = await self.state() {
+            await self.refresh(state: state)
+        }
+    }
+
+    static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
+        for trigger in triggers {
+            let token = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            guard let range = text.range(
+                of: token,
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) else { continue }
+            return text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+    }
+
+    private static func commandAfterTrigger(
+        transcript: String,
+        segments: [WakeWordSegment],
+        triggerEndTime: TimeInterval?,
+        triggers: [String]) -> String
+    {
+        guard let triggerEndTime else {
+            return self.trimmedAfterTrigger(transcript, triggers: triggers)
+        }
+        let trimmed = WakeWordGate.commandText(
+            transcript: transcript,
+            segments: segments,
+            triggerEndTime: triggerEndTime)
+        return trimmed.isEmpty ? self.trimmedAfterTrigger(transcript, triggers: triggers) : trimmed
+    }
+}

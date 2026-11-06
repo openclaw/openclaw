@@ -1,0 +1,1072 @@
+package ai.openclaw.app.ui.chat
+
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.design.ClawTheme
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import org.commonmark.Extension
+import org.commonmark.ext.autolink.AutolinkExtension
+import org.commonmark.ext.gfm.strikethrough.Strikethrough
+import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
+import org.commonmark.ext.gfm.tables.TableBlock
+import org.commonmark.ext.gfm.tables.TableBody
+import org.commonmark.ext.gfm.tables.TableCell
+import org.commonmark.ext.gfm.tables.TableHead
+import org.commonmark.ext.gfm.tables.TableRow
+import org.commonmark.ext.gfm.tables.TablesExtension
+import org.commonmark.ext.task.list.items.TaskListItemMarker
+import org.commonmark.ext.task.list.items.TaskListItemsExtension
+import org.commonmark.node.BlockQuote
+import org.commonmark.node.BulletList
+import org.commonmark.node.Code
+import org.commonmark.node.Document
+import org.commonmark.node.Emphasis
+import org.commonmark.node.FencedCodeBlock
+import org.commonmark.node.HardLineBreak
+import org.commonmark.node.Heading
+import org.commonmark.node.HtmlBlock
+import org.commonmark.node.HtmlInline
+import org.commonmark.node.IndentedCodeBlock
+import org.commonmark.node.Link
+import org.commonmark.node.ListItem
+import org.commonmark.node.Node
+import org.commonmark.node.OrderedList
+import org.commonmark.node.Paragraph
+import org.commonmark.node.SoftLineBreak
+import org.commonmark.node.StrongEmphasis
+import org.commonmark.node.ThematicBreak
+import org.commonmark.parser.IncludeSourceSpans
+import org.commonmark.parser.Parser
+import java.net.URI
+import java.util.Locale
+import org.commonmark.node.Image as MarkdownImage
+import org.commonmark.node.Text as MarkdownTextNode
+
+private const val DATA_IMAGE_HEADER_MAX_CHARS = 64
+internal const val CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH = 32
+private val dataImageRegex = Regex("^data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\\n\\r]+)$")
+
+private val markdownParser: Parser by lazy {
+  val extensions: List<Extension> =
+    listOf(
+      AutolinkExtension.create(),
+      StrikethroughExtension.create(),
+      TablesExtension.create(),
+      TaskListItemsExtension.create(),
+    )
+  Parser
+    .builder()
+    .extensions(extensions)
+    .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
+    .build()
+}
+
+/** Renders gateway/chat Markdown using the restricted mobile-safe feature set. */
+@Composable
+fun ChatMarkdown(
+  text: String,
+  textColor: Color,
+  isStreaming: Boolean = false,
+  bodyStyle: TextStyle = ClawTheme.type.body,
+  progressBars: Boolean = false,
+) {
+  val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
+  // Parsed nodes survive theme changes; span caches must also key on these styles.
+  val inlineStyles =
+    InlineStyles(
+      inlineCodeBg = ClawTheme.colors.codeBg,
+      inlineCodeColor = ClawTheme.colors.codeText,
+      linkColor = textColor,
+      baseCallout = bodyStyle,
+    )
+
+  val rendering = MarkdownRendering(textColor, inlineStyles, isStreaming, progressBars)
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    for (block in blocks) {
+      when (block) {
+        is ChatMarkdownSourceBlock.Markdown -> {
+          val documentBlocks = remember(block.source) { parseChatMarkdownBlocks(block.source) }
+          rendering.RenderMarkdownBlocks(documentBlocks)
+        }
+
+        is ChatMarkdownSourceBlock.Math -> {
+          ChatMathBlock(latex = block.latex, textColor = textColor)
+        }
+
+        is ChatMarkdownSourceBlock.MathFallback -> {
+          ChatCodeBlock(code = block.latex, language = null)
+        }
+      }
+    }
+  }
+}
+
+private data class MarkdownRendering(
+  val textColor: Color,
+  val inlineStyles: InlineStyles,
+  val isStreaming: Boolean,
+  val progressBars: Boolean,
+)
+
+@Composable
+private fun MarkdownRendering.RenderMarkdownBlocks(blocks: List<ChatMarkdownRenderBlock>) {
+  for (block in blocks) {
+    when (block) {
+      is ChatMarkdownRenderBlock.CommonMark -> {
+        RenderCommonMarkBlock(block.node)
+      }
+
+      is ChatMarkdownRenderBlock.LiteralHtml -> {
+        RenderLiteralHtml(block.source, textColor)
+      }
+
+      is ChatMarkdownRenderBlock.Disclosure -> {
+        RenderMarkdownDisclosure(block)
+      }
+    }
+  }
+}
+
+@Composable
+private fun MarkdownRendering.RenderCommonMarkBlock(current: Node) {
+  if (progressBars) {
+    val progress = remember(current) { parseChatProgressElement(current) }
+    if (progress != null) {
+      ChatProgressBar(progress)
+      return
+    }
+  }
+  when (current) {
+    is Paragraph -> {
+      RenderParagraph(current)
+    }
+
+    is Heading -> {
+      val headingText = remember(current, inlineStyles) { buildInlineMarkdown(current.firstChild, inlineStyles) }
+      val anchor = rememberChatReaderAnchor()
+      Text(
+        text = headingText,
+        style = headingStyle(current.level, inlineStyles.baseCallout),
+        color = textColor,
+        modifier = anchor?.modifier ?: Modifier,
+        onTextLayout = anchor?.onTextLayout ?: {},
+      )
+    }
+
+    is FencedCodeBlock -> {
+      if (isChatMermaidFence(current, isStreaming)) {
+        ChatMermaidBlock(current.literal.orEmpty())
+      } else {
+        ChatCodeBlock(
+          code = current.literal.orEmpty(),
+          language = current.info?.trim()?.ifEmpty { null },
+          // Streaming fences remain plain until closed. Finalized messages may validly
+          // end at EOF without a closing fence under CommonMark.
+          isComplete = !isStreaming || current.closingFenceLength != null,
+        )
+      }
+    }
+
+    is IndentedCodeBlock -> {
+      ChatCodeBlock(code = current.literal.orEmpty(), language = null)
+    }
+
+    is BlockQuote -> {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .width(2.dp)
+              .fillMaxHeight()
+              .background(ClawTheme.colors.textMuted.copy(alpha = 0.35f)),
+        )
+        Column(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          RenderMarkdownBlocks(commonMarkBlocks(current.firstChild))
+        }
+      }
+    }
+
+    is BulletList, is OrderedList -> {
+      RenderList(current)
+    }
+
+    is TableBlock -> {
+      RenderTableBlock(current)
+    }
+
+    is ThematicBreak -> {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(ClawTheme.colors.textMuted.copy(alpha = 0.25f)),
+      )
+    }
+
+    is HtmlBlock -> {
+      RenderLiteralHtml(current.literal.orEmpty(), textColor)
+    }
+  }
+}
+
+@Composable
+private fun RenderLiteralHtml(
+  source: String,
+  textColor: Color,
+) {
+  val literal = source.trim()
+  if (literal.isNotEmpty()) {
+    val anchor = rememberChatReaderAnchor()
+    Text(
+      text = literal,
+      style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
+      color = textColor,
+      modifier = anchor?.modifier ?: Modifier,
+      onTextLayout = anchor?.onTextLayout,
+    )
+  }
+}
+
+@Composable
+private fun MarkdownRendering.RenderMarkdownDisclosure(disclosure: ChatMarkdownRenderBlock.Disclosure) {
+  var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
+  val summarySource = disclosure.summary ?: nativeString("Details")
+  val summary =
+    remember(summarySource, inlineStyles.linkColor) {
+      buildChatInlineMarkdown(summarySource, linkColor = inlineStyles.linkColor)
+    }
+
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Surface(
+      onClick = { isExpanded = !isExpanded },
+      shape = RoundedCornerShape(8.dp),
+      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+      contentColor = ClawTheme.colors.textMuted,
+      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.6f)),
+    ) {
+      Row(
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = if (isExpanded) "▾" else "▸",
+          style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
+        )
+        Text(
+          text = summary,
+          style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
+          color = textColor,
+        )
+      }
+    }
+
+    if (isExpanded) {
+      Column(
+        modifier = Modifier.padding(start = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        RenderMarkdownBlocks(disclosure.blocks)
+      }
+    }
+  }
+}
+
+@Composable
+private fun MarkdownRendering.RenderParagraph(paragraph: Paragraph) {
+  val standaloneImage = remember(paragraph) { standaloneDataImage(paragraph) }
+  if (standaloneImage != null) {
+    // Render a paragraph that is only a data image as media, not as an inline alt label.
+    InlineBase64Image(base64 = standaloneImage.base64, mimeType = standaloneImage.mimeType)
+    return
+  }
+
+  var start = paragraph.firstChild
+  if (progressBars) {
+    while (start != null) {
+      val progress = findChatInlineProgress(start) ?: break
+      var textEnd = progress.start
+      while (textEnd !== start && (textEnd.previous is SoftLineBreak || textEnd.previous is HardLineBreak)) {
+        textEnd = textEnd.previous
+      }
+      RenderInlineMarkdownRange(start, textEnd)
+      ChatProgressBar(progress.element)
+      start = progress.after
+      while (start is SoftLineBreak || start is HardLineBreak) start = start.next
+    }
+  }
+  RenderInlineMarkdownRange(start, null)
+}
+
+@Composable
+private fun MarkdownRendering.RenderInlineMarkdownRange(
+  start: Node?,
+  endExclusive: Node?,
+) {
+  val annotated = remember(start, endExclusive, inlineStyles) { buildInlineMarkdown(start, inlineStyles, endExclusive) }
+  if (annotated.text.trimEnd().isEmpty()) {
+    return
+  }
+
+  val anchor = rememberChatReaderAnchor()
+  Text(
+    text = annotated,
+    style = inlineStyles.baseCallout,
+    color = textColor,
+    modifier = anchor?.modifier ?: Modifier,
+    onTextLayout = anchor?.onTextLayout ?: {},
+  )
+}
+
+@Composable
+private fun MarkdownRendering.RenderList(list: Node) {
+  val items = remember(list) { markdownSiblings(list.firstChild).filterIsInstance<ListItem>().toList() }
+  val markers =
+    remember(list) {
+      val start = (list as? OrderedList)?.markerStartNumber ?: 1
+      items.mapIndexed { index, item ->
+        val task = item.firstChild as? TaskListItemMarker
+        when {
+          task != null -> if (task.isChecked) "☑" else "☐"
+          list is OrderedList -> "${start + index}."
+          else -> "•"
+        }
+      }
+    }
+  val markerStyle = inlineStyles.baseCallout.copy(fontWeight = FontWeight.SemiBold)
+  val textMeasurer = rememberTextMeasurer()
+  // One width per list keeps sibling text aligned when numbers or font scaling grow.
+  val markerWidth =
+    with(LocalDensity.current) {
+      (markers.maxOfOrNull { textMeasurer.measure(it, markerStyle, softWrap = false).size.width } ?: 0)
+        .toDp()
+        .coerceAtLeast(24.dp)
+    }
+  // Nested lists already sit inside their parent's content column.
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    items.forEachIndexed { index, item ->
+      RenderListItem(item, markers[index], markerStyle, markerWidth)
+    }
+  }
+}
+
+@Composable
+private fun MarkdownRendering.RenderListItem(
+  item: ListItem,
+  marker: String,
+  markerStyle: TextStyle,
+  markerWidth: Dp,
+) {
+  val firstChild = item.firstChild
+  val contentStart = if (firstChild is TaskListItemMarker) firstChild.next else firstChild
+
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.Top,
+  ) {
+    Text(
+      text = marker,
+      style = markerStyle,
+      color = textColor,
+      modifier = Modifier.width(markerWidth),
+      softWrap = false,
+      maxLines = 1,
+    )
+
+    Column(
+      modifier = Modifier.weight(1f),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      RenderMarkdownBlocks(blocks = commonMarkBlocks(contentStart))
+    }
+  }
+}
+
+@Composable
+private fun MarkdownRendering.RenderTableBlock(table: TableBlock) {
+  val rows = remember(table, inlineStyles) { buildTableRows(table, inlineStyles) }
+  if (rows.isEmpty()) return
+
+  val maxCols = rows.maxOf { row -> row.cells.size }.coerceAtLeast(1)
+  val scrollState = rememberScrollState()
+
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .horizontalScroll(scrollState)
+        .border(1.dp, ClawTheme.colors.textMuted.copy(alpha = 0.25f)),
+  ) {
+    for (row in rows) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        for (index in 0 until maxCols) {
+          val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
+          val anchor = rememberChatReaderAnchor()
+          Text(
+            text = cell,
+            style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
+            color = textColor,
+            onTextLayout = anchor?.onTextLayout ?: {},
+            modifier =
+              Modifier
+                .then(anchor?.modifier ?: Modifier)
+                .border(1.dp, ClawTheme.colors.textMuted.copy(alpha = 0.22f))
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .width(160.dp),
+          )
+        }
+      }
+    }
+  }
+}
+
+private fun buildTableRows(
+  table: TableBlock,
+  inlineStyles: InlineStyles,
+): List<TableRenderRow> =
+  markdownSiblings(table.firstChild)
+    .flatMap { section ->
+      val rows =
+        when (section) {
+          is TableHead, is TableBody -> markdownSiblings(section.firstChild).filterIsInstance<TableRow>()
+          is TableRow -> sequenceOf(section)
+          else -> emptySequence()
+        }
+      rows.map { row ->
+        TableRenderRow(
+          isHeader = section is TableHead,
+          cells =
+            markdownSiblings(row.firstChild)
+              .filterIsInstance<TableCell>()
+              .map { buildInlineMarkdown(it.firstChild, inlineStyles) }
+              .toList(),
+        )
+      }
+    }.toList()
+
+private fun buildInlineMarkdown(
+  start: Node?,
+  inlineStyles: InlineStyles,
+  endExclusive: Node? = null,
+): AnnotatedString =
+  buildAnnotatedString {
+    appendInlineNode(start, inlineStyles, endExclusive)
+  }
+
+private fun AnnotatedString.Builder.appendInlineNode(
+  node: Node?,
+  styles: InlineStyles,
+  endExclusive: Node? = null,
+) {
+  for (current in markdownSiblings(node)) {
+    if (current === endExclusive) break
+    when (current) {
+      is MarkdownTextNode -> {
+        append(current.literal)
+      }
+
+      is SoftLineBreak, is HardLineBreak -> {
+        append('\n')
+      }
+
+      is Code -> {
+        withStyle(
+          SpanStyle(
+            fontFamily = FontFamily.Monospace,
+            background = styles.inlineCodeBg,
+            color = styles.inlineCodeColor,
+          ),
+        ) {
+          append(current.literal)
+        }
+      }
+
+      is Emphasis, is StrongEmphasis, is Strikethrough -> {
+        val style =
+          when (current) {
+            is Emphasis -> SpanStyle(fontStyle = FontStyle.Italic)
+            is StrongEmphasis -> SpanStyle(fontWeight = FontWeight.SemiBold)
+            else -> SpanStyle(textDecoration = TextDecoration.LineThrough)
+          }
+        withStyle(style) {
+          appendInlineNode(current.firstChild, styles)
+        }
+      }
+
+      is Link -> {
+        appendLinkNode(current, styles)
+      }
+
+      is MarkdownImage -> {
+        append(buildPlainText(current.firstChild).ifBlank { "image" })
+      }
+
+      is HtmlInline -> {
+        if (!current.literal.isNullOrBlank()) {
+          append(current.literal)
+        }
+      }
+
+      else -> {
+        appendInlineNode(current.firstChild, styles)
+      }
+    }
+  }
+}
+
+private fun AnnotatedString.Builder.appendLinkNode(
+  link: Link,
+  styles: InlineStyles,
+) {
+  val destination = link.destination?.trim().orEmpty()
+  val linkStyle =
+    SpanStyle(
+      color = styles.linkColor,
+      textDecoration = TextDecoration.Underline,
+    )
+  if (destination.isEmpty() || !isSafeMarkdownLinkDestination(destination)) {
+    // Drop unsafe schemes while preserving visible link text.
+    appendInlineNode(link.firstChild, styles)
+    return
+  }
+
+  withLink(LinkAnnotation.Url(url = destination, styles = TextLinkStyles(style = linkStyle))) {
+    appendInlineNode(link.firstChild, styles)
+  }
+}
+
+internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
+  val scheme =
+    runCatching { URI(destination).scheme?.lowercase(Locale.US) }
+      .getOrNull()
+      ?: return false
+  // Chat markdown links are user/model supplied; keep navigation limited to
+  // browser-safe web URLs instead of custom Android intents or file URLs.
+  return scheme == "http" || scheme == "https"
+}
+
+/** Builds styled inline markdown for compact chat labels and preview text. */
+internal fun buildChatInlineMarkdown(
+  text: String,
+  linkColor: Color = Color.Blue,
+): AnnotatedString {
+  val document = parseChatMarkdown(text)
+  val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
+  return buildInlineMarkdown(
+    paragraph.firstChild,
+    InlineStyles(
+      inlineCodeBg = Color.Transparent,
+      inlineCodeColor = Color.Unspecified,
+      linkColor = linkColor,
+      baseCallout = TextStyle.Default,
+    ),
+  )
+}
+
+internal fun parseChatMarkdown(text: String): Document = markdownParser.parse(text) as Document
+
+internal fun markdownSiblings(start: Node?): Sequence<Node> = generateSequence(start) { it.next }
+
+internal sealed interface ChatMarkdownRenderBlock {
+  data class CommonMark(
+    val node: Node,
+  ) : ChatMarkdownRenderBlock
+
+  data class LiteralHtml(
+    val source: String,
+  ) : ChatMarkdownRenderBlock
+
+  data class Disclosure(
+    val summary: String?,
+    val isExpanded: Boolean,
+    val blocks: List<ChatMarkdownRenderBlock>,
+  ) : ChatMarkdownRenderBlock
+}
+
+internal fun parseChatMarkdownBlocks(text: String): List<ChatMarkdownRenderBlock> {
+  val document = parseChatMarkdown(text)
+  val tokenizer = DisclosureTokenizer()
+  val tokens = mutableListOf<DisclosureToken>()
+  for (current in markdownSiblings(document.firstChild)) {
+    if (current is HtmlBlock && tokenizer.shouldTokenize(current.literal.orEmpty())) {
+      tokens += tokenizer.tokenize(current.literal.orEmpty())
+    } else {
+      tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.CommonMark(current))
+    }
+  }
+  return foldDisclosureTokens(tokens)
+}
+
+private fun commonMarkBlocks(start: Node?): List<ChatMarkdownRenderBlock> = markdownSiblings(start).map(ChatMarkdownRenderBlock::CommonMark).toList()
+
+private sealed interface DisclosureToken {
+  data class Block(
+    val block: ChatMarkdownRenderBlock,
+  ) : DisclosureToken
+
+  data class Open(
+    val isExpanded: Boolean,
+  ) : DisclosureToken
+
+  data class Summary(
+    val source: String,
+  ) : DisclosureToken
+
+  data object Close : DisclosureToken
+}
+
+private class DisclosureTokenizer {
+  private data class BalanceFrame(
+    val isStructural: Boolean,
+    var hasSummary: Boolean = false,
+  )
+
+  private enum class TagKind {
+    DETAILS_OPEN,
+    DETAILS_OPEN_EXPANDED,
+    DETAILS_CLOSE,
+    SUMMARY_OPEN,
+    SUMMARY_CLOSE,
+    UNSUPPORTED_DETAILS_OPEN,
+    UNSUPPORTED_DETAILS_CLOSE,
+    UNSUPPORTED_SUMMARY,
+  }
+
+  private data class Tag(
+    val range: IntRange,
+    val raw: String,
+    val kind: TagKind,
+  )
+
+  // Disclosure scanning pauses inside CommonMark raw HTML block types 1-5;
+  // their contents stay literal until the matching terminator.
+  private class RawHtmlContext(
+    val terminator: String,
+    val normalizeCase: Boolean = false,
+  ) {
+    fun closes(line: String): Boolean = (if (normalizeCase) line.lowercase(Locale.US) else line).contains(terminator)
+
+    companion object {
+      fun opening(line: String): RawHtmlContext? {
+        val trimmed = line.trimStart()
+        val lowercased = trimmed.lowercase(Locale.US)
+        if (trimmed.startsWith("<!--")) return RawHtmlContext("-->")
+        if (trimmed.startsWith("<?")) return RawHtmlContext("?>")
+        if (trimmed.startsWith("<![CDATA[")) return RawHtmlContext("]]>")
+        if (trimmed.length > 2 && trimmed.startsWith("<!") && trimmed[2] in 'A'..'Z') return RawHtmlContext(">")
+        for (tag in listOf("pre", "script", "style", "textarea")) {
+          val prefix = "<$tag"
+          if (!lowercased.startsWith(prefix)) continue
+          val boundary = lowercased.getOrNull(prefix.length)
+          if (boundary == null || boundary.isWhitespace() || boundary == '>') return RawHtmlContext("</$tag>", normalizeCase = true)
+        }
+        return null
+      }
+    }
+  }
+
+  private val balanceStack = mutableListOf<BalanceFrame>()
+
+  fun shouldTokenize(source: String): Boolean = balanceStack.isNotEmpty() || startsWithCandidateLine(source)
+
+  fun tokenize(source: String): List<DisclosureToken> {
+    val lines = source.split('\n')
+    val tokens = mutableListOf<DisclosureToken>()
+    val pendingSource = StringBuilder()
+    var rawHtmlContext: RawHtmlContext? = null
+
+    fun flushSource() {
+      val markdown = pendingSource.toString()
+      pendingSource.clear()
+      if (markdown.isBlank()) return
+      tokens += commonMarkBlocks(parseChatMarkdown(markdown).firstChild).map(DisclosureToken::Block)
+    }
+
+    fun appendLiteral(raw: String) {
+      flushSource()
+      tokens += DisclosureToken.Block(ChatMarkdownRenderBlock.LiteralHtml(raw))
+    }
+
+    fun appendSourceLine(
+      line: String,
+      index: Int,
+    ) {
+      pendingSource.append(line)
+      if (index < lines.lastIndex) pendingSource.append('\n')
+    }
+
+    lines.forEachIndexed { lineIndex, line ->
+      (rawHtmlContext ?: RawHtmlContext.opening(line))?.let { context ->
+        appendSourceLine(line, lineIndex)
+        rawHtmlContext = context.takeUnless { it.closes(line) }
+        return@forEachIndexed
+      }
+      val tags = tags(line)
+      if (tags == null) {
+        appendSourceLine(line, lineIndex)
+        return@forEachIndexed
+      }
+
+      var cursor = 0
+      var index = 0
+      while (index < tags.size) {
+        val tag = tags[index]
+        pendingSource.append(line, cursor, tag.range.first)
+        when (tag.kind) {
+          TagKind.DETAILS_OPEN,
+          TagKind.DETAILS_OPEN_EXPANDED,
+          -> {
+            flushSource()
+            val isStructural = balanceStack.size < CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH
+            if (isStructural) {
+              tokens += DisclosureToken.Open(tag.kind == TagKind.DETAILS_OPEN_EXPANDED)
+            } else {
+              appendLiteral(tag.raw)
+            }
+            balanceStack += BalanceFrame(isStructural = isStructural)
+          }
+
+          TagKind.UNSUPPORTED_DETAILS_OPEN -> {
+            appendLiteral(tag.raw)
+            balanceStack += BalanceFrame(isStructural = false)
+          }
+
+          TagKind.DETAILS_CLOSE,
+          TagKind.UNSUPPORTED_DETAILS_CLOSE,
+          -> {
+            val frame = balanceStack.removeLastOrNull()
+            if (frame?.isStructural == true && tag.kind == TagKind.DETAILS_CLOSE) {
+              flushSource()
+              tokens += DisclosureToken.Close
+            } else {
+              appendLiteral(tag.raw)
+            }
+          }
+
+          TagKind.SUMMARY_OPEN -> {
+            // The web block rule also pairs summary tags within one line;
+            // multiline summaries deliberately remain literal on every surface.
+            // Reference definitions resolve in bodies, not standalone summaries;
+            // keeping fragments isolated avoids cross-document splicing.
+            val closeIndex = ((index + 1) until tags.size).firstOrNull { tags[it].kind == TagKind.SUMMARY_CLOSE }
+            val frame = balanceStack.lastOrNull()
+            if (closeIndex != null && frame?.isStructural == true && !frame.hasSummary) {
+              flushSource()
+              val close = tags[closeIndex]
+              val summary = line.substring(tag.range.last + 1, close.range.first)
+              if (summary.isNotBlank()) tokens += DisclosureToken.Summary(summary)
+              frame.hasSummary = true
+              cursor = close.range.last + 1
+              index = closeIndex + 1
+              continue
+            }
+            appendLiteral(tag.raw)
+          }
+
+          TagKind.SUMMARY_CLOSE,
+          TagKind.UNSUPPORTED_SUMMARY,
+          -> {
+            appendLiteral(tag.raw)
+          }
+        }
+        cursor = tag.range.last + 1
+        index += 1
+      }
+      pendingSource.append(line, cursor, line.length)
+      if (lineIndex < lines.lastIndex) pendingSource.append('\n')
+    }
+
+    flushSource()
+    return tokens
+  }
+
+  companion object {
+    private val candidateLineRegex = Regex("^ {0,3}</?(?:details|summary)(?=[\\s>])", RegexOption.IGNORE_CASE)
+    private val tagRegex = Regex("</?(?:details|summary)(?=[\\s>])[^>]*>", RegexOption.IGNORE_CASE)
+
+    fun startsWithCandidateLine(source: String): Boolean = source.lineSequence().firstOrNull { it.isNotBlank() }?.let { tags(it) != null } ?: false
+
+    private fun tags(line: String): List<Tag>? {
+      if (!candidateLineRegex.containsMatchIn(line)) return null
+      val codeRanges = inlineCodeRanges(line)
+      val tags =
+        tagRegex
+          .findAll(line)
+          .mapNotNull { match ->
+            if (isEscaped(line, match.range.first) || codeRanges.any { match.range.first in it }) {
+              null
+            } else {
+              Tag(range = match.range, raw = match.value, kind = kind(match.value))
+            }
+          }.toList()
+      return tags.ifEmpty { null }
+    }
+
+    private fun kind(raw: String): TagKind =
+      when (val lower = raw.lowercase(Locale.US)) {
+        "<details>" -> {
+          TagKind.DETAILS_OPEN
+        }
+
+        "<details open>" -> {
+          TagKind.DETAILS_OPEN_EXPANDED
+        }
+
+        "</details>" -> {
+          TagKind.DETAILS_CLOSE
+        }
+
+        "<summary>" -> {
+          TagKind.SUMMARY_OPEN
+        }
+
+        "</summary>" -> {
+          TagKind.SUMMARY_CLOSE
+        }
+
+        else -> {
+          when {
+            lower.startsWith("</details") -> TagKind.UNSUPPORTED_DETAILS_CLOSE
+            lower.startsWith("<details") -> TagKind.UNSUPPORTED_DETAILS_OPEN
+            else -> TagKind.UNSUPPORTED_SUMMARY
+          }
+        }
+      }
+
+    private fun isEscaped(
+      line: String,
+      index: Int,
+    ): Boolean {
+      var cursor = index - 1
+      var count = 0
+      while (cursor >= 0 && line[cursor] == '\\') {
+        count += 1
+        cursor -= 1
+      }
+      return count % 2 == 1
+    }
+
+    private fun inlineCodeRanges(line: String): List<IntRange> {
+      val ranges = mutableListOf<IntRange>()
+      var cursor = 0
+      while (cursor < line.length) {
+        if (line[cursor] != '`') {
+          cursor += 1
+          continue
+        }
+        val openerStart = cursor
+        while (cursor < line.length && line[cursor] == '`') cursor += 1
+        val runLength = cursor - openerStart
+        var search = cursor
+        var closeEnd = -1
+        while (search < line.length) {
+          if (line[search] != '`') {
+            search += 1
+            continue
+          }
+          val closeStart = search
+          while (search < line.length && line[search] == '`') search += 1
+          if (search - closeStart == runLength) {
+            closeEnd = search
+            break
+          }
+        }
+        if (closeEnd >= 0) {
+          ranges += openerStart until closeEnd
+          cursor = closeEnd
+        }
+      }
+      return ranges
+    }
+  }
+}
+
+private fun foldDisclosureTokens(tokens: List<DisclosureToken>): List<ChatMarkdownRenderBlock> {
+  data class Frame(
+    var summary: String? = null,
+    val isExpanded: Boolean,
+    val blocks: MutableList<ChatMarkdownRenderBlock> = mutableListOf(),
+  )
+
+  val result = mutableListOf<ChatMarkdownRenderBlock>()
+  val stack = mutableListOf<Frame>()
+
+  fun append(block: ChatMarkdownRenderBlock) {
+    stack.lastOrNull()?.blocks?.add(block) ?: result.add(block)
+  }
+
+  fun closeTopFrame() {
+    val frame = stack.removeLastOrNull() ?: return
+    append(
+      ChatMarkdownRenderBlock.Disclosure(
+        summary = frame.summary,
+        isExpanded = frame.isExpanded,
+        blocks = frame.blocks,
+      ),
+    )
+  }
+
+  tokens.forEach { token ->
+    when (token) {
+      is DisclosureToken.Block -> append(token.block)
+      is DisclosureToken.Open -> stack += Frame(isExpanded = token.isExpanded)
+      is DisclosureToken.Summary -> stack.lastOrNull()?.summary = token.source
+      DisclosureToken.Close -> closeTopFrame()
+    }
+  }
+
+  // Streaming commonly ends before the closing tag; fold every open frame at
+  // EOF so the partial body stays inside a stable expandable section.
+  while (stack.isNotEmpty()) closeTopFrame()
+  return result
+}
+
+private fun buildPlainText(start: Node?): String {
+  val sb = StringBuilder()
+  for (node in markdownSiblings(start)) {
+    when (node) {
+      is MarkdownTextNode -> sb.append(node.literal)
+      is SoftLineBreak, is HardLineBreak -> sb.append('\n')
+      else -> sb.append(buildPlainText(node.firstChild))
+    }
+  }
+  return sb.toString()
+}
+
+private fun standaloneDataImage(paragraph: Paragraph): ParsedDataImage? {
+  val only = paragraph.firstChild as? MarkdownImage ?: return null
+  if (only.next != null) return null
+  return parseDataImageDestination(only.destination)
+}
+
+/** Parses a data:image Markdown destination when it is safe to render inline. */
+internal fun parseDataImageDestination(destination: String?): ParsedDataImage? {
+  val raw = destination?.trim().orEmpty()
+  if (raw.isEmpty()) return null
+  // Bound the full URI before regex parsing so pasted data images cannot allocate huge match buffers.
+  if (raw.length > CHAT_IMAGE_MAX_BASE64_CHARS + DATA_IMAGE_HEADER_MAX_CHARS) return null
+  val match = dataImageRegex.matchEntire(raw) ?: return null
+  val subtype = match.groupValues[1]
+  val base64 = match.groupValues[2].replace("\n", "").replace("\r", "")
+  if (base64.isEmpty()) return null
+  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
+  return ParsedDataImage(mimeType = "image/$subtype", base64 = base64)
+}
+
+private fun headingStyle(
+  level: Int,
+  baseCallout: TextStyle,
+): TextStyle =
+  when (level.coerceIn(1, 6)) {
+    1 -> baseCallout.copy(fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold)
+    2 -> baseCallout.copy(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
+    3 -> baseCallout.copy(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+    4 -> baseCallout.copy(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
+    else -> baseCallout.copy(fontWeight = FontWeight.SemiBold)
+  }
+
+private data class InlineStyles(
+  val inlineCodeBg: Color,
+  val inlineCodeColor: Color,
+  val linkColor: Color,
+  val baseCallout: TextStyle,
+)
+
+private data class TableRenderRow(
+  val isHeader: Boolean,
+  val cells: List<AnnotatedString>,
+)
+
+/**
+ * Parsed bounded data-image payload for chat markdown rendering.
+ */
+internal data class ParsedDataImage(
+  val mimeType: String,
+  val base64: String,
+)
+
+@Composable
+private fun InlineBase64Image(
+  base64: String,
+  mimeType: String?,
+) {
+  val imageState = rememberBase64ImageState(base64)
+  val image = imageState.image
+
+  if (image != null) {
+    val anchor = rememberChatReaderAnchor(base64)
+    Image(
+      bitmap = image,
+      contentDescription = mimeType ?: nativeString("Image"),
+      contentScale = ContentScale.Fit,
+      modifier = Modifier.fillMaxWidth().then(anchor?.modifier ?: Modifier),
+    )
+  } else if (imageState.failed) {
+    Text(
+      text = nativeString("Image unavailable"),
+      modifier = Modifier.padding(vertical = 2.dp),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+  }
+}

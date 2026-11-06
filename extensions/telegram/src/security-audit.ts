@@ -1,0 +1,142 @@
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveNativeSkillsEnabled } from "openclaw/plugin-sdk/native-command-config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "../runtime-api.js";
+import type { ResolvedTelegramAccount } from "./accounts.js";
+import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+
+export async function collectTelegramSecurityAuditFindings(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  account: ResolvedTelegramAccount;
+}) {
+  const findings: Array<{
+    checkId: string;
+    severity: "info" | "warn" | "critical";
+    title: string;
+    detail: string;
+    remediation?: string;
+  }> = [];
+
+  const telegramCfg = params.account.config ?? {};
+  const accountId =
+    normalizeOptionalString(params.accountId) ?? params.account.accountId ?? "default";
+  const invalidTelegramAllowFromEntries = new Set<string>();
+  const collectInvalidAllowFrom = (entries: unknown) => {
+    if (!Array.isArray(entries)) {
+      return false;
+    }
+    for (const entry of entries) {
+      const normalized = normalizeTelegramAllowFromEntry(entry);
+      if (normalized && normalized !== "*" && !isNumericTelegramSenderUserId(normalized)) {
+        invalidTelegramAllowFromEntries.add(normalized);
+      }
+    }
+    return entries.length > 0;
+  };
+  const appendInvalidAllowFromFinding = () => {
+    if (invalidTelegramAllowFromEntries.size === 0) {
+      return;
+    }
+    const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
+    const more =
+      invalidTelegramAllowFromEntries.size > examples.length
+        ? ` (+${invalidTelegramAllowFromEntries.size - examples.length} more)`
+        : "";
+    findings.push({
+      checkId: "channels.telegram.allowFrom.invalid_entries",
+      severity: "warn",
+      title: "Telegram allowlist contains non-numeric entries",
+      detail:
+        "Telegram sender authorization requires numeric Telegram user IDs. " +
+        `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
+      remediation:
+        "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
+    });
+  };
+  collectInvalidAllowFrom(telegramCfg.allowFrom);
+  if (params.cfg.commands?.text === false) {
+    appendInvalidAllowFromFinding();
+    return findings;
+  }
+
+  const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = telegramCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const groups = telegramCfg.groups as Record<string, unknown> | undefined;
+  const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
+  const groupAccessPossible =
+    groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
+  if (!groupAccessPossible) {
+    appendInvalidAllowFromFinding();
+    return findings;
+  }
+
+  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
+    () => [],
+  );
+  const storeHasWildcard = storeAllowFrom.some(
+    (value) => (normalizeOptionalString(value) ?? "") === "*",
+  );
+  collectInvalidAllowFrom(storeAllowFrom);
+  const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
+    ? telegramCfg.groupAllowFrom
+    : [];
+  const groupAllowFromHasWildcard = groupAllowFrom.some(
+    (value) => (normalizeOptionalString(String(value)) ?? "") === "*",
+  );
+  collectInvalidAllowFrom(groupAllowFrom);
+
+  const groupScopes = Object.values(groups ?? {}).flatMap((value) => {
+    if (!value || typeof value !== "object") {
+      return [];
+    }
+    const topics = (value as Record<string, unknown>).topics;
+    const scopes: unknown[] = [value];
+    return scopes.concat(topics && typeof topics === "object" ? Object.values(topics) : []);
+  });
+  let anyGroupOverride = false;
+  for (const scope of groupScopes) {
+    if (scope && typeof scope === "object") {
+      anyGroupOverride =
+        collectInvalidAllowFrom((scope as Record<string, unknown>).allowFrom) || anyGroupOverride;
+    }
+  }
+
+  const hasAnySenderAllowlist =
+    storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+
+  appendInvalidAllowFromFinding();
+
+  if (storeHasWildcard || groupAllowFromHasWildcard) {
+    findings.push({
+      checkId: "channels.telegram.groups.allowFrom.wildcard",
+      severity: "critical",
+      title: "Telegram group allowlist contains wildcard",
+      detail:
+        'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
+      remediation:
+        'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
+    });
+    return findings;
+  }
+
+  if (!hasAnySenderAllowlist) {
+    const skillsEnabled = resolveNativeSkillsEnabled({
+      providerId: "telegram",
+      providerSetting: telegramCfg.commands?.nativeSkills,
+      globalSetting: params.cfg.commands?.nativeSkills,
+    });
+    findings.push({
+      checkId: "channels.telegram.groups.allowFrom.missing",
+      severity: "critical",
+      title: "Telegram group commands have no sender allowlist",
+      detail:
+        `Telegram group access is enabled but no sender allowlist is configured; this allows any group member to invoke /… commands` +
+        (skillsEnabled ? " (including skill commands)." : "."),
+      remediation:
+        "Approve yourself via pairing (recommended), or set channels.telegram.groupAllowFrom (or per-group groups.<id>.allowFrom).",
+    });
+  }
+
+  return findings;
+}

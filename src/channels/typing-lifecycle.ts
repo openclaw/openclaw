@@ -1,0 +1,50 @@
+// Typing indicator keepalive loop with in-flight tick suppression.
+type AsyncTick = () => Promise<void> | void;
+
+/** Creates a cancellable keepalive loop for channel typing indicators. */
+export function createTypingKeepaliveLoop(params: { intervalMs: number; onTick: AsyncTick }) {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let tickInFlight = false;
+
+  const tick = async () => {
+    if (tickInFlight) {
+      return;
+    }
+    // Avoid overlapping typing updates when a channel API call stalls past the interval.
+    tickInFlight = true;
+    try {
+      await params.onTick();
+    } finally {
+      tickInFlight = false;
+    }
+  };
+
+  const start = () => {
+    if (params.intervalMs <= 0 || timer) {
+      return;
+    }
+    timer = setInterval(() => {
+      // Nothing awaits the timer, so a rejecting onTick would reach the process as an
+      // unhandled rejection. Report it and keep the loop running.
+      tick().catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.warn(`[typing] keepalive tick failed: ${reason}`);
+      });
+    }, params.intervalMs);
+    timer.unref?.();
+  };
+
+  const stop = () => {
+    clearInterval(timer);
+    timer = undefined;
+    // Stopping the timer cannot cancel an admitted provider request. Its
+    // completion releases exclusivity even if the loop restarts meanwhile.
+  };
+
+  return {
+    tick,
+    start,
+    stop,
+    isRunning: () => timer !== undefined,
+  };
+}

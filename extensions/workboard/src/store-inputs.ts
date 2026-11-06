@@ -1,0 +1,200 @@
+import type {
+  WorkboardBoardSummary,
+  WorkboardCard,
+  WorkboardDiagnostic,
+  WorkboardEvent,
+  WorkboardLaunchState,
+  WorkboardWorkspace,
+  WorkboardWorkspaceAccess,
+} from "@openclaw/workboard-contract";
+
+type WorkboardCardInput = {
+  title?: unknown;
+  notes?: unknown;
+  status?: unknown;
+  priority?: unknown;
+  labels?: unknown;
+  agentId?: unknown;
+  sessionKey?: unknown;
+  runId?: unknown;
+  sourceUrl?: unknown;
+  execution?: unknown;
+  metadata?: unknown;
+  templateId?: unknown;
+  position?: unknown;
+  tenant?: unknown;
+  boardId?: unknown;
+  createdByCardId?: unknown;
+  idempotencyKey?: unknown;
+  skills?: unknown;
+  workspace?: unknown;
+  /** Trusted mutation provenance; not accepted from public tool schemas. */
+  workspaceAccess?: unknown;
+  maxRuntimeSeconds?: unknown;
+  maxRetries?: unknown;
+  scheduledAt?: unknown;
+  startedAt?: unknown;
+  completedAt?: unknown;
+  parents?: unknown;
+};
+
+export type WorkboardCardPatch = WorkboardCardInput;
+/** Internal builders carry launch state separately from untrusted metadata. */
+export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
+  ownedLaunch?: WorkboardLaunchState;
+};
+export type WorkboardUpdateCardOptions = {
+  automationLaunch?: WorkboardLaunchState;
+  allowMetadataDependencyLinks?: boolean;
+  enforceStatusHolds?: boolean;
+  event?: Omit<WorkboardEvent, "id" | "at">;
+  eventAt?: number;
+  expectedUpdatedAt?: number;
+  ownerSlot?: { ownerId: string; now: number };
+  preserveProofId?: string;
+  preserveNotificationId?: string;
+};
+export type WorkboardCommentInput = { body?: unknown };
+export type WorkboardLinkInput = {
+  type?: unknown;
+  targetCardId?: unknown;
+  title?: unknown;
+  url?: unknown;
+};
+export type WorkboardLinkedCreateInput = WorkboardCardInput;
+export type WorkboardProofInput = {
+  status?: unknown;
+  label?: unknown;
+  command?: unknown;
+  url?: unknown;
+  note?: unknown;
+};
+export type WorkboardArtifactInput = {
+  label?: unknown;
+  url?: unknown;
+  path?: unknown;
+  mimeType?: unknown;
+};
+export type WorkboardAttachmentInput = {
+  fileName?: unknown;
+  contentBase64?: unknown;
+  mimeType?: unknown;
+  note?: unknown;
+};
+export type WorkboardWorkerLogInput = Pick<WorkboardCardInput, "sessionKey" | "runId"> & {
+  level?: unknown;
+  message?: unknown;
+};
+export type WorkboardProtocolViolationInput = Pick<WorkboardCardInput, "sessionKey" | "runId"> & {
+  detail?: unknown;
+};
+export type WorkboardClaimInput = WorkboardMutationScope & {
+  ttlSeconds?: unknown;
+};
+export type WorkboardClaimOptions = {
+  assertOwnerCurrent?: () => void;
+  /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
+  expectedAuthority?: {
+    boardId: string;
+    status: WorkboardCard["status"];
+    agentId?: string;
+    workspace?: WorkboardWorkspace;
+    workspaceAccess?: WorkboardWorkspaceAccess;
+  };
+  /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
+  adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
+};
+export type WorkboardHeartbeatInput = WorkboardMutationScope & {
+  note?: unknown;
+};
+export type WorkboardBulkInput = {
+  ids?: unknown;
+  patch?: unknown;
+  archived?: unknown;
+};
+export type WorkboardCompleteInput = WorkboardMutationScope & {
+  summary?: unknown;
+  proof?: unknown;
+  proofId?: unknown;
+  artifacts?: unknown;
+  createdCardIds?: unknown;
+};
+export type WorkboardBlockInput = WorkboardMutationScope & {
+  reason?: unknown;
+};
+export type WorkboardDispatchResult = {
+  promoted: WorkboardCard[];
+  reclaimed: WorkboardCard[];
+  blocked: WorkboardCard[];
+  orchestrated: WorkboardCard[];
+  count: number;
+};
+export type WorkboardListOptions = {
+  boardId?: unknown;
+};
+export type WorkboardDispatchOptions = WorkboardListOptions & {
+  now?: unknown;
+  assertOwnerCurrent?: () => void;
+};
+export type WorkboardStatsResult = WorkboardBoardSummary & {
+  byAgent: Record<string, number>;
+  oldestReadyAgeMs?: number;
+};
+export type WorkboardPromoteInput = {
+  force?: unknown;
+  reason?: unknown;
+};
+export type WorkboardReassignInput = {
+  agentId?: unknown;
+  status?: unknown;
+  resetFailures?: unknown;
+  reason?: unknown;
+};
+export type WorkboardReclaimInput = Pick<WorkboardReassignInput, "status" | "reason">;
+export type WorkboardBoardInput = {
+  id?: unknown;
+  kind?: unknown;
+  name?: unknown;
+  description?: unknown;
+  icon?: unknown;
+  color?: unknown;
+  clearAppearance?: unknown;
+  automationJobId?: unknown;
+  defaultWorkspace?: unknown;
+  orchestration?: unknown;
+  archived?: unknown;
+};
+export type WorkboardSpecifyInput = WorkboardCardPatch & {
+  summary?: unknown;
+};
+export type WorkboardDecomposeInput = {
+  summary?: unknown;
+  children?: unknown;
+  completeParent?: unknown;
+};
+export type WorkboardNotificationSubscribeInput = WorkboardNotificationListOptions & {
+  sessionKey?: unknown;
+  runId?: unknown;
+  target?: unknown;
+  eventKinds?: unknown;
+};
+export type WorkboardNotificationListOptions = {
+  boardId?: unknown;
+  cardId?: unknown;
+};
+export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
+  subscriptionId?: unknown;
+  limit?: unknown;
+};
+export type WorkboardMutationScope = {
+  ownerId?: unknown;
+  token?: unknown;
+};
+
+export type WorkboardDiagnosticsResult = {
+  diagnostics: Array<{
+    card: WorkboardCard;
+    diagnostics: WorkboardDiagnostic[];
+  }>;
+  count: number;
+};

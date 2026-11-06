@@ -1,0 +1,597 @@
+/* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
+import { Compile } from "typebox/compile";
+import { expect, vi } from "vitest";
+import { ChannelsPairingListResultSchema } from "../../../packages/gateway-protocol/src/schema/channel-pairing.ts";
+import { ChannelsStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/channels.ts";
+import { MigrationProtocolSchemas } from "../../../packages/gateway-protocol/src/schema/migrations.ts";
+import { SystemAgentChatHistoryResultSchema } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
+import {
+  PluginsCatalogBrowseResultSchema,
+  PluginsCatalogCategoriesResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/plugins.ts";
+import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
+import {
+  createControlUiMockGatewayInitScript,
+  type ControlUiMockRequestHandler,
+} from "./control-ui-e2e.ts";
+import { normalizeControlUiMockAuth } from "./control-ui-mock-auth.ts";
+import { collectGarbageForTest } from "./garbage-collection.ts";
+import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
+
+const getGateway = (window: MockGatewayWindow) =>
+  expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
+
+it("retains only bounded row counts from successful delivered session lists", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const { request, send } = gatewayPage.connect();
+  await flushMockTimers();
+  let response: unknown;
+  gateway.setRequestHandler("sessions.list", ({ respond }) => respond(response));
+  response = { sessions: [] };
+  for (const spawnedBy of [undefined, "", "  "]) {
+    await request(`root-${String(spawnedBy)}`, "sessions.list", { spawnedBy });
+  }
+  expect(gateway.sessionListResponseFacts.replies).toEqual(
+    Array.from({ length: 3 }, () => ({ child: false, rows: 0 })),
+  );
+  for (let rows = 0; rows < 10; rows++) {
+    response = { sessions: Array.from({ length: rows }, () => ({ key: "private-row-canary" })) };
+    await request(`list-${rows}`, "sessions.list", rows % 2 ? { spawnedBy: "private-parent" } : {});
+  }
+  const bounded = {
+    replies: Array.from({ length: 8 }, (_, index) => ({
+      child: (index + 2) % 2 === 1,
+      rows: index + 2,
+    })),
+    truncated: true,
+    unavailableReplies: 0,
+  };
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  expect(JSON.stringify(gateway.sessionListResponseFacts)).not.toContain("private-");
+  response = { unavailable: true };
+  await request("missing-rows", "sessions.list", {});
+  bounded.unavailableReplies = 1;
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  response = { __mockError: { code: "FORBIDDEN", message: "private-error" } };
+  await request("denied", "sessions.list", {});
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+
+  gateway.deferNext("sessions.list");
+  send("held", "sessions.list", {});
+  await flushMockTimers();
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  gateway.resolveDeferred("sessions.list", { sessions: [] });
+  bounded.replies.shift();
+  bounded.replies.push({ child: false, rows: 0 });
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  gateway.deferNext("sessions.list");
+  send("closed", "sessions.list", {});
+  await flushMockTimers();
+  gateway.closeLatest();
+  gateway.resolveDeferred("sessions.list", { sessions: [] });
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+});
+
+it("counts a delivered session list even when its receiver closes synchronously", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const socket = new gatewayPage.window.WebSocket("ws://mock-gateway");
+  await flushMockTimers();
+  socket.addEventListener("message", () => socket.close());
+  socket.send(
+    JSON.stringify({ type: "req", id: "delivered", method: "sessions.list", params: {} }),
+  );
+  await flushMockTimers();
+  expect(socket.readyState).toBe(gatewayPage.window.WebSocket.CLOSED);
+  expect(gateway.sessionListResponseFacts).toEqual({
+    replies: [{ child: false, rows: 1 }],
+    truncated: false,
+    unavailableReplies: 0,
+  });
+});
+
+it.for([undefined, null, "profile-current"])(
+  "keeps prepared role presentation separate from changed socket scopes (%s)",
+  async (profileActivityViewerId, { gatewayPage }) => {
+    const prepared = normalizeControlUiMockAuth({
+      roleAllowsAdmin: false,
+      operatorSessionCap: "write",
+      profileActivityViewerId,
+      operatorScopes: ["operator.sessions.write"],
+    });
+    gatewayPage.execute(createControlUiMockGatewayInitScript(prepared));
+    const first = gatewayPage.connect();
+    await flushMockTimers();
+    const hello = await first.request("first-connect", "connect", {});
+    expect(hello.auth).toMatchObject({
+      ...prepared.operatorRolePolicy,
+      scopes: prepared.operatorScopes,
+    });
+    getGateway(gatewayPage.window).setOperatorScopes(["operator.read"]);
+    getGateway(gatewayPage.window).closeLatest();
+    const replacement = gatewayPage.connect();
+    await flushMockTimers();
+    const renewed = await replacement.request("renewed-connect", "connect", {});
+    expect(renewed.auth).toMatchObject({
+      ...prepared.operatorRolePolicy,
+      scopes: ["operator.read"],
+    });
+    if (profileActivityViewerId === undefined) {
+      expect(renewed.auth).not.toHaveProperty("profileActivityViewerId");
+    } else {
+      expect(renewed.auth).toHaveProperty("profileActivityViewerId", profileActivityViewerId);
+    }
+  },
+);
+
+it("serves protocol-valid empty Custodian history without method advertisement", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript({ featureMethods: ["openclaw.chat"] }));
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+
+  const history = await request("custodian-history", "openclaw.chat.history", {});
+
+  expect(Compile(SystemAgentChatHistoryResultSchema).Check(history)).toBe(true);
+  expect(history.turns).toEqual([]);
+});
+
+it("keeps catalog resolution read-only and preserves configured outcomes", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      sessions: [{ key: "agent:main:main", snapshotAt: 1 }],
+    }),
+  );
+  const { request, frames } = gatewayPage.connect();
+  await flushMockTimers();
+  const gateway = getGateway(gatewayPage.window);
+  const initial = await request("catalog-list-before", "sessions.list", {});
+  for (const method of ["sessions.catalog.resolve", "beam.owned.resolve"]) {
+    expect(await request(`${method}-unbound`, method, {})).toBeNull();
+    const destination = { sessionKey: "agent:main:catalog-destination" };
+    gateway.setMethodResponse(method, destination);
+    expect(await request(`${method}-bound`, method, {})).toEqual(destination);
+    gateway.setMethodResponse(method, {
+      __mockError: { code: "FORBIDDEN", message: "Destination access denied" },
+    });
+    await request(`${method}-denied`, method, {});
+    expect(frames.find((frame) => frame.id === `${method}-denied`)).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "Destination access denied" },
+    });
+  }
+  const final = await request("catalog-list-after", "sessions.list", {});
+  expect(final.sessions).toEqual(initial.sessions);
+});
+
+it("serves protocol-valid empty channel status and pairing defaults", async ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+
+  const snapshot = await request("channel-status", "channels.status", { probe: false });
+
+  expect(Compile(ChannelsStatusResultSchema).Check(snapshot)).toBe(true);
+  expect([snapshot.channels, snapshot.channelAccounts]).toEqual([{}, {}]);
+
+  const pairing = await request("channel-pairing", "channels.pairing.list", {});
+  expect(Compile(ChannelsPairingListResultSchema).Check(pairing)).toBe(true);
+  expect([pairing.accounts, pairing.requests]).toEqual([[], []]);
+});
+
+it("serves protocol-valid empty plugin discovery defaults", async ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+
+  const categories = await request("plugin-categories", "plugins.catalog.categories", {});
+  expect(Compile(PluginsCatalogCategoriesResultSchema).Check(categories)).toBe(true);
+  expect(categories.categories).toEqual([]);
+
+  const catalog = await request("plugin-catalog", "plugins.catalog.browse", {});
+  expect(Compile(PluginsCatalogBrowseResultSchema).Check(catalog)).toBe(true);
+  expect(catalog.items).toEqual([]);
+});
+
+it("serves protocol-valid empty memory plans for the requested agent", async ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+  const validate = Compile(MigrationProtocolSchemas.MigrationsMemoryPlanResult);
+
+  for (const agentId of ["main", "research"]) {
+    const plan = await request(`memory-plan-${agentId}`, "migrations.memory.plan", { agentId });
+    expect(validate.Check(plan)).toBe(true);
+    expect(plan).toMatchObject({ agentId, providers: [] });
+  }
+  const fallback = await request("memory-plan-default", "migrations.memory.plan", {});
+  expect(validate.Check(fallback)).toBe(true);
+  expect(fallback.agentId).toBe("main");
+});
+
+it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(window);
+  const pending: Parameters<ControlUiMockRequestHandler>[0][] = [];
+  gateway.setRequestHandler("health", (request) => pending.push(request));
+  const sockets = ["first", "second"].map((name) => gatewayPage.connect(`ws://mock/${name}`));
+  await flushMockTimers();
+  for (const [index, socket] of sockets.entries()) {
+    socket.send(String(index), "health", { index });
+  }
+  await flushMockTimers();
+  expect(pending.map((request) => request.params)).toEqual([{ index: 0 }, { index: 1 }]);
+  for (const request of pending.toReversed()) {
+    request.respond(request.params);
+    request.emit("checked", request.params);
+  }
+  for (const index of [0, 1]) {
+    expect(
+      sockets[index]?.frames.filter((frame) => frame.event !== "connect.challenge"),
+    ).toMatchObject([
+      { type: "res", id: String(index), ok: true, payload: { index } },
+      { type: "event", event: "checked", payload: { index } },
+    ]);
+  }
+});
+
+it("takes existing mock sockets offline without closing their replacement", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  const passthroughPrefix = "ws://source-ui/?token=";
+  const script = createControlUiMockGatewayInitScript({
+    webSocketPassthroughPrefixes: [passthroughPrefix],
+  });
+  class PassthroughWebSocket extends window.EventTarget {
+    static readonly CLOSED = 3;
+    static readonly CLOSING = 2;
+    static readonly CONNECTING = 0;
+    static readonly OPEN = 1;
+    readyState = PassthroughWebSocket.OPEN;
+
+    close(): void {
+      this.readyState = PassthroughWebSocket.CLOSED;
+    }
+  }
+  window.WebSocket = PassthroughWebSocket as unknown as typeof WebSocket;
+
+  execute(script);
+
+  const passthrough = new window.WebSocket(`${passthroughPrefix}vite`);
+  const first = new window.WebSocket("ws://mock-gateway/first");
+  const second = new window.WebSocket("ws://mock-gateway/second");
+  await flushMockTimers();
+  expect(passthrough.readyState).toBe(window.WebSocket.OPEN);
+  expect(first.readyState).toBe(window.WebSocket.OPEN);
+  expect(second.readyState).toBe(window.WebSocket.OPEN);
+
+  let replacement: WebSocket | undefined;
+  first.addEventListener("close", () => {
+    replacement = new window.WebSocket("ws://mock-gateway/replacement");
+  });
+
+  const controls = getGateway(window);
+  controls.setOnline(false);
+
+  expect(passthrough.readyState).toBe(window.WebSocket.OPEN);
+  expect(first.readyState).toBe(window.WebSocket.CLOSED);
+  expect(second.readyState).toBe(window.WebSocket.CLOSED);
+  expect(replacement?.readyState).toBe(window.WebSocket.CONNECTING);
+
+  controls.setOnline(true);
+  expect(replacement?.readyState).toBe(window.WebSocket.OPEN);
+});
+
+it("releases closed transports while preserving their connection history", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const retired = (() => {
+    const socket = new window.WebSocket("ws://mock-gateway/retired");
+    window.setTimeout(() => socket.close(), 0);
+    return new WeakRef(socket);
+  })();
+  await flushMockTimers();
+  const current = new window.WebSocket("ws://mock-gateway/current");
+  await flushMockTimers();
+  const gateway = getGateway(window);
+  expect(gateway.socketCount()).toBe(2);
+  expect(gateway.socketUrls()).toEqual(["ws://mock-gateway/retired", "ws://mock-gateway/current"]);
+  expect(gateway.socketStates()).toEqual([
+    { readyState: window.WebSocket.CLOSED, state: "closed", url: "ws://mock-gateway/retired" },
+    { readyState: window.WebSocket.OPEN, state: "open", url: "ws://mock-gateway/current" },
+  ]);
+
+  const control = new WeakRef({ unowned: true });
+  await collectGarbageForTest();
+  expect(control.deref()).toBeUndefined();
+  expect(retired.deref()).toBeUndefined();
+  expect(current.readyState).toBe(window.WebSocket.OPEN);
+});
+
+it.for(["absent", "null", "explicit"] as const)(
+  "round-trips config.set through config.get with %s source projections and an advancing hash",
+  async (projectionShape, { gatewayPage }) => {
+    const { execute } = gatewayPage;
+    const raw = '{\n  "logging": {\n    "level": "info"\n  }\n}\n';
+    const config = (level: string) => ({ logging: { level } });
+    const initialConfig = config("info");
+    const runtimeDefaults = { agents: { defaults: { thinkingDefault: "low" } } };
+    const projections =
+      projectionShape === "explicit"
+        ? {
+            sourceConfig: initialConfig,
+            resolved: initialConfig,
+            runtimeConfig: { ...initialConfig, ...runtimeDefaults },
+          }
+        : projectionShape === "null"
+          ? { sourceConfig: null, resolved: null, runtimeConfig: null }
+          : {};
+    const expectProjections = (snapshot: Record<string, unknown>, source: unknown) => {
+      if (projectionShape === "explicit") {
+        expect(snapshot.sourceConfig).toEqual(source);
+        expect(snapshot.resolved).toEqual(source);
+        expect(snapshot.runtimeConfig).toMatchObject(runtimeDefaults);
+      } else {
+        for (const key of ["sourceConfig", "resolved", "runtimeConfig"]) {
+          if (projectionShape === "null") {
+            expect(snapshot[key]).toBeNull();
+          } else {
+            expect(Object.hasOwn(snapshot, key)).toBe(false);
+          }
+        }
+      }
+    };
+    const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "config.get": {
+          raw,
+          config: initialConfig,
+          ...projections,
+          hash: "fixture-hash",
+          valid: true,
+          issues: [],
+        },
+      },
+    });
+    execute(script);
+
+    const { request, send, frames } = gatewayPage.connect();
+    await flushMockTimers();
+
+    const expectSnapshot = (
+      snapshot: Record<string, unknown>,
+      level: string,
+      expected: Record<string, unknown>,
+    ) => {
+      expect(snapshot).toMatchObject(expected);
+      expect(snapshot.config).toEqual(config(level));
+      expectProjections(snapshot, config(level));
+    };
+    const writeConfig = async (
+      method: string,
+      sequence: number,
+      updatedRaw: string,
+      level: string,
+      appliedHash: string,
+    ) => {
+      const hash = `mock-config-hash-${sequence}`;
+      const baseHash = sequence === 1 ? "fixture-hash" : `mock-config-hash-${sequence - 1}`;
+      expect(await request(`write-${sequence}`, method, { raw: updatedRaw, baseHash })).toEqual({
+        ok: true,
+        hash,
+        config: config(level),
+      });
+      expectSnapshot(await request(`read-${sequence}`, "config.get", {}), level, {
+        raw: updatedRaw,
+        hash,
+        configRevisionHash: hash,
+        appliedConfigHash: appliedHash,
+      });
+    };
+    expectSnapshot(await request("get-1", "config.get", {}), "info", {
+      raw,
+      hash: "fixture-hash",
+      configRevisionHash: "fixture-hash",
+      appliedConfigHash: "fixture-hash",
+    });
+    const nextRaw = raw.replace("info", "debug");
+    // Acks carry the persisted hash, mirroring the real gateway contract.
+    await writeConfig("config.set", 1, nextRaw, "debug", "fixture-hash");
+    await writeConfig("config.apply", 2, nextRaw, "debug", "mock-config-hash-2");
+    const json5Raw = '{\n  // Keep this comment.\n  logging: { level: "warn", },\n}\n';
+    await writeConfig("config.set", 3, json5Raw, "warn", "mock-config-hash-2");
+
+    const gateway = getGateway(gatewayPage.window);
+    const replacement = config("error");
+    gateway.deferNext("config.patch");
+    send("pending-replacement", "config.patch", {
+      raw: JSON.stringify(replacement),
+      baseHash: "mock-config-hash-3",
+    });
+    await flushMockTimers();
+    const persisted = {
+      raw: JSON.stringify(replacement),
+      config: replacement,
+      hash: "replacement-hash",
+      appliedConfigHash: "replacement-applied-hash",
+      valid: true,
+      issues: [],
+    };
+    gateway.setMethodResponse("config.get", persisted);
+    gateway.resolveDeferred("config.patch", { ok: true, hash: "replacement-hash" });
+    expect(frames.find((frame) => frame.id === "pending-replacement")).toMatchObject({
+      ok: true,
+    });
+    // Reload before any read can materialize the acknowledged replacement fixture.
+    execute(script);
+    const reconnected = gatewayPage.connect();
+    await flushMockTimers();
+    expect(await reconnected.request("get-replaced", "config.get", {})).toMatchObject(persisted);
+    expect(
+      await reconnected.request("set-after-replacement", "config.set", {
+        raw: JSON.stringify(replacement),
+        baseHash: "replacement-hash",
+      }),
+    ).toMatchObject({ ok: true, hash: "mock-config-hash-4" });
+  },
+);
+it("publishes a catalog adoption only after its deferred response succeeds", async ({
+  gatewayPage,
+}) => {
+  const { execute } = gatewayPage;
+  const sessionKey = "agent:main:deferred-catalog-adoption";
+  const script = createControlUiMockGatewayInitScript({
+    deferredMethods: ["sessions.catalog.continue"],
+    methodResponses: {
+      "sessions.catalog.continue": { sessionKey },
+    },
+  });
+  execute(script);
+
+  const { frames, send, request } = gatewayPage.connect();
+  await flushMockTimers();
+
+  send("deferred-adoption", "sessions.catalog.continue", {
+    catalogId: "codex",
+    hostId: "gateway:local",
+    threadId: "thread-1",
+  });
+  await flushMockTimers();
+  expect(frames.find((frame) => frame.id === "deferred-adoption")).toBeUndefined();
+
+  const gateway = getGateway(gatewayPage.window);
+  gateway.resolveDeferred("sessions.catalog.continue", { sessionKey });
+  await flushMockTimers();
+  expect(frames.find((frame) => frame.id === "deferred-adoption")?.payload).toEqual({
+    sessionKey,
+  });
+
+  expect(
+    await request("list-after-deferred-adoption", "sessions.list", {
+      agentId: "main",
+      search: "deferred-catalog-adoption",
+    }),
+  ).toMatchObject({
+    count: 2,
+    sessions: [
+      expect.objectContaining({ key: "agent:main:main" }),
+      expect.objectContaining({ key: sessionKey }),
+    ],
+  });
+});
+
+it("keeps a same-session observer subscribed when another observer releases", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const { frames, request } = gatewayPage.connect();
+  await flushMockTimers();
+  await request("connect", "connect", { caps: ["session-scoped-events"] });
+  const key = "agent:main:shared-observers";
+  await request("first", "sessions.messages.subscribe", { key, subscriptionId: "first" });
+  await request("second", "sessions.messages.subscribe", { key, subscriptionId: "second" });
+  await request("release-first", "sessions.messages.unsubscribe", { key, subscriptionId: "first" });
+  const final = { sessionKey: key, runId: "shared-run", state: "final" };
+  gateway.emit("chat", final);
+  expect(frames.filter((frame) => frame.type === "event" && frame.event === "chat")).toEqual([
+    expect.objectContaining({ payload: final }),
+  ]);
+  await request("release-second", "sessions.messages.unsubscribe", {
+    key,
+    subscriptionId: "second",
+  });
+  gateway.emit("chat", final);
+  expect(frames.filter((frame) => frame.type === "event" && frame.event === "chat")).toHaveLength(
+    1,
+  );
+});
+
+it("keeps repeated events scoped after unsubscribe and reconnect without filtering roster messages", async ({
+  gatewayPage,
+}) => {
+  vi.useFakeTimers();
+  const { execute } = gatewayPage;
+  const sessionKey = "agent:main:sidebar-narration-demo";
+  const otherKey = "agent:main:other-session";
+  try {
+    execute(
+      createControlUiMockGatewayInitScript({
+        repeatingSessionEvents: {
+          intervalMs: 250,
+          events: [
+            {
+              event: "agent",
+              payload: {
+                sessionKey,
+                stream: "assistant",
+                data: { text: "Working", replace: true },
+              },
+            },
+            {
+              event: "session.tool",
+              payload: { sessionKey, stream: "tool", data: { name: "exec" } },
+            },
+            { event: "session.observer", payload: { sessionKey, headline: "Verifying" } },
+          ],
+        },
+      }),
+    );
+    const gateway = getGateway(gatewayPage.window);
+    const { frames, send } = gatewayPage.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    send("subscribe", "sessions.messages.subscribe", { key: sessionKey });
+    await vi.advanceTimersByTimeAsync(750);
+    const repeated = () =>
+      frames.filter((frame) => frame.type === "event" && frame.event !== "connect.challenge");
+    expect(repeated().map((frame) => frame.event)).toEqual([
+      "agent",
+      "session.tool",
+      "session.observer",
+      "agent",
+    ]);
+    expect(repeated().at(-1)?.payload).toMatchObject({
+      sessionKey,
+      data: { replace: true, text: "Working" },
+    });
+
+    send("keep-timer", "sessions.messages.subscribe", { key: otherKey });
+    send("unsubscribe", "sessions.messages.unsubscribe", { key: sessionKey });
+    await vi.advanceTimersByTimeAsync(0);
+    const before = repeated().length;
+    await vi.advanceTimersByTimeAsync(750);
+    expect(repeated()).toHaveLength(before);
+    send("connect-scoped", "connect", { caps: ["session-scoped-events"] });
+    await vi.advanceTimersByTimeAsync(0);
+    gateway.emit("session.message", { sessionKey, messageId: "roster-message" });
+    expect(repeated().at(-1)).toMatchObject({
+      event: "session.message",
+      payload: { sessionKey, messageId: "roster-message" },
+    });
+
+    gateway.closeLatest();
+    const replacement = gatewayPage.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    replacement.send("replace-other", "sessions.messages.subscribe", { key: otherKey });
+    await vi.advanceTimersByTimeAsync(750);
+    expect(
+      replacement.frames.filter((frame) => frame.type === "event").map((frame) => frame.event),
+    ).toEqual(["connect.challenge"]);
+  } finally {
+    gatewayPage.close();
+    vi.useRealTimers();
+  }
+});

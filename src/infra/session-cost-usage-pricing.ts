@@ -1,0 +1,199 @@
+import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
+import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
+import { isToolCallContentType } from "../chat/tool-content.js";
+import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
+
+const extractCostBreakdown = (usageRaw?: UsageLike): CostBreakdown | undefined => {
+  const cost = usageRaw?.cost;
+  if (!cost) {
+    return undefined;
+  }
+
+  const total = asFiniteNumber(cost.total);
+  if (total === undefined || total < 0) {
+    return undefined;
+  }
+
+  return {
+    total,
+    input: asFiniteNumber(cost.input),
+    output: asFiniteNumber(cost.output),
+    cacheRead: asFiniteNumber(cost.cacheRead),
+    cacheWrite: asFiniteNumber(cost.cacheWrite),
+    totalOrigin: cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined,
+  };
+};
+
+const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
+  const message = entry.message as Record<string, unknown> | undefined;
+  const messageTimestamp = asFiniteNumber(message?.timestamp);
+  if (messageTimestamp !== undefined) {
+    const parsed = new Date(messageTimestamp);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
+  }
+  const raw = entry.timestamp;
+  if (typeof raw === "string") {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
+  }
+  return undefined;
+};
+
+export const parseUsageCostTranscriptRecord = (
+  entry: Record<string, unknown>,
+): ParsedTranscriptEntry | null => {
+  const message = entry.message as Record<string, unknown> | undefined;
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  const roleRaw = message.role;
+  const role = roleRaw === "user" || roleRaw === "assistant" ? roleRaw : undefined;
+  const isStandaloneToolResult = roleRaw === "tool" || roleRaw === "toolResult";
+  if (!role && !isStandaloneToolResult) {
+    return null;
+  }
+
+  const usageRaw =
+    (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
+  // Usage reports count only measured turns. A turn whose provider usage is unknown (a failed or
+  // interrupted request) adds no tokens or cost; it still counts as a message.
+  const reported = usageRaw?.usageReport?.state === "unavailable" ? undefined : usageRaw;
+  const usage = reported ? (normalizeUsage(reported) ?? undefined) : undefined;
+
+  const provider =
+    (typeof message.provider === "string" ? message.provider : undefined) ??
+    (typeof entry.provider === "string" ? entry.provider : undefined);
+  const model =
+    (typeof message.model === "string" ? message.model : undefined) ??
+    (typeof entry.model === "string" ? entry.model : undefined);
+
+  const costBreakdown = extractCostBreakdown(reported);
+  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+  const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
+  const toolNames: string[] = [];
+  const toolResultCounts = { total: 0, errors: 0 };
+  if (isStandaloneToolResult) {
+    toolResultCounts.total = 1;
+    toolResultCounts.errors = message.isError === true || message.is_error === true ? 1 : 0;
+  } else {
+    let unmatchedTopLevelName = normalizeOptionalString(message.toolName ?? message.tool_name);
+    if (unmatchedTopLevelName) {
+      toolNames.push(unmatchedTopLevelName);
+    }
+    for (const contentEntry of Array.isArray(message.content) ? message.content : []) {
+      const block = asOptionalObjectRecord(contentEntry);
+      if (!block) {
+        continue;
+      }
+      const type = normalizeOptionalString(block.type)?.toLowerCase();
+      if (isToolCallContentType(type)) {
+        const name = normalizeOptionalString(block.name);
+        // Suppress only the first legacy mirror; repeated calls still count.
+        if (name && name === unmatchedTopLevelName) {
+          unmatchedTopLevelName = undefined;
+        } else if (name) {
+          toolNames.push(name);
+        }
+      } else if (type === "tool_result" || type === "tool_result_error") {
+        toolResultCounts.total += 1;
+        if (block.is_error === true) {
+          toolResultCounts.errors += 1;
+        }
+      }
+    }
+  }
+
+  return {
+    role,
+    timestamp: parseTimestamp(entry),
+    durationMs,
+    usage,
+    costTotal: costBreakdown?.total,
+    costBreakdown,
+    provider,
+    model,
+    stopReason,
+    toolNames,
+    toolResultCounts,
+  };
+};
+
+export const computeUsageTokenTotals = (usage: NormalizedUsage) => {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const componentTotal = input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: usage.total ?? componentTotal,
+  };
+};
+
+export type UsageCostResolver = (params: {
+  provider?: string;
+  model?: string;
+}) => ModelCostConfig | undefined;
+
+type UsageCostEstimateEntry = ParsedTranscriptEntry & { usage: NormalizedUsage };
+
+export function needsUsageCostEstimate(
+  entry: ParsedTranscriptEntry | null,
+): entry is UsageCostEstimateEntry {
+  // Recorded estimates include request-time service tiers the current catalog cannot recover.
+  return (
+    Boolean(entry?.usage) &&
+    !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
+  );
+}
+
+/**
+ * Counters above the context marker's prompt cover several model calls, and their sum cannot
+ * recover each request's tier. A sum inside the lowest tier keeps every call there, so it is exact.
+ */
+function hasAmbiguousRequestTier(usage: NormalizedUsage, cost: ModelCostConfig): boolean {
+  const secondTier = cost.tieredPricing?.[1];
+  const context = usage.contextUsage;
+  if (!secondTier || context?.state !== "available") {
+    return false;
+  }
+  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  return promptTokens > context.promptTokens && promptTokens >= secondTier.range[0];
+}
+
+/** Whether the catalog price can change this entry's estimate; read before applying it. */
+export function usageCostEstimateUsesPricing(entry: UsageCostEstimateEntry): boolean {
+  return entry.costTotal === undefined || computeUsageTokenTotals(entry.usage).totalTokens > 0;
+}
+
+export function applyUsageCostEstimate(
+  entry: UsageCostEstimateEntry,
+  resolveCost: UsageCostResolver,
+): ParsedTranscriptEntry {
+  const cost = resolveCost({ provider: entry.provider, model: entry.model });
+  const { totalTokens } = computeUsageTokenTotals(entry.usage);
+  if (!cost && totalTokens > 0) {
+    entry.costTotal = undefined;
+    entry.costBreakdown = undefined;
+  } else if (entry.costTotal === undefined || totalTokens > 0) {
+    const estimated =
+      cost && !hasAmbiguousRequestTier(entry.usage, cost)
+        ? calculateUsageCost(entry.usage, cost)
+        : undefined;
+    entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
+    entry.costTotal = entry.costBreakdown?.total;
+  }
+  return entry;
+}

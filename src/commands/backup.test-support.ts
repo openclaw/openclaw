@@ -1,0 +1,46 @@
+// Backup test support provides temp config/state fixtures and mocked backup runtime helpers.
+import path from "node:path";
+import { Readable } from "node:stream";
+import { vi } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
+import * as backupShared from "./backup-shared.js";
+
+const backupTestMocks = vi.hoisted(() => ({
+  backupWalkMock: vi.fn(),
+}));
+
+export const { backupWalkMock } = backupTestMocks;
+
+export function createMockTarStream(
+  params: {
+    beforeRead?: () => Promise<void> | void;
+    contents?: string;
+    error?: Error;
+  } = {},
+): Readable {
+  return Readable.from(
+    (async function* () {
+      await params.beforeRead?.();
+      if (params.error) {
+        throw params.error;
+      }
+      yield Buffer.from(params.contents ?? "archive-bytes");
+      yield Buffer.alloc(1024);
+    })(),
+  );
+}
+
+vi.mock("../infra/backup-tar-walk.js", () => ({
+  walkBackupTar: backupTestMocks.backupWalkMock,
+}));
+
+export async function mockStateOnlyBackupPlan(stateDir: string) {
+  await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
+    agents: { ownership: "explicit", entries: { main: {} } },
+  });
+  const plan = await backupShared.resolveBackupPlanFromDisk({
+    includeWorkspace: false,
+    nowMs: 123,
+  });
+  vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(plan);
+}

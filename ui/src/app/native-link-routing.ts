@@ -1,0 +1,267 @@
+import type { NativeLinkMenu } from "../components/native-link-menu.runtime.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  type BrowserPanelToggleDetail,
+} from "../components/panel-toggle-contract.ts";
+import {
+  anchorFromNavigationEvent,
+  externalHttpLinkFromEvent,
+  shouldHandleNavigationClick,
+} from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { hasNativeBrowserBridge } from "./native-browser-host.ts";
+import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
+
+type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
+
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
+export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
+  "openclaw:native-update-availability-changed";
+let nativeUpdatePosted: (() => void) | undefined;
+
+type NativeLinkRoutingOptions = {
+  signal?: AbortSignal;
+  prepareNativeUpdateFallback?: () => { isCurrent: () => boolean; run: () => void };
+  shouldOpenInControlUiBrowser?: () => boolean;
+  shouldOpenExternally?: () => boolean;
+  canPresentBrowserPanel?: () => boolean;
+};
+
+export function prepareNativeUpdateFallback(
+  overlays: Pick<ApplicationOverlays, "snapshot" | "captureUpdateTarget" | "runUpdate">,
+) {
+  return {
+    isCurrent: overlays.captureUpdateTarget(),
+    run: () => {
+      const snapshot = overlays.snapshot;
+      const campaign = snapshot.updateSchedule?.campaign;
+      const busy =
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        campaign?.state === "applying";
+      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+        void overlays.runUpdate();
+      }
+    },
+  };
+}
+
+function getNativeLinkPoster(): NativeLinkPoster | undefined {
+  // Native hosts install this handler before navigation; its absence preserves browser behavior.
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawLink;
+  return handler?.postMessage.bind(handler);
+}
+
+function getNativeUpdateHandler() {
+  return webKitHostWindow()?.webkit?.messageHandlers?.openclawUpdate;
+}
+
+export function hasNativeUpdateBridge(): boolean {
+  return getNativeUpdateHandler() !== undefined;
+}
+
+export function postNativeUpdate(): boolean {
+  const handler = getNativeUpdateHandler();
+  if (!handler) {
+    return false;
+  }
+  // Bound single-argument WebKit handler call, not window.postMessage;
+  // binding also keeps oxlint's targetOrigin rule out of the wrong context.
+  const poster = handler.postMessage.bind(handler);
+  poster({ type: "start-update" });
+  nativeUpdatePosted?.();
+  return true;
+}
+
+function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; url: URL } | null {
+  if (!event.isTrusted) {
+    return null;
+  }
+  const anchor = anchorFromNavigationEvent(event);
+  if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
+    return null;
+  }
+  const url = URL.parse(anchor.href, window.location.href);
+  return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
+}
+
+function postNativeLink(postMessage: NativeLinkPoster, url: URL | string): boolean {
+  try {
+    postMessage({
+      type: "open-link",
+      url: typeof url === "string" ? new URL(url).href : url.href,
+      target: "external",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function hasNativeExternalLink(): boolean {
+  return getNativeLinkPoster() !== undefined;
+}
+
+export function postNativeExternalLink(url: string): boolean {
+  const poster = getNativeLinkPoster();
+  return poster ? postNativeLink(poster, url) : false;
+}
+
+export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
+  if (options.signal?.aborted || typeof window === "undefined" || typeof document === "undefined") {
+    return { dispose() {} };
+  }
+  const postMessage = getNativeLinkPoster();
+  if (
+    !postMessage &&
+    !hasNativeBrowserBridge() &&
+    !options.shouldOpenInControlUiBrowser &&
+    !options.prepareNativeUpdateFallback
+  ) {
+    return { dispose() {} };
+  }
+  let menu: NativeLinkMenu | null = null;
+  let menuRequest = 0;
+  let disposed = false;
+  let nativeUpdatePending:
+    | ReturnType<NonNullable<NativeLinkRoutingOptions["prepareNativeUpdateFallback"]>>
+    | undefined;
+  nativeUpdatePosted = () => {
+    nativeUpdatePending = options.prepareNativeUpdateFallback?.();
+  };
+  const handleNativeUpdateDeclined = () => {
+    const pending = nativeUpdatePending;
+    nativeUpdatePending = undefined;
+    if (pending?.isCurrent()) {
+      pending.run();
+    }
+  };
+  const closeMenu = (expected?: NativeLinkMenu) => {
+    if (expected && menu !== expected) {
+      return;
+    }
+    menuRequest += 1;
+    menu?.remove();
+    menu = null;
+  };
+  const openInline = (url: URL) => {
+    if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+      if (postMessage) {
+        postNativeLink(postMessage, url);
+      }
+    } else {
+      window.dispatchEvent(
+        new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+          detail: {
+            open: true,
+            url: url.href,
+            ...(hasNativeBrowserBridge() ? { native: true } : {}),
+          },
+        }),
+      );
+    }
+  };
+  const showMenu = async (event: MouseEvent, anchor: HTMLAnchorElement, url: URL) => {
+    closeMenu();
+    const request = menuRequest;
+    const path = event.composedPath();
+    const { mountNativeLinkMenu } = await import("../components/native-link-menu.runtime.ts");
+    if (disposed || options.signal?.aborted || request !== menuRequest || !anchor.isConnected) {
+      return;
+    }
+    menu = mountNativeLinkMenu({
+      path,
+      anchor,
+      url,
+      x: event.clientX,
+      y: event.clientY,
+      close: closeMenu,
+      openExternal: () => postMessage && postNativeLink(postMessage, url),
+      openInline: () => openInline(url),
+    });
+  };
+
+  const handleClick = (event: MouseEvent) => {
+    const webLink = externalHttpLinkFromEvent(event);
+    // Explicit external intent bypasses native panels and the Gateway browser preference.
+    if (
+      webLink &&
+      (webLink.anchor.hasAttribute("data-link-reader-external") || options.shouldOpenExternally?.())
+    ) {
+      if (
+        postMessage &&
+        shouldHandleNavigationClick(event) &&
+        postNativeLink(postMessage, webLink.url)
+      ) {
+        closeMenu();
+        event.preventDefault();
+      }
+      return;
+    }
+    if (
+      webLink &&
+      (hasNativeBrowserBridge()
+        ? shouldHandleNavigationClick(event)
+        : !event.defaultPrevented &&
+          !event.shiftKey &&
+          !event.altKey &&
+          ((event.type === "click" && event.button === 0) ||
+            (event.type === "auxclick" && event.button === 1))) &&
+      (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
+    ) {
+      openInline(webLink.url);
+      closeMenu();
+      event.preventDefault();
+      return;
+    }
+    if (!postMessage || !shouldHandleNavigationClick(event)) {
+      return;
+    }
+    const appLink = trustedExternalAppUrl(event);
+    if (!appLink || !postNativeLink(postMessage, appLink.url)) {
+      return;
+    }
+    closeMenu();
+    event.preventDefault();
+  };
+  const handleContextMenu = (event: MouseEvent) => {
+    if (!postMessage || event.defaultPrevented) {
+      return;
+    }
+    const link = externalHttpLinkFromEvent(event);
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void showMenu(event, link.anchor, link.url).catch((error: unknown) => {
+      if (!disposed) {
+        console.error("[openclaw] native link menu failed to load; right-click to retry", error);
+      }
+    });
+  };
+
+  // Run after target/document handlers so cancelled application actions remain authoritative.
+  const stops = [
+    listen(window, "click", handleClick),
+    listen(window, "auxclick", handleClick),
+    listen(window, NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined),
+  ];
+  // Capture keeps message-level context menus from replacing native link actions.
+  if (postMessage) {
+    stops.push(listen(document, "contextmenu", handleContextMenu, true));
+  }
+
+  const dispose = () => {
+    disposed = true;
+    nativeUpdatePosted = undefined;
+    nativeUpdatePending = undefined;
+    stops.forEach((stop) => stop());
+    closeMenu();
+  };
+  if (options.signal) {
+    stops.push(listen(options.signal, "abort", dispose, { once: true }));
+  }
+  return { dispose };
+}

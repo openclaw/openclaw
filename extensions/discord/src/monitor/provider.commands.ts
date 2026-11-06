@@ -1,0 +1,118 @@
+import {
+  listNativeCommandSpecsForConfig,
+  prepareSkillCommandsForAgents,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  mergeNativeCommandSpecs,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/native-command-registry";
+import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
+import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
+
+type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
+
+const loadPluginCommandRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/plugin-command-runtime"),
+);
+
+export async function resolveDiscordProviderCommandSpecs(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  nativeEnabled: boolean;
+  nativeSkillsEnabled: boolean;
+  voiceEnabled: boolean;
+}) {
+  const maxDiscordCommands = 100;
+  const pluginCommandSpecs: PluginCommandNativeCandidate[] = [];
+  if (params.nativeEnabled) {
+    const candidates = (await loadPluginCommandRuntime())
+      .createPluginCommandRuntime()
+      .listNativeCandidates("discord");
+    for (const command of candidates) {
+      if (command.name.length > 32) {
+        params.runtime.error?.(
+          danger(
+            `discord: plugin command "/${command.name.slice(0, 32)}…" exceeds the 32-character name limit. Set a shorter Discord native alias. Skipping.`,
+          ),
+        );
+        continue;
+      }
+      pluginCommandSpecs.push({ ...command, name: command.name.toLowerCase() });
+    }
+  }
+  const onCollision = (normalizedName: string) => {
+    params.runtime.error?.(
+      danger(
+        `discord: plugin command "/${normalizedName}" duplicates an existing native command. Skipping.`,
+      ),
+    );
+  };
+  const mergePluginCommandSpecs = (
+    primary: readonly NativeCommandSpec[],
+    collisionHandler: (normalizedName: string) => void,
+  ) =>
+    mergeNativeCommandSpecs({
+      primary,
+      secondary: pluginCommandSpecs,
+      onCollision: collisionHandler,
+    });
+  const listPrimaryCommandSpecs = (
+    skillCommands: Awaited<ReturnType<typeof prepareSkillCommandsForAgents>>,
+  ): NativeCommandSpec[] => {
+    const standardSpecs = listNativeCommandSpecsForConfig(params.cfg, {
+      skillCommands,
+      provider: "discord",
+    });
+    if (!params.voiceEnabled) {
+      return standardSpecs;
+    }
+    // The specialized voice handler owns /vc before plugin merging and cap planning;
+    // remove generic specs so the deployed catalog cannot contain a shadow duplicate.
+    const voiceName = DISCORD_VOICE_COMMAND_SPEC.name;
+    return [
+      ...standardSpecs.filter((spec) => normalizeLowercaseStringOrEmpty(spec.name) !== voiceName),
+      DISCORD_VOICE_COMMAND_SPEC,
+    ];
+  };
+  // Defer first-pass diagnostics until the skill-limit decision. A collision can disappear
+  // when fallback removes skills, so only the final retained command set should report it.
+  const provisionalCollisions: string[] = [];
+  const skillCommands =
+    params.nativeEnabled && params.nativeSkillsEnabled
+      ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
+      : [];
+  let commandSpecs: DiscordProviderCommandSpec[] = params.nativeEnabled
+    ? mergePluginCommandSpecs(listPrimaryCommandSpecs(skillCommands), (normalizedName) =>
+        provisionalCollisions.push(normalizedName),
+      )
+    : [];
+  const initialCommandCount = commandSpecs.length;
+  if (
+    params.nativeEnabled &&
+    params.nativeSkillsEnabled &&
+    commandSpecs.length > maxDiscordCommands
+  ) {
+    commandSpecs = mergePluginCommandSpecs(listPrimaryCommandSpecs([]), onCollision);
+    params.runtime.log?.(
+      warn(
+        `${initialCommandCount} commands exceed the ${maxDiscordCommands}-command Discord limit; removing per-skill commands and keeping /skill.`,
+      ),
+    );
+  } else {
+    for (const normalizedName of provisionalCollisions) {
+      onCollision(normalizedName);
+    }
+  }
+  if (params.nativeEnabled && commandSpecs.length > maxDiscordCommands) {
+    params.runtime.log?.(
+      warn(
+        `${commandSpecs.length} commands exceed the ${maxDiscordCommands}-command Discord limit; some commands may fail to deploy.`,
+      ),
+    );
+  }
+  return { commandSpecs };
+}

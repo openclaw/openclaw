@@ -1,0 +1,1465 @@
+#!/usr/bin/env -S node --import tsx
+
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  opendirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { builtinModules, createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, posix as pathPosix, relative, win32 as pathWin32 } from "node:path";
+import { pathToFileURL } from "node:url";
+import { collectPackageRootImports } from "../src/infra/package-root-imports.js";
+import { packageActivationRuntimeEntrypoint } from "../src/infra/package-update-activation-runtime-assets.js";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "../src/infra/runtime-dependency-ownership.js";
+import { managedHandoffRuntimeEntrypoint } from "../src/infra/update-managed-service-handoff-runtime-assets.js";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+  WORKER_BUNDLE_SQLITE_STORE_PATH,
+} from "../src/shared/worker-bundle-hash.js";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
+import { formatErrorMessage } from "./lib/error-format.mts";
+import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
+import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
+import {
+  comparePackageDistInventory,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "./lib/package-dist-inventory-contract.mts";
+import {
+  collectRuntimeDependencySpecs,
+  packageNameFromSpecifier,
+} from "./lib/plugin-package-dependencies.mts";
+import { escapeRegExp } from "./lib/regexp.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
+import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
+
+type InstalledPackageJson = {
+  main?: unknown;
+  bin?: unknown;
+  exports?: unknown;
+  name?: string;
+  version?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+};
+
+type InstalledBundledExtensionPackageJson = Pick<
+  InstalledPackageJson,
+  "dependencies" | "optionalDependencies"
+>;
+
+type InstalledBundledExtensionManifestRecord = {
+  id: string;
+  manifest: InstalledBundledExtensionPackageJson;
+  path: string;
+};
+
+const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
+const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
+  "Failed to load legacy context engine runtime.";
+const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
+const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
+const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
+const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
+// Keep each generated ownership scope bounded without making independent worker
+// chunks consume the root-runtime budget. The root runtime shipped 10,130 files in
+// 2026.10.10-beta.1 (9,473 in 2026.10.5-beta.4); keep roughly 2x headroom.
+const MAX_INSTALLED_ROOT_DIST_JS_FILES = 20_000;
+const MAX_INSTALLED_WORKER_DIST_JS_FILES = 10_000;
+const MAX_INSTALLED_BUNDLED_PLUGIN_FILES = 20_000;
+const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+// Self-contained workers and sealed update recovery helpers
+// need extra headroom, but synchronous read/parse stays bounded.
+const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
+  `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+  `worker/${WORKER_BUNDLE_SQLITE_STORE_PATH}`,
+  packageActivationRuntimeEntrypoint.distWorkerPath,
+  managedHandoffRuntimeEntrypoint.distWorkerPath,
+]);
+const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
+  // Optional A2UI markdown renderer. Main no longer builds Canvas A2UI, but main's
+  // release tooling verifies already-qualified stable/extended-stable packages
+  // whose dist/canvas-host/a2ui/a2ui.bundle.js catches this missing package and
+  // falls back. Remove once no supported release line ships canvas-host/a2ui.
+  "@a2ui/markdown-it",
+  "@discordjs/opus",
+  "@lancedb/lancedb",
+  // Feishu/Lark remains a bundled plugin package. Root dist can retain orphaned
+  // lazy chunks from the plugin build even though dist/extensions/feishu is
+  // externalized from the root package scan.
+  "@larksuiteoapi/node-sdk",
+  // Discord remains an official external plugin. The root package can retain
+  // orphaned lazy chunks from the plugin build, but the plugin owns prism-media.
+  "prism-media",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "link-preview-js",
+  "matrix-js-sdk",
+  // Public plugin SDK contract helpers are intentionally test-only entrypoints.
+  // Consumers importing them run under their own Vitest dev dependency.
+  "vitest",
+]);
+const require = createRequire(import.meta.url);
+const acorn = require("acorn") as typeof import("acorn");
+
+type DistJavaScriptFileListResult =
+  | { files: string[]; limitExceeded: false }
+  | { files: string[]; limit: number; limitExceeded: true };
+
+type InstalledRootDistJavaScriptReadResult =
+  | { error: string; ok: false }
+  | { ok: true; relativePath: string; source: string | null };
+
+type PublishedInstallScenario = ReturnType<typeof buildPublishedInstallScenarios>[number];
+
+type OpenClawNpmPostpublishVerifyArgs =
+  | {
+      help: false;
+      version: string;
+    }
+  | {
+      help: true;
+      version: "";
+    };
+
+export function openClawNpmPostpublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+}
+
+export function parseOpenClawNpmPostpublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPostpublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const version = args[0]?.trim() ?? "";
+  if (version === "--help" || version === "-h") {
+    return { help: true, version: "" };
+  }
+  if (!version) {
+    throw new Error(openClawNpmPostpublishVerifyUsage());
+  }
+  if (version.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (args.length > 1) {
+    throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
+  }
+  return { help: false, version };
+}
+
+export function buildPublishedInstallScenarios(version: string) {
+  const parsed = parseReleaseVersion(version);
+  if (parsed === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  const exactSpec = `openclaw@${version}`;
+  const scenarios = [
+    {
+      name: "fresh-exact",
+      installSpecs: [exactSpec],
+      expectedVersion: version,
+    },
+  ];
+
+  if (parsed.channel === "stable" && parsed.correctionNumber !== undefined) {
+    scenarios.push({
+      name: "upgrade-from-base-stable",
+      installSpecs: [`openclaw@${parsed.baseVersion}`, exactSpec],
+      expectedVersion: version,
+    });
+  }
+
+  return scenarios;
+}
+
+export function resolvePublishedInstallSourceVerification(
+  sourceRoot: string,
+  expectedVersion: string,
+): Pick<
+  Parameters<typeof collectInstalledPackageErrors>[0],
+  "additionalCompanionManifestRoots" | "allowLegacyGeneratedOwnership"
+> {
+  const packageJsonPath = join(sourceRoot, "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  if (packageJson.name !== "openclaw" || packageJson.version !== expectedVersion) {
+    throw new Error(
+      `source checkout version mismatch: expected openclaw@${expectedVersion}, found ${packageJson.name ?? "<missing>"}@${packageJson.version ?? "<missing>"}.`,
+    );
+  }
+  return {
+    additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
+    allowLegacyGeneratedOwnership: !existsSync(
+      join(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
+    ),
+  };
+}
+
+type NpmRegistryAttestation = {
+  bundle?: {
+    dsseEnvelope?: {
+      payload?: string;
+    };
+  };
+  predicateType?: string;
+};
+
+type NpmProvenanceVerificationPolicy = ReturnType<typeof resolveNpmProvenanceVerificationPolicy>;
+
+type VerifyNpmProvenanceBundle = (
+  bundle: unknown,
+  policy: NpmProvenanceVerificationPolicy,
+) => Promise<void>;
+
+type NpmProvenanceStatement = {
+  predicate?: {
+    buildDefinition?: {
+      externalParameters?: {
+        workflow?: {
+          path?: string;
+          ref?: string;
+          repository?: string;
+        };
+      };
+      resolvedDependencies?: Array<{
+        digest?: {
+          gitCommit?: string;
+        };
+        uri?: string;
+      }>;
+    };
+    runDetails?: {
+      builder?: {
+        id?: string;
+      };
+    };
+  };
+  subject?: Array<{
+    digest?: Record<string, string>;
+    name?: string;
+  }>;
+};
+
+const NPM_PROVENANCE_PREDICATE_TYPE = "https://slsa.dev/provenance/v1";
+const NPM_PROVENANCE_REPOSITORY = "https://github.com/openclaw/openclaw";
+const NPM_PROVENANCE_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
+const NPM_PROVENANCE_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com";
+const NPM_PROVENANCE_BUILDER_ID = "https://github.com/actions/runner/github-hosted";
+const NPM_REGISTRY_REQUEST_TIMEOUT_MS = 30_000;
+const NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
+const NPM_REGISTRY_PROVENANCE_ATTEMPTS = 30;
+const NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS = 10_000;
+
+type ReleasePublishWorkflowIdentity = { ref: string; sha: string };
+type VerifyDerivedReleasePublishWorkflow = (identity: ReleasePublishWorkflowIdentity) => void;
+
+type FetchRegistryJsonOptions = {
+  fetchImpl?: typeof fetch;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
+
+function resolveNpmProvenanceVerificationPolicy(
+  statement: NpmProvenanceStatement,
+  version: string,
+  expectedWorkflow?: {
+    ref?: string;
+    sha?: string;
+    verifyDerived?: VerifyDerivedReleasePublishWorkflow;
+  },
+) {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+  const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
+  const workflowRef = workflow?.ref;
+  const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  // A month's final patch >=33 releases stay on its canonical .33 maintenance branch.
+  const isExpectedExtendedStableRef =
+    classifyReleaseTrain(parsedVersion) === "extended-stable" &&
+    workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
+  const protectedReleasePublishMatch =
+    /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");
+  let protectedReleasePublishTrusted = false;
+  if (protectedReleasePublishMatch) {
+    const expectedDependencyUri = `git+${NPM_PROVENANCE_REPOSITORY}@${workflowRef}`;
+    let expectedRef = expectedWorkflow?.ref;
+    let expectedSha = expectedWorkflow?.sha;
+    if (!expectedRef && !expectedSha && expectedWorkflow?.verifyDerived && workflowRef) {
+      // Without an explicit override, the attested tag and commit are only a
+      // claim; they become the expected identity after live trusted-source checks.
+      const attestedSha =
+        statement.predicate?.buildDefinition?.resolvedDependencies?.find(
+          (dependency) => dependency.uri === expectedDependencyUri,
+        )?.digest?.gitCommit ?? "";
+      if (
+        !/^[a-f0-9]{40}$/u.test(attestedSha) ||
+        attestedSha.slice(0, 12) !== protectedReleasePublishMatch[1]
+      ) {
+        throw new Error(
+          "npm provenance SHA-pinned release-publish ref has no matching workflow revision to verify.",
+        );
+      }
+      expectedWorkflow.verifyDerived({ ref: workflowRef, sha: attestedSha });
+      expectedRef = workflowRef;
+      expectedSha = attestedSha;
+    }
+    if (
+      expectedRef !== workflowRef ||
+      !/^[a-f0-9]{40}$/u.test(expectedSha ?? "") ||
+      expectedSha?.slice(0, 12) !== protectedReleasePublishMatch[1]
+    ) {
+      throw new Error(
+        "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA.",
+      );
+    }
+    protectedReleasePublishTrusted =
+      statement.predicate?.buildDefinition?.resolvedDependencies?.some(
+        (dependency) =>
+          dependency.uri === expectedDependencyUri && dependency.digest?.gitCommit === expectedSha,
+      ) === true;
+    if (!protectedReleasePublishTrusted) {
+      throw new Error(
+        "npm provenance does not bind the approved SHA-pinned release-publish ref to its workflow revision.",
+      );
+    }
+  }
+  const isTrustedRef =
+    workflowRef === "refs/heads/main" ||
+    workflowRef === expectedReleaseRef ||
+    isExpectedExtendedStableRef ||
+    protectedReleasePublishTrusted ||
+    (parsedVersion.channel === "alpha" &&
+      /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
+        workflowRef ?? "",
+      ));
+
+  if (
+    workflow?.repository !== NPM_PROVENANCE_REPOSITORY ||
+    workflow?.path !== NPM_PROVENANCE_WORKFLOW_PATH ||
+    !isTrustedRef ||
+    statement.predicate?.runDetails?.builder?.id !== NPM_PROVENANCE_BUILDER_ID
+  ) {
+    throw new Error(
+      `npm provenance attestation does not bind ${version} to the trusted OpenClaw GitHub release workflow.`,
+    );
+  }
+
+  return {
+    certificateIssuer: NPM_PROVENANCE_CERTIFICATE_ISSUER,
+    certificateIdentityURI: `${NPM_PROVENANCE_REPOSITORY}/${NPM_PROVENANCE_WORKFLOW_PATH}@${workflowRef}`,
+  };
+}
+
+async function verifySigstoreNpmProvenanceBundle(
+  bundle: unknown,
+  policy: NpmProvenanceVerificationPolicy,
+): Promise<void> {
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
+}
+
+export async function verifyNpmProvenanceAttestation(params: {
+  attestations: NpmRegistryAttestation[];
+  expectedWorkflowRef?: string;
+  expectedWorkflowSha?: string;
+  /** Verifies an attested release-publish identity when no expected workflow is supplied. */
+  verifyDerivedWorkflow?: VerifyDerivedReleasePublishWorkflow;
+  integrity: string;
+  packageName: string;
+  verifyBundle?: VerifyNpmProvenanceBundle;
+  version: string;
+}): Promise<void> {
+  const expectedSubject = `pkg:npm/${params.packageName}@${params.version}`;
+  const expectedSha512 = Buffer.from(params.integrity.slice("sha512-".length), "base64").toString(
+    "hex",
+  );
+  const verifyBundle = params.verifyBundle ?? verifySigstoreNpmProvenanceBundle;
+  let verificationError: unknown;
+  let policyError: unknown;
+
+  for (const attestation of params.attestations) {
+    if (attestation.predicateType !== NPM_PROVENANCE_PREDICATE_TYPE) {
+      continue;
+    }
+    const payload = attestation.bundle?.dsseEnvelope?.payload;
+    if (!payload) {
+      continue;
+    }
+    try {
+      const statement = JSON.parse(
+        Buffer.from(payload, "base64").toString("utf8"),
+      ) as NpmProvenanceStatement;
+      if (
+        statement.subject?.some(
+          (subject) =>
+            subject.name === expectedSubject && subject.digest?.sha512 === expectedSha512,
+        )
+      ) {
+        let policy: NpmProvenanceVerificationPolicy;
+        try {
+          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version, {
+            ref: params.expectedWorkflowRef,
+            sha: params.expectedWorkflowSha,
+            verifyDerived: params.verifyDerivedWorkflow,
+          });
+        } catch (error) {
+          policyError = error;
+          continue;
+        }
+        try {
+          await verifyBundle(attestation.bundle, policy);
+          return;
+        } catch (error) {
+          verificationError = error;
+        }
+      }
+    } catch {
+      // Try the remaining attestations before reporting the missing match.
+    }
+  }
+
+  if (verificationError) {
+    throw new Error(
+      `npm provenance attestation failed Sigstore verification for ${params.packageName}@${params.version}: ${formatErrorMessage(verificationError)}`,
+    );
+  }
+
+  if (policyError instanceof Error) {
+    throw policyError;
+  }
+  if (policyError) {
+    throw new Error(
+      `npm provenance attestation policy evaluation failed for ${params.packageName}@${params.version}: ${formatErrorMessage(policyError)}`,
+    );
+  }
+
+  throw new Error(
+    `npm provenance attestation does not match ${params.packageName}@${params.version} and its registry integrity.`,
+  );
+}
+
+/**
+ * Accepts an attested release-publish identity only when GitHub still has the
+ * exact lightweight tag at that commit and the commit is reachable from main.
+ */
+export function verifyAttestedReleasePublishWorkflow(
+  identity: ReleasePublishWorkflowIdentity,
+  runGh?: (args: string[]) => string,
+): void {
+  const repository = NPM_PROVENANCE_REPOSITORY.replace("https://github.com/", "");
+  verifyReleaseToolingIdentity({
+    repository,
+    runGh,
+    workflowFullRef: identity.ref,
+    workflowRef: identity.ref.replace(/^refs\/tags\//u, ""),
+    workflowSha: identity.sha,
+  });
+  verifyReleaseToolingIdentity({
+    repository,
+    runGh,
+    workflowFullRef: "refs/heads/main",
+    workflowRef: "main",
+    workflowSha: identity.sha,
+  });
+}
+
+export function collectInstalledPackageErrors(params: {
+  additionalCompanionManifestRoots?: string[];
+  allowLegacyGeneratedOwnership?: boolean;
+  expectedVersion: string;
+  installedVersion: string;
+  packageRoot: string;
+}): string[] {
+  const errors: string[] = [];
+  const installedVersion = normalizeInstalledBinaryVersion(params.installedVersion);
+
+  if (installedVersion !== params.expectedVersion) {
+    errors.push(
+      `installed package version mismatch: expected ${params.expectedVersion}, found ${params.installedVersion || "<missing>"}.`,
+    );
+  }
+
+  for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(params.packageRoot)) {
+    if (!existsSync(join(params.packageRoot, relativePath))) {
+      errors.push(`installed package is missing required bundled runtime sidecar: ${relativePath}`);
+    }
+  }
+
+  errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
+  errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
+  errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
+  errors.push(
+    ...collectInstalledRootDependencyManifestErrors(
+      params.packageRoot,
+      params.additionalCompanionManifestRoots,
+      params.allowLegacyGeneratedOwnership,
+    ),
+  );
+
+  return [...new Set(errors)];
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  const activationRuntimePath = "dist/facade-activation-check.runtime.js";
+  if (!existsSync(join(packageRoot, activationRuntimePath))) {
+    errors.push(
+      `installed package is missing required facade activation runtime: ${activationRuntimePath}`,
+    );
+  }
+  return errors;
+}
+
+export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string): string[] {
+  return readInstalledPackageDistInventory(packageRoot).bundledPluginArtifacts.filter(
+    (relativePath) => /\/runtime(?:-setter)?-api\.js$/u.test(relativePath),
+  );
+}
+
+export function collectInstalledBundledExtensionManifestErrors(packageRoot: string): string[] {
+  return readBundledExtensionPackageJsons(packageRoot).errors;
+}
+
+export function normalizeInstalledBinaryVersion(output: string): string {
+  const trimmed = output.trim();
+  const versionMatch = /\b\d{4}\.\d{1,2}\.\d{1,2}(?:-\d+|-(?:alpha|beta)\.\d+)?\b/u.exec(trimmed);
+  return versionMatch?.[0] ?? trimmed;
+}
+
+function listInstalledDistJavaScriptFiles(
+  packageRoot: string,
+  scope: "root" | "worker",
+): DistJavaScriptFileListResult {
+  const distDir = join(packageRoot, "dist");
+  const scopeDir = scope === "worker" ? join(distDir, "worker") : distDir;
+  if (!existsSync(scopeDir)) {
+    return { files: [], limitExceeded: false };
+  }
+
+  const limit =
+    scope === "worker" ? MAX_INSTALLED_WORKER_DIST_JS_FILES : MAX_INSTALLED_ROOT_DIST_JS_FILES;
+  const pending = [scopeDir];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    const dir = opendirSync(currentDir);
+    try {
+      while (true) {
+        const entry = dir.readSync();
+        if (!entry) {
+          break;
+        }
+
+        const entryPath = join(currentDir, entry.name);
+        const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
+        if (
+          scope === "root" &&
+          (relativePath === "extensions" ||
+            relativePath.startsWith("extensions/") ||
+            relativePath === "worker" ||
+            relativePath.startsWith("worker/"))
+        ) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          pending.push(entryPath);
+          continue;
+        }
+        if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
+          files.push(entryPath);
+          if (files.length > limit) {
+            return {
+              files,
+              limit,
+              limitExceeded: true,
+            };
+          }
+        }
+      }
+    } finally {
+      dir.closeSync();
+    }
+  }
+
+  return { files, limitExceeded: false };
+}
+
+function formatInstalledDistFileScanLimitError(scope: string, limit: number): string {
+  return `installed package ${scope} contains more than ${limit} JavaScript files; refusing to scan unbounded package contents.`;
+}
+
+function readInstalledRootDistJavaScriptFile(
+  packageRoot: string,
+  filePath: string,
+): InstalledRootDistJavaScriptReadResult {
+  const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+  const maxBytes = SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)
+    ? MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES
+    : MAX_INSTALLED_ROOT_DIST_JS_BYTES;
+  const fileStat = lstatSync(filePath);
+  if (!fileStat.isFile() || fileStat.size > maxBytes) {
+    return {
+      error: `installed package root dist file '${relativePath}' is invalid or exceeds ${maxBytes} bytes.`,
+      ok: false,
+    };
+  }
+  if (SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)) {
+    // These artifacts have a dedicated closure/import guard before packaging.
+    // Avoid rebuilding their multi-million-node ASTs in generic root scans.
+    return { ok: true, relativePath, source: null };
+  }
+  return { ok: true, relativePath, source: readFileSync(filePath, "utf8") };
+}
+
+export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
+  const rootDistFiles = listInstalledDistJavaScriptFiles(packageRoot, "root");
+  if (rootDistFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("root dist", rootDistFiles.limit)];
+  }
+  const workerDistFiles = listInstalledDistJavaScriptFiles(packageRoot, "worker");
+  if (workerDistFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("worker dist", workerDistFiles.limit)];
+  }
+
+  // The legacy marker is a root runtime bundling contract; extension assets are plugin-owned.
+  for (const filePath of [...rootDistFiles.files, ...workerDistFiles.files]) {
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    if (!file.ok) {
+      return [file.error];
+    }
+    const source = file.source ?? readFileSync(filePath, "utf8");
+    if (source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
+      return [
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      ];
+    }
+  }
+  return [];
+}
+
+function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+  const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
+  const errors: string[] = [];
+  const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];
+
+  if (!existsSync(pluginSdkDistRoot)) {
+    return [];
+  }
+
+  for (const entry of readdirSync(pluginSdkDistRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+
+    const relativePath = `dist/plugin-sdk/${entry.name}`;
+    const content = readFileSync(join(pluginSdkDistRoot, entry.name), "utf8");
+    for (const specifier of forbiddenPrivateWorkspaceSpecifiers) {
+      if (content.includes(`"${specifier}`) || content.includes(`'${specifier}`)) {
+        errors.push(
+          `installed package plugin SDK declaration '${relativePath}' references private workspace package ${specifier}.`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+type RuntimeImport = { specifier: string; extensionId?: string; kind: "static" | "runtime" };
+
+type ParsedImportSpecifiersResult =
+  | {
+      ok: true;
+      imports: RuntimeImport[];
+    }
+  | { ok: false; error: string };
+
+function extractJavaScriptImportSpecifiers(
+  source: string,
+  legacyOwnership: boolean,
+): ParsedImportSpecifiersResult {
+  try {
+    const regions: Array<{ start: number; end: number; extensionId?: string }> = [];
+    const stack: Array<{ start: number; extensionId?: string; flat: boolean }> = [];
+    // Published modules need stricter validation than the CommonJS-aware dependency scanner.
+    acorn.parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      sourceType: "module",
+      onComment: legacyOwnership
+        ? (block, text, start, end) => {
+            if (block) {
+              return;
+            }
+            const marker = bundledModuleRegions(source.slice(start, end)).next().value;
+            if (marker) {
+              // Simple labels close at the next module; historical regions can nest.
+              const previous = stack.at(-1);
+              if (previous?.flat) {
+                stack.pop();
+                regions.push({ ...previous, end: start });
+              }
+              const extensionId = /^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(marker[1] ?? "")?.[1];
+              stack.push({ start: end, extensionId, flat: marker[0].startsWith("// ") });
+            } else if (text.trim() === "#endregion") {
+              const region = stack.pop();
+              if (region) {
+                regions.push({ ...region, end: start });
+              }
+            }
+          }
+        : undefined,
+    });
+    for (const region of stack) {
+      if (region.flat) {
+        regions.push({ ...region, end: source.length });
+      }
+    }
+    const imports: RuntimeImport[] = [];
+    collectPackageRootImports(source, (specifier, start, kind) => {
+      // Inner regions close first. Inspect real comments and full-source bindings;
+      // removing regions can erase a loader that is later called by root code.
+      const region = regions.find((entry) => entry.start <= start && start < entry.end);
+      imports.push({ specifier, extensionId: region?.extensionId, kind });
+    });
+    return { ok: true, imports };
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+}
+
+export function collectInstalledRootDependencyManifestErrors(
+  packageRoot: string,
+  additionalCompanionManifestRoots: string[] = [],
+  allowLegacyGeneratedOwnership = false,
+): string[] {
+  const packageJsonPath = join(packageRoot, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return ["installed package is missing package.json."];
+  }
+  const packageJsonStat = lstatSync(packageJsonPath);
+  if (!packageJsonStat.isFile() || packageJsonStat.size > MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+    return [
+      `installed package.json is invalid or exceeds ${MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES} bytes.`,
+    ];
+  }
+  let rootPackageJson: InstalledPackageJson;
+  try {
+    rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  } catch (error) {
+    return [`installed package.json could not be parsed: ${formatErrorMessage(error)}.`];
+  }
+  const declaredRuntimeDeps = new Set([
+    ...Object.keys(rootPackageJson.dependencies ?? {}),
+    ...Object.keys(rootPackageJson.optionalDependencies ?? {}),
+  ]);
+  const distFiles = listInstalledDistJavaScriptFiles(packageRoot, "root");
+  if (distFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
+  }
+  const missingImporters = new Map<string, Set<string>>();
+  const bundledExtensionRuntimeDependencyOwners =
+    collectBundledExtensionRuntimeDependencyOwners(packageRoot);
+  const companionManifestRoots = [
+    join(packageRoot, "..", "@openclaw"),
+    ...additionalCompanionManifestRoots,
+  ];
+  const companionManifestCache = new Map<string, InstalledPackageJson | null>();
+  let runtimeDependencyOwnership: RuntimeDependencyOwnership | null;
+  try {
+    runtimeDependencyOwnership = readRuntimeDependencyOwnership(packageRoot);
+  } catch (error) {
+    return [
+      `installed package runtime dependency ownership is invalid: ${RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    ];
+  }
+  const legacyOwnership = allowLegacyGeneratedOwnership && runtimeDependencyOwnership === null;
+  const importsByFile = new Map<string, RuntimeImport[]>();
+  const extensionsByFile = new Map<string, string[]>();
+
+  for (const filePath of distFiles.files) {
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    if (!file.ok) {
+      return [file.error];
+    }
+    if (file.source === null) {
+      continue;
+    }
+    const parsedSpecifiers = extractJavaScriptImportSpecifiers(file.source, legacyOwnership);
+    if (!parsedSpecifiers.ok) {
+      return [
+        `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
+      ];
+    }
+    importsByFile.set(file.relativePath, parsedSpecifiers.imports);
+    const owners = runtimeDependencyOwnership?.chunks[file.relativePath];
+    if (owners) {
+      if (owners.sha256 !== createHash("sha256").update(file.source).digest("hex")) {
+        return [
+          `installed package runtime dependency ownership does not match '${file.relativePath}'; rebuild the package.`,
+        ];
+      }
+      extensionsByFile.set(file.relativePath, owners.extensions);
+    }
+  }
+
+  // Root imports from any build output override plugin evidence, including
+  // relative createRequire calls that are absent from the bundler's graph.
+  const pending = legacyOwnership
+    ? []
+    : [...importsByFile.keys()].filter((file) => !extensionsByFile.has(file));
+  const visited = new Set<string>();
+  const distDir = importsByFile.size ? realpathSync(join(packageRoot, "dist")) : "";
+  const enqueueRelativeImports = (file: string, imports: RuntimeImport[]) => {
+    const resolveImport = createRequire(pathToFileURL(join(distDir, file))).resolve;
+    for (const { specifier } of imports) {
+      if (specifier.startsWith(".")) {
+        try {
+          const importedPath = resolveImport(specifier.replace(/[?#].*$/u, ""));
+          const importedFile = relative(distDir, importedPath).replaceAll("\\", "/");
+          if (importsByFile.has(importedFile)) {
+            pending.push(importedFile);
+          }
+        } catch {
+          // Missing relative modules are reported by package closure checks.
+        }
+      }
+    }
+  };
+  if (legacyOwnership) {
+    // Conservatively include every declared entry target, across conditions and
+    // patterns. The bin launcher also loads entry.js outside the scanned dist tree.
+    const targets: unknown[] = [rootPackageJson.main, rootPackageJson.bin, rootPackageJson.exports];
+    const entryPatterns = ["dist/entry.js"];
+    while (targets.length) {
+      const target = targets.pop();
+      if (typeof target === "string") {
+        entryPatterns.push(target.replace(/^\.\//u, ""));
+      } else if (target && typeof target === "object") {
+        targets.push(...Object.values(target));
+      }
+    }
+    if (typeof rootPackageJson.main === "string" && distDir) {
+      try {
+        const mainPath = createRequire(pathToFileURL(packageJsonPath)).resolve(
+          `./${rootPackageJson.main}`,
+        );
+        const mainFile = relative(distDir, mainPath).replaceAll("\\", "/");
+        if (importsByFile.has(mainFile)) {
+          pending.push(mainFile);
+        }
+      } catch {
+        // Missing main targets are reported by package closure checks.
+      }
+    }
+    // Node export substitutions can include slashes; filesystem globs cannot.
+    const entryMatchers = entryPatterns.map(
+      (pattern) => new RegExp(`^${escapeRegExp(pattern).replaceAll("\\*", ".*")}$`, "u"),
+    );
+    for (const file of importsByFile.keys()) {
+      if (entryMatchers.some((pattern) => pattern.test(`dist/${file}`))) {
+        pending.push(file);
+      }
+    }
+    // Static imports are hoisted out of generated plugin regions and inherit
+    // their chunk's graph ownership. Executable imports retain source placement:
+    // unowned calls revoke ownership of their target and its transitive closure.
+    for (const [file, imports] of importsByFile) {
+      enqueueRelativeImports(
+        file,
+        imports.filter((entry) => entry.kind === "runtime" && !entry.extensionId),
+      );
+    }
+  }
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (visited.has(file)) {
+      continue;
+    }
+    visited.add(file);
+    extensionsByFile.delete(file);
+    enqueueRelativeImports(file, importsByFile.get(file) ?? []);
+  }
+
+  for (const [file, imports] of importsByFile) {
+    const extensions = extensionsByFile.get(file);
+    for (const { specifier, extensionId } of imports) {
+      const dependencyName = packageNameFromSpecifier(specifier);
+      if (
+        !dependencyName ||
+        NODE_BUILTIN_MODULES.has(dependencyName) ||
+        OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS.has(dependencyName) ||
+        declaredRuntimeDeps.has(dependencyName) ||
+        (extensions?.length &&
+          extensions.every(
+            (owner) =>
+              bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(owner) ||
+              isInstalledCompanionExtensionOwnedRuntimeImport({
+                dependencyName,
+                extensionId: owner,
+                manifestRoots: companionManifestRoots,
+                manifestCache: companionManifestCache,
+              }),
+          )) ||
+        (legacyOwnership &&
+          !visited.has(file) &&
+          extensionId &&
+          (bundledExtensionRuntimeDependencyOwners.get(dependencyName)?.has(extensionId) ||
+            isInstalledCompanionExtensionOwnedRuntimeImport({
+              dependencyName,
+              extensionId,
+              manifestCache: companionManifestCache,
+              manifestRoots: companionManifestRoots,
+            })))
+      ) {
+        continue;
+      }
+      const importers = missingImporters.get(dependencyName) ?? new Set<string>();
+      importers.add(file);
+      missingImporters.set(dependencyName, importers);
+    }
+  }
+
+  return [...missingImporters.entries()]
+    .map(([dependencyName, importers]) => {
+      const importerList = [...importers].toSorted((left, right) => left.localeCompare(right));
+      return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
+  dependencyName: string;
+  extensionId: string;
+  manifestRoots: string[];
+  manifestCache: Map<string, InstalledPackageJson | null>;
+}): boolean {
+  const extensionId = params.extensionId;
+  for (const manifestRoot of params.manifestRoots) {
+    const cacheKey = `${manifestRoot}\0${extensionId}`;
+    let manifest = params.manifestCache.get(cacheKey);
+    if (manifest === undefined) {
+      const manifestPath = join(manifestRoot, extensionId, "package.json");
+      manifest = null;
+      if (existsSync(manifestPath)) {
+        const stat = lstatSync(manifestPath);
+        if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+          try {
+            const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
+            if (parsed.name === `@openclaw/${extensionId}`) {
+              manifest = parsed;
+            }
+          } catch {
+            // Invalid companion manifests cannot authorize root runtime imports.
+          }
+        }
+      }
+      params.manifestCache.set(cacheKey, manifest);
+    }
+    if (
+      manifest &&
+      (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+        Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectBundledExtensionRuntimeDependencyOwners(
+  packageRoot: string,
+): Map<string, Set<string>> {
+  const ownersByDependency = new Map<string, Set<string>>();
+  const { manifests } = readBundledExtensionPackageJsons(packageRoot);
+  for (const { id, manifest } of manifests) {
+    for (const dependencyName of collectRuntimeDependencySpecs(manifest).keys()) {
+      const owners = ownersByDependency.get(dependencyName) ?? new Set<string>();
+      owners.add(id);
+      ownersByDependency.set(dependencyName, owners);
+    }
+  }
+  return ownersByDependency;
+}
+
+function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
+  return platform === "win32"
+    ? pathWin32.join(prefixDir, "openclaw.cmd")
+    : pathPosix.join(prefixDir, "bin", "openclaw");
+}
+
+export function resolveInstalledBinaryCommandInvocation(
+  prefixDir: string,
+  args: string[],
+  params: { comSpec?: string; platform?: NodeJS.Platform } = {},
+) {
+  const platform = params.platform ?? process.platform;
+  const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? resolveWindowsCmdExePath(),
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command: binaryPath,
+    args,
+  };
+}
+
+function readInstalledPackageDistInventory(packageRoot: string): {
+  bundledPluginArtifacts: string[];
+  error?: string;
+} {
+  const inventoryPath = join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
+  try {
+    const inventory: unknown = JSON.parse(readFileSync(inventoryPath, "utf8"));
+    if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
+      throw new Error("inventory must be an array of file paths");
+    }
+    const seen = new Set<string>();
+    for (const entry of inventory as string[]) {
+      const parts = entry.split("/");
+      if (
+        !entry.startsWith("dist/") ||
+        entry.includes("\\") ||
+        entry.includes("\0") ||
+        parts.some((part) => !part || part === "." || part === "..") ||
+        seen.has(entry)
+      ) {
+        throw new Error("inventory contains a duplicate or unsafe file path");
+      }
+      seen.add(entry);
+    }
+    return {
+      bundledPluginArtifacts: [...seen]
+        .filter((entry) => entry.startsWith("dist/extensions/"))
+        .toSorted((left, right) => left.localeCompare(right)),
+    };
+  } catch (error) {
+    return {
+      bundledPluginArtifacts: [],
+      error: `installed package dist inventory is missing or invalid: ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    };
+  }
+}
+
+function listInstalledBundledPluginArtifacts(packageRoot: string): {
+  files: string[];
+  limitExceeded: boolean;
+} {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return { files: [], limitExceeded: false };
+  }
+  const pending = [extensionsDir];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    const dir = opendirSync(currentDir);
+    try {
+      while (true) {
+        const entry = dir.readSync();
+        if (!entry) {
+          break;
+        }
+        const entryPath = join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          pending.push(entryPath);
+        } else if (entry.isFile()) {
+          files.push(relative(packageRoot, entryPath).replaceAll("\\", "/"));
+          if (files.length > MAX_INSTALLED_BUNDLED_PLUGIN_FILES) {
+            return { files, limitExceeded: true };
+          }
+        }
+      }
+    } finally {
+      dir.closeSync();
+    }
+  }
+  return { files, limitExceeded: false };
+}
+
+function readBundledExtensionPackageJsons(packageRoot: string) {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  const manifests: InstalledBundledExtensionManifestRecord[] = [];
+  const errors: string[] = [];
+  const publishedInventory = readInstalledPackageDistInventory(packageRoot);
+  if (publishedInventory.error) {
+    errors.push(publishedInventory.error);
+  }
+  const installedArtifacts = listInstalledBundledPluginArtifacts(packageRoot);
+  if (installedArtifacts.limitExceeded) {
+    errors.push(
+      `installed package contains more than ${MAX_INSTALLED_BUNDLED_PLUGIN_FILES} bundled plugin files; refusing to scan unbounded package contents.`,
+    );
+  }
+  const installedArtifactParity = comparePackageDistInventory({
+    files: installedArtifacts.files,
+    inventory: publishedInventory.bundledPluginArtifacts,
+  });
+  errors.push(
+    ...installedArtifactParity.packagedFilesMissingFromInventory.map(
+      (relativePath) =>
+        `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+    ),
+  );
+  for (const relativePath of installedArtifactParity.inventoryEntriesMissingFromPackage) {
+    errors.push(
+      relativePath.endsWith("/package.json")
+        ? `installed bundled extension manifest missing: ${join(packageRoot, relativePath)}.`
+        : `installed bundled plugin artifact missing: ${relativePath}.`,
+    );
+  }
+
+  if (!existsSync(extensionsDir)) {
+    return { manifests, errors };
+  }
+
+  for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const extensionDirPath = join(extensionsDir, entry.name);
+    const packageJsonPath = join(extensionsDir, entry.name, "package.json");
+    if (!existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    try {
+      const packageJsonStats = lstatSync(packageJsonPath);
+      if (!packageJsonStats.isFile()) {
+        throw new Error("manifest must be a regular file");
+      }
+      if (packageJsonStats.size > MAX_BUNDLED_EXTENSION_MANIFEST_BYTES) {
+        throw new Error(`manifest exceeds ${MAX_BUNDLED_EXTENSION_MANIFEST_BYTES} bytes`);
+      }
+
+      const realExtensionDirPath = realpathSync(extensionDirPath);
+      const realPackageJsonPath = realpathSync(packageJsonPath);
+      const relativeManifestPath = relative(realExtensionDirPath, realPackageJsonPath);
+      if (
+        relativeManifestPath.length === 0 ||
+        relativeManifestPath.startsWith("..") ||
+        isAbsolute(relativeManifestPath)
+      ) {
+        throw new Error("manifest resolves outside the bundled extension directory");
+      }
+
+      manifests.push({
+        id: entry.name,
+        manifest: JSON.parse(
+          readFileSync(realPackageJsonPath, "utf8"),
+        ) as InstalledBundledExtensionPackageJson,
+        path: realPackageJsonPath,
+      });
+    } catch (error) {
+      errors.push(
+        `installed bundled extension manifest invalid: failed to parse ${packageJsonPath}: ${formatErrorMessage(error)}.`,
+      );
+    }
+  }
+
+  return { manifests, errors };
+}
+
+export function npmExec(args: string[], cwd: string): string {
+  const invocation = resolveNpmCommandInvocation({
+    npmArgs: args,
+    npmExecPath: process.env.npm_execpath,
+    nodeExecPath: process.execPath,
+    platform: process.platform,
+  });
+
+  return runNpmVerifyCommand(invocation, cwd);
+}
+
+export function buildPublishedInstallCommandArgs(prefixDir: string, spec: string): string[] {
+  return ["install", "-g", "--prefix", prefixDir, spec, "--no-fund", "--no-audit"];
+}
+
+export async function fetchRegistryJson(
+  url: string,
+  options: FetchRegistryJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = options.timeoutMs ?? NPM_REGISTRY_REQUEST_TIMEOUT_MS;
+  const maxBodyBytes = options.maxBodyBytes ?? NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES;
+  const controller = new AbortController();
+  const timeoutError = Object.assign(
+    new Error(`npm registry request timed out after ${timeoutMs}ms: ${url}`),
+    { code: "ETIMEDOUT" },
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      (options.fetchImpl ?? fetch)(url, {
+        headers: {
+          Accept: "application/json",
+        },
+        redirect: "error",
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    if (!response.ok) {
+      throw new Error(`npm registry request failed (${response.status}): ${url}`);
+    }
+    return JSON.parse(
+      await readBoundedResponseText(response, `npm registry ${url}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      }),
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isRetryableRegistryProvenanceError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes("npm provenance attestation") ||
+    message.includes("npm registry signature") ||
+    message.includes("registry integrity")
+  ) {
+    return false;
+  }
+  return (
+    /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
+    message.includes("npm registry metadata is incomplete") ||
+    message.includes("npm registry provenance metadata is incomplete") ||
+    /aborted|fetch failed|network|timeout|timed out/u.test(message)
+  );
+}
+
+export async function retryNpmRegistryProvenanceRead<T>(
+  read: () => Promise<T>,
+  options: {
+    attempts?: number;
+    delay?: (delayMs: number) => Promise<void>;
+  } = {},
+): Promise<T> {
+  const attempts = options.attempts ?? NPM_REGISTRY_PROVENANCE_ATTEMPTS;
+  const delay =
+    options.delay ??
+    ((delayMs: number) =>
+      new Promise<void>((resolveDelay) => {
+        setTimeout(resolveDelay, delayMs);
+      }));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableRegistryProvenanceError(error) || attempt === attempts) {
+        throw error;
+      }
+      await delay(Math.min(attempt * 1000, NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS));
+    }
+  }
+
+  throw lastError;
+}
+
+async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<void> {
+  const registry = new URL(process.env.npm_config_registry ?? "https://registry.npmjs.org");
+  if (registry.protocol !== "https:") {
+    throw new Error(`npm registry must use HTTPS: ${registry}`);
+  }
+  if (!registry.pathname.endsWith("/")) {
+    registry.pathname = `${registry.pathname}/`;
+  }
+  const packageName = "openclaw";
+  const packageDocument = (await fetchRegistryJson(
+    new URL(
+      `${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`,
+      registry,
+    ).toString(),
+  )) as {
+    dist?: {
+      attestations?: {
+        provenance?: {
+          predicateType?: string;
+        };
+        url?: string;
+      };
+      integrity?: string;
+      signatures?: Parameters<typeof verifyNpmRegistrySignatures>[0]["signatures"];
+    };
+  };
+  const keysDocument = (await fetchRegistryJson(new URL("-/npm/v1/keys", registry).toString())) as {
+    keys?: Parameters<typeof verifyNpmRegistrySignatures>[0]["keys"];
+  };
+  const integrity = packageDocument.dist?.integrity;
+  const signatures = packageDocument.dist?.signatures;
+  const provenance = packageDocument.dist?.attestations?.provenance;
+  const attestationUrl = packageDocument.dist?.attestations?.url;
+  if (!integrity || !signatures || !keysDocument.keys) {
+    throw new Error(`npm registry metadata is incomplete for ${packageName}@${version}.`);
+  }
+  if (
+    provenance?.predicateType !== NPM_PROVENANCE_PREDICATE_TYPE ||
+    typeof attestationUrl !== "string" ||
+    attestationUrl.length === 0
+  ) {
+    throw new Error(
+      `npm registry provenance metadata is incomplete for ${packageName}@${version}.`,
+    );
+  }
+  const parsedAttestationUrl = new URL(attestationUrl);
+  const attestationPathPrefix = new URL("-/npm/v1/attestations/", registry).pathname;
+  if (
+    parsedAttestationUrl.protocol !== "https:" ||
+    parsedAttestationUrl.origin !== registry.origin ||
+    !parsedAttestationUrl.pathname.startsWith(attestationPathPrefix)
+  ) {
+    throw new Error(
+      `npm registry returned an untrusted provenance attestation URL for ${packageName}@${version}.`,
+    );
+  }
+
+  verifyNpmRegistrySignatures({
+    packageName,
+    version,
+    integrity,
+    signatures,
+    keys: keysDocument.keys,
+  });
+  const attestationDocument = (await fetchRegistryJson(parsedAttestationUrl.toString())) as {
+    attestations?: NpmRegistryAttestation[];
+  };
+  const attestations = attestationDocument.attestations ?? [];
+  if (attestations.length === 0) {
+    throw new Error(
+      `npm registry provenance metadata is incomplete for ${packageName}@${version}.`,
+    );
+  }
+  await verifyNpmProvenanceAttestation({
+    packageName,
+    version,
+    integrity,
+    attestations,
+    expectedWorkflowRef: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF,
+    expectedWorkflowSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+    // Explicit env overrides stay strict; otherwise derive the attested publish tooling.
+    verifyDerivedWorkflow: (identity) => verifyAttestedReleasePublishWorkflow(identity),
+  });
+  console.log(
+    `openclaw-npm-postpublish-verify: registry signature and provenance attestation verified (${version})`,
+  );
+}
+
+function verifyScenario(
+  version: string,
+  scenario: PublishedInstallScenario,
+  sourceVerification: ReturnType<typeof resolvePublishedInstallSourceVerification>,
+): void {
+  const workingDir = mkdtempSync(join(tmpdir(), `openclaw-postpublish-${scenario.name}.`));
+  const prefixDir = join(workingDir, "prefix");
+
+  try {
+    for (const spec of scenario.installSpecs) {
+      npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), workingDir);
+    }
+
+    const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
+    const packageRoot = join(globalRoot, "openclaw");
+    const pkg = JSON.parse(
+      readFileSync(join(packageRoot, "package.json"), "utf8"),
+    ) as InstalledPackageJson;
+    const errors = collectInstalledPackageErrors({
+      ...sourceVerification,
+      expectedVersion: scenario.expectedVersion,
+      installedVersion: pkg.version?.trim() ?? "",
+      packageRoot,
+    });
+    const installedBinaryVersion = runNpmVerifyCommand(
+      resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]),
+      workingDir,
+    );
+
+    if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== scenario.expectedVersion) {
+      errors.push(
+        `installed openclaw binary version mismatch: expected ${scenario.expectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,
+      );
+    }
+
+    if (errors.length === 0) {
+      runInstalledWorkspaceBootstrapSmoke({ packageRoot });
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`${scenario.name} failed:\n- ${errors.join("\n- ")}`);
+    }
+
+    console.log(`openclaw-npm-postpublish-verify: ${scenario.name} OK (${version})`);
+  } finally {
+    rmSync(workingDir, { force: true, recursive: true });
+  }
+}
+
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseOpenClawNpmPostpublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPostpublishVerifyUsage());
+    return;
+  }
+
+  const { version } = args;
+  const scenarios = buildPublishedInstallScenarios(version);
+  const sourceVerification = resolvePublishedInstallSourceVerification(process.cwd(), version);
+  await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
+  for (const scenario of scenarios) {
+    verifyScenario(version, scenario, sourceVerification);
+  }
+
+  console.log(
+    `openclaw-npm-postpublish-verify: verified published npm install paths for ${version}.`,
+  );
+}
+
+const entrypoint = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
+if (entrypoint !== null && import.meta.url === entrypoint) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(`openclaw-npm-postpublish-verify: ${formatErrorMessage(error)}`);
+    process.exitCode = 1;
+  }
+}

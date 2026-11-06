@@ -1,0 +1,141 @@
+import { applyMergePatch } from "../config/merge-patch.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { isRecord } from "../utils.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+
+type ReadBundleJsonResult =
+  | { ok: true; raw: Record<string, unknown> }
+  | { ok: false; error: string; reason?: "open" };
+
+export function extractBundleServerMap(
+  raw: unknown,
+  containerKeys: readonly string[],
+): Record<string, Record<string, unknown>> {
+  if (!isRecord(raw)) {
+    return {};
+  }
+  let nested = raw;
+  for (const key of containerKeys) {
+    if (isRecord(raw[key])) {
+      nested = raw[key];
+      break;
+    }
+  }
+  const servers: Record<string, Record<string, unknown>> = {};
+  for (const [name, value] of Object.entries(nested)) {
+    if (isRecord(value)) {
+      servers[name] = { ...value };
+    }
+  }
+  return servers;
+}
+
+export function readBundleJsonObject(params: {
+  rootDir: string;
+  relativePath: string;
+  allowMissing?: boolean;
+}): ReadBundleJsonResult {
+  const file = readPluginCacheFile({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    rejectHardlinks: true,
+    maxBytes: null,
+  });
+  if (!file.ok && file.failurePhase !== "read") {
+    if (params.allowMissing === undefined) {
+      return { ok: true, raw: {} };
+    }
+    return matchRootFileOpenFailure<ReadBundleJsonResult>(file.failure, {
+      path: () =>
+        params.allowMissing
+          ? { ok: true, raw: {} }
+          : { ok: false, error: `unable to read ${params.relativePath}: path`, reason: "open" },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unable to read ${params.relativePath}: ${failure.reason}`,
+        reason: "open",
+      }),
+    });
+  }
+  const parsed = file.ok
+    ? parsePluginCacheJson(file)
+    : { ok: false as const, error: file.failure.error };
+  if (!parsed.ok) {
+    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(parsed.error)}` };
+  }
+  return isRecord(parsed.value)
+    ? { ok: true, raw: structuredClone(parsed.value) }
+    : { ok: false, error: `${params.relativePath} must contain a JSON object` };
+}
+
+export function loadEnabledBundleConfig<TConfig>(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  createEmptyConfig: () => TConfig;
+  loadBundleConfig: (params: {
+    pluginId: string;
+    rootDir: string;
+    bundleFormat: PluginBundleFormat;
+  }) => { config: TConfig; diagnostics: string[] };
+  loadNativePluginConfig?: (params: {
+    record: PluginManifestRecord;
+  }) => { config: TConfig; diagnostics: string[] } | undefined;
+}): { config: TConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
+  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
+  if (!normalizedPlugins.enabled) {
+    return { config: params.createEmptyConfig(), diagnostics: [] };
+  }
+
+  const registry =
+    params.manifestRegistry ??
+    loadPluginManifestRegistryForPluginRegistry({
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      includeDisabled: true,
+    });
+  const diagnostics: Array<{ pluginId: string; message: string }> = [];
+  let merged = params.createEmptyConfig();
+
+  for (const record of registry.plugins) {
+    const canLoadBundle = record.format === "bundle" && Boolean(record.bundleFormat);
+    const canLoadNative = record.format !== "bundle" && params.loadNativePluginConfig !== undefined;
+    if (!canLoadBundle && !canLoadNative) {
+      continue;
+    }
+    const activationState = resolveEffectivePluginActivationState({
+      id: record.id,
+      origin: record.origin,
+      channelIds: record.channels,
+      config: normalizedPlugins,
+      rootConfig: params.cfg,
+      enabledByDefault: record.enabledByDefault,
+    });
+    if (!activationState.activated) {
+      continue;
+    }
+
+    const loaded =
+      canLoadBundle && record.bundleFormat
+        ? params.loadBundleConfig({
+            pluginId: record.id,
+            rootDir: record.rootDir,
+            bundleFormat: record.bundleFormat,
+          })
+        : params.loadNativePluginConfig?.({ record });
+    if (!loaded) {
+      continue;
+    }
+    merged = applyMergePatch(merged, loaded.config) as TConfig;
+    for (const message of loaded.diagnostics) {
+      diagnostics.push({ pluginId: record.id, message });
+    }
+  }
+
+  return { config: merged, diagnostics };
+}

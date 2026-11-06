@@ -1,0 +1,12 @@
+import type { FileHandle } from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+
+export async function readFileRangeAsync(
+  fileHandle: FileHandle,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  const bytesRead = await readFileWindowFully(fileHandle, buffer, position);
+  return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
+}

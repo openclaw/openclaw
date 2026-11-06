@@ -1,0 +1,169 @@
+#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import * as ts from "typescript/ast";
+import {
+  collectSourceFiles,
+  collectStronglyConnectedComponents,
+  formatCycle,
+} from "./lib/import-cycle-graph.ts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const scanRoots = ["src", "extensions", "scripts"] as const;
+const sourceExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
+const testSourcePattern = /(?:\.test|\.e2e\.test)\.[cm]?[tj]sx?$/;
+const generatedSourcePattern = /\.(?:generated|bundle)\.[tj]s$/;
+const declarationSourcePattern = /\.d\.[cm]?ts$/;
+const ignoredPathPartPattern =
+  /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
+
+function shouldSkipRepoPath(repoPath: string): boolean {
+  return (
+    ignoredPathPartPattern.test(repoPath) ||
+    testSourcePattern.test(repoPath) ||
+    generatedSourcePattern.test(repoPath) ||
+    declarationSourcePattern.test(repoPath)
+  );
+}
+
+function createSourceResolver(files: readonly string[]) {
+  const fileSet = new Set(files);
+  const pathMap = new Map<string, string>();
+  for (const file of files) {
+    const parsed = path.posix.parse(file);
+    const extensionless = path.posix.join(parsed.dir, parsed.name);
+    pathMap.set(extensionless, file);
+    if (file.endsWith(".ts")) {
+      pathMap.set(`${extensionless}.js`, file);
+    } else if (file.endsWith(".tsx")) {
+      pathMap.set(`${extensionless}.js`, file);
+      pathMap.set(`${extensionless}.jsx`, file);
+    } else if (file.endsWith(".mts")) {
+      pathMap.set(`${extensionless}.mjs`, file);
+    } else if (file.endsWith(".cts")) {
+      pathMap.set(`${extensionless}.cjs`, file);
+    }
+  }
+  return (importer: string, specifier: string): string | null => {
+    if (!specifier.startsWith(".")) {
+      return null;
+    }
+    const base = path.posix.normalize(path.posix.join(path.posix.dirname(importer), specifier));
+    if (fileSet.has(base)) {
+      return base;
+    }
+    const mappedBase = pathMap.get(base);
+    if (mappedBase) {
+      return mappedBase;
+    }
+    const candidates = [
+      ...sourceExtensions.map((extension) => `${base}${extension}`),
+      `${base}/index.ts`,
+      `${base}/index.tsx`,
+      `${base}/index.js`,
+      `${base}/index.mjs`,
+    ];
+    for (const candidate of candidates) {
+      if (fileSet.has(candidate)) {
+        return candidate;
+      }
+      const mapped = pathMap.get(candidate);
+      if (mapped) {
+        return mapped;
+      }
+    }
+    return null;
+  };
+}
+
+function importDeclarationHasRuntimeEdge(node: ts.ImportDeclaration): boolean {
+  if (!node.importClause) {
+    return true;
+  }
+  if (node.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword) {
+    return false;
+  }
+  const bindings = node.importClause.namedBindings;
+  if (node.importClause.name || !bindings || ts.isNamespaceImport(bindings)) {
+    return true;
+  }
+  return bindings.elements.some((element) => !element.isTypeOnly);
+}
+
+function exportDeclarationHasRuntimeEdge(node: ts.ExportDeclaration): boolean {
+  if (!node.moduleSpecifier || node.isTypeOnly) {
+    return false;
+  }
+  const clause = node.exportClause;
+  if (!clause || ts.isNamespaceExport(clause)) {
+    return true;
+  }
+  return clause.elements.some((element) => !element.isTypeOnly);
+}
+
+function collectRuntimeStaticImports(
+  file: string,
+  resolveSource: ReturnType<typeof createSourceResolver>,
+  sourceFile: ts.SourceFile,
+) {
+  const imports: string[] = [];
+  visitModuleSpecifiers(sourceFile, ({ node, specifier }) => {
+    const include =
+      (ts.isImportDeclaration(node) && importDeclarationHasRuntimeEdge(node)) ||
+      (ts.isExportDeclaration(node) && exportDeclarationHasRuntimeEdge(node));
+    if (include && specifier) {
+      const resolved = resolveSource(file, specifier);
+      if (resolved) {
+        imports.push(resolved);
+      }
+    }
+  });
+  return imports.toSorted((left, right) => left.localeCompare(right));
+}
+
+function main(): number {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  const files = scanRoots.flatMap((root) =>
+    collectSourceFiles(path.join(repoRoot, root), {
+      repoRoot,
+      sourceExtensions,
+      shouldSkipRepoPath,
+    }),
+  );
+  const resolveSource = createSourceResolver(files);
+  const graph = new Map<string, string[]>();
+  // Native snapshots reload their root list. Keep only one bounded batch of syntax trees.
+  const batchSize = 32;
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    const batch = files.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((file) => ({
+        fileName: file,
+        text: readFileSync(path.join(repoRoot, file), "utf8"),
+      })),
+    );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const file = batch[index]!;
+      graph.set(file, collectRuntimeStaticImports(file, resolveSource, sourceFile));
+    }
+  }
+  const components = collectStronglyConnectedComponents(graph);
+
+  console.log(`Import cycle check: ${components.length} runtime value cycle(s).`);
+  if (components.length === 0) {
+    return 0;
+  }
+
+  console.error("\nRuntime value import cycles:");
+  for (const component of components) {
+    console.error(`\n# component size ${component.length}`);
+    console.error(formatCycle(component, graph));
+  }
+  console.error("\nBreak the cycle or convert type-only edges to `import type`.");
+  return 1;
+}
+
+process.exitCode = main();

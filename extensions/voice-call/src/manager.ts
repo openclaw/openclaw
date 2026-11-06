@@ -1,0 +1,618 @@
+import fs from "node:fs";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
+import type { CallEndResult, CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
+import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
+import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
+import {
+  continueCall as continueCallWithContext,
+  endCall as endCallWithContext,
+  hasConversationStreamConnect,
+  initiateCall as initiateCallWithContext,
+  sendDtmf as sendDtmfWithContext,
+  speak as speakWithContext,
+  speakInitialMessage as speakInitialMessageWithContext,
+  type SpeakOptions,
+} from "./manager/outbound.js";
+import { copyCallRecord } from "./manager/state.js";
+import {
+  findCallInStore,
+  getCallHistoryFromStore,
+  loadActiveCallsFromStore,
+  persistCallRecord,
+} from "./manager/store.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
+import { resolveCallMaxDurationSeconds, startMaxDurationTimer } from "./manager/timers.js";
+import type { VoiceCallProvider } from "./providers/base.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
+import type { VoiceCallStateRuntime } from "./runtime-state.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
+import {
+  TerminalStates,
+  type CallId,
+  type CallRecord,
+  type EndReason,
+  type NormalizedEvent,
+  type OutboundCallOptions,
+} from "./types.js";
+import { resolveUserPath } from "./utils.js";
+
+function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "timeout"): void {
+  call.endedAt = Date.now();
+  call.endReason = endReason;
+  call.state = endReason;
+}
+
+export class CallManager {
+  private activeCalls = new Map<CallId, CallRecord>();
+  private providerCallIdMap = new Map<string, CallId>();
+  private processedEventIds = new Set<string>();
+  private rejectedProviderCallIds = new Set<string>();
+  private provider: VoiceCallProvider | null = null;
+  private storePath: string;
+  private webhookUrl: string | null = null;
+  private activeTurnCalls = new Set<CallId>();
+  private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
+  private transcriptWaiters: CallManagerContext["transcriptWaiters"] = new Map();
+  private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private initialMessageInFlight = new Set<CallId>();
+  private autoResponseOwners = new WeakMap<CallRecord, symbol>();
+  private readonly mutationQueue = new KeyedAsyncQueue();
+  private readonly pendingCallAdmissions = new Set<CallId>();
+  private readonly pendingWork = new Set<Promise<unknown>>();
+  private readonly notifyHangupTimers = new Map<CallId, NodeJS.Timeout>();
+  private initialization: Promise<void> | null = null;
+  private closing = false;
+  private stopPromise: Promise<void> | null = null;
+
+  private trackCallWork = (work: Promise<unknown>): void => {
+    this.pendingWork.add(work);
+    const settled = () => this.pendingWork.delete(work);
+    void work.then(settled, settled);
+  };
+
+  private runOperation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing) {
+      return Promise.reject(new Error("Voice Call manager is stopping"));
+    }
+    const pending = this.initialization
+      ? this.initialization.then(() => {
+          if (this.closing) {
+            throw new Error("Voice Call manager is stopping");
+          }
+          return operation();
+        })
+      : operation();
+    this.trackCallWork(pending);
+    return pending;
+  }
+
+  /** Stop is owned by runtime shutdown, after webhook and stream producers have closed. */
+  stop(): Promise<void> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
+    this.closing = true;
+    const clearTimers = () => {
+      for (const timers of [this.maxDurationTimers, this.notifyHangupTimers]) {
+        for (const timer of timers.values()) {
+          clearTimeout(timer);
+        }
+        timers.clear();
+      }
+    };
+    clearTimers();
+    for (const waiter of this.transcriptWaiters.values()) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(new Error("Voice Call runtime stopped"));
+    }
+    this.transcriptWaiters.clear();
+    this.stopPromise = (async () => {
+      const failures: unknown[] = [];
+      while (this.pendingWork.size > 0) {
+        const results = await Promise.allSettled(this.pendingWork);
+        for (const result of results) {
+          if (result.status === "rejected") {
+            failures.push(result.reason);
+          }
+        }
+      }
+      clearTimers();
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Voice Call work failed during shutdown");
+      }
+    })();
+    return this.stopPromise;
+  }
+
+  /** Serialize realtime metadata; persisted steering commits before bridge effects. */
+  updateCallMetadata(
+    call: CallRecord,
+    update: (metadata: CallRecord["metadata"]) => CallRecord["metadata"],
+    options?: { persist?: boolean; assertCurrent?: () => void },
+  ): Promise<void> {
+    return this.runOperation(() =>
+      this.mutationQueue.enqueue("state", async () => {
+        if (this.activeCalls.get(call.callId) !== call || TerminalStates.has(call.state)) {
+          if (options?.persist) {
+            throw new Error("Call has ended");
+          }
+          return;
+        }
+        const next = copyCallRecord(call);
+        next.metadata = update(next.metadata);
+        if (options?.persist) {
+          await persistCallRecord(
+            this.storePath,
+            next,
+            this.stateRuntime,
+            options.assertCurrent ? { assertCurrent: options.assertCurrent } : undefined,
+          );
+        }
+        Object.assign(call, next);
+      }),
+    );
+  }
+
+  onCallUpdated: CallManagerContext["onCallUpdated"];
+  beforeCallEnd: CallManagerContext["beforeCallEnd"];
+  playRealtimeVoicemail: CallManagerContext["playRealtimeVoicemail"];
+  beforeCarrierPlayback: CallManagerContext["beforeCarrierPlayback"];
+
+  private publishCallUpdate = (call: CallRecord): void => {
+    const work = this.onCallUpdated?.(call);
+    if (work) {
+      this.trackCallWork(work);
+    }
+  };
+
+  /** Accepted notification work may settle its status after terminal removal or shutdown admission. */
+  persistDeliveryStatus(snapshot: CallRecord): Promise<void> {
+    const work = this.mutationQueue.enqueue("state", async () => {
+      const current =
+        this.activeCalls.get(snapshot.callId) ??
+        (await findCallInStore(this.storePath, snapshot.callId, this.stateRuntime));
+      if (!current) {
+        throw new Error("Call delivery record is unavailable");
+      }
+      const next = copyCallRecord(current);
+      next.metadata = { ...next.metadata };
+      for (const key of ["callReport", "liveTranscriptDelivery"]) {
+        if (snapshot.metadata?.[key] !== undefined) {
+          next.metadata[key] = snapshot.metadata[key];
+        }
+      }
+      await persistCallRecord(this.storePath, next, this.stateRuntime);
+      if (this.activeCalls.get(snapshot.callId) === current) {
+        Object.assign(current, next);
+      }
+    });
+    this.trackCallWork(work);
+    return work;
+  }
+
+  /**
+   * Carrier-side stream session issuer. Wired by the runtime when realtime is
+   * enabled so the manager can pre-issue stream URLs for providers (e.g.
+   * Telnyx) that attach Media Streaming at dial or answer time.
+   */
+  streamSessionIssuer: StreamSessionIssuer | undefined;
+
+  constructor(
+    private readonly config: VoiceCallConfig,
+    storePath?: string,
+    private readonly coreSession?: VoiceCallCoreSessionConfig,
+    private readonly stateRuntime?: VoiceCallStateRuntime["state"],
+  ) {
+    const rawOverride = storePath?.trim() || config.store?.trim();
+    this.storePath = rawOverride ? resolveUserPath(rawOverride) : resolveDefaultVoiceCallStoreDir();
+  }
+
+  initialize(provider: VoiceCallProvider, webhookUrl: string): Promise<void> {
+    if (this.closing) {
+      return Promise.reject(new Error("Voice Call manager is stopping"));
+    }
+    const pending = this.initializeFromStore(provider, webhookUrl);
+    this.initialization = pending;
+    this.trackCallWork(pending);
+    void pending.then(
+      () => {
+        if (this.initialization === pending) {
+          this.initialization = null;
+        }
+      },
+      () => {},
+    );
+    return pending;
+  }
+
+  private async initializeFromStore(
+    provider: VoiceCallProvider,
+    webhookUrl: string,
+  ): Promise<void> {
+    this.provider = provider;
+    this.webhookUrl = webhookUrl;
+
+    fs.mkdirSync(this.storePath, { recursive: true });
+
+    const persisted = await loadActiveCallsFromStore(this.storePath, this.stateRuntime);
+    if (this.closing) {
+      return;
+    }
+    this.processedEventIds = persisted.processedEventIds;
+    this.rejectedProviderCallIds = new Set();
+
+    for (const call of persisted.interruptedDeliveries) {
+      const metadata = { ...call.metadata };
+      for (const key of ["callReport", "liveTranscriptDelivery"] as const) {
+        const status = metadata[key];
+        if (
+          status !== null &&
+          typeof status === "object" &&
+          "status" in status &&
+          status.status === "pending"
+        ) {
+          metadata[key] = {
+            ...status,
+            status: "failed",
+            error: "interrupted by restart",
+            at: Date.now(),
+          };
+        }
+      }
+      call.metadata = metadata;
+      await persistCallRecord(this.storePath, call, this.stateRuntime);
+    }
+    if (this.closing) {
+      return;
+    }
+
+    const verified = await this.verifyRestoredCalls(provider, persisted.activeCalls);
+    if (this.closing) {
+      return;
+    }
+    const timers: Array<{ callId: CallId; deadline: number }> = [];
+    for (const [callId, call] of verified) {
+      const maxDurationAnchor =
+        call.answeredAt ??
+        (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined);
+      if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
+        const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
+        );
+        if (call.answeredAt === undefined) {
+          // Twilio streams can restore directly in speaking/listening without an
+          // answered webhook; anchoring at startedAt preserves bounded duration.
+          call.answeredAt = maxDurationAnchor;
+          await persistCallRecord(this.storePath, call, this.stateRuntime);
+        }
+        if (this.closing) {
+          return;
+        }
+        timers.push({ callId, deadline: maxDurationAnchor + maxDurationMs });
+      }
+    }
+    // Publish one restored view after every required write has completed.
+    this.activeCalls = verified;
+    this.providerCallIdMap = new Map();
+    for (const [callId, call] of verified) {
+      if (call.providerCallId) {
+        this.providerCallIdMap.set(call.providerCallId, callId);
+      }
+    }
+    for (const { callId, deadline } of timers) {
+      startMaxDurationTimer({
+        ctx: this.getContext(),
+        callId,
+        timeoutMs: Math.max(0, deadline - Date.now()),
+        onTimeout: (id) => this.endCall(id, { reason: "timeout" }),
+      });
+      console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
+    }
+
+    if (verified.size > 0) {
+      console.log(`[voice-call] Restored ${verified.size} active call(s) from store`);
+    }
+  }
+
+  /**
+   * Verify persisted calls with the provider before restoring.
+   * Calls without providerCallId or older than maxDurationSeconds are skipped.
+   * Transient provider errors keep the call (rely on timer fallback).
+   */
+  private async verifyRestoredCalls(
+    provider: VoiceCallProvider,
+    candidates: Map<CallId, CallRecord>,
+  ): Promise<Map<CallId, CallRecord>> {
+    if (candidates.size === 0) {
+      return new Map();
+    }
+    const now = Date.now();
+    const verified = new Map<CallId, CallRecord>();
+    const verifyTasks: Promise<void>[] = [];
+    let skippedNoProviderCallId = 0;
+    let skippedOlderThanMaxDuration = 0;
+    const skippedTerminalStatuses = new Map<string, number>();
+    let keptVerifiedActive = 0;
+    let keptUnknownProviderStatus = 0;
+    let keptVerificationFailures = 0;
+
+    let admissionFailure: { error: unknown } | undefined;
+    try {
+      for (const [callId, call] of candidates) {
+        if (this.closing) {
+          break;
+        }
+        try {
+          resolveCallAgentId(call);
+        } catch (error) {
+          console.warn(
+            `[voice-call] Skipped restored call ${callId}: ${formatErrorMessage(error)}`,
+          );
+          continue;
+        }
+        if (!call.providerCallId) {
+          skippedNoProviderCallId += 1;
+          continue;
+        }
+
+        // Skip calls older than maxDurationSeconds (time-based fallback)
+        const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
+        );
+        if (now - (call.answeredAt ?? call.startedAt) > maxAgeMs) {
+          skippedOlderThanMaxDuration += 1;
+          markRestoredCallSkipped(call, "timeout");
+          await persistCallRecord(this.storePath, call, this.stateRuntime);
+          if (!this.closing) {
+            this.publishCallUpdate(call);
+          }
+          if (this.closing) {
+            break;
+          }
+          await provider
+            .hangupCall({
+              callId,
+              providerCallId: call.providerCallId,
+              reason: "timeout",
+            })
+            .catch((err: unknown) => {
+              console.warn(
+                `[voice-call] Failed to hang up expired restored call ${callId}:`,
+                err instanceof Error ? err.message : String(err),
+              );
+            });
+          continue;
+        }
+
+        const task = provider.getCallStatus({ providerCallId: call.providerCallId }).then(
+          async (result) => {
+            if (result.isTerminal) {
+              const status = normalizeOptionalString(result.status) ?? "terminal";
+              skippedTerminalStatuses.set(status, (skippedTerminalStatuses.get(status) ?? 0) + 1);
+              markRestoredCallSkipped(call, "completed");
+              await persistCallRecord(this.storePath, call, this.stateRuntime);
+              if (!this.closing) {
+                this.publishCallUpdate(call);
+              }
+            } else if (result.isUnknown) {
+              keptUnknownProviderStatus += 1;
+              verified.set(callId, call);
+            } else {
+              keptVerifiedActive += 1;
+              verified.set(callId, call);
+            }
+          },
+          () => {
+            // A failed provider check keeps the call; failed persistence still rejects restore.
+            keptVerificationFailures += 1;
+            verified.set(callId, call);
+          },
+        );
+        // Later calls can await carrier work before the final drain observes this task.
+        void task.catch(() => {});
+        verifyTasks.push(task);
+      }
+    } catch (error) {
+      admissionFailure = { error };
+    }
+    const outcomes = await Promise.allSettled(verifyTasks);
+    if (admissionFailure) {
+      throw admissionFailure.error;
+    }
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+    }
+    const summaries = [
+      ["Skipped", skippedNoProviderCallId, "with no providerCallId"],
+      ["Skipped", skippedOlderThanMaxDuration, "older than maxDurationSeconds"],
+      ...[...skippedTerminalStatuses]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([status, count]) => ["Skipped", count, `with provider status: ${status}`] as const),
+      ["Kept", keptVerifiedActive, "confirmed active by provider"],
+      ["Kept", keptUnknownProviderStatus, "with unknown provider status (relying on timer)"],
+      ["Kept", keptVerificationFailures, "after verification failure (relying on timer)"],
+    ] as const;
+    for (const [action, count, reason] of summaries) {
+      if (count > 0) {
+        console.log(`[voice-call] ${action} ${count} restored call(s) ${reason}`);
+      }
+    }
+    return verified;
+  }
+
+  async initiateCall(
+    to: string,
+    sessionKey?: string,
+    options?: OutboundCallOptions,
+  ): Promise<{ callId: CallId; success: boolean; error?: string }> {
+    return this.runOperation(() =>
+      initiateCallWithContext(this.getContext(), to, sessionKey, options),
+    );
+  }
+
+  async speak(
+    callId: CallId,
+    text: string,
+    options?: SpeakOptions,
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.runOperation(() => speakWithContext(this.getContext(), callId, text, options));
+  }
+
+  async sendDtmf(callId: CallId, digits: string): Promise<{ success: boolean; error?: string }> {
+    return this.runOperation(() => sendDtmfWithContext(this.getContext(), callId, digits));
+  }
+
+  async speakInitialMessage(providerCallId: string): Promise<void> {
+    return this.runOperation(() =>
+      speakInitialMessageWithContext(this.getContext(), providerCallId),
+    );
+  }
+
+  async continueCall(
+    callId: CallId,
+    prompt: string,
+  ): Promise<{ success: boolean; transcript?: string; error?: string }> {
+    return this.runOperation(() => continueCallWithContext(this.getContext(), callId, prompt));
+  }
+
+  endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
+    return this.runOperation(() => endCallWithContext(this.getContext(), callId, options));
+  }
+
+  private getContext(): CallManagerContext {
+    return {
+      mutationQueue: this.mutationQueue,
+      pendingCallAdmissions: this.pendingCallAdmissions,
+      trackCallWork: this.trackCallWork,
+      isStopping: () => this.closing,
+      notifyHangupTimers: this.notifyHangupTimers,
+      activeCalls: this.activeCalls,
+      providerCallIdMap: this.providerCallIdMap,
+      processedEventIds: this.processedEventIds,
+      rejectedProviderCallIds: this.rejectedProviderCallIds,
+      provider: this.provider,
+      config: this.config,
+      coreSession: this.coreSession,
+      storePath: this.storePath,
+      stateRuntime: this.stateRuntime,
+      webhookUrl: this.webhookUrl,
+      activeTurnCalls: this.activeTurnCalls,
+      endCallOperations: this.endCallOperations,
+      transcriptWaiters: this.transcriptWaiters,
+      maxDurationTimers: this.maxDurationTimers,
+      initialMessageInFlight: this.initialMessageInFlight,
+      onCallUpdated: this.publishCallUpdate,
+      beforeCallEnd: this.beforeCallEnd,
+      playRealtimeVoicemail: this.playRealtimeVoicemail,
+      beforeCarrierPlayback: this.beforeCarrierPlayback,
+      onCallerSpeech: (call) => this.invalidateAutoResponse(call),
+      onCallAnswered: (call) => this.maybeSpeakInitialMessageOnAnswered(call),
+      streamSessionIssuer: this.streamSessionIssuer,
+    };
+  }
+
+  processEvent(event: NormalizedEvent): Promise<ProcessEventResult> {
+    return this.runOperation(() => processManagerEvent(this.getContext(), event));
+  }
+
+  createAutoResponseGuard(call: CallRecord): { isCurrent: () => boolean; release: () => void } {
+    // Call identity fences restored/replaced records; generation identity fences
+    // newer speech without cancelling agent work that was already accepted.
+    const owner = Symbol("automatic response");
+    this.autoResponseOwners.set(call, owner);
+    return {
+      isCurrent: () =>
+        !this.closing &&
+        this.activeCalls.get(call.callId) === call &&
+        !TerminalStates.has(call.state) &&
+        this.autoResponseOwners.get(call) === owner,
+      release: () => {
+        if (this.autoResponseOwners.get(call) === owner) {
+          this.autoResponseOwners.delete(call);
+        }
+      },
+    };
+  }
+
+  invalidateAutoResponse(call: CallRecord): void {
+    this.autoResponseOwners.delete(call);
+  }
+
+  private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
+    const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
+
+    if (!initialMessage) {
+      return;
+    }
+
+    // Notify mode should speak as soon as the provider reports "answered".
+    // Conversation mode should defer only when the Twilio stream-connect path
+    // is actually available; otherwise speak immediately on answered.
+    const mode = call.metadata?.mode ?? "conversation";
+    if (mode === "conversation") {
+      if (
+        this.config.realtime.enabled ||
+        hasConversationStreamConnect(this.provider, this.config)
+      ) {
+        return;
+      }
+    } else if (mode !== "notify") {
+      return;
+    }
+
+    if (!this.provider || !call.providerCallId) {
+      return;
+    }
+
+    void this.speakInitialMessage(call.providerCallId).catch((err: unknown) => {
+      console.warn(
+        `[voice-call] Failed to speak initial message for call ${call.callId}: ${formatErrorMessage(err)}`,
+      );
+    });
+  }
+
+  getCall(callId: CallId): CallRecord | undefined {
+    return this.activeCalls.get(callId);
+  }
+
+  /** Await admitted identity updates before resolving a token-bound stream's active call. */
+  getCallForStream(callId: CallId): Promise<CallRecord | undefined> {
+    return this.runOperation(() =>
+      this.mutationQueue.enqueue("state", async () =>
+        this.closing ? undefined : this.activeCalls.get(callId),
+      ),
+    );
+  }
+
+  getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
+    return getCallByProviderCallIdFromMaps({
+      activeCalls: this.activeCalls,
+      providerCallIdMap: this.providerCallIdMap,
+      providerCallId,
+    });
+  }
+
+  getActiveCalls(): CallRecord[] {
+    return Array.from(this.activeCalls.values());
+  }
+
+  /** Resolve a status record from active state or the retained event store. */
+  async getCallFromMemoryOrStore(callId: CallId): Promise<CallRecord | undefined> {
+    const active = this.getCall(callId) ?? this.getCallByProviderCallId(callId);
+    if (active) {
+      return active;
+    }
+    return this.runOperation(() => findCallInStore(this.storePath, callId, this.stateRuntime));
+  }
+
+  async getCallHistory(limit = 50): Promise<CallRecord[]> {
+    return this.runOperation(() =>
+      getCallHistoryFromStore(this.storePath, limit, this.stateRuntime),
+    );
+  }
+}

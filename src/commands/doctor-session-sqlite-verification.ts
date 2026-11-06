@@ -1,0 +1,430 @@
+/** Offline destination ownership and conservative adoption of historical import evidence. */
+import fs from "node:fs";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "../config/sessions/session-entry-snapshots.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import {
+  readMigrationArtifactIdentity,
+  statMigrationPath,
+  type MigrationArtifact,
+} from "../infra/session-sqlite-migration-artifact.js";
+import {
+  canonicalMigrationFilePath,
+  uniqueRestoreMoves,
+  writeSessionSqliteMigrationManifest,
+  type SessionSqliteMigrationMove,
+  type SessionSqliteMigrationTargetManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  countTranscriptEventsForPath,
+  readOnlySqliteValidationSnapshot,
+  type ReadOnlySqliteValidationSnapshot,
+} from "../infra/session-sqlite-migration-readers.js";
+import {
+  verifyTranscriptEvents,
+  verifyCanonicalSessionTranscriptSources,
+} from "../infra/session-sqlite-transcript-verification.js";
+import { readSqliteFileGenerationSync } from "../infra/sqlite-file-generation-worker.js";
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
+import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
+import type { RecoveryArtifactReference } from "./doctor-session-sqlite-recovery-inventory.js";
+import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
+import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+
+/**
+ * A reboot can renumber a volume's st_dev. The original sits beside its destination, so when its
+ * recorded inode and metadata are still on the destination's current device, both files moved
+ * together: the volume was renumbered, not swapped for another one with a colliding inode.
+ * Callers verify the original's bytes separately; a replaced destination still fails its inode check.
+ */
+function isOriginalBesideDestination(
+  move: SessionSqliteMigrationMove,
+  sqlitePath: string,
+  destination: fs.BigIntStats,
+): boolean {
+  const artifact = move.kind === "database-backup" ? move.artifact : undefined;
+  const witness =
+    artifact?.disposal.state === "pending-disposal" && !statMigrationPath(move.archivePath)
+      ? artifact.disposal.claimPath
+      : move.archivePath;
+  const stat = statMigrationPath(witness, { bigint: true });
+  return Boolean(
+    artifact &&
+    path.dirname(witness) === path.dirname(sqlitePath) &&
+    stat?.isFile() &&
+    stat.dev === destination.dev &&
+    String(stat.ino) === artifact.identity.ino &&
+    String(stat.mtimeNs) === artifact.identity.mtimeNs &&
+    stat.size === BigInt(artifact.identity.size),
+  );
+}
+
+/** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
+export function createRecoveryDestinationVerifier(
+  stateDir: string,
+  assertCurrent: () => void,
+  options: { allowOwnedMutation?: boolean } = {},
+) {
+  const destinations = new Map<
+    string,
+    { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation?: SqliteFileGeneration }
+  >();
+  return (refs: Iterable<Pick<RecoveryArtifactReference, "target" | "run" | "move">>) => {
+    for (const { target, run, move } of refs) {
+      const disposal = move.artifact?.disposal;
+      if (
+        disposal?.state === "pending-disposal" &&
+        !statMigrationPath(move.archivePath) &&
+        !statMigrationPath(disposal.claimPath)
+      ) {
+        // A consented disposal whose bytes are already gone protects nothing here.
+        continue;
+      }
+      const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
+      assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
+      const expected = destinations.get(target.sqlitePath);
+      let agentId = expected?.agentId;
+      if (!expected) {
+        const owner = inspectOpenClawAgentDatabaseOwner(target.sqlitePath);
+        agentId = owner.status === "owned" ? owner.agentId : undefined;
+      }
+      if (!target.databaseIdentity && agentId !== target.agentId) {
+        throw new Error("destination database ownership cannot be verified");
+      }
+      // Establish the baseline after owner inspection closes its SQLite reader. Later checks
+      // never reopen SQLite: that would itself change sidecar bookkeeping.
+      const files = paths.map((file) =>
+        fs.lstatSync(file, { bigint: true, throwIfNoEntry: false }),
+      );
+      if (
+        !files[0]?.isFile() ||
+        (target.databaseIdentity && String(files[0]?.ino) !== target.databaseIdentity.ino) ||
+        files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
+        (expected &&
+          (["dev", "ino"] as const).some((key) => files[0]?.[key] !== expected.files[0]?.[key])) ||
+        (expected &&
+          !options.allowOwnedMutation &&
+          files.some((file, index) =>
+            (index === 0
+              ? (["ctimeNs", "mtimeNs", "size"] as const)
+              : (["dev", "ino", "size"] as const)
+            ).some((key) => file?.[key] !== expected.files[index]?.[key]),
+          ))
+      ) {
+        throw new Error("Recovery destination database changed; preview cleanup again.");
+      }
+      const identity = target.databaseIdentity;
+      const deviceChanged = identity !== undefined && identity.dev !== String(files[0]!.dev);
+      const remounted =
+        deviceChanged && isOriginalBesideDestination(move, target.sqlitePath, files[0]!);
+      // Owned cleanup tolerates its live Gateway writing between this stat and a fingerprint,
+      // so it needs contents only to re-certify a moved destination. Otherwise ignore SHM
+      // reader bookkeeping, but freshly fingerprint WAL/journal contents even on coarse
+      // filesystem clocks. Raw descriptor closes stay outside the serving process.
+      const generation =
+        options.allowOwnedMutation && (!deviceChanged || remounted)
+          ? undefined
+          : readSqliteFileGenerationSync(target.sqlitePath);
+      if (
+        generation &&
+        (
+          [
+            ["database", 0],
+            ["wal", 1],
+            ["journal", 3],
+          ] as const
+        ).some(
+          ([key, index]) =>
+            generation[key]?.dev !== files[index]?.dev ||
+            generation[key]?.ino !== files[index]?.ino ||
+            generation[key]?.size !== files[index]?.size ||
+            (expected &&
+              !options.allowOwnedMutation &&
+              generation[key]?.sha256 !== expected.generation?.[key]?.sha256),
+        )
+      ) {
+        throw new Error("Recovery destination database changed; preview cleanup again.");
+      }
+      if (identity && deviceChanged) {
+        // An inode can collide across volumes. Without a remount witness, older manifests can
+        // only be re-certified when a producer-verified original proves the entire closed
+        // destination image.
+        const original =
+          move.kind === "database-backup" &&
+          move.sourcePath === target.sqlitePath &&
+          !move.archivePath.endsWith(".scoped.bak") &&
+          move.artifact?.classification === "repair-original"
+            ? move.artifact.identity
+            : undefined;
+        if (
+          !remounted &&
+          (!generation ||
+            (generation.wal?.size ?? 0n) > 32n ||
+            (generation.journal?.size ?? 0n) > 0n ||
+            generation.database.sha256 !== (identity.sha256 ?? original?.sha256))
+        ) {
+          throw new Error(
+            `Recovery destination device changed from ${identity.dev} to ${files[0]!.dev}; destination contents could not be verified against recorded recovery evidence. Originals retained. Run openclaw doctor --fix to check current state; retain the originals for manual verification.`,
+          );
+        }
+        assertCurrent();
+        target.databaseIdentity = {
+          ...identity,
+          dev: String(files[0]!.dev),
+          ...(generation && !remounted && { sha256: generation.database.sha256 }),
+        };
+        writeSessionSqliteMigrationManifest(run);
+      }
+      destinations.set(target.sqlitePath, { agentId, files, generation });
+    }
+  };
+}
+
+export function verifyHistoricalMigrationArtifact(params: {
+  target: SessionSqliteMigrationTargetManifest;
+  move: SessionSqliteMigrationMove;
+  env: NodeJS.ProcessEnv;
+}): MigrationArtifact | undefined {
+  const { target, move, env } = params;
+  if (move.kind !== "legacy-store" && move.kind !== "transcript") {
+    return undefined;
+  }
+  const identity = readMigrationArtifactIdentity(move.archivePath);
+  const indexMove =
+    move.kind === "legacy-store"
+      ? move
+      : uniqueRestoreMoves(target).find((item) => item.kind === "legacy-store");
+  if (!indexMove) {
+    return undefined;
+  }
+  readMigrationArtifactIdentity(indexMove.archivePath);
+  const fd = fs.openSync(
+    indexMove.archivePath,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+  );
+  let index: unknown;
+  try {
+    index = JSON.parse(readFileDescriptorBoundedSync(fd, fs.fstatSync(fd).size).toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!isRecord(index)) {
+    return undefined;
+  }
+  const entries =
+    move.kind === "legacy-store"
+      ? Object.entries(index)
+      : move.sessionKey
+        ? [[move.sessionKey, index[move.sessionKey]]]
+        : [];
+  if (move.kind === "transcript" && entries.length !== 1) {
+    return undefined;
+  }
+  const dependencies = new Set(
+    move.kind === "legacy-store"
+      ? uniqueRestoreMoves(target)
+          .filter((item) => item.kind === "transcript")
+          .map((item) => item.sourcePath)
+      : [],
+  );
+  const verified = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      const db = getSessionKysely(database.db);
+      for (const [key, raw] of entries) {
+        if (
+          typeof key !== "string" ||
+          !isRecord(raw) ||
+          typeof raw.sessionId !== "string" ||
+          !raw.sessionId.trim() ||
+          typeof raw.updatedAt !== "number"
+        ) {
+          return false;
+        }
+        const sessionId = raw.sessionId;
+        const row = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select(["current_session_id", "entry_json"])
+            .select(sessionEntrySnapshotColumns)
+            .where("session_key", "=", key),
+        );
+        if (!row || row.current_session_id !== raw.sessionId) {
+          return false;
+        }
+        const current: unknown = JSON.parse(row.entry_json);
+        if (!isRecord(current)) {
+          return false;
+        }
+        attachSessionEntrySnapshots(current, row);
+        const entry: SessionEntry = { ...raw, sessionId, updatedAt: raw.updatedAt };
+        const normalized = migrateLegacySessionCreator(normalizeLegacySessionEntryDelivery(entry));
+        if (
+          Object.entries(normalized).some(
+            ([field, value]) =>
+              field !== "sessionFile" && JSON.stringify(current[field]) !== JSON.stringify(value),
+          )
+        ) {
+          return false;
+        }
+        if (move.kind !== "transcript") {
+          // Historical indexes can refer to transcripts published by an earlier run.
+          // Reuse the producer's path contract rather than requiring same-run moves.
+          for (const source of resolveLegacyTranscriptPaths(target, entry).transcriptDependencies) {
+            dependencies.add(canonicalMigrationFilePath(source));
+          }
+          continue;
+        }
+        const complete = verifyTranscriptEvents(database.db, {
+          path: move.archivePath,
+          originalPath: move.sourcePath,
+          sessionId,
+        });
+        if (!complete) {
+          return false;
+        }
+      }
+      return true;
+    },
+    { agentId: target.agentId, path: target.sqlitePath, env },
+  );
+  if (!verified.found || !verified.value) {
+    return undefined;
+  }
+  return {
+    identity,
+    classification: "imported",
+    reason: "verified-historical-import",
+    dependencies: [...dependencies],
+    disposal: { state: "retained" },
+  };
+}
+
+export function validateLegacySessionRecords(
+  target: SessionStoreTarget,
+  records: readonly LegacySessionRecord[],
+  report: DoctorSessionSqliteTargetReport,
+  purpose: "validate" | "before-archive",
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (report.issues.some((issue) => issue.code === "legacy_import_deferred" && !issue.sessionKey)) {
+    return false;
+  }
+  if (purpose === "before-archive" && records.length === 0) {
+    return true;
+  }
+  const issueCountBeforeValidation = report.issues.length;
+  const validation = readOnlySqliteValidationSnapshot(target);
+  if (!validation.ok) {
+    report.issues.push({
+      code: "sqlite_read_failed",
+      message: `SQLite validation read failed: ${String(validation.error)}`,
+    });
+    return false;
+  }
+  for (const record of records) {
+    validateLegacySessionRecord(record, report, validation.snapshot, purpose, env);
+  }
+  return report.issues.length === issueCountBeforeValidation;
+}
+
+function validateLegacySessionRecord(
+  record: LegacySessionRecord,
+  report: DoctorSessionSqliteTargetReport,
+  snapshot: ReadOnlySqliteValidationSnapshot,
+  purpose: "validate" | "before-archive",
+  env: NodeJS.ProcessEnv,
+): void {
+  const beforeArchive = purpose === "before-archive";
+  const hasIssue = (code: string) =>
+    report.issues.some((issue) => issue.code === code && issue.sessionKey === record.sessionKey);
+  const recordIssue = (code: string, message: string) =>
+    report.issues.push({ code, message, sessionKey: record.sessionKey });
+  // Import preserves aliases until canonical repair; standalone validation compares canonical keys.
+  const normalizedKey = beforeArchive
+    ? record.sessionKey
+    : normalizeStoreSessionKey(record.sessionKey);
+  const sqliteSessionId =
+    record.historical || record.preserveCurrentSession
+      ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
+        ? record.entry.sessionId
+        : undefined
+      : snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  if (!sqliteSessionId) {
+    recordIssue("sqlite_entry_missing", `SQLite entry is missing for ${normalizedKey}.`);
+    return;
+  }
+  if (sqliteSessionId !== record.entry.sessionId) {
+    recordIssue(
+      "sqlite_entry_mismatch",
+      `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
+    );
+    return;
+  }
+  // A proven canonical owner permits protected archival, not certification of conflicting bytes.
+  if (beforeArchive && record.preserveCurrentSession && hasIssue("legacy_import_deferred")) {
+    return;
+  }
+  if (!beforeArchive) {
+    report.validatedEntries += 1;
+  }
+  const result = countTranscriptEventsForPath(record.transcriptPath);
+  if (result.status === "missing") {
+    if (!beforeArchive) {
+      report.validatedTranscriptEvents +=
+        snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+    }
+    return;
+  }
+  if (result.status !== "ok") {
+    if (!hasIssue("transcript_malformed")) {
+      recordIssue("transcript_malformed", result.message);
+    }
+    return;
+  }
+  const sqliteEvents = snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
+  // Import has already verified normalized rows; standalone validation proves source containment.
+  const expectedEvents = beforeArchive
+    ? (record.recovery?.sqliteEvents ?? record.recovery?.events ?? result.events)
+    : result.events;
+  const verified =
+    beforeArchive || !record.transcriptPath
+      ? sqliteEvents >= expectedEvents
+      : verifyCanonicalSessionTranscriptSources({
+          target: report,
+          mode: "contained",
+          sources: [
+            {
+              path: record.transcriptPath,
+              sessionId: record.entry.sessionId,
+              originalPath: record.historical?.originalPath,
+            },
+          ],
+          env,
+        });
+  if (!verified) {
+    recordIssue(
+      "sqlite_transcript_count_mismatch",
+      beforeArchive
+        ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
+        : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
+    );
+    return;
+  }
+  if (!beforeArchive) {
+    report.validatedTranscriptEvents += sqliteEvents;
+  }
+}

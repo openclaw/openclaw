@@ -1,0 +1,711 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfig } from "../../../config/io.js";
+import { captureAuthenticatedNodePairingState } from "../../../infra/device-pairing-node-state.js";
+import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec.js";
+import { upsertPresence } from "../../../infra/system-presence.js";
+import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
+import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
+import { resolveLocalNodeId } from "../../../node-host/local-id.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
+import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
+import {
+  isBrowserCopilotClient,
+  isEphemeralGatewayClient,
+} from "../../../utils/message-channel.js";
+import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
+import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
+import {
+  createAuthenticatedGitHubIdentitySync,
+  resolveTrustedEnterpriseGitHubAccountId,
+  resolveRepositoryConnectionIdentity,
+} from "../../github-user-identity.js";
+import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../local-user-ingress.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import { serializeEventPayload } from "../../node-registry.js";
+import { openclawIdTunnelRolePolicy } from "../../openclaw-id/tunnel-principal.js";
+import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
+import {
+  buildPluginNodeCapabilityScopedHostUrl,
+  indexPluginNodeCapabilitySurfaces,
+  mintPluginNodeCapabilityToken,
+  resolvePluginNodeCapabilityExpiresAtMs,
+  setClientPluginNodeCapability,
+  type PluginNodeCapabilitySurface,
+} from "../../plugin-node-capability.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
+import { buildClientPresence } from "../client-presence.js";
+import { truncateCloseReason } from "../close-reason.js";
+import type { GatewayWsClient } from "../ws-types.js";
+import {
+  rejectGatewayConnectOrigin,
+  rejectUnavailableProfileConnect,
+  resolveEffectiveConnectionScopes,
+  resolveGatewayConnectPolicyFailure,
+} from "./connect-admission.js";
+import { sendGatewayHello } from "./connect-hello.js";
+import { prepareGatewayNodeConnect } from "./connect-node-session.js";
+import {
+  bindGatewayConnectOperatorAccess,
+  prepareGatewayConnectOperatorAccess,
+  prepareGatewayConnectOperatorDeviceSource,
+  rejectGatewayConnectOperatorAccess,
+} from "./connect-operator-access.js";
+import {
+  createGatewayConnectProfileLifecycle,
+  resolveGatewayConnectProfileAdmission,
+  scheduleGatewayConnectProfileSync,
+} from "./connect-user-profile.js";
+import type {
+  DeviceAuthorizedGatewayConnect,
+  GatewayConnectPhaseContext,
+} from "./message-handler-types.js";
+
+type AuthenticatedNodePairingAdmission = NonNullable<
+  Awaited<ReturnType<typeof captureAuthenticatedNodePairingState>>
+> & {
+  authenticated: { nodeId: string; publicKey: string; token: string };
+};
+
+export async function attachAuthenticatedGatewayConnect(
+  context: GatewayConnectPhaseContext,
+  state: DeviceAuthorizedGatewayConnect,
+): Promise<void> {
+  const {
+    socket,
+    connId,
+    remoteAddr,
+    pluginSurfaceBaseUrl,
+    pluginNodeCapabilities = [],
+    buildRequestContext,
+    close,
+    isClosed,
+    clearHandshakeTimer,
+    setClient,
+    setHandshakeState,
+    advanceHandshakePhase,
+    setCloseCause,
+    logGateway,
+    logWsControl,
+  } = context.handler;
+  const {
+    connectParams,
+    isLocalClient,
+    reportedClientIp,
+    runDetachedConnectWork,
+    clientLabel,
+    clientMeta,
+    markHandshakeFailure,
+    sendHandshakeErrorResponse,
+    releasePendingNodePairingCleanup,
+  } = context;
+  const {
+    minProtocol,
+    maxProtocol,
+    usesLegacyNodeProtocol,
+    role,
+    scopes: deviceScopes,
+    device,
+    devicePublicKey,
+    deviceToken,
+    authResult,
+    authMethod,
+    pairingLocality,
+    sessionUsesSharedGatewayAuth,
+    sessionSharedGatewaySessionGeneration,
+    remoteIngressPrincipal,
+  } = state;
+  const nodeStartedAt = performance.now();
+  if (!(await prepareGatewayNodeConnect(context, state))) {
+    return;
+  }
+
+  const rejectNodePairing = async (message: string, metadata: { deviceId?: string } = {}) => {
+    markHandshakeFailure("node-pairing-generation-changed", metadata);
+    sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+    await releasePendingNodePairingCleanup();
+    close(1008, truncateCloseReason(message));
+  };
+  let nodePairingAdmission: AuthenticatedNodePairingAdmission | undefined;
+  if (role === "node") {
+    const nodeId = device?.id ?? connectParams.client.id;
+    const authenticatedNodeToken =
+      authMethod === "device-token"
+        ? normalizeOptionalString(connectParams.auth?.deviceToken ?? connectParams.auth?.token)
+        : deviceToken?.token;
+    if (!device || !devicePublicKey || !authenticatedNodeToken) {
+      await rejectNodePairing("authenticated node pairing identity unavailable");
+      return;
+    }
+    const authenticatedNodePairing = {
+      nodeId,
+      publicKey: devicePublicKey,
+      token: authenticatedNodeToken,
+    };
+    const admittedPairingState =
+      await captureAuthenticatedNodePairingState(authenticatedNodePairing);
+    if (!admittedPairingState) {
+      await rejectNodePairing(
+        "node pairing changed during connect",
+        device.id ? { deviceId: device.id } : {},
+      );
+      return;
+    }
+    nodePairingAdmission = {
+      ...admittedPairingState,
+      authenticated: authenticatedNodePairing,
+    };
+  }
+
+  context.recordAttachTiming?.("nodePreparationMs", nodeStartedAt);
+
+  // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
+  // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
+  const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
+  const clientId = connectParams.client.id;
+  const instanceId = connectParams.client.instanceId;
+  // Nodes retain device-owned presence. User clients need one row per connection
+  // so two tabs watching different sessions cannot overwrite each other.
+  const presenceKey = shouldTrackPresence
+    ? role === "node"
+      ? (device?.id ?? instanceId ?? connId)
+      : connId
+    : undefined;
+  const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+  });
+  const tailscaleLogin = authResult.tailscaleIdentity
+    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
+    : undefined;
+  const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
+  const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
+  const repositoryIdentity = resolveRepositoryConnectionIdentity({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+    requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
+  });
+  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    repositoryIdentity,
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+    requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
+    recordTiming: context.recordAttachTiming,
+  });
+  const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
+  // Only an owner-bound ingress grant receives the shared owner role bypass;
+  // an OpenClaw ID owner device is the Gateway owner.
+  const openclawIdPrincipal = authMethod === "trusted-proxy" ? authResult.openclawId : undefined;
+  const operatorOwner =
+    role === "operator" &&
+    (authMethod === "token" ||
+      authMethod === "password" ||
+      remoteIngressPrincipal?.operatorRoleActor.kind === "system" ||
+      openclawIdPrincipal?.kind === "owner");
+  // Authenticated inputs need durable identity even when their presence is omitted.
+  const ownerProfileExpected =
+    (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
+    shouldUseGatewayOwnerProfile({
+      role,
+      authenticatedUserId,
+      authMethod,
+      rolesConfigured,
+      openclawIdOwner: openclawIdPrincipal?.kind === "owner",
+    });
+  const identityStartedAt = performance.now();
+  const profileAdmission = remoteIngressPrincipal
+    ? { ok: true as const, prepared: undefined }
+    : await resolveGatewayConnectProfileAdmission({
+        context,
+        state,
+        ownerProfileExpected,
+        authenticatedUserId,
+        resolveAuthenticatedGitHubIdentity,
+        assertCurrent: profileLifecycle.assertCurrent,
+      });
+  context.recordAttachTiming?.("identityMs", identityStartedAt);
+  if (!profileAdmission.ok) {
+    return;
+  }
+  context.setConnectPhase?.("registration");
+  const preparedProfile = profileAdmission.prepared;
+  const authenticatedUserProfile =
+    remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
+  // Identity-derived scopes must be capped only after their durable profile is known.
+  // Configured roles fail closed if profile storage or provider verification is unavailable.
+  const scopesStartedAt = performance.now();
+  const effectiveScopes = remoteIngressPrincipal
+    ? deviceScopes
+    : resolveEffectiveConnectionScopes({
+        role,
+        deviceScopes,
+        verifiedIdentity: state.authPolicy.verifiedIdentity,
+        identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+        upgradeReq: context.handler.upgradeReq,
+      });
+  // OpenClaw ID members are capped by their membership role, whatever the device requested.
+  const openclawIdRolePolicy =
+    role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
+  const rolePolicy = remoteIngressPrincipal
+    ? remoteIngressPrincipal.operatorRolePolicy
+    : openclawIdRolePolicy
+      ? openclawIdRolePolicy
+      : role === "operator" && !operatorOwner
+        ? resolveOperatorRolePolicyForAssignment(
+            authenticatedUserProfile?.profileId,
+            preparedProfile?.authority.role ?? null,
+            context.configSnapshot,
+            preparedProfile?.authority.githubLogin ?? null,
+          )
+        : undefined;
+  const scopes = rolePolicy
+    ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
+    : effectiveScopes;
+  state.scopes = scopes;
+  connectParams.scopes = scopes;
+  if (role === "operator" && authenticatedUserId) {
+    const addedIdentityScopes = scopes.filter(
+      (scope) => !roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: deviceScopes }),
+    );
+    if (addedIdentityScopes.length > 0) {
+      logGateway.info(
+        `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} auth=${authMethod} conn=${connId}`,
+      );
+    }
+  }
+
+  context.recordAttachTiming?.("scopeGrantMs", scopesStartedAt);
+
+  let registrationStartedAt = performance.now();
+  if (isClosed()) {
+    await releasePendingNodePairingCleanup();
+    setCloseCause("connect-aborted-before-register", {
+      ...clientMeta,
+      auth: authMethod,
+    });
+    return;
+  }
+  const pluginSurfaceUrls: Record<string, string> = {};
+  const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
+  const pendingPluginNodeCapabilities: Array<{
+    surface: PluginNodeCapabilitySurface;
+    capability: string;
+    expiresAtMs: number;
+  }> = [];
+  const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
+  if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
+    for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+      // Node reconciliation replaces declared caps with the approved surface.
+      // Issuing a route capability for a withheld cap would bypass node.pair.approve.
+      if (effectiveNodeCaps && !effectiveNodeCaps.has(pluginCapabilitySurface.surface)) {
+        continue;
+      }
+      const capability = mintPluginNodeCapabilityToken();
+      const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
+      if (expiresAtMs === undefined) {
+        continue;
+      }
+      const scopedUrl =
+        buildPluginNodeCapabilityScopedHostUrl(pluginSurfaceBaseUrl, capability) ??
+        pluginSurfaceBaseUrl;
+      pluginSurfaceUrls[pluginCapabilitySurface.surface] = scopedUrl;
+      pendingPluginNodeCapabilities.push({
+        surface: pluginCapabilitySurface,
+        capability,
+        expiresAtMs,
+      });
+    }
+  }
+  const isLocalBackendClient =
+    pairingLocality !== "remote" &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const agentRuntimeIdentityProof = connectParams.auth?.agentRuntimeIdentityToken;
+  let trustedAgentRuntimeIdentity:
+    | Awaited<ReturnType<typeof verifyAgentRuntimeIdentityToken>>
+    | undefined;
+  if (typeof agentRuntimeIdentityProof === "string") {
+    if (!isLocalBackendClient) {
+      const message =
+        "agent runtime identity token is only accepted from local backend gateway clients";
+      markHandshakeFailure("agent-runtime-identity-untrusted-client", {
+        client: connectParams.client.id,
+        mode: connectParams.client.mode,
+        pairingLocality,
+      });
+      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+    trustedAgentRuntimeIdentity = await verifyAgentRuntimeIdentityToken(agentRuntimeIdentityProof);
+    if (!trustedAgentRuntimeIdentity) {
+      const message = "invalid agent runtime identity token";
+      markHandshakeFailure("agent-runtime-identity-invalid", {
+        client: connectParams.client.id,
+        mode: connectParams.client.mode,
+        pairingLocality,
+      });
+      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+      close(1008, message);
+      return;
+    }
+  }
+  // Record the authenticated ingress after device and role scope restrictions.
+  // Later turns must not infer management authority from names or session routing.
+  const authenticatedOperator =
+    role === "operator" && authMethod !== undefined && authMethod !== "none";
+  const authenticatedControlUi =
+    authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+  const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
+  const internal: NonNullable<GatewayWsClient["internal"]> = {
+    ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
+      ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
+      : {}),
+    ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
+    ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
+    ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
+    ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
+    ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
+    ...(remoteIngressPrincipal
+      ? {
+          remoteIngressPrincipal,
+          operatorRoleActor: remoteIngressPrincipal.operatorRoleActor,
+          operatorAccessAuthority: remoteIngressPrincipal.operatorAccessAuthority,
+        }
+      : operatorOwner
+        ? { operatorRoleActor: { kind: "system" as const } }
+        : {}),
+  };
+  if (authenticatedOperator) {
+    const sourceStartedAt = performance.now();
+    const source = await prepareGatewayConnectOperatorDeviceSource(context, state, deviceScopes);
+    context.recordAttachTiming?.("operatorDeviceMs", sourceStartedAt);
+    if (source === undefined) {
+      return;
+    }
+    internal.operatorDeviceTokenIdentity = source;
+    registrationStartedAt += performance.now() - sourceStartedAt;
+  }
+  const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
+    prepareGatewayLocalUserIngress({
+      authMethod,
+      authenticatedUserExpected: Boolean(authenticatedUserId) || ownerProfileExpected,
+      ...(profile
+        ? {
+            profile: {
+              profileId: profile.profileId,
+              displayName: profile.displayName,
+            },
+          }
+        : {}),
+      ...(device?.id ? { pairedDeviceId: device.id } : {}),
+      isLocalClient,
+    });
+  const localUserIngress = prepareLocalUserIngress();
+  if (usesLegacyNodeProtocol) {
+    logWsControl.warn(
+      `legacy node protocol accepted conn=${connId} client=${formatPeerTextForLog(clientLabel)} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
+    );
+  }
+  const nextClient: GatewayWsClient = {
+    remoteControlUiIngress: getRemoteControlUiIngressContext(context.handler.upgradeReq),
+    socket,
+    connect: connectParams,
+    connId,
+    connectionKind: "gateway",
+    ...(!usesLegacyNodeProtocol && pluginSurfaceBaseUrl ? { pluginSurfaceBaseUrl } : {}),
+    isDeviceTokenAuth: authMethod === "device-token",
+    pairedClientId: isBrowserCopilotClient(connectParams.client)
+      ? connectParams.client.id
+      : undefined,
+    usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
+    sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
+    authPolicy: state.authPolicy,
+    presenceKey,
+    ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
+    ...(repositoryIdentity
+      ? {
+          authenticatedGitHubAccountId: repositoryIdentity.accountId,
+          authenticatedRepositoryCredentialSource: repositoryIdentity.credentialSource,
+        }
+      : {}),
+    ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    clientIp: reportedClientIp,
+    ...(context.browserOrigin ? { browserOrigin: context.browserOrigin } : {}),
+    ...(Object.keys(internal).length > 0 ? { internal } : {}),
+    ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+    ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
+      ? { pluginNodeCapabilitySurfaces }
+      : {}),
+  };
+  attachGatewayLocalUserIngress(nextClient, localUserIngress);
+  if (resolveAuthenticatedGitHubIdentity) {
+    nextClient.authenticatedGitHubIdentitySync = async () => {
+      const result = await resolveAuthenticatedGitHubIdentity();
+      await profileLifecycle.attach(result.profileId, result.updatedAt, prepareLocalUserIngress);
+      return result;
+    };
+  }
+  for (const entry of pendingPluginNodeCapabilities) {
+    setClientPluginNodeCapability({
+      client: nextClient,
+      surface: entry.surface,
+      capability: entry.capability,
+      expiresAtMs: entry.expiresAtMs,
+    });
+  }
+  // Only an exact cryptographic device match proves the same install; independent
+  // SSH-tunneled or separate-state nodes are exempt even when they appear local.
+  // Restart stale nodes after a shared install update; an independently updated
+  // node can be newer than its Gateway and still use the negotiated protocol.
+  // Reject before registration/presence so supervisor restarts leave no phantom online state.
+  if (role === "node" && isLocalClient) {
+    const localNodeId = await resolveLocalNodeId();
+    if (localNodeId && device?.id === localNodeId) {
+      const gatewayVersion = resolveRuntimeServiceVersion(process.env);
+      const clientVersion = connectParams.client.version;
+      const releaseOrder = compareOpenClawReleaseVersions(clientVersion, gatewayVersion);
+      if (releaseOrder !== null && releaseOrder < 0) {
+        logWsControl.info(
+          `node version mismatch conn=${connId} client=${formatPeerTextForLog(clientLabel)} clientVersion=${formatPeerTextForLog(clientVersion)} gatewayVersion=${gatewayVersion}; closing for supervisor restart`,
+        );
+        sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "client version mismatch", {
+          details: {
+            code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+            clientVersion,
+            gatewayVersion,
+          },
+        });
+        await releasePendingNodePairingCleanup();
+        close(1008, "client version mismatch");
+        return;
+      }
+    }
+  }
+
+  const admittedNodePairing = role === "node" ? nodePairingAdmission : undefined;
+  if (admittedNodePairing) {
+    const currentPairingState = await captureAuthenticatedNodePairingState(
+      admittedNodePairing.authenticated,
+    );
+    if (
+      !currentPairingState ||
+      currentPairingState.identity.key !== admittedNodePairing.identity.key ||
+      currentPairingState.generation?.key !== admittedNodePairing.generation?.key
+    ) {
+      await rejectNodePairing("node pairing changed during connect", {
+        deviceId: admittedNodePairing.identity.nodeId,
+      });
+      return;
+    }
+  }
+
+  if (
+    isLocalBackendClient &&
+    scopes.includes(APPROVALS_SCOPE) &&
+    (await isOperatorApprovalRuntimeToken(connectParams.auth?.approvalRuntimeToken))
+  ) {
+    nextClient.internal = { ...nextClient.internal, approvalRuntime: true };
+  }
+
+  const policyFailure = resolveGatewayConnectPolicyFailure(context, state);
+  if (policyFailure) {
+    await releasePendingNodePairingCleanup();
+    if (policyFailure.kind === "auth") {
+      setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+      close(4001, "gateway auth changed");
+    } else {
+      rejectGatewayConnectOrigin(context, policyFailure.reason);
+    }
+    return;
+  }
+  const handoffReceiver = context.handler.prepareAuthenticatedReceive(role);
+  if (!handoffReceiver.ok) {
+    const { cause, message } = handoffReceiver.error;
+    markHandshakeFailure(cause, {});
+    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message);
+    await releasePendingNodePairingCleanup();
+    close(1011, message);
+    return;
+  }
+  try {
+    if (!remoteIngressPrincipal) {
+      prepareGatewayConnectOperatorAccess(nextClient);
+    }
+  } catch {
+    await rejectGatewayConnectOperatorAccess(context);
+    return;
+  }
+  if (!profileLifecycle.isCurrent(preparedProfile)) {
+    await rejectUnavailableProfileConnect(
+      context,
+      new Error("Gateway profile changed before registration"),
+    );
+    return;
+  }
+  prepareGatewayRecipientProfile(nextClient, {
+    identity: remoteIngressPrincipal?.preparedSessionProfile ?? preparedProfile?.recipient,
+  });
+  if (!setClient(nextClient)) {
+    await releasePendingNodePairingCleanup();
+    setCloseCause("connect-aborted-before-register", {
+      ...clientMeta,
+      auth: authMethod,
+    });
+    return;
+  }
+  profileLifecycle.bind(nextClient);
+  if (!bindGatewayConnectOperatorAccess(context, nextClient)) {
+    return;
+  }
+  clearHandshakeTimer();
+  // Only registered operators use bounded router starts. Node lifecycle traffic,
+  // workers and preauth retain native yielding and their existing queue/drain rules.
+  handoffReceiver.value();
+  setHandshakeState("connected");
+  advanceHandshakePhase("session_attached");
+  context.recordAttachTiming?.("sessionRegistrationMs", registrationStartedAt);
+  // Ephemeral clients never page transcripts, so avoid starting an idle history worker for them.
+  if (role === "operator" && !isEphemeralGatewayClient(connectParams.client)) {
+    runDetachedConnectWork(
+      async () => {
+        const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
+        await prewarmGatewaySessionHistory(getRuntimeConfig(), {
+          isCancelled: () => context.handler.connectionWork.signal.aborted,
+        });
+      },
+      (error) =>
+        logGateway.debug(`connection session history prewarm failed: ${formatForLog(error)}`),
+    );
+  }
+  logWsControl.info(
+    [
+      `client connected conn=${connId}`,
+      `client=${clientId} name=${formatPeerTextForLog(clientLabel)}`,
+      `mode=${connectParams.client.mode} role=${role} auth=${authMethod}`,
+      `version=${formatPeerTextForLog(connectParams.client.version)} platform=${formatPeerTextForLog(connectParams.client.platform)}`,
+      `build=${formatPeerTextForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
+      authenticatedUserId ? `user=${formatForLog(authenticatedUserId)}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+
+  if (presenceKey) {
+    upsertPresence(
+      presenceKey,
+      {
+        ...buildClientPresence(nextClient),
+        reason: "connect",
+      },
+      { pending: true },
+    );
+  }
+  if (admittedNodePairing) {
+    const pairingGeneration = admittedNodePairing.generation?.key;
+    const requestContext = buildRequestContext();
+    const nodeSession = requestContext.nodeRegistry.register(nextClient, {
+      remoteIp: reportedClientIp,
+      pairingIdentity: admittedNodePairing.identity.key,
+      approvedSurface: admittedNodePairing.approvedSurface,
+      ...(pairingGeneration ? { pairingGeneration } : {}),
+    });
+    recordRemoteNodeInfo({
+      nodeId: nodeSession.nodeId,
+      connId: nodeSession.connId,
+      displayName: nodeSession.displayName,
+      platform: nodeSession.platform,
+      deviceFamily: nodeSession.deviceFamily,
+      commands: nodeSession.commands,
+      remoteIp: nodeSession.remoteIp,
+      pairingGeneration: nodeSession.pairingGeneration,
+    });
+    runDetachedConnectWork(
+      async () => {
+        await refreshRemoteNodeBins({
+          nodeId: nodeSession.nodeId,
+          platform: nodeSession.platform,
+          deviceFamily: nodeSession.deviceFamily,
+          commands: nodeSession.commands,
+          cfg: getRuntimeConfig(),
+          // The node socket is registered before macOS app command handlers finish warming.
+          // Delay only the connect-time probe; later skill refreshes use the live session.
+          readinessDelayMs: 5_000,
+          readinessSignal: context.handler.connectionWork.signal,
+        });
+      },
+      (err) =>
+        logGateway.warn(`remote bin check failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
+    );
+    const sendConnectSnapshot = async (event: string, payload: unknown) => {
+      if (pairingGeneration) {
+        await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
+          nodeSession.nodeId,
+          pairingGeneration,
+          event,
+          serializeEventPayload(payload),
+        );
+        return;
+      }
+      await requestContext.nodeRegistry.sendEventForPairingIdentity({
+        nodeId: nodeSession.nodeId,
+        connId: nodeSession.connId,
+        pairingIdentity: admittedNodePairing.identity.key,
+        event,
+        payload,
+      });
+    };
+    runDetachedConnectWork(
+      async () => {
+        const cfg = await loadVoiceWakeConfig();
+        await sendConnectSnapshot("voicewake.changed", { triggers: cfg.triggers });
+      },
+      (err) =>
+        logGateway.warn(
+          `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+        ),
+    );
+    runDetachedConnectWork(
+      async () => {
+        const routing = await loadVoiceWakeRoutingConfig();
+        await sendConnectSnapshot("voicewake.routing.changed", { config: routing });
+      },
+      (err) =>
+        logGateway.warn(
+          `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+        ),
+    );
+  }
+
+  await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
+
+  scheduleGatewayConnectProfileSync({
+    context,
+    state,
+    client: nextClient,
+    lifecycle: profileLifecycle,
+    prepareIngress: prepareLocalUserIngress,
+  });
+}

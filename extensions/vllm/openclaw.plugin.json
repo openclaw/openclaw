@@ -1,0 +1,68 @@
+{
+  "id": "vllm",
+  "categories": ["models"],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["vllm"],
+  "modelCatalog": {
+    "discovery": {
+      "vllm": "refreshable"
+    }
+  },
+  "providerRequest": {
+    "providers": {
+      "vllm": {
+        "family": "vllm",
+        "modelParamsSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "priorityScheduling": {
+              "type": "boolean",
+              "default": false,
+              "title": "Priority scheduling",
+              "description": "Prioritize interactive requests on this vLLM model ahead of background and utility work. Requires the vLLM server to run with --scheduling-policy priority. Disabled by default."
+            }
+          }
+        },
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "vllm": {
+        "external": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "vllm",
+        "envVars": ["VLLM_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "vllm",
+      "method": "custom",
+      "choiceId": "vllm",
+      "choiceLabel": "vLLM",
+      "choiceHint": "Local/self-hosted OpenAI-compatible server",
+      "groupId": "vllm",
+      "groupLabel": "vLLM",
+      "groupHint": "Local/self-hosted OpenAI-compatible"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

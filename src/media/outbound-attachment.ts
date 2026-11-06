@@ -1,0 +1,65 @@
+import { rm } from "node:fs/promises";
+import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-options.js";
+import { saveMediaBuffer } from "./store.js";
+
+/** Loads a remote/local media URL and stages it into the outbound media store. */
+export async function resolveOutboundAttachmentFromUrl(
+  mediaUrl: string,
+  maxBytes: number,
+  options?: {
+    mediaAccess?: OutboundMediaAccess;
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+    /** Host-selected publication intent; does not grant file-read or delivery authority. */
+    htmlPublication?: "explicit";
+  },
+): Promise<{ path: string; contentType?: string }> {
+  const { loadWebMedia, markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+  const media = await loadWebMedia(mediaUrl, {
+    ...buildOutboundMediaLoadOptions({
+      maxBytes,
+      mediaAccess: options?.mediaAccess,
+      mediaLocalRoots: options?.localRoots,
+      mediaReadFile: options?.readFile,
+    }),
+    htmlPublication: options?.htmlPublication,
+  });
+  // Preserve source file names so outbound attachments keep useful names after UUID staging.
+  const saved = await saveMediaBuffer(
+    media.buffer,
+    media.contentType ?? undefined,
+    "outbound",
+    maxBytes,
+    media.fileName,
+  );
+  if (media.trustedGeneratedHtmlSource) {
+    try {
+      await markTrustedGeneratedHtmlPath(saved.path, media.buffer);
+    } catch (error) {
+      await rm(saved.path, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+  return { path: saved.path, contentType: saved.contentType };
+}
+
+export async function resolveOutboundAttachmentFromBuffer(
+  buffer: Buffer,
+  maxBytes: number,
+  options?: {
+    contentType?: string;
+    filename?: string;
+    assertCommitAllowed?: () => void;
+  },
+): Promise<{ path: string; contentType?: string }> {
+  const saved = await saveMediaBuffer(
+    buffer,
+    options?.contentType,
+    "outbound",
+    maxBytes,
+    options?.filename,
+    undefined,
+    options?.assertCommitAllowed ? { assertCommitAllowed: options.assertCommitAllowed } : undefined,
+  );
+  return { path: saved.path, contentType: saved.contentType };
+}

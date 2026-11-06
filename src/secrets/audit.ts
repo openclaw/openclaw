@@ -1,0 +1,658 @@
+import fs from "node:fs";
+import os from "node:os";
+import {
+  listLegacyAuthProfileArchives,
+  listLegacyAuthProfileSources,
+} from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import {
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
+import {
+  isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
+} from "../agents/model-auth-markers.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { JsonFileReadError, readJsonSync } from "../infra/json-files.js";
+import { resolveUserPath } from "../utils.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import {
+  findSecretStorePlaintextResidueFindings,
+  findSecretStoreRedactedValueFindings,
+} from "./audit-store.js";
+import type { PlaintextAssignment } from "./audit-store.js";
+import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+import { listAuthProfileStoreTargets, type AuthProfileStoreTarget } from "./auth-store-paths.js";
+import { createSecretsConfigIO } from "./config-io.js";
+import { classifyConfigSecretTarget } from "./config-secret-target.js";
+import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
+import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
+import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
+import { secretRefKey } from "./ref-contract.js";
+import { isSecretResolutionError } from "./resolve-errors.js";
+import {
+  isProviderScopedSecretResolutionError,
+  resolveSecretRefValue,
+  resolveSecretRefValues,
+  type SecretRefResolveCache,
+} from "./resolve.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
+import { isNonEmptyString, isRecord, parseEnvValue } from "./shared.js";
+import { listAgentModelsJsonPaths, listSecretsDotEnvPaths } from "./storage-scan.js";
+import { discoverConfigSecretTargets } from "./target-registry.js";
+
+/** Stable finding codes emitted by `openclaw secrets audit`. */
+type SecretsAuditCode =
+  | "PLAINTEXT_FOUND"
+  | "REF_UNRESOLVED"
+  | "PLACEHOLDER_VALUE"
+  | "REF_SHADOWED"
+  | "STORE_PLAINTEXT_RESIDUE"
+  | "LEGACY_RESIDUE";
+
+/** Audit severity used for CLI output and check-mode exit behavior. */
+type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
+
+/** One secret audit finding with file/path context. */
+type SecretsAuditFinding = {
+  code: SecretsAuditCode;
+  severity: SecretsAuditSeverity;
+  file: string;
+  jsonPath: string;
+  message: string;
+  provider?: string;
+  profileId?: string;
+};
+
+/** Overall audit state derived from findings and unresolved refs. */
+type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
+
+/** Structured report returned by the secrets audit command. */
+type SecretsAuditReport = Awaited<ReturnType<typeof runSecretsAudit>>;
+
+type RefAssignment = {
+  file: string;
+  path: string;
+  ref: SecretRef;
+  expected: "string" | "string-or-object";
+  provider?: string;
+};
+
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
+
+type AuditCollector = {
+  findings: SecretsAuditFinding[];
+  refAssignments: RefAssignment[];
+  configProviderRefPaths: Map<string, string[]>;
+  authProviderModes: Map<string, Set<"api_key" | "token" | "oauth">>;
+  configPlaintextAssignments: PlaintextAssignment[];
+  filesScanned: Set<string>;
+};
+
+const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+function collectProviderRefPath(
+  collector: AuditCollector,
+  providerId: string,
+  configPath: string,
+): void {
+  const key = normalizeProviderId(providerId);
+  const existing = collector.configProviderRefPaths.get(key);
+  if (existing) {
+    existing.push(configPath);
+    return;
+  }
+  collector.configProviderRefPaths.set(key, [configPath]);
+}
+
+function trackAuthProviderState(
+  collector: AuditCollector,
+  provider: string,
+  mode: "api_key" | "token" | "oauth",
+): void {
+  const key = normalizeProviderId(provider);
+  const existing = collector.authProviderModes.get(key);
+  if (existing) {
+    existing.add(mode);
+    return;
+  }
+  collector.authProviderModes.set(key, new Set([mode]));
+}
+
+function collectConfigSecrets(params: {
+  config: OpenClawConfig;
+  configPath: string;
+  collector: AuditCollector;
+  env: NodeJS.ProcessEnv;
+}): void {
+  for (const target of discoverConfigSecretTargets(params.config, { env: params.env })) {
+    const { ref, plaintext } = classifyConfigSecretTarget(params.config, target);
+    if (plaintext && typeof target.value === "string") {
+      params.collector.configPlaintextAssignments.push({
+        file: params.configPath,
+        path: target.path,
+        value: target.value,
+      });
+    }
+    if (ref) {
+      params.collector.refAssignments.push({
+        file: params.configPath,
+        path: target.path,
+        ref,
+        expected: target.entry.expectedResolvedValue,
+        provider: target.providerId,
+      });
+      if (target.entry.trackProviderShadowing && target.providerId) {
+        collectProviderRefPath(params.collector, target.providerId, target.path);
+      }
+      continue;
+    }
+    if (!plaintext) {
+      continue;
+    }
+    params.collector.findings.push({
+      code: "PLAINTEXT_FOUND",
+      severity: "warn",
+      file: params.configPath,
+      jsonPath: target.path,
+      message: `${target.path} is stored as plaintext.`,
+      provider: target.providerId,
+    });
+  }
+}
+
+function collectAuthStoreSecrets(
+  target: AuthProfileStoreTarget,
+  collector: AuditCollector,
+  defaults?: SecretDefaults,
+): void {
+  const authStorePath = target.path;
+  if (!fs.existsSync(authStorePath)) {
+    return;
+  }
+  const parsed =
+    target.kind === "shared"
+      ? readPersistedSharedAuthProfileStoreRaw(target.env)
+      : readPersistedAuthProfileStoreRaw(target.agentDir);
+  if (!isRecord(parsed) || !isRecord(parsed.profiles)) {
+    return;
+  }
+  collector.filesScanned.add(authStorePath);
+  for (const entry of iterateAuthProfileCredentials(parsed.profiles)) {
+    if (entry.kind === "api_key" || entry.kind === "token") {
+      const { ref } = resolveSecretInputRef({
+        value: entry.value,
+        refValue: entry.refValue,
+        defaults,
+      });
+      const authoredValueRef = coerceSecretRef(entry.value, defaults);
+      if (ref) {
+        collector.refAssignments.push({
+          file: authStorePath,
+          path: `profiles.${entry.profileId}.${entry.valueField}`,
+          ref,
+          expected: "string",
+          provider: entry.provider,
+        });
+        trackAuthProviderState(collector, entry.provider, entry.kind);
+      }
+      if (authoredValueRef) {
+        continue;
+      }
+      if (isNonEmptyString(entry.value)) {
+        collector.findings.push({
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: authStorePath,
+          jsonPath: `profiles.${entry.profileId}.${entry.valueField}`,
+          message:
+            entry.kind === "api_key"
+              ? "Auth profile API key is stored as plaintext."
+              : "Auth profile token is stored as plaintext.",
+          provider: entry.provider,
+          profileId: entry.profileId,
+        });
+        trackAuthProviderState(collector, entry.provider, entry.kind);
+      }
+      continue;
+    }
+    if (entry.hasAccess || entry.hasRefresh) {
+      collector.findings.push({
+        code: "LEGACY_RESIDUE",
+        severity: "info",
+        file: authStorePath,
+        jsonPath: `profiles.${entry.profileId}`,
+        message: "OAuth credentials are present (out of scope for static SecretRef migration).",
+        provider: entry.provider,
+        profileId: entry.profileId,
+      });
+      trackAuthProviderState(collector, entry.provider, "oauth");
+    }
+  }
+}
+
+function collectModelsJsonSecrets(params: {
+  modelsJsonPath: string;
+  collector: AuditCollector;
+}): void {
+  let parsed: unknown;
+  try {
+    parsed = readJsonSync(params.modelsJsonPath, { maxBytes: MAX_AUDIT_MODELS_JSON_BYTES });
+  } catch (error) {
+    if (
+      error instanceof JsonFileReadError &&
+      error.reason === "read" &&
+      hasErrnoCode(error.cause, "ENOENT")
+    ) {
+      return;
+    }
+    params.collector.filesScanned.add(params.modelsJsonPath);
+    // JSON parser causes can quote credential bytes from models.json.
+    const detail =
+      error instanceof JsonFileReadError && error.reason === "parse" ? error.message : error;
+    params.collector.findings.push({
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: params.modelsJsonPath,
+      jsonPath: "<root>",
+      message: `Invalid JSON in models.json: ${formatErrorMessage(detail)}`,
+    });
+    return;
+  }
+  params.collector.filesScanned.add(params.modelsJsonPath);
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) {
+    return;
+  }
+  for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
+    if (!isRecord(providerValue)) {
+      continue;
+    }
+    const collectValue = (value: unknown, headerKey?: string) => {
+      const isHeader = headerKey !== undefined;
+      const ref = coerceSecretRef(value);
+      if (
+        !ref &&
+        (!isNonEmptyString(value) ||
+          (isHeader ? isSecretRefHeaderValueMarker(value) : isNonSecretApiKeyMarker(value)) ||
+          (isHeader && !isLikelySensitiveModelProviderHeaderName(headerKey)))
+      ) {
+        return;
+      }
+      params.collector.findings.push({
+        code: ref ? "REF_UNRESOLVED" : "PLAINTEXT_FOUND",
+        severity: ref ? "error" : "warn",
+        file: params.modelsJsonPath,
+        jsonPath: `providers.${providerId}.${isHeader ? `headers.${headerKey}` : "apiKey"}`,
+        message: ref
+          ? isHeader
+            ? "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json."
+            : "models.json contains an unresolved SecretRef object; regenerate models.json."
+          : isHeader
+            ? "models.json provider header value is stored as plaintext."
+            : "models.json provider apiKey is stored as plaintext.",
+        provider: providerId,
+      });
+    };
+    collectValue(providerValue.apiKey);
+
+    const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
+    if (!headers) {
+      continue;
+    }
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectValue(headerValue, headerKey);
+    }
+  }
+}
+
+function collectLegacyAuthSourceFindings(params: {
+  config: OpenClawConfig;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  collector: AuditCollector;
+}): void {
+  const seen = new Set<string>();
+  const report = (source: { path: string; kind: string }, archived: boolean) => {
+    if (seen.has(source.path)) {
+      return;
+    }
+    seen.add(source.path);
+    params.collector.findings.push({
+      code: "LEGACY_RESIDUE",
+      severity: !archived && source.kind === "auth-state" ? "info" : "warn",
+      file: source.path,
+      jsonPath: "<root>",
+      message: archived
+        ? `Archived auth source ${source.kind} may contain plaintext credentials; retain it only as long as recovery requires.`
+        : `Retired auth source ${source.kind} is present; run openclaw doctor --fix to migrate and archive it.`,
+    });
+  };
+  const targets = listAuthProfileStoreTargets(params.config, params.stateDir, params.env);
+  for (const target of targets) {
+    const agentDir = target.kind === "agent" ? target.agentDir : undefined;
+    for (const source of listLegacyAuthProfileSources({ agentDir, env: params.env })) {
+      report(source, false);
+    }
+  }
+  const sharedMainDir = resolveSharedMainAuthAgentDir(params.env);
+  for (const archive of listLegacyAuthProfileArchives({
+    agentDirs: targets
+      .flatMap((target) => (target.kind === "agent" ? [target.agentDir] : []))
+      .concat(sharedMainDir),
+    env: params.env,
+  })) {
+    report(archive, true);
+  }
+}
+
+async function collectUnresolvedRefFindings(params: {
+  collector: AuditCollector;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  allowExec: boolean;
+}): Promise<{ refsChecked: number; skippedExecRefs: number }> {
+  const cache: SecretRefResolveCache = {};
+  const refsByProvider = new Map<string, Map<string, SecretRef>>();
+  const skippedRefKeys = new Set<string>();
+  let refsChecked = 0;
+  let skippedExecRefs = 0;
+  for (const assignment of params.collector.refAssignments) {
+    const providerKey = `${assignment.ref.source}:${assignment.ref.provider}`;
+    let refsForProvider = refsByProvider.get(providerKey);
+    if (!refsForProvider) {
+      refsForProvider = new Map<string, SecretRef>();
+      refsByProvider.set(providerKey, refsForProvider);
+    }
+    refsForProvider.set(secretRefKey(assignment.ref), assignment.ref);
+  }
+
+  const resolvedByRefKey = new Map<string, unknown>();
+  const errorsByRefKey = new Map<string, unknown>();
+
+  for (const refsForProvider of refsByProvider.values()) {
+    const refs = [...refsForProvider.values()];
+    const selectedRefs = selectRefsForExecPolicy({
+      refs,
+      allowExec: params.allowExec,
+    });
+    if (selectedRefs.skippedExecRefs.length > 0) {
+      skippedExecRefs += selectedRefs.skippedExecRefs.length;
+      for (const ref of selectedRefs.skippedExecRefs) {
+        skippedRefKeys.add(secretRefKey(ref));
+        const staticError = getSkippedExecRefStaticError({
+          ref,
+          config: params.config,
+        });
+        if (staticError) {
+          errorsByRefKey.set(secretRefKey(ref), new Error(staticError));
+        }
+      }
+    }
+    if (selectedRefs.refsToResolve.length === 0) {
+      continue;
+    }
+    refsChecked += selectedRefs.refsToResolve.length;
+    const provider = refs[0]?.provider;
+    try {
+      const resolved = await resolveSecretRefValues(selectedRefs.refsToResolve, {
+        config: params.config,
+        env: params.env,
+        cache,
+      });
+      for (const [key, value] of resolved.entries()) {
+        resolvedByRefKey.set(key, value);
+      }
+      continue;
+    } catch (err) {
+      if (provider && isProviderScopedSecretResolutionError(err)) {
+        for (const ref of selectedRefs.refsToResolve) {
+          errorsByRefKey.set(secretRefKey(ref), err);
+        }
+        continue;
+      }
+      // Fall back to per-ref resolution for provider-specific pinpoint errors.
+    }
+
+    // Batch resolution is cheaper, but individual fallback gives path-specific diagnostics when
+    // a provider returns mixed id failures.
+    const tasks = selectedRefs.refsToResolve.map(
+      (ref) => async (): Promise<{ key: string; resolved: unknown }> => ({
+        key: secretRefKey(ref),
+        resolved: await resolveSecretRefValue(ref, {
+          config: params.config,
+          env: params.env,
+          cache,
+        }),
+      }),
+    );
+    const fallback = await runTasksWithConcurrency({
+      tasks,
+      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, selectedRefs.refsToResolve.length),
+      errorMode: "continue",
+      onTaskError: (error, index) => {
+        const ref = selectedRefs.refsToResolve[index];
+        if (!ref) {
+          return;
+        }
+        errorsByRefKey.set(secretRefKey(ref), error);
+      },
+    });
+    for (const result of fallback.results) {
+      if (!result) {
+        continue;
+      }
+      resolvedByRefKey.set(result.key, result.resolved);
+    }
+  }
+
+  for (const assignment of params.collector.refAssignments) {
+    const key = secretRefKey(assignment.ref);
+    if (skippedRefKeys.has(key) && !errorsByRefKey.has(key)) {
+      continue;
+    }
+    const resolveErr = errorsByRefKey.get(key);
+    let code: SecretsAuditCode = "REF_UNRESOLVED";
+    let detail: string;
+    if (resolveErr) {
+      if (isSecretResolutionError(resolveErr) && resolveErr.code === "SECRET_REF_REDACTED_VALUE") {
+        code = "PLACEHOLDER_VALUE";
+      }
+      detail = formatErrorMessage(resolveErr);
+    } else if (!resolvedByRefKey.has(key)) {
+      detail = "resolved value is missing";
+    } else if (!isExpectedResolvedSecretValue(resolvedByRefKey.get(key), assignment.expected)) {
+      detail =
+        assignment.expected === "string"
+          ? "resolved value is not a non-empty string"
+          : "resolved value is not a string/object";
+    } else {
+      continue;
+    }
+    params.collector.findings.push({
+      code,
+      severity: "error",
+      file: assignment.file,
+      jsonPath: assignment.path,
+      message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${detail}).`,
+      provider: assignment.provider,
+    });
+  }
+  return {
+    refsChecked,
+    skippedExecRefs,
+  };
+}
+
+function collectShadowingFindings(collector: AuditCollector): void {
+  for (const [provider, paths] of collector.configProviderRefPaths.entries()) {
+    const modes = collector.authProviderModes.get(provider);
+    if (!modes) {
+      continue;
+    }
+    const modeText = [...modes].join("/");
+    for (const configPath of paths) {
+      collector.findings.push({
+        code: "REF_SHADOWED",
+        severity: "warn",
+        file: "openclaw.json",
+        jsonPath: configPath,
+        message: `Auth profile credentials (${modeText}) take precedence for provider "${provider}", so this config ref may never be used.`,
+        provider,
+      });
+    }
+  }
+}
+
+function summarizeFindings(findings: SecretsAuditFinding[]) {
+  return {
+    plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
+    unresolvedRefCount: findings.filter(
+      (entry) => entry.code === "REF_UNRESOLVED" || entry.code === "PLACEHOLDER_VALUE",
+    ).length,
+    shadowedRefCount: findings.filter((entry) => entry.code === "REF_SHADOWED").length,
+    storeResidueCount: findings.filter((entry) => entry.code === "STORE_PLAINTEXT_RESIDUE").length,
+    legacyResidueCount: findings.filter((entry) => entry.code === "LEGACY_RESIDUE").length,
+  };
+}
+
+/** Runs a secrets audit over config/auth stores and returns structured findings. */
+export async function runSecretsAudit(
+  params: {
+    env?: NodeJS.ProcessEnv;
+    allowExec?: boolean;
+  } = {},
+) {
+  const env = params.env ?? process.env;
+  const snapshot = await createSecretsConfigIO({ env }).readConfigFileSnapshot();
+  const configPath = resolveUserPath(snapshot.path);
+  const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
+
+  const collector: AuditCollector = {
+    findings: [],
+    refAssignments: [],
+    configProviderRefPaths: new Map(),
+    authProviderModes: new Map(),
+    configPlaintextAssignments: [],
+    filesScanned: new Set([configPath]),
+  };
+
+  const stateDir = resolveStateDir(env, os.homedir);
+  const envPaths = listSecretsDotEnvPaths({ configPath, stateDir });
+  const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
+  let resolution = {
+    refsChecked: 0,
+    skippedExecRefs: 0,
+    resolvabilityComplete: true,
+  };
+
+  if (snapshot.valid) {
+    collectConfigSecrets({
+      config,
+      configPath,
+      collector,
+      env,
+    });
+    for (const target of listAuthProfileStoreTargets(config, stateDir, env)) {
+      collectAuthStoreSecrets(target, collector, defaults);
+    }
+    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
+      collectModelsJsonSecrets({
+        modelsJsonPath,
+        collector,
+      });
+    }
+    const unresolvedRefResult = await collectUnresolvedRefFindings({
+      collector,
+      config,
+      env,
+      allowExec: Boolean(params.allowExec),
+    });
+    resolution = {
+      refsChecked: unresolvedRefResult.refsChecked,
+      skippedExecRefs: unresolvedRefResult.skippedExecRefs,
+      resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
+    };
+    collectShadowingFindings(collector);
+    collector.findings.push(
+      ...(await findSecretStorePlaintextResidueFindings({
+        assignments: collector.configPlaintextAssignments,
+        database: { env },
+      })),
+    );
+  } else {
+    collector.findings.push({
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: configPath,
+      jsonPath: "<root>",
+      message: "Config is invalid; cannot validate secret references reliably.",
+    });
+  }
+
+  for (const envPath of envPaths) {
+    if (!fs.existsSync(envPath)) {
+      continue;
+    }
+    collector.filesScanned.add(envPath);
+    const knownKeys = new Set(listKnownSecretEnvVarNames());
+    for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!match) {
+        continue;
+      }
+      const key = match[1] ?? "";
+      if (!knownKeys.has(key) || !parseEnvValue(match[2] ?? "")) {
+        continue;
+      }
+      collector.findings.push({
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: envPath,
+        jsonPath: `$env.${key}`,
+        message: `Potential secret found in .env (${key}).`,
+      });
+    }
+  }
+  collector.findings.push(
+    ...(await findSecretStoreRedactedValueFindings({
+      database: { env },
+      excludeNames: new Set(
+        collector.refAssignments
+          .filter((assignment) => assignment.ref.source === "store")
+          .map((assignment) => assignment.ref.id),
+      ),
+    })),
+  );
+  collectLegacyAuthSourceFindings({ config, stateDir, env, collector });
+  const summary = summarizeFindings(collector.findings);
+  const status: SecretsAuditStatus =
+    summary.unresolvedRefCount > 0
+      ? "unresolved"
+      : collector.findings.length > 0
+        ? "findings"
+        : "clean";
+
+  return {
+    version: 1 as const,
+    status,
+    resolution,
+    filesScanned: [...collector.filesScanned].toSorted(),
+    summary,
+    findings: collector.findings,
+  };
+}
+
+/** Maps audit results to CLI exit codes. */
+export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
+  if (report.summary.unresolvedRefCount > 0) {
+    return 2;
+  }
+  if (check && report.findings.length > 0) {
+    return 1;
+  }
+  return 0;
+}

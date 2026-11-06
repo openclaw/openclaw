@@ -1,0 +1,447 @@
+import { redactCdpUrl } from "../cdp.helpers.js";
+import { snapshotAria } from "../cdp.js";
+import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
+import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { getCachedChromeGraphicsDiagnostics } from "../chrome.graphics.js";
+import { resolveManagedBrowserHeadlessMode } from "../config.js";
+import { buildBrowserDoctorReport } from "../doctor.js";
+import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
+import { BrowserError } from "../errors.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { createBrowserProfilesService } from "../profiles-service.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { getProfileLifecycle, isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import { parseSystemProfileDomains } from "../system-profile-domains.js";
+import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
+import { handleRouteError, readBody, resolveProfileContext } from "./agent.shared.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
+
+const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
+
+async function sendBasicJsonResponse(res: BrowserResponse, run: () => Promise<unknown>) {
+  try {
+    res.json(await run());
+  } catch (err) {
+    return handleRouteError(res, err, { formatMessage: String });
+  }
+}
+
+async function withBasicRequestAdmission<T>(
+  req: BrowserRequest,
+  run: () => Promise<T>,
+  profile?: ProfileContext["profile"],
+): Promise<T> {
+  const assertRequesterCurrent = () => {
+    req.signal?.throwIfAborted();
+    req.requester?.signal.throwIfAborted();
+    if (req.requester?.isCurrent() === false) {
+      throw new BrowserError(
+        "The Gateway connection that requested the browser operation has ended.",
+        401,
+      );
+    }
+  };
+  assertRequesterCurrent();
+  await req.assertCurrent?.(profile);
+  assertRequesterCurrent();
+  return await run();
+}
+
+function registerBasicProfilePost(
+  app: BrowserRouteRegistrar,
+  ctx: BrowserRouteContext,
+  path: string,
+  run: (params: {
+    req: BrowserRequest;
+    res: BrowserResponse;
+    profileCtx: ProfileContext;
+  }) => Promise<void>,
+) {
+  app.post(path, async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    try {
+      await withBasicRequestAdmission(req, () => run({ req, res, profileCtx }), profileCtx.profile);
+    } catch (err) {
+      return handleRouteError(res, err, { formatMessage: String });
+    }
+  });
+}
+
+async function withProfilesServiceMutation(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+  run: (service: ReturnType<typeof createBrowserProfilesService>) => Promise<unknown>;
+}) {
+  await sendBasicJsonResponse(params.res, () =>
+    withBasicRequestAdmission(params.req, () =>
+      params.run(createBrowserProfilesService(params.ctx)),
+    ),
+  );
+}
+
+async function buildBrowserStatus(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  signal: AbortSignal,
+  inspectGraphics = false,
+) {
+  signal.throwIfAborted();
+  let current: ReturnType<typeof ctx.state>;
+  try {
+    current = ctx.state();
+  } catch {
+    throw new BrowserError("browser server not started", 503);
+  }
+
+  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const { descriptor: engine } = resolveBrowserEngine(profileCtx.profile.engine);
+  let cdpHttp: boolean;
+  let cdpReady: boolean;
+  let pageReady = false;
+  if (capabilities.usesChromeMcp) {
+    cdpReady = await profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal, {
+      onResult: (tabCount) => (pageReady = tabCount !== null),
+    });
+    cdpHttp = cdpReady;
+  } else {
+    cdpReady = await profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal);
+    cdpHttp = cdpReady;
+    // Passive status observes HTTP/relay availability; deep doctor performs the live probe.
+    pageReady = cdpReady;
+  }
+
+  const profileState = current.profiles.get(profileCtx.profile.name);
+  const lifecycle = profileState ? getProfileLifecycle(profileState) : null;
+  const running = profileState?.running;
+  const canInspectManagedGraphics =
+    inspectGraphics &&
+    capabilities.mode === "local-managed" &&
+    cdpReady &&
+    running &&
+    !lifecycle?.transitionReason &&
+    !lifecycle?.blockedReason &&
+    running.cdpPort === profileCtx.profile.cdpPort;
+  const graphics = canInspectManagedGraphics
+    ? await getCachedChromeGraphicsDiagnostics(running, current.resolved.ssrfPolicy)
+    : (running?.graphicsDiagnostics ?? null);
+  const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
+    current.resolved,
+    profileCtx.profile,
+  );
+  let detected: ReturnType<typeof resolveBrowserExecutableForPlatform> = null;
+  let detectError: string | null = null;
+
+  try {
+    detected = resolveBrowserExecutableForPlatform(
+      capabilities.mode === "local-managed" && capabilities.browserFilesystemLocal
+        ? {
+            ...current.resolved,
+            executablePath: profileCtx.profile.executablePath,
+            headless: configuredHeadlessMode.headless,
+          }
+        : current.resolved,
+      process.platform,
+    );
+  } catch (err) {
+    detectError = String(err);
+  }
+  const headlessMode =
+    typeof profileState?.running?.headless === "boolean"
+      ? {
+          headless: profileState.running.headless,
+          source: profileState.running.headlessSource ?? configuredHeadlessMode.source,
+        }
+      : configuredHeadlessMode;
+
+  signal.throwIfAborted();
+
+  return {
+    enabled: current.resolved.enabled,
+    profile: profileCtx.profile.name,
+    driver: profileCtx.profile.driver,
+    engine: engine.id,
+    sessionScope: engine.sessionScope,
+    screenshotFidelity: engine.screenshotFidelity,
+    availableEngines: listBrowserEngines(),
+    transport: capabilities.usesChromeMcp
+      ? ("chrome-mcp" as const)
+      : capabilities.mode === "local-extension"
+        ? ("extension" as const)
+        : ("cdp" as const),
+    running: cdpReady,
+    cdpReady,
+    cdpHttp,
+    pageReady,
+    pid: capabilities.usesChromeMcp
+      ? getChromeMcpPid(profileCtx.profile.name)
+      : (profileState?.running?.pid ?? null),
+    cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
+    cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
+    chosenBrowser: profileState?.running?.exe.kind ?? null,
+    detectedBrowser: detected?.kind ?? null,
+    detectedExecutablePath: detected?.path ?? null,
+    detectError,
+    userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
+    color: profileCtx.profile.color,
+    headless: headlessMode.headless,
+    headlessSource: headlessMode.source,
+    noSandbox: current.resolved.noSandbox,
+    executablePath: profileCtx.profile.executablePath ?? null,
+    attachOnly: profileCtx.profile.attachOnly,
+    graphics,
+  };
+}
+
+async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSignal) {
+  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  try {
+    const tab = await profileCtx.ensureTabAvailable(undefined, { signal });
+    if (capabilities.usesChromeMcp) {
+      await takeChromeMcpSnapshot({
+        profileName: profileCtx.profile.name,
+        profile: profileCtx.profile,
+        targetId: tab.targetId,
+        signal,
+      });
+      return {
+        id: "live-snapshot",
+        label: "Live snapshot",
+        status: "pass" as const,
+        summary: `Chrome MCP snapshot succeeded on ${tab.suggestedTargetId ?? tab.targetId}`,
+      };
+    }
+    if (!tab.wsUrl) {
+      return {
+        id: "live-snapshot",
+        label: "Live snapshot",
+        status: "warn" as const,
+        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot check",
+      };
+    }
+    const snap = await snapshotAria({
+      wsUrl: tab.wsUrl,
+      ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+      limit: 25,
+    });
+    return {
+      id: "live-snapshot",
+      label: "Live snapshot",
+      status: snap.nodes.length > 0 ? ("pass" as const) : ("warn" as const),
+      summary:
+        snap.nodes.length > 0
+          ? `CDP accessibility snapshot returned ${snap.nodes.length} nodes on ${tab.suggestedTargetId ?? tab.targetId}`
+          : `CDP accessibility snapshot returned no nodes on ${tab.suggestedTargetId ?? tab.targetId}`,
+    };
+  } catch (err) {
+    if (isProfileRestartRequiredError(err)) {
+      throw err;
+    }
+    return {
+      id: "live-snapshot",
+      label: "Live snapshot",
+      status: "fail" as const,
+      summary: String(err),
+      fixHint: "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
+    };
+  }
+}
+
+export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  app.get("/system-profiles", async (req, res) => {
+    await sendBasicJsonResponse(res, async () => ({
+      systemProfiles: await createBrowserProfilesService(ctx).listSystemProfiles(
+        toStringOrEmpty(req.query.browser) || undefined,
+      ),
+    }));
+  });
+
+  app.get("/system-profile-import/status", async (_req, res) => {
+    await sendBasicJsonResponse(res, () =>
+      createBrowserProfilesService(ctx).getSystemProfileImportStatus(),
+    );
+  });
+
+  app.post("/system-profile-import/dismiss", async (_req, res) => {
+    await sendBasicJsonResponse(res, async () => {
+      await dismissSystemProfileImportPrompt();
+      return { ok: true };
+    });
+  });
+
+  app.get("/profiles", async (_req, res) => {
+    await sendBasicJsonResponse(res, async () => ({
+      profiles: await createBrowserProfilesService(ctx).listProfiles(),
+    }));
+  });
+
+  for (const route of ["/", "/doctor"]) {
+    app.get(route, async (req, res) => {
+      const profileCtx = resolveProfileContext(req, res, ctx);
+      if (!profileCtx) {
+        return;
+      }
+      await sendBasicJsonResponse(res, () =>
+        runProfileRouteOperation({
+          profileCtx,
+          signal: req.signal,
+          assertCurrent: req.assertCurrent,
+          run: async (signal) => {
+            const live =
+              route === "/doctor" &&
+              (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true);
+            const status = await buildBrowserStatus(ctx, profileCtx, signal, live);
+            if (route === "/") {
+              return status;
+            }
+            const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
+            const identity =
+              relay?.ownership === "borrowed"
+                ? (await relay.client.status()).identity
+                : relay?.bridge.identity;
+            const report = buildBrowserDoctorReport({
+              status,
+              extensionVersion:
+                status.transport === "extension" ? identity?.extensionVersion : undefined,
+            });
+            if (live) {
+              report.checks.push(await runBrowserLiveProbe(profileCtx, signal));
+              report.ok = report.checks.every((check) => check.status !== "fail");
+            }
+            return report;
+          },
+        }),
+      );
+    });
+  }
+
+  registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
+    let headless: boolean | undefined;
+    if (Object.hasOwn(req.query ?? {}, "headless")) {
+      const requestedHeadless = toBoolean(req.query.headless);
+      if (typeof requestedHeadless !== "boolean") {
+        jsonError(res, 400, 'Invalid headless value. Use "true" or "false".');
+        return;
+      }
+
+      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+      if (
+        profileCtx.profile.driver !== "openclaw" ||
+        profileCtx.profile.attachOnly ||
+        capabilities.isRemote
+      ) {
+        jsonError(
+          res,
+          400,
+          `Headless start override is only supported for locally launched openclaw profiles. Profile "${profileCtx.profile.name}" is attach-only, remote, or existing-session.`,
+        );
+        return;
+      }
+      headless = requestedHeadless;
+    }
+    await profileCtx.ensureBrowserAvailable({
+      headless,
+      ...(req.signal ? { signal: req.signal } : {}),
+    });
+    res.json({ ok: true, profile: profileCtx.profile.name });
+  });
+
+  registerBasicProfilePost(app, ctx, "/stop", async ({ res, profileCtx }) => {
+    const result = await profileCtx.stopRunningBrowser();
+    res.json({
+      ok: true,
+      stopped: result.stopped,
+      profile: profileCtx.profile.name,
+    });
+  });
+
+  registerBasicProfilePost(app, ctx, "/reset-profile", async ({ res, profileCtx }) => {
+    const result = await profileCtx.resetProfile();
+    res.json({ ok: true, profile: profileCtx.profile.name, ...result });
+  });
+
+  app.post("/profiles/create", async (req, res) => {
+    const body = readBody(req);
+    const name = toStringOrEmpty(body.name);
+    const color = toStringOrEmpty(body.color);
+    const cdpUrl = toStringOrEmpty(body.cdpUrl);
+    const userDataDir = toStringOrEmpty(body.userDataDir);
+    const driver = toStringOrEmpty(body.driver);
+
+    if (!name) {
+      return jsonError(res, 400, "name is required");
+    }
+    if (driver && driver !== "openclaw" && driver !== "clawd" && driver !== "existing-session") {
+      return jsonError(
+        res,
+        400,
+        `unsupported profile driver "${driver}"; use "openclaw", "clawd", or "existing-session"`,
+      );
+    }
+
+    await withProfilesServiceMutation({
+      req,
+      res,
+      ctx,
+      run: async (service) =>
+        await service.createProfile({
+          name,
+          color: color || undefined,
+          cdpUrl: cdpUrl || undefined,
+          userDataDir: userDataDir || undefined,
+          driver:
+            driver === "existing-session"
+              ? "existing-session"
+              : driver === "openclaw" || driver === "clawd"
+                ? "openclaw"
+                : undefined,
+        }),
+    });
+  });
+
+  app.post("/profiles/import", async (req, res) => {
+    const body = readBody(req);
+    // Fail closed on a malformed domain filter: a caller that meant to scope
+    // the import must never silently import every cookie instead.
+    let domains: string[] | undefined;
+    try {
+      domains = parseSystemProfileDomains(body.domains);
+    } catch (err) {
+      return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
+    }
+    await withProfilesServiceMutation({
+      req,
+      res,
+      ctx,
+      run: async (service) =>
+        await service.importSystemProfile(
+          {
+            browser: toStringOrEmpty(body.browser) || undefined,
+            systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
+            into: toStringOrEmpty(body.into) || undefined,
+            domains,
+            makeDefault: toBoolean(body.makeDefault) ?? false,
+          },
+          { signal: req.signal },
+        ),
+    });
+  });
+
+  app.delete("/profiles/:name", async (req, res) => {
+    const name = toStringOrEmpty(req.params.name);
+    if (!name) {
+      return jsonError(res, 400, "profile name is required");
+    }
+
+    await withProfilesServiceMutation({
+      req,
+      res,
+      ctx,
+      run: async (service) => await service.deleteProfile(name),
+    });
+  });
+}

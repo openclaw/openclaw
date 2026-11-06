@@ -1,0 +1,80 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+import {
+  clearSidebarAttentionDismissal,
+  resolveSidebarAttentionKey,
+  resolveScopeUpgradeDismissal,
+  type SidebarAttentionDismissal,
+} from "../components/sidebar-attention-dismissals.ts";
+import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
+import type { AgentCapability } from "../lib/agents/index.ts";
+import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
+import type { ApplicationGateway } from "./gateway.ts";
+import type { MentionsCapability } from "./mentions.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
+
+export type SidebarAttentionStoreSources = {
+  gateway: ApplicationGateway;
+  agentSelection: AgentSelectionCapability;
+  agents: AgentCapability;
+  overlays: ApplicationOverlays;
+  scopeUpgrade: ScopeUpgradeCapability;
+  connectionBootstrap?: ConnectionBootstrapCoordinator;
+};
+
+export type SidebarAttentionStoreOwner = {
+  readonly entries: readonly SidebarInboxEntry[];
+  readonly mentions: MentionsCapability;
+  dismiss(dismissal: SidebarAttentionDismissal): void;
+  syncDismissals(): void;
+  dispose(): void;
+};
+
+type SidebarAttentionStoreOwnerConstructor = new (
+  sources: SidebarAttentionStoreSources,
+  onChange: () => void,
+) => SidebarAttentionStoreOwner;
+
+export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
+
+export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
+  const listeners = createChangeListeners();
+  let owner: SidebarAttentionStoreOwner | null = null;
+  // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
+  const synchronizeScopeUpgradeDismissal = () => {
+    const snapshot = sources.gateway.snapshot;
+    const scopes = snapshot.hello?.auth?.scopes;
+    if (
+      snapshot.phase === "connected" &&
+      scopes &&
+      !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
+    ) {
+      clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
+    }
+    owner?.syncDismissals();
+  };
+  const stopGateway = sources.gateway.subscribe(synchronizeScopeUpgradeDismissal);
+  const stopScopeUpgrade = sources.scopeUpgrade.subscribe(synchronizeScopeUpgradeDismissal);
+  synchronizeScopeUpgradeDismissal();
+  return {
+    get entries() {
+      return owner?.entries ?? [];
+    },
+    activate(Owner: SidebarAttentionStoreOwnerConstructor) {
+      owner ??= new Owner(sources, listeners.publish);
+      return owner.mentions;
+    },
+    dismiss(dismissal: SidebarAttentionDismissal) {
+      owner?.dismiss(dismissal);
+    },
+    subscribe: listeners.subscribe,
+    dispose() {
+      stopGateway();
+      stopScopeUpgrade();
+      owner?.dispose();
+      owner = null;
+      listeners.clear();
+    },
+  };
+}

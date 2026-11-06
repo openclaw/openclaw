@@ -1,0 +1,448 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
+import {
+  installRemoteProfileTestLifecycle,
+  loadRemoteProfileTestDeps,
+  type RemoteProfileTestDeps,
+} from "./server-context.remote-profile-tab-ops.test-helpers.js";
+
+const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
+installRemoteProfileTestLifecycle(deps);
+
+function page(targetId: string, url = `https://${targetId.toLowerCase()}.example`) {
+  return {
+    targetId,
+    title: targetId === "T1" ? "Tab 1" : targetId,
+    url,
+    type: "page" as const,
+  };
+}
+
+async function expectBlockedCdpEndpoint(promise: Promise<unknown>) {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as { name?: unknown }).name).toBe("BrowserCdpEndpointBlockedError");
+    expect((error as { status?: unknown }).status).toBe(400);
+    return;
+  }
+  throw new Error("expected blocked browser CDP endpoint");
+}
+
+const permissiveRemoteCdpPolicy = {
+  allowPrivateNetwork: true,
+  allowedHostnames: ["1.1.1.1"],
+};
+
+describe("browser remote profile tab ops via Playwright", () => {
+  it("uses Playwright tab operations when available", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
+    ]);
+    const createPageViaPlaywright = vi.fn(async () => ({
+      targetId: "T2",
+      title: "Tab 2",
+      url: "http://127.0.0.1:3000",
+      type: "page",
+    }));
+    const closePageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+      closePageByTargetIdViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const fetchMock = vi.fn(async (url: unknown) => {
+      expect(String(url)).toContain("/json/version");
+      return {
+        ok: true,
+        json: async () => ({
+          webSocketDebuggerUrl:
+            "wss://1.1.1.1:9222/devtools/browser/REMOTE-BROWSER?auth=fixture-value",
+        }),
+      } as unknown as Response;
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+    // Enumeration budget falls back to the action-level timeout, not the
+    // CDP handshake, so a tab-heavy session is not mistaken for a dead relay.
+    expect(listPagesViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      ssrfPolicy: permissiveRemoteCdpPolicy,
+      timeoutMs: 60_000,
+    });
+
+    const opened = await remote.openTab("http://127.0.0.1:3000", { timeoutMs: 60_000 });
+    expect(opened.targetId).toBe("T2");
+    expect((opened as { ownership?: unknown }).ownership).toMatchObject({
+      status: "durable",
+      nativeTargetId: "T2",
+      profileFingerprint: expect.stringMatching(/^sha256:/),
+      browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
+    });
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("T2");
+    expect(createPageViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      url: "http://127.0.0.1:3000",
+      timeoutMs: 60_000,
+      cdpPolicy: permissiveRemoteCdpPolicy,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    await remote.closeTab("T1");
+    expect(closePageByTargetIdViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      targetId: "T1",
+      ssrfPolicy: permissiveRemoteCdpPolicy,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("forwards a caller-supplied enumeration deadline instead of the handshake timeout", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
+    ]);
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          json: async () => ({
+            webSocketDebuggerUrl:
+              "wss://1.1.1.1:9222/devtools/browser/REMOTE-BROWSER?auth=fixture-value",
+          }),
+        }) as unknown as Response,
+    );
+    const { remote } = deps.createRemoteRouteHarness(fetchMock);
+
+    await remote.listTabs({ timeoutMs: 45_000 });
+
+    expect(listPagesViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 45_000 }),
+    );
+  });
+
+  it("preserves ownership cancellation when closing the exact created page fails", async () => {
+    const close = vi.fn(async () => {
+      throw new Error("created page close failed");
+    });
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      createPageViaPlaywright: vi.fn(async () => ({ ...page("T2"), close })),
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("/json/close/T2")) {
+        return new Response(null, { status: 404 });
+      }
+      return await new Promise<Response>((_resolve, reject) => {
+        markProbeStarted();
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal?.reason instanceof Error
+                ? init.signal.reason
+                : new Error("ownership version probe aborted"),
+            ),
+          { once: true },
+        );
+      });
+    });
+    const { remote } = deps.createRemoteRouteHarness(fetchMock);
+    const controller = new AbortController();
+    const abortError = new Error("caller aborted ownership probe");
+
+    const opening = remote.openTab("https://t2.example", { signal: controller.signal });
+    await probeStarted;
+    controller.abort(abortError);
+
+    await expect(opening).rejects.toBe(abortError);
+    expect(close).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/json/version"),
+    ]);
+  });
+
+  it("assigns stable tab ids and resolves labels", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      page("A", "https://example.com"),
+      page("B", "https://docs.example.com"),
+    ]);
+    const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      focusPageByTargetIdViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["B", "t2"],
+    ]);
+    expect(tabs.map((tab) => tab.suggestedTargetId)).toEqual(["t1", "t2"]);
+
+    const labeled = await remote.labelTab("t2", "docs");
+    expect(labeled).toMatchObject({
+      targetId: "B",
+      suggestedTargetId: "docs",
+      tabId: "t2",
+      label: "docs",
+    });
+
+    await remote.focusTab("docs");
+    expect(focusPageByTargetIdViaPlaywright).toHaveBeenNthCalledWith(1, {
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      targetId: "B",
+      ssrfPolicy: permissiveRemoteCdpPolicy,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("B");
+
+    await remote.labelTab("t1", "B");
+    await expect(remote.focusTab("B")).rejects.toThrow("ambiguous browser tab reference");
+    await remote.focusTab("B", { exactTargetId: true });
+    expect(focusPageByTargetIdViaPlaywright).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ targetId: "B" }),
+    );
+  });
+
+  it("migrates only unique URL groups alongside ambiguous duplicate groups", async () => {
+    let currentPages = [
+      page("A", "https://unique.example"),
+      page("B", "https://duplicate.example"),
+      page("C", "https://duplicate.example"),
+    ];
+    const listPagesViaPlaywright = vi.fn(async () => currentPages);
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = deps.createRemoteRouteHarness();
+
+    expect((await remote.listTabs()).map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["B", "t2"],
+      ["C", "t3"],
+    ]);
+    await remote.labelTab("t1", "unique");
+    state.profiles.get("remote")!.lastTargetId = "A";
+
+    currentPages = [
+      page("D", "https://unique.example"),
+      page("E", "https://duplicate.example"),
+      page("F", "https://duplicate.example"),
+    ];
+
+    await expect(remote.listTabs()).resolves.toEqual([
+      expect.objectContaining({
+        targetId: "D",
+        tabId: "t1",
+        label: "unique",
+        suggestedTargetId: "unique",
+      }),
+      expect.objectContaining({ targetId: "E", tabId: "t4", suggestedTargetId: "t4" }),
+      expect.objectContaining({ targetId: "F", tabId: "t5", suggestedTargetId: "t5" }),
+    ]);
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("D");
+  });
+
+  it("opens a real remote Playwright tab when only browser-internal targets are listed", async () => {
+    const internalTab = {
+      targetId: "OMNI",
+      title: "Omnibox Popup",
+      url: "chrome://omnibox-popup.top-chrome/",
+      type: "page" as const,
+    };
+    const realTab = {
+      targetId: "REAL",
+      title: "New Tab",
+      url: "about:blank",
+      type: "page" as const,
+    };
+    const listPagesViaPlaywright = vi.fn(
+      deps.createSequentialPageLister([[internalTab], [internalTab, realTab]]),
+    );
+    const createPageViaPlaywright = vi.fn(async () => realTab);
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = deps.createRemoteRouteHarness();
+
+    const selected = await remote.ensureTabAvailable();
+    expect(selected.targetId).toBe("REAL");
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("REAL");
+    expect(createPageViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      url: "about:blank",
+      cdpPolicy: permissiveRemoteCdpPolicy,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+  });
+
+  it("does not open a blank tab when page target identities are unavailable", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => {
+      throw new Error("Playwright page target identities are temporarily unavailable.");
+    });
+    const createPageViaPlaywright = vi.fn(async () => page("WRONG", "about:blank"));
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { remote, fetchMock } = deps.createRemoteRouteHarness();
+
+    await expect(remote.ensureTabAvailable()).rejects.toThrow(/target identities.*unavailable/i);
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the last complete list when a later enumeration is unavailable", async () => {
+    const complete = [page("A", "https://a.example"), page("B", "https://b.example")];
+    const listPagesViaPlaywright = vi
+      .fn<() => Promise<typeof complete>>()
+      .mockResolvedValueOnce(complete)
+      .mockRejectedValueOnce(
+        new Error("Playwright page target identities are temporarily unavailable."),
+      );
+    const createPageViaPlaywright = vi.fn(async () => page("WRONG", "about:blank"));
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { remote } = deps.createRemoteRouteHarness();
+
+    await expect(remote.ensureTabAvailable("B")).resolves.toMatchObject({ targetId: "B" });
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("blocks remote Playwright tab operations when strict SSRF hostname allowlist rejects the cdpUrl", async () => {
+    const listPagesViaPlaywright = vi.fn(async () => [
+      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
+    ]);
+    const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
+    const closePageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      focusPageByTargetIdViaPlaywright,
+      closePageByTargetIdViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const state = deps.makeState("remote");
+    state.resolved.ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["browserless.example.com"],
+    };
+    const remoteProfile = expectDefined(state.resolved.profiles.remote, "remote browser profile");
+    state.resolved.profiles.remote = {
+      ...remoteProfile,
+      cdpUrl: "http://10.0.0.42:9222",
+      cdpPort: 9222,
+    };
+    const ctx = deps.createBrowserRouteContext({ getState: () => state });
+    const remote = ctx.forProfile("remote");
+
+    await expectBlockedCdpEndpoint(remote.listTabs());
+    await expectBlockedCdpEndpoint(remote.focusTab("T1"));
+    await expectBlockedCdpEndpoint(remote.closeTab("T1"));
+    expect(listPagesViaPlaywright).not.toHaveBeenCalled();
+    expect(focusPageByTargetIdViaPlaywright).not.toHaveBeenCalled();
+    expect(closePageByTargetIdViaPlaywright).not.toHaveBeenCalled();
+  });
+});
+
+function mockExtensionPage(targetIds = ["TARGET-41"]): void {
+  vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+    listPagesViaPlaywright: vi.fn(async () =>
+      targetIds.map((targetId) => ({
+        targetId,
+        title: "Extension test",
+        url: "https://example.com/login",
+        type: "page",
+      })),
+    ),
+  } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+}
+
+function createExtensionProfile() {
+  const state = deps.makeState("openclaw");
+  state.resolved.defaultProfile = "chrome";
+  state.resolved.profiles.chrome = {
+    cdpUrl: "http://127.0.0.1:18799",
+    cdpPort: 18799,
+    color: "#FF4500",
+    driver: "extension",
+  };
+  return deps
+    .createTestBrowserRouteContext({
+      getState: () => state,
+    })
+    .forProfile("chrome");
+}
+
+describe("browser extension profile tab ops", () => {
+  it("matches native ids by CDP target despite identical page metadata and different order", async () => {
+    mockExtensionPage(["TARGET-41", "TARGET-42", "TARGET-43"]);
+    globalThis.fetch = vi.fn(async () =>
+      Response.json(
+        [42, 99, 41, 43].map((tabId) => ({
+          id: `TARGET-${tabId}`,
+          tabId: tabId === 43 ? "43" : tabId,
+          title: "Extension test",
+          url: "https://example.com/login",
+          type: "page",
+        })),
+      ),
+    );
+
+    const tabs = await createExtensionProfile().listTabs();
+
+    expect(tabs).toEqual([
+      expect.objectContaining({
+        targetId: "TARGET-41",
+        tabId: "t1",
+        webExtensionTabId: 41,
+      }),
+      expect.objectContaining({
+        targetId: "TARGET-42",
+        tabId: "t2",
+        webExtensionTabId: 42,
+      }),
+      expect.objectContaining({ targetId: "TARGET-43", tabId: "t3" }),
+    ]);
+    expect(tabs[2]).not.toHaveProperty("webExtensionTabId");
+  });
+
+  it("preserves caller cancellation during the native extension metadata request", async () => {
+    mockExtensionPage();
+    const controller = new AbortController();
+    const reason = new Error("tab listing cancelled");
+    let fetchSignal: AbortSignal | null | undefined;
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      fetchSignal = init?.signal;
+      controller.abort(reason);
+      throw reason;
+    });
+
+    await expect(createExtensionProfile().listTabs({ signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+});

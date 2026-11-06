@@ -1,0 +1,34 @@
+// Implements explicit steering through the durable prepared-reply queue path.
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import type { CommandHandler } from "./commands-types.js";
+import {
+  parseSteerMessage,
+  resolveActiveExplicitSteerSessionKey,
+} from "./explicit-steer-routing.js";
+
+const STEER_USAGE = "Usage: /steer <message>";
+
+export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/steer", match: parseSteerMessage },
+  async (params, message) => {
+    if (!message) {
+      return commandReply(STEER_USAGE);
+    }
+
+    const steerTargetSessionKey = resolveActiveExplicitSteerSessionKey({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      sessionKey: params.sessionKey,
+      commandBody: params.command.commandBodyNormalized,
+    });
+    // Session routing resolves the active :direct:/:dm: alias before session
+    // preparation. From here the ordinary prepared reply path owns media,
+    // transcript persistence, stable queue identity, cancellation, lifecycle
+    // adoption, and fallback if the active run disappears before admission.
+    applyCommandTextToParams(params, message);
+    return steerTargetSessionKey
+      ? { shouldContinue: true, queueModeOverride: "steer" }
+      : { shouldContinue: true };
+  },
+);

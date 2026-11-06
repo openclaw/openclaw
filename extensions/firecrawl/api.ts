@@ -1,0 +1,66 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { runFirecrawlScrape } from "./src/firecrawl-client.js";
+
+export type FetchFirecrawlContentParams = {
+  url: string;
+  extractMode: "markdown" | "text";
+  apiKey: string;
+  baseUrl: string;
+  onlyMainContent: boolean;
+  maxAgeMs: number;
+  proxy: "auto" | "basic" | "stealth";
+  storeInCache: boolean;
+  timeoutSeconds: number;
+  maxChars?: number;
+};
+
+export type FetchFirecrawlContentResult = {
+  text: string;
+  title?: string;
+  finalUrl?: string;
+  status?: number;
+  warning?: string;
+};
+
+export async function fetchFirecrawlContent(
+  params: FetchFirecrawlContentParams,
+): Promise<FetchFirecrawlContentResult> {
+  const cfg: OpenClawConfig = {
+    plugins: {
+      entries: {
+        firecrawl: {
+          enabled: true,
+          config: {
+            webFetch: {
+              apiKey: params.apiKey,
+              baseUrl: params.baseUrl,
+              onlyMainContent: params.onlyMainContent,
+              maxAgeMs: params.maxAgeMs,
+              timeoutSeconds: params.timeoutSeconds,
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const result = await runFirecrawlScrape({
+    cfg,
+    url: params.url,
+    extractMode: params.extractMode,
+    maxChars: params.maxChars,
+    proxy: params.proxy,
+    storeInCache: params.storeInCache,
+    onlyMainContent: params.onlyMainContent,
+    maxAgeMs: params.maxAgeMs,
+    timeoutSeconds: params.timeoutSeconds,
+  });
+
+  return {
+    text: result.text,
+    title: result.title,
+    finalUrl: result.finalUrl,
+    status: result.status,
+    warning: result.warning,
+  };
+}

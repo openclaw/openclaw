@@ -1,0 +1,80 @@
+// Documents persisted/runtime model selection display normalization.
+import { describe, expect, it } from "vitest";
+import {
+  resolveModelDisplayName,
+  resolveModelDisplayRef,
+  resolveSessionInfoModelSelection,
+} from "./model-selection-display.js";
+
+describe("model-selection-display", () => {
+  describe("resolveModelDisplayRef", () => {
+    it("combines separate runtime provider and model ids", () => {
+      expect(
+        resolveModelDisplayRef({
+          runtimeProvider: "openai",
+          runtimeModel: "gpt-5.4",
+        }),
+      ).toBe("openai/gpt-5.4");
+    });
+  });
+
+  describe("resolveModelDisplayName", () => {
+    it("renders the trailing model segment for compact UI labels", () => {
+      expect(
+        resolveModelDisplayName({
+          runtimeProvider: "openrouter",
+          runtimeModel: "anthropic/claude-sonnet-4-6",
+        }),
+      ).toBe("claude-sonnet-4-6");
+    });
+
+    it("returns a stable empty-state label", () => {
+      expect(resolveModelDisplayName({})).toBe("model n/a");
+    });
+  });
+
+  describe("resolveSessionInfoModelSelection", () => {
+    it("keeps override ids attached to the current provider when no override provider is stored", () => {
+      // Slash-bearing override models may be nested model ids, not providers;
+      // preserve the known current provider when no override provider exists.
+      expect(
+        resolveSessionInfoModelSelection({
+          currentProvider: "anthropic",
+          currentModel: "claude-sonnet-4-6",
+          overrideModel: "ollama-beelink2/qwen2.5-coder:7b",
+        }),
+      ).toEqual({
+        modelProvider: "anthropic",
+        model: "ollama-beelink2/qwen2.5-coder:7b",
+      });
+    });
+
+    it("falls back to configured defaults when runtime session state is empty", () => {
+      expect(
+        resolveSessionInfoModelSelection({
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        }),
+      ).toEqual({
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      });
+    });
+
+    it("ignores malformed persisted session model values", () => {
+      expect(
+        resolveSessionInfoModelSelection({
+          currentProvider: { provider: "openai" },
+          currentModel: false,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-6",
+          entryProvider: ["openrouter"],
+          entryModel: 123,
+        }),
+      ).toEqual({
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+    });
+  });
+});

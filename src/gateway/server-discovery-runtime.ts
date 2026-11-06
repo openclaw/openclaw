@@ -1,0 +1,307 @@
+import path from "node:path";
+import {
+  clampTimerTimeoutMs,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import type { DiscoveryConfig, MdnsDiscoveryMode } from "../config/types.gateway.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { isRegularFile } from "../infra/executable-path.js";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { getTailnetHostname } from "../infra/tailscale.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
+import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import { getPluginValueInstance, runPluginCleanup } from "../plugins/plugin-instance-scope.js";
+import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
+import { runExec } from "../process/exec.js";
+
+/** Formats the Bonjour instance name while preserving user-provided OpenClaw names. */
+function formatBonjourInstanceName(displayName: string) {
+  const trimmed = displayName.trim();
+  if (!trimmed) {
+    return "OpenClaw";
+  }
+  if (/openclaw/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} (OpenClaw)`;
+}
+
+/** Resolves the CLI path advertised to Bonjour clients, preferring explicit env config. */
+function resolveBonjourCliPath(): string | undefined {
+  const envPath = process.env.OPENCLAW_CLI_PATH?.trim();
+  if (envPath) {
+    return envPath;
+  }
+
+  const execDir = path.dirname(process.execPath);
+  const siblingCli = path.join(execDir, "openclaw");
+  if (isRegularFile(siblingCli)) {
+    return siblingCli;
+  }
+
+  const argvPath = process.argv[1];
+  if (argvPath && isRegularFile(argvPath)) {
+    return argvPath;
+  }
+
+  const cwd = process.cwd();
+  return [path.join(cwd, "dist", "index.js"), path.join(cwd, "bin", "openclaw")].find(
+    isRegularFile,
+  );
+}
+
+/** Resolves a Tailnet DNS hint from env or the local tailscale CLI when enabled. */
+async function resolveTailnetDnsHint(opts?: { enabled?: boolean }): Promise<string | undefined> {
+  const envValue = process.env.OPENCLAW_TAILNET_DNS?.trim().replace(/\.$/, "");
+  if (envValue) {
+    return envValue;
+  }
+  if (opts?.enabled === false) {
+    return undefined;
+  }
+
+  try {
+    return await getTailnetHostname((command, args) =>
+      runExec(command, args, { timeoutMs: 1500, maxBuffer: 200_000 }),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+type DiscoveryUpdate = {
+  mdnsMode?: MdnsDiscoveryMode;
+  gatewayTlsFingerprintSha256?: string;
+  gatewayDiscoveryServices?: readonly PluginGatewayDiscoveryServiceRegistration[];
+};
+export type GatewayDiscovery = {
+  update: (next: DiscoveryUpdate) => Promise<void>;
+  stop: () => Promise<void>;
+};
+type DiscoveryGeneration = {
+  mode: MdnsDiscoveryMode;
+  tlsFingerprint?: string;
+  services: Map<
+    PluginGatewayDiscoveryServiceRegistration,
+    { started?: boolean; stop?: () => void | Promise<void> }
+  >;
+};
+
+/** One owner replaces local advertisements and keeps wide-area TXT policy in sync. */
+export async function startGatewayDiscovery(params: {
+  discovery?: DiscoveryConfig;
+  gatewayDiscoveryServices?: readonly PluginGatewayDiscoveryServiceRegistration[];
+  machineDisplayName: string;
+  port: number;
+  gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable?: boolean;
+  tailscaleMode: "off" | "serve" | "funnel";
+  logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
+}): Promise<GatewayDiscovery> {
+  let mode = params.discovery?.mdns?.mode ?? "minimal";
+  let tlsFingerprint = params.gatewayTls?.fingerprintSha256;
+  const wideAreaDomain = params.discovery?.wideArea?.domain;
+  let services = params.gatewayDiscoveryServices ?? [];
+  let current: DiscoveryGeneration | undefined;
+  let closed = false;
+  let pending = Promise.resolve();
+  let cleanup = Promise.resolve();
+  const isCurrent = (generation: DiscoveryGeneration) => !closed && current === generation;
+  const stopService = (stop: () => void | Promise<void>) => {
+    cleanup = cleanup.then(stop).catch((err: unknown) => {
+      params.logDiscovery.warn(`gateway discovery stop failed: ${String(err)}`);
+    });
+    return cleanup;
+  };
+  const stopGeneration = async (generation?: DiscoveryGeneration) => {
+    for (const [entry, advertisement] of [...(generation?.services ?? [])].toReversed()) {
+      if (current !== generation && current?.services.get(entry) === advertisement) {
+        continue;
+      }
+      generation?.services.delete(entry);
+      const stop = advertisement.stop;
+      advertisement.stop = undefined;
+      if (stop) {
+        void stopService(stop);
+      }
+    }
+    // Timed-out starts may acquire handles while another stop is awaiting I/O.
+    // Drain those acquired callbacks too, without joining unresolved starts.
+    let drained: Promise<void>;
+    do {
+      drained = cleanup;
+      await drained;
+    } while (drained !== cleanup);
+  };
+  const enqueue = (operation: () => Promise<void>) => {
+    const result = pending.then(operation);
+    pending = result.catch(() => {});
+    return result;
+  };
+  const advertise = async (generation: DiscoveryGeneration) => {
+    if (!isCurrent(generation)) {
+      return;
+    }
+    const localEnabled =
+      generation.mode !== "off" &&
+      !isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) &&
+      process.env.NODE_ENV !== "test" &&
+      !process.env.VITEST;
+    const minimal = generation.mode !== "full";
+    const tailnetDns =
+      localEnabled || wideAreaDomain?.trim()
+        ? await resolveTailnetDnsHint({ enabled: params.tailscaleMode !== "off" })
+        : undefined;
+    if (!isCurrent(generation)) {
+      return;
+    }
+    const context = {
+      machineDisplayName: params.machineDisplayName,
+      gatewayPort: params.port,
+      gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
+      gatewayTlsFingerprintSha256: generation.tlsFingerprint,
+      gatewayDirectReachable: params.gatewayDirectReachable === true,
+      sshPort: minimal ? undefined : (parseTcpPort(process.env.OPENCLAW_SSH_PORT) ?? undefined),
+      tailnetDns,
+      cliPath: minimal ? undefined : resolveBonjourCliPath(),
+      minimal,
+    };
+    if (wideAreaDomain?.trim()) {
+      const domain = resolveWideAreaDiscoveryDomain({ configDomain: wideAreaDomain });
+      const tailnetIPv4 = pickPrimaryTailnetIPv4();
+      if (!domain) {
+        params.logDiscovery.warn(
+          "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
+        );
+      } else if (!tailnetIPv4) {
+        params.logDiscovery.warn(
+          "discovery.wideArea.domain is set, but no Tailscale IPv4 address was found; skipping unicast DNS-SD zone update",
+        );
+      } else {
+        try {
+          const result = await writeWideAreaGatewayZone({
+            ...context,
+            domain,
+            displayName: formatBonjourInstanceName(params.machineDisplayName),
+            tailnetIPv4,
+            tailnetIPv6: pickPrimaryTailnetIPv6() ?? undefined,
+          });
+          params.logDiscovery.info(
+            `wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${domain} → ${result.zonePath})`,
+          );
+        } catch (err) {
+          params.logDiscovery.warn(`wide-area discovery update failed: ${String(err)}`);
+        }
+      }
+    }
+    const advertiseTimeoutMs =
+      clampTimerTimeoutMs(
+        parseStrictPositiveInteger(
+          process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS?.trim(),
+        ),
+      ) ?? 5_000;
+    for (const [entry, advertisement] of generation.services) {
+      let drained: Promise<void>;
+      do {
+        drained = cleanup;
+        await drained;
+      } while (drained !== cleanup);
+      // Keep cleanup, ownership checks, and publication in one continuation.
+      if (!localEnabled || !isCurrent(generation)) {
+        return;
+      }
+      if (advertisement.started) {
+        continue;
+      }
+      advertisement.started = true;
+      let timedOut = false;
+      const instance = entry.instance ?? getPluginValueInstance(entry.service);
+      const start = async () => {
+        let handle: Awaited<ReturnType<typeof entry.service.advertise>>;
+        try {
+          handle = await entry.service.advertise(context);
+        } catch (error) {
+          // A settled acquisition failure can retry on the next update; acquired handles cannot.
+          advertisement.started = false;
+          throw error;
+        }
+        if (handle?.stop) {
+          const stop = handle.stop;
+          const invokeStop = () => stop.call(handle);
+          const stopOwned = () =>
+            instance ? instance.runCleanup(invokeStop) : runPluginCleanup(stop, invokeStop);
+          if (!closed && current?.services.get(entry) === advertisement) {
+            advertisement.stop = stopOwned;
+          } else {
+            await stopService(stopOwned);
+          }
+        }
+        if (timedOut) {
+          params.logDiscovery.warn(
+            `gateway discovery service completed after startup timeout (${entry.id}, plugin=${entry.pluginId})`,
+          );
+        }
+      };
+      // Admission spans handle adoption, including cleanup of a late acquisition.
+      const started = (async () => (instance ? instance.run(start) : start()))().catch(
+        (err: unknown) => {
+          params.logDiscovery.warn(
+            `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.id}, plugin=${entry.pluginId}): ${String(err)}`,
+          );
+        },
+      );
+      await raceWithTimeout(
+        started,
+        advertiseTimeoutMs,
+        () => {
+          timedOut = true;
+          params.logDiscovery.warn(
+            `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.id}, plugin=${entry.pluginId}); continuing startup`,
+          );
+        },
+        { ref: false },
+      );
+    }
+  };
+  const update: GatewayDiscovery["update"] = (next) => {
+    const nextMode = "mdnsMode" in next ? (next.mdnsMode ?? "minimal") : mode;
+    const nextServices = next.gatewayDiscoveryServices ?? services;
+    const nextTlsFingerprint = next.gatewayTlsFingerprintSha256 ?? tlsFingerprint;
+    if (
+      closed ||
+      (current &&
+        mode === nextMode &&
+        services === nextServices &&
+        tlsFingerprint === nextTlsFingerprint)
+    ) {
+      return Promise.resolve();
+    }
+    const previous = current;
+    const retained =
+      mode === nextMode && tlsFingerprint === nextTlsFingerprint ? previous?.services : undefined;
+    mode = nextMode;
+    tlsFingerprint = nextTlsFingerprint;
+    services = nextServices;
+    // Exact retained registrations keep acquired and pending handles across publication.
+    const generation = (current = {
+      mode,
+      tlsFingerprint,
+      services: new Map(services.map((entry) => [entry, retained?.get(entry) ?? {}])),
+    });
+    return enqueue(async () => {
+      await stopGeneration(previous);
+      await advertise(generation);
+    });
+  };
+  await update({});
+  return {
+    update,
+    stop: () => {
+      closed = true;
+      const previous = current;
+      current = undefined;
+      return enqueue(() => stopGeneration(previous));
+    },
+  };
+}

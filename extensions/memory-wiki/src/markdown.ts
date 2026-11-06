@@ -1,0 +1,605 @@
+import { isUtf8 } from "node:buffer";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import {
+  asFiniteNumber,
+  asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeSingleOrTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import YAML from "yaml";
+import { FRONTMATTER_PATTERN, renderWikiFrontmatter } from "./frontmatter-source.js";
+import { extractWikiLinks, maskMarkdownCode } from "./markdown-links.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
+
+export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
+
+export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
+
+type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
+
+export type ParsedWikiMarkdown = {
+  hasFrontmatter: boolean;
+  frontmatter: Record<string, unknown>;
+  body: string;
+};
+
+export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
+type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
+export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
+
+type WikiPageFrontmatterError = {
+  relativePath: string;
+  message: string;
+};
+
+export type WikiPageSummary = {
+  absolutePath: string;
+  relativePath: string;
+  kind: WikiPageKind;
+  title: string;
+  hasFrontmatter: boolean;
+  id?: string;
+  pageType?: string;
+  entityType?: string;
+  canonicalId?: string;
+  aliases: string[];
+  sourceIds: string[];
+  linkTargets: string[];
+  claims: WikiClaim[];
+  contradictions: string[];
+  questions: string[];
+  confidence?: number;
+  privacyTier?: string;
+  personCard?: WikiPersonCard;
+  relationships: WikiRelationship[];
+  bestUsedFor: string[];
+  notEnoughFor: string[];
+  sourceType?: string;
+  provenanceMode?: string;
+  importedSourceBody?: "bridge" | "unsafe-local";
+  generatedSourceBody?: GeneratedSourceBody;
+  unmanagedRawSourceBody?: boolean;
+  sourcePath?: string;
+  bridgeRelativePath?: string;
+  bridgeWorkspaceDir?: string;
+  bridgeAgentIds: string[];
+  unsafeLocalConfiguredPath?: string;
+  unsafeLocalRelativePath?: string;
+  lastRefreshedAt?: string;
+  updatedAt?: string;
+};
+
+type WikiPageSummaryScanResult =
+  | { status: "valid"; page: WikiPageSummary; parsed: ParsedWikiMarkdown }
+  | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
+  | { status: "ignored" };
+
+const MAX_WIKI_SEGMENT_BYTES = 240;
+const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
+const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
+const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
+  MAX_WIKI_FILENAME_COMPONENT_BYTES -
+  Buffer.byteLength(FS_SAFE_PINNED_WRITE_TEMP_SUFFIX) -
+  Buffer.byteLength(".");
+const WIKI_SEGMENT_HASH_BYTES = 12;
+const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
+export const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
+export const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
+
+function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
+  if (Buffer.byteLength(raw) <= maxBytes) {
+    return raw;
+  }
+  const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  const truncated = truncateUtf8Prefix(raw, maxBytes - Buffer.byteLength(`-${suffix}`)).replace(
+    /-+$/g,
+    "",
+  );
+  return `${truncated || fallback}-${suffix}`;
+}
+
+export function slugifyWikiSegment(raw: string): string {
+  const slug = normalizeLowercaseStringOrEmpty(raw)
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) {
+    return "page";
+  }
+  return capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, "page");
+}
+
+export function slugifyWikiPageStem(raw: string): string {
+  const slug = slugifyWikiSegment(raw);
+  if (!WIKI_RESERVED_PAGE_STEMS.has(slug)) {
+    return slug;
+  }
+  const suffix = createHash("sha1").update(slug).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  return `${slug}-${suffix}`;
+}
+
+export function createWikiPageFilename(stem: string, extension = ".md"): string {
+  const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
+  const maxStemBytes = Math.max(
+    1,
+    MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES - Buffer.byteLength(normalizedExtension),
+  );
+  return `${capWikiValueWithHash(stem, maxStemBytes, "page")}${normalizedExtension}`;
+}
+
+export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
+  const match = content.match(FRONTMATTER_PATTERN);
+  if (!match) {
+    return { hasFrontmatter: false, frontmatter: {}, body: content };
+  }
+  const frontmatter = match[1]!;
+  const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
+  if (!parsed) {
+    // Every writer spreads this value back into YAML. Reject non-mapping roots
+    // so an edit cannot silently replace scalar or sequence frontmatter.
+    throw new TypeError("Wiki frontmatter must be a YAML mapping");
+  }
+  return {
+    hasFrontmatter: true,
+    frontmatter: parsed,
+    body: content.slice(match[0].length),
+  };
+}
+
+export function renderWikiMarkdown(params: {
+  frontmatter: Record<string, unknown>;
+  body: string;
+  /** Current page text; ordinary mappings preserve untouched source, other graphs render values. */
+  original?: string;
+}): string {
+  const frontmatter = renderWikiFrontmatter(params.frontmatter, params.original);
+  return `---\n${frontmatter}\n---\n\n${params.body.trimStart()}`;
+}
+
+function extractTitleFromMarkdown(body: string): string | undefined {
+  // Masking keeps offsets: "# comment" lines in code cannot match, and the title is
+  // read from the unmasked line so inline code in a real heading survives.
+  for (const heading of maskMarkdownCode(body).matchAll(/^#[ \t].*$/gm)) {
+    const title = normalizeOptionalString(
+      body.slice(heading.index + 1, heading.index + heading[0].length),
+    );
+    if (title) {
+      return title;
+    }
+  }
+  return undefined;
+}
+
+function normalizeOptionalStringFields<K extends string>(
+  record: Record<string, unknown>,
+  keys: readonly K[],
+): Partial<Record<K, string>> {
+  const fields: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    const value = normalizeOptionalString(record[key]);
+    if (value) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+
+function normalizeWikiClaimEvidence(value: unknown) {
+  const record = asNullableRecord(value);
+  if (!record) {
+    return null;
+  }
+  const weight = asFiniteNumber(record.weight);
+  const confidence = asFiniteNumber(record.confidence);
+  const evidence = {
+    ...normalizeOptionalStringFields(record, ["kind", "sourceId", "path", "lines"]),
+    ...(weight !== undefined ? { weight } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "note", "updatedAt"]),
+  };
+  return Object.keys(evidence).length > 0 ? evidence : null;
+}
+
+export function normalizeWikiClaims(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const record = asNullableRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const text = normalizeOptionalString(record.text);
+    if (!text) {
+      return [];
+    }
+    const evidence = Array.isArray(record.evidence)
+      ? record.evidence.flatMap((candidate) => {
+          const normalized = normalizeWikiClaimEvidence(candidate);
+          return normalized ? [normalized] : [];
+        })
+      : [];
+    const confidence = asFiniteNumber(record.confidence);
+    return [
+      {
+        ...normalizeOptionalStringFields(record, ["id"]),
+        text,
+        ...normalizeOptionalStringFields(record, ["status"]),
+        ...(confidence !== undefined ? { confidence } : {}),
+        evidence,
+        ...normalizeOptionalStringFields(record, ["updatedAt"]),
+      },
+    ];
+  });
+}
+
+function normalizeWikiPersonCard(value: unknown) {
+  const record = asNullableRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const confidence = asFiniteNumber(record.confidence);
+  const card = {
+    ...normalizeOptionalStringFields(record, ["canonicalId"]),
+    handles: normalizeSingleOrTrimmedStringList(record.handles),
+    socials: normalizeSingleOrTrimmedStringList(record.socials),
+    emails: normalizeSingleOrTrimmedStringList(record.emails ?? record.email),
+    ...normalizeOptionalStringFields(record, ["timezone", "lane"]),
+    askFor: normalizeSingleOrTrimmedStringList(record.askFor),
+    avoidAskingFor: normalizeSingleOrTrimmedStringList(record.avoidAskingFor),
+    bestUsedFor: normalizeSingleOrTrimmedStringList(record.bestUsedFor),
+    notEnoughFor: normalizeSingleOrTrimmedStringList(record.notEnoughFor),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
+  };
+  const hasAnyValue = Object.values(card).some((field) =>
+    Array.isArray(field) ? field.length > 0 : field !== undefined,
+  );
+  return hasAnyValue ? card : undefined;
+}
+
+function normalizeWikiRelationships(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const record = asNullableRecord(entry);
+    if (!record) {
+      return [];
+    }
+    const weight = asFiniteNumber(record.weight);
+    const confidence = asFiniteNumber(record.confidence);
+    const relationship = {
+      ...normalizeOptionalStringFields(record, ["targetId", "targetPath", "targetTitle", "kind"]),
+      ...(weight !== undefined ? { weight } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+      ...normalizeOptionalStringFields(record, [
+        "evidenceKind",
+        "privacyTier",
+        "note",
+        "updatedAt",
+      ]),
+    };
+    return Object.keys(relationship).length > 0 ? [relationship] : [];
+  });
+}
+
+function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean {
+  if (!patterns[0]?.test(lines[0] ?? "") || (patterns[1] && !patterns[1].test(lines[1] ?? ""))) {
+    return false;
+  }
+  let patternIndex = 2;
+  for (const line of lines.slice(2)) {
+    const pattern = patterns[patternIndex];
+    if (!pattern) {
+      return true;
+    }
+    if (pattern.test(line)) {
+      patternIndex += 1;
+    }
+  }
+  return patternIndex === patterns.length;
+}
+
+const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
+
+function afterSourceContentFence(page: string): number {
+  const heading = SOURCE_CONTENT_HEADING.exec(page);
+  if (!heading) {
+    return 0;
+  }
+  const fenceLineStart = heading.index + heading[0].length;
+  const fence = /^`+/.exec(page.slice(fenceLineStart))?.[0];
+  if (!fence) {
+    return fenceLineStart;
+  }
+  const closingFence = new RegExp(`\\r?\\n${fence}(?=\\r?\\n|$)`, "u");
+  const close = closingFence.exec(page.slice(fenceLineStart + fence.length));
+  if (!close) {
+    return fenceLineStart;
+  }
+  return fenceLineStart + fence.length + close.index + close[0].length;
+}
+
+function findNotesHumanBlock(
+  page: string,
+  producerMarkdown = false,
+): { start: number; end: number } | null {
+  const bodyOffset = producerMarkdown
+    ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0)
+    : afterSourceContentFence(page);
+  // Code examples belong to the transcript/producer, never to the local Notes slot.
+  const searchable = maskMarkdownCode(page.slice(bodyOffset), true);
+  const start = searchable.indexOf(HUMAN_START_MARKER);
+  const endMarker = searchable.lastIndexOf(HUMAN_END_MARKER);
+  if (start === -1 && endMarker < 0) {
+    // Raw producer documents can have their own unmarked Notes heading.
+    if (producerMarkdown) {
+      return null;
+    }
+    const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
+      page.slice(bodyOffset),
+    );
+    if (!notesSection?.[1]?.trim()) {
+      return null;
+    }
+  }
+  if (start === -1 || endMarker < start) {
+    const missingMarker = start === -1 ? HUMAN_START_MARKER : HUMAN_END_MARKER;
+    throw new Error(
+      `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
+    );
+  }
+  return { start: bodyOffset + start, end: bodyOffset + endMarker + HUMAN_END_MARKER.length };
+}
+
+export function extractHumanNotesBlock(
+  page: string,
+  options?: { producerMarkdown?: boolean },
+): string | null {
+  const block = findNotesHumanBlock(page, options?.producerMarkdown);
+  if (!block) {
+    return null;
+  }
+  const notes = page.slice(
+    block.start + HUMAN_START_MARKER.length,
+    block.end - HUMAN_END_MARKER.length,
+  );
+  return notes.trim() ? page.slice(block.start, block.end) : null;
+}
+
+export function preserveHumanNotesBlock(
+  rendered: string,
+  existing: string,
+  options?: { producerMarkdown?: boolean },
+): string {
+  const existingBlock = findNotesHumanBlock(existing, options?.producerMarkdown);
+  const renderedBlock = findNotesHumanBlock(rendered, options?.producerMarkdown);
+  if (!existingBlock || !renderedBlock) {
+    return rendered;
+  }
+  return (
+    rendered.slice(0, renderedBlock.start) +
+    existing.slice(existingBlock.start, existingBlock.end) +
+    rendered.slice(renderedBlock.end)
+  );
+}
+
+const GENERATED_SOURCE_WRAPPERS: ReadonlyArray<{
+  kind: GeneratedSourceBody;
+  patterns: RegExp[];
+}> = [
+  {
+    kind: "bridge",
+    patterns: [/^# Memory Bridge(?:\s*\(|:)/u, /^## Bridge Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "unsafe-local",
+    patterns: [/^# Unsafe Local Import:/u, /^## Unsafe Local Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "local-file",
+    patterns: [/^#\s+\S/u, /^## Source\s*$/u, /^- Type: `local-file`\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "chatgpt-export",
+    patterns: [
+      /^# ChatGPT Export:/u,
+      /^## Source\s*$/u,
+      /^- Conversation id: `[^`]+`\s*$/u,
+      /^## Active Branch Transcript\s*$/u,
+    ],
+  },
+];
+
+function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
+  if (!markdown.includes(HUMAN_START_MARKER) || !markdown.includes(HUMAN_END_MARKER)) {
+    return undefined;
+  }
+  const lines = markdown
+    .replace(/\r\n?/g, "\n")
+    .trimStart()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
+  return GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
+    ?.kind;
+}
+
+function detectUnmanagedRawSourceBody(markdown: string): boolean {
+  const trimBlankLines = (value: string): string => value.replace(/^(?:[ \t]*\n)+/u, "");
+  const normalized = trimBlankLines(markdown.replace(/\r\n?/g, "\n"));
+  const withoutTitle = trimBlankLines(normalized.replace(/^#\s+.+?\s*\n/u, ""));
+  return (
+    normalized.startsWith(WIKI_RAW_SOURCE_MARKER) || withoutTitle.startsWith(WIKI_RAW_SOURCE_MARKER)
+  );
+}
+
+function hasWikiSourceFrontmatter(frontmatter: Record<string, unknown>): boolean {
+  return (
+    normalizeOptionalString(frontmatter.pageType) !== undefined ||
+    normalizeOptionalString(frontmatter.sourceType) !== undefined ||
+    normalizeOptionalString(frontmatter.provenanceMode) !== undefined
+  );
+}
+
+export function isUnmanagedRawSourceSummary(page: WikiPageSummary): boolean {
+  return (
+    page.kind === "source" && page.unmanagedRawSourceBody === true && !page.generatedSourceBody
+  );
+}
+
+export function formatWikiLink(params: {
+  renderMode: "native" | "obsidian";
+  relativePath: string;
+  sourceRelativeTo?: string;
+  title: string;
+}): string {
+  if (params.renderMode === "obsidian") {
+    return `[[${params.relativePath.replace(/\.md$/i, "")}|${params.title}]]`;
+  }
+  const linkTarget = params.sourceRelativeTo
+    ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
+    : params.relativePath;
+  // Angle brackets keep spaces and parentheses inside the link destination.
+  const destination = /[\s()<>]/.test(linkTarget)
+    ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
+    : linkTarget;
+  // Titles are metadata: unmatched brackets or a trailing backslash must not break the link.
+  const label = params.title.replace(/[\\[\]`]/g, "\\$&");
+  return `[${label}](${destination})`;
+}
+
+export function renderMarkdownFence(content: string, infoString = "text"): string {
+  let fenceSize = 3;
+  for (const match of content.matchAll(/`+/g)) {
+    fenceSize = Math.max(fenceSize, match[0].length + 1);
+  }
+  const fence = "`".repeat(fenceSize);
+  return `${fence}${infoString}\n${content}\n${fence}`;
+}
+
+function inferWikiPageKind(relativePath: string): WikiPageKind | null {
+  const normalized = relativePath.split(path.sep).join("/");
+  return WIKI_PAGE_GROUPS.find((group) => normalized.startsWith(`${group.dir}/`))?.kind ?? null;
+}
+
+export function scanWikiPageSummary(params: {
+  absolutePath: string;
+  relativePath: string;
+  raw: string;
+  /** Query readers do not need the compiler/lint link graph. */
+  includeLinks?: boolean;
+}): WikiPageSummaryScanResult {
+  const kind = inferWikiPageKind(params.relativePath);
+  if (!kind) {
+    return { status: "ignored" };
+  }
+  let parsed: ParsedWikiMarkdown;
+  try {
+    parsed = parseWikiMarkdown(params.raw);
+  } catch (error) {
+    // Vault scans exclude malformed pages from derived state, while direct parse callers
+    // stay strict so write paths cannot replace unparsed metadata with empty fields.
+    return {
+      status: "invalid-frontmatter",
+      error: {
+        relativePath: params.relativePath.split(path.sep).join("/"),
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+  const title =
+    (typeof parsed.frontmatter.title === "string" && parsed.frontmatter.title.trim()) ||
+    extractTitleFromMarkdown(parsed.body) ||
+    path.basename(params.relativePath, ".md");
+  const generatedSourceBody = detectGeneratedSourceBody(parsed.body);
+  const importedSourceBody =
+    generatedSourceBody === "bridge" || generatedSourceBody === "unsafe-local"
+      ? generatedSourceBody
+      : undefined;
+  const unmanagedRawSourceBody =
+    !generatedSourceBody &&
+    !hasWikiSourceFrontmatter(parsed.frontmatter) &&
+    detectUnmanagedRawSourceBody(parsed.body);
+
+  return {
+    status: "valid",
+    parsed,
+    page: {
+      absolutePath: params.absolutePath,
+      relativePath: params.relativePath.split(path.sep).join("/"),
+      kind,
+      title,
+      hasFrontmatter: parsed.hasFrontmatter,
+      id: normalizeOptionalString(parsed.frontmatter.id),
+      pageType: normalizeOptionalString(parsed.frontmatter.pageType),
+      entityType: normalizeOptionalString(parsed.frontmatter.entityType),
+      canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
+      aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
+      sourceIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.sourceIds),
+      linkTargets:
+        params.includeLinks === false
+          ? []
+          : extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
+      claims: normalizeWikiClaims(parsed.frontmatter.claims),
+      contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
+      questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
+      confidence: asFiniteNumber(parsed.frontmatter.confidence),
+      privacyTier: normalizeOptionalString(parsed.frontmatter.privacyTier),
+      personCard: normalizeWikiPersonCard(parsed.frontmatter.personCard),
+      relationships: normalizeWikiRelationships(parsed.frontmatter.relationships),
+      bestUsedFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bestUsedFor),
+      notEnoughFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.notEnoughFor),
+      sourceType: normalizeOptionalString(parsed.frontmatter.sourceType),
+      provenanceMode: normalizeOptionalString(parsed.frontmatter.provenanceMode),
+      ...(importedSourceBody ? { importedSourceBody } : {}),
+      ...(generatedSourceBody ? { generatedSourceBody } : {}),
+      ...(unmanagedRawSourceBody ? { unmanagedRawSourceBody } : {}),
+      sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
+      bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
+      bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
+      bridgeAgentIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bridgeAgentIds),
+      unsafeLocalConfiguredPath: normalizeOptionalString(
+        parsed.frontmatter.unsafeLocalConfiguredPath,
+      ),
+      unsafeLocalRelativePath: normalizeOptionalString(parsed.frontmatter.unsafeLocalRelativePath),
+      lastRefreshedAt: normalizeOptionalString(parsed.frontmatter.lastRefreshedAt),
+      updatedAt: normalizeOptionalString(parsed.frontmatter.updatedAt),
+    },
+  };
+}
+
+export function toWikiPageSummary(params: {
+  absolutePath: string;
+  relativePath: string;
+  raw: string;
+}): WikiPageSummary | null {
+  const result = scanWikiPageSummary(params);
+  return result.status === "valid" ? result.page : null;
+}
+
+class WikiPageNotUtf8Error extends Error {
+  constructor(displayPath: string) {
+    super(
+      `Wiki page is not valid UTF-8 and cannot be rewritten safely: ${displayPath}. ` +
+        "The file was left unchanged. Keep a byte-for-byte backup, convert a copy to UTF-8 with its original encoding, then retry.",
+    );
+    this.name = "WikiPageNotUtf8Error";
+  }
+}
+
+/**
+ * Decode vault page bytes for a whole-file rewrite. Compile and lint re-emit
+ * the full page from decoded text, so replacement-decodable bytes would be
+ * persisted back as U+FFFD over human content the update never touched (same
+ * rule as the edit/apply_patch tools, see src/agents/utf8-file.ts).
+ */
+export function decodeWikiPageUtf8(bytes: Buffer, displayPath: string): string {
+  if (!isUtf8(bytes)) {
+    throw new WikiPageNotUtf8Error(displayPath);
+  }
+  return bytes.toString("utf8");
+}

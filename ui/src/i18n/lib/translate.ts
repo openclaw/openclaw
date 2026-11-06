@@ -1,0 +1,284 @@
+import {
+  DEFAULT_LOCALE,
+  RTL_LOCALES,
+  SUPPORTED_LOCALES,
+  isSupportedLocale,
+  resolveNavigatorLocale,
+  type Locale,
+} from "../../../../src/shared/control-ui-locale.ts";
+import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
+import { en } from "../locales/en.ts";
+import { getLazyLocaleCatalog } from "./locale-catalog.ts";
+import { loadLazyLocaleTranslation } from "./registry.ts";
+import type { TranslationMap } from "./types.ts";
+
+function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
+  let value: unknown = map;
+  for (const key of keys) {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    value = Reflect.get(value, key);
+  }
+  return value;
+}
+
+type Subscriber = (locale: Locale) => void;
+type LocaleLoadRecovery = {
+  isUnrecoverableError: (error: unknown) => boolean;
+  onUnrecoverableLocaleLoad?: (locale: Locale) => void;
+};
+
+export { SUPPORTED_LOCALES, isSupportedLocale };
+
+function syncDocumentLocale(locale: Locale): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.documentElement.lang = locale;
+  document.documentElement.dir = RTL_LOCALES.includes(locale) ? "rtl" : "ltr";
+}
+
+class I18nManager {
+  private locale: Locale = DEFAULT_LOCALE;
+  private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
+  private subscribers: Set<Subscriber> = new Set();
+  // Locale chunks are served by the gateway, so a selection made while disconnected can fail.
+  // Preserve the target for the next connected transition; otherwise the chrome silently stays
+  // in the old language forever.
+  private pendingLocale: Locale | null = null;
+  private pendingLocaleShouldPersist = true;
+  // Only the latest selection may update retry state or become active after an async chunk load.
+  private localeRequestGeneration = 0;
+  // One chunk import per locale may be active. Settlement removes it so a
+  // disconnected/failed load remains retryable on the next connected transition.
+  private inFlightLocaleLoads = new Map<Locale, Promise<TranslationMap | null>>();
+  private localeLoadRecovery: LocaleLoadRecovery | undefined;
+  private observedNamespaceLoads = new WeakSet<Promise<void>>();
+
+  constructor() {
+    this.loadLocale();
+  }
+
+  private readStoredLocale(): string | null {
+    try {
+      return getSafeLocalStorage()?.getItem("openclaw.i18n.locale") ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private persistLocale(locale: Locale | null) {
+    const storage = getSafeLocalStorage();
+    if (!storage) {
+      return;
+    }
+    try {
+      if (locale === null) {
+        storage.removeItem("openclaw.i18n.locale");
+      } else {
+        storage.setItem("openclaw.i18n.locale", locale);
+      }
+    } catch {
+      // Ignore storage write failures in private/blocked contexts.
+    }
+  }
+
+  private loadLocale() {
+    const saved = this.readStoredLocale();
+    const shouldPersist = isSupportedLocale(saved);
+    const locale = shouldPersist ? saved : this.getSystemLocale();
+    if (locale === DEFAULT_LOCALE) {
+      this.locale = DEFAULT_LOCALE;
+      syncDocumentLocale(DEFAULT_LOCALE);
+      if (!shouldPersist) {
+        this.persistLocale(null);
+      }
+      return;
+    }
+    void this.applyLocale(locale, false, shouldPersist);
+  }
+
+  public getLocale(): Locale {
+    return this.locale;
+  }
+
+  public getRequestedLocale(): Locale {
+    return this.pendingLocale ?? this.locale;
+  }
+
+  public async prepareLocale(): Promise<void> {
+    let locale;
+    do {
+      locale = this.locale;
+      await this.prepareCatalog(locale);
+    } while (locale !== this.locale);
+  }
+
+  private prepareCatalog(locale: Locale): Promise<void> | undefined {
+    return getLazyLocaleCatalog(this.translations[locale]!)?.prepare(
+      this.translations[DEFAULT_LOCALE]!,
+    );
+  }
+
+  public getSystemLocale(): Locale {
+    const language =
+      typeof globalThis.navigator?.language === "string" ? globalThis.navigator.language : null;
+    return resolveNavigatorLocale(language ?? "");
+  }
+
+  public async setLocale(locale: Locale) {
+    return this.applyLocale(locale, false, true);
+  }
+
+  public async useSystemLocale() {
+    return this.applyLocale(this.getSystemLocale(), false, false);
+  }
+
+  private async applyLocale(locale: Locale, retrying: boolean, shouldPersist: boolean) {
+    const requestGeneration = ++this.localeRequestGeneration;
+    const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
+    if (!shouldPersist) {
+      // System mode is an unset preference. Clear it before any async chunk
+      // load so a failed load cannot resurrect the previous explicit locale.
+      this.persistLocale(null);
+    }
+    if (this.locale === locale && !needsTranslationLoad) {
+      this.pendingLocale = null;
+      if (shouldPersist) {
+        this.persistLocale(locale);
+      }
+      return;
+    }
+
+    if (locale !== DEFAULT_LOCALE) {
+      this.pendingLocale = locale;
+      this.pendingLocaleShouldPersist = shouldPersist;
+      try {
+        if (needsTranslationLoad) {
+          const translation = await getOrCreatePromise(
+            this.inFlightLocaleLoads,
+            locale,
+            () => loadLazyLocaleTranslation(locale),
+            { evictOnSettled: true },
+          );
+          if (!translation) {
+            return;
+          }
+          this.translations[locale] = translation;
+        }
+        await this.prepareCatalog(locale);
+      } catch (e) {
+        const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
+        if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
+          if (shouldPersist) {
+            this.persistLocale(locale);
+          }
+          this.localeLoadRecovery.onUnrecoverableLocaleLoad?.(locale);
+        }
+        console.error(`Failed to load locale: ${locale}`, e);
+        return;
+      }
+    }
+
+    if (this.localeRequestGeneration !== requestGeneration) {
+      return;
+    }
+    this.pendingLocale = null;
+    this.locale = locale;
+    syncDocumentLocale(locale);
+    if (shouldPersist) {
+      this.persistLocale(locale);
+    }
+    this.notify();
+  }
+
+  public retryPendingLocale(): void {
+    if (this.pendingLocale === null || this.pendingLocale === this.locale) {
+      return;
+    }
+    const target = this.pendingLocale;
+    const shouldPersist = this.pendingLocaleShouldPersist;
+    this.pendingLocale = null;
+    void this.applyLocale(target, true, shouldPersist);
+  }
+
+  public setLocaleLoadRecovery(recovery: LocaleLoadRecovery | undefined): void {
+    // Keep this leaf independent of app-level stale-chunk policy; the app injects both the
+    // error classifier and guarded recovery action.
+    this.localeLoadRecovery = recovery;
+  }
+
+  public registerTranslation(locale: Locale, map: TranslationMap) {
+    this.translations[locale] = map;
+  }
+
+  public subscribe(sub: Subscriber) {
+    this.subscribers.add(sub);
+    return () => this.subscribers.delete(sub);
+  }
+
+  private notify() {
+    this.subscribers.forEach((sub) => sub(this.locale));
+  }
+
+  private lookupActive(keys: readonly string[]): unknown {
+    const catalog = this.translations[this.locale];
+    const value = lookupTranslation(catalog, keys);
+    if (value !== undefined || !catalog) {
+      return value;
+    }
+    const namespace = keys[0]!;
+    const load = getLazyLocaleCatalog(catalog)?.load(namespace);
+    if (load && !this.observedNamespaceLoads.has(load)) {
+      this.observedNamespaceLoads.add(load);
+      void load.then(
+        () => {
+          if (this.translations[this.locale] === catalog) {
+            this.notify();
+          }
+        },
+        (error: unknown) => console.error(`Failed to load locale namespace: ${namespace}`, error),
+      );
+    }
+    return value;
+  }
+
+  public translateActive(key: string): string | undefined {
+    const value = this.lookupActive(key.split("."));
+    return typeof value === "string" ? value : undefined;
+  }
+
+  public t(key: string, params?: Record<string, string>): string {
+    const keys = key.split(".");
+    let value = this.lookupActive(keys);
+    if (value === undefined && this.locale !== DEFAULT_LOCALE) {
+      value = lookupTranslation(this.translations[DEFAULT_LOCALE], keys);
+    }
+
+    if (typeof value !== "string") {
+      return key;
+    }
+
+    if (params) {
+      // ?? not ||: an empty-string param is a provided value (render empty),
+      // while a missing param keeps the visible {placeholder} for debugging.
+      return value.replace(/\{(\w+)\}/g, (_, k) => params[k] ?? `{${k}}`);
+    }
+
+    return value;
+  }
+}
+
+export const i18n = new I18nManager();
+export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+export const translateActive = (key: string) => i18n.translateActive(key);
+
+if (import.meta.env?.MODE === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {
+    createI18nManager() {
+      return new I18nManager();
+    },
+  };
+}

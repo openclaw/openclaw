@@ -1,0 +1,728 @@
+// Runs post-plugin convergence checks without retaining pre-update plugin modules.
+import os from "node:os";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
+import {
+  isUpdateDoctorInspectionReportMode,
+  UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
+  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+  UPDATE_POST_CORE_CONVERGENCE_ENV,
+} from "../../commands/doctor/shared/update-phase.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
+import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
+import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
+import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
+import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
+import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
+import {
+  collectUpdateDoctorFailureFacts,
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  DoctorMaintenanceRefusalError,
+  PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  UpdateDoctorError,
+  UpdateDoctorDeferredInspectionCheckIdsSchema,
+  type UpdatePostInstallDoctorResult,
+} from "../../infra/update-doctor-result.js";
+import { UPDATE_DOCTOR_HISTORICAL_SCANS_ENV } from "../../infra/update-doctor-scan-receipts.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
+import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
+import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
+import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
+import { formatCommandOutput } from "../../process/command-error.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
+import { isPlainCommandExitFailure, type CommandOptions } from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
+import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
+import { createUpdateDoctorProgress } from "./progress.js";
+import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
+import { createUpdateCommandAuthority } from "./update-command-authority.js";
+import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
+import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import {
+  consumeUpdateDoctorHistoricalScans,
+  observeUpdateParentDatabaseWrites,
+  recordUpdateDatabaseWrites,
+} from "./update-command-database-receipts.js";
+import {
+  assertUpdateDoctorChildSucceeded,
+  inspectUpdateDoctorChildSupport,
+  runUpdateDoctorProcess,
+  withUpdateDoctorChild,
+} from "./update-command-doctor-child.js";
+import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { validatePostPluginConfigInFreshProcess } from "./update-command-post-plugin-config-check.js";
+import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
+import {
+  applyPostPluginConfigValidation,
+  POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+  type PostPluginConfigValidation,
+} from "./update-command-post-plugin-validation.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import {
+  disableUpdatedPackageCompileCacheEnv,
+  stripGatewayServiceMarkerEnv,
+  withUpdateEnv,
+} from "./update-command-service-env.js";
+import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
+
+export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
+  return await withUpdateEnv(
+    {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
+      [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+      [UPDATE_POST_CORE_CONVERGENCE_ENV]: undefined,
+    },
+    run,
+  );
+}
+
+// Isolated update-compat workers set this while serving an older release's updater
+// (scripts/lib/update-compat-isolated-bridge.mjs). That updater's executor fence was never
+// admitted by this runtime, so Doctor runs through the published CLI, not executor custody.
+const servesOlderUpdater = () =>
+  Reflect.get(globalThis, Symbol.for("openclaw.updateCompat.olderUpdater")) === true;
+
+export async function runUpdateFinalizationDoctorInFreshProcess(params: {
+  phase: "pre-plugin" | "post-plugin";
+  root: string;
+  runId?: string;
+  opts?: UpdateCommandOptions;
+  /** Only local candidate code may supply its known native Doctor contract. */
+  doctorCapabilities?: { doctorConfigWrites: true; doctorRetirementOnly: true };
+  retirementOnly?: true;
+  databaseBackup?: UpdateDatabaseBackup;
+  onDoctorStep?: (step: UpdateStepResult) => void;
+  yes: boolean;
+  json: boolean;
+  workspaceSuggestions?: boolean;
+  timeoutMs?: number;
+  serviceInspectionDeadlineAtMs?: number;
+  nodeRunner?: string;
+  entryPath?: string;
+  onWarnings?: (warnings: string[]) => void;
+  assertCurrent?: () => void;
+  /** Propagate a refused child authority to the finalization owner without retrying it. */
+  onAuthorityRefused?: () => void;
+}): Promise<PluginUpdateWarning | void> {
+  const requestedTimeoutMs = parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs;
+  const serviceInspectionDeadlineAtMs =
+    params.serviceInspectionDeadlineAtMs ??
+    (requestedTimeoutMs === undefined ? undefined : Date.now() + requestedTimeoutMs);
+  const remaining = createDoctorServiceInspectionBudget(serviceInspectionDeadlineAtMs);
+  const {
+    run,
+    executorFence,
+    runId,
+    requester,
+    assertCurrent,
+    assertRequesterCurrent,
+    refuseAuthority,
+  } = createUpdateCommandAuthority(params, "Fresh Doctor");
+  assertCurrent();
+  const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
+  if (!entryPath) {
+    throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
+  }
+  assertCurrent();
+  const args = [
+    entryPath,
+    "doctor",
+    "--repair",
+    "--non-interactive",
+    ...(params.workspaceSuggestions ? [] : ["--no-workspace-suggestions"]),
+    ...(params.yes ? ["--yes"] : []),
+  ];
+  const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
+  delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  delete baseEnv[UPDATE_DOCTOR_HISTORICAL_SCANS_ENV];
+  const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+  let doctorResult: UpdatePostInstallDoctorResult | null | undefined;
+  let doctorSettled = true;
+  let processSettlement: UpdateStepResult | undefined;
+  let result: { stdout?: unknown; stderr?: unknown } | undefined;
+  let warning: PluginUpdateWarning | undefined;
+  let failure: { error: unknown } | undefined;
+  const sectionTiming = createUpdateDoctorSectionTiming(process.env, createUpdateDoctorProgress());
+  let doctorStep: UpdateStepResult | undefined;
+  let doctorStartedAt: number | undefined;
+  assertCurrent();
+  try {
+    const commandOptions: CommandOptions = {
+      cwd: params.root,
+      timeoutMs: remaining(),
+      maxOutputBytes: 4 * 1024 * 1024,
+      terminateOnOutputLimit: true,
+      onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
+      baseEnv,
+      env: {
+        [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
+        ...((runId ?? params.runId) ? { [UPDATE_RUN_ID_ENV]: runId ?? params.runId } : {}),
+        // The outer updater owns service refresh and activation after every
+        // migration finishes; a fresh Doctor must not resume its parked service.
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          serviceRepairPolicy: "external",
+          deferConfiguredPluginInstallRepair: true,
+        }),
+        ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
+      },
+    };
+    const reusableScans =
+      params.phase === "post-plugin" && params.databaseBackup
+        ? consumeUpdateDoctorHistoricalScans(params.databaseBackup, {
+            ...baseEnv,
+            ...commandOptions.env,
+            ...sectionTiming.env,
+          })
+        : undefined;
+    if (reusableScans) {
+      commandOptions.env = {
+        ...commandOptions.env,
+        [UPDATE_DOCTOR_HISTORICAL_SCANS_ENV]: reusableScans,
+      };
+    }
+    const workerRuntime = params.nodeRunner ?? resolveNodeRunner();
+    const workerUrl = resolveRuntimeWorkerUrl({
+      ...runtimeProcessEntrypoints.updateMigratedFinalize,
+      root: params.root,
+    });
+    const workerCommand = [workerRuntime, ...resolveRuntimeWorkerArgv(workerUrl, workerRuntime)];
+    const doctorCapabilities = run
+      ? (params.doctorCapabilities ??
+        (await inspectUpdateDoctorChildSupport(
+          { workerUrl, argv: workerCommand },
+          {
+            cwd: params.root,
+            timeoutMs: remaining(),
+            baseEnv,
+            env: commandOptions.env,
+          },
+          assertCurrent,
+        )))
+      : undefined;
+    const doctorConfigWrites = doctorCapabilities?.doctorConfigWrites;
+    // The capability check above stays untraced; only the Doctor reports its sections.
+    const doctorOptions: CommandOptions = {
+      ...commandOptions,
+      env: { ...commandOptions.env, ...sectionTiming.env },
+    };
+    let doctorArgv: string[];
+    if (doctorConfigWrites && executorFence && runId && !servesOlderUpdater()) {
+      doctorArgv = [...workerCommand, "--doctor"];
+    } else {
+      if (
+        params.opts?.fullIntegrityCheck &&
+        (
+          await readUpdateTargetCliOptions(
+            {
+              nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+              entryPath,
+              command: "doctor",
+            },
+            { cwd: params.root, baseEnv, timeoutMs: params.timeoutMs },
+          )
+        ).has("--full-integrity-check")
+      ) {
+        args.push("--full-integrity-check");
+      }
+      const invocation = resolveOpenClawCliInvocation({
+        execPath: params.nodeRunner ?? resolveNodeRunner(),
+        entryPath,
+        execArgv: [],
+        args: args.slice(1),
+      });
+      doctorArgv = [invocation.command, ...invocation.args];
+    }
+    assertCurrent();
+    doctorStartedAt = Date.now();
+    doctorStep = {
+      name: `${params.phase} doctor`,
+      command: doctorArgv.join(" "),
+      cwd: params.root,
+      durationMs: 0,
+      exitCode: null,
+    };
+    let child: Awaited<ReturnType<typeof runUpdateDoctorProcess>>;
+    if (doctorConfigWrites && executorFence && runId && !servesOlderUpdater()) {
+      const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
+      assertCurrent();
+      if (params.databaseBackup) {
+        await observeUpdateParentDatabaseWrites(params.databaseBackup, {
+          env: baseEnv,
+          root: params.root,
+          assertCurrent,
+        });
+      }
+      child = await withUpdateDoctorChild(
+        {
+          root: params.root,
+          context: {
+            runId,
+            executorFence,
+            requester: requester?.requester,
+            assertRequesterCurrent,
+            onProcessSettlement: (step) => {
+              processSettlement = step;
+            },
+          },
+          input: {
+            configInputHash: snapshot.hash,
+            originalRecoveryCapture: run?.originalRecoveryCapture,
+            repair: true,
+            ...(params.retirementOnly && doctorCapabilities?.doctorRetirementOnly
+              ? { retirementOnly: true as const }
+              : {}),
+            fullIntegrityCheck: params.opts?.fullIntegrityCheck,
+            databaseGenerations:
+              params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
+            databasePluginOwners: params.databaseBackup?.pluginOwners,
+            get serviceInspectionDeadlineAtMs() {
+              const budget = remaining();
+              return budget === undefined ? undefined : Date.now() + budget;
+            },
+            yes: params.yes,
+            workspaceSuggestions: params.workspaceSuggestions === true,
+            ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"
+              ? { postCoreSchemaRepair: true as const }
+              : {}),
+          },
+        },
+        (runCommand) =>
+          sectionTiming.wrap(runCommand)(doctorArgv, { ...doctorOptions, timeoutMs: remaining() }),
+      );
+    } else {
+      // A valid legacy target contract retains its shipped CLI Doctor. This is
+      // capability selection, never recovery from missing or refused authority.
+      child = await sectionTiming.wrap((argv, options) =>
+        runUpdateDoctorProcess(
+          {
+            root: params.root,
+            runId: runId ?? params.runId ?? "",
+            onProcessSettlement: (step) => {
+              processSettlement = step;
+            },
+          },
+          argv,
+          options,
+        ),
+      )(doctorArgv, { ...doctorOptions, timeoutMs: remaining() });
+    }
+    result = child;
+    doctorStep.exitCode = child.code;
+    assertUpdateDoctorChildSucceeded(child);
+    assertCurrent();
+  } catch (error) {
+    failure = { error };
+    if (doctorStep && isRecord(error) && typeof error.exitCode === "number") {
+      doctorStep.exitCode = error.exitCode;
+    }
+  } finally {
+    if (doctorStep && doctorStartedAt !== undefined) {
+      doctorStep.durationMs = Date.now() - doctorStartedAt;
+    }
+  }
+  const commandFailure = failure;
+  if (failure) {
+    const error = failure.error;
+    failure = undefined;
+    try {
+      if (
+        hasCommandProcessCleanupError(error) ||
+        (isRecord(error) && error.cleanup === "uncertain")
+      ) {
+        doctorSettled = false;
+        throw new CommandProcessCleanupError({ cause: error });
+      }
+      if (
+        collectNestedErrorCandidates(error).some(
+          (cause) =>
+            cause instanceof UpdateCommandRecoveryPendingError ||
+            cause instanceof UpdateRequesterRevokedError,
+        )
+      ) {
+        refuseAuthority(error);
+      }
+      assertCurrent();
+      doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+      if (
+        doctorResult?.configWriteRefusal?.reason === "authority-check-failed" ||
+        doctorResult?.configWriteRefusal?.reason === "requester-revoked"
+      ) {
+        refuseAuthority(error);
+      }
+      if (isRecord(error)) {
+        result = {
+          ...error,
+          ...(typeof error.stderr === "string"
+            ? { stderr: sectionTiming.stripTrace(error.stderr) }
+            : {}),
+        };
+      }
+      // The existing result channel identifies a settled deferred repair. Plugin
+      // convergence still owns that repair; other exits retain their failure.
+      const deferred =
+        isRecord(error) &&
+        error.exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
+        isPlainCommandExitFailure({
+          ...error,
+          failed: error.failed === true,
+          cause: error.cause,
+        }) &&
+        doctorResult?.status === "advisory";
+      if (deferred && doctorStep) {
+        doctorStep.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
+      }
+      if (!deferred) {
+        const exitCode =
+          isRecord(error) && typeof error.exitCode === "number" ? error.exitCode : null;
+        const redaction = { env: process.env, stateDir: resolveStateDir() };
+        const failureFacts = doctorResult?.configWriteRefusal
+          ? [
+              createUpdateFailureFact({
+                check: "config-write",
+                code: doctorResult.configWriteRefusal.reason,
+                message: doctorResult.configWriteRefusal.message,
+              }),
+            ]
+          : doctorResult?.failureFacts?.length
+            ? doctorResult.failureFacts
+            : [
+                createUpdateFailureFact({
+                  check: "doctor",
+                  code: "doctor-failed",
+                  message:
+                    typeof result?.stderr === "string" && result.stderr.trim()
+                      ? result.stderr
+                      : error instanceof Error
+                        ? error.message
+                        : String(error),
+                }),
+              ];
+        const details = (["stderr", "stdout"] as const).flatMap((stream) => {
+          const output = result?.[stream];
+          if (typeof output !== "string" || !output.trim()) {
+            return [];
+          }
+          // Execa's message starts with full argv. Keep both actual diagnostics before
+          // the bounded update handoff, without cutting a credential before redaction.
+          const redacted = redactSupportString(output, redaction, {
+            maxLength: Number.MAX_SAFE_INTEGER,
+          });
+          const formatted = formatCommandOutput(redacted, 384);
+          let excerpt = formatted;
+          if (Buffer.byteLength(redacted) > 384 || Buffer.byteLength(formatted) > 384) {
+            const beginning = formatCommandOutput(truncateUtf8Prefix(redacted, 256), 256);
+            excerpt = `${truncateUtf8Prefix(beginning, 256)}\n...\n${truncateUtf8Suffix(formatted, 123)}`;
+          }
+          return excerpt ? [`${stream}: ${excerpt}`] : [];
+        });
+        const message = details.length
+          ? `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        if (
+          doctorResult?.status === "error" &&
+          doctorResult.maintenanceRefusal?.kind === "data-at-risk"
+        ) {
+          throw new DoctorMaintenanceRefusalError(message, doctorResult.maintenanceRefusal, {
+            cause: error,
+            failureFacts,
+          });
+        }
+        // Explicit writer/migration refusals and unsettled writers retain their safety decision.
+        // An execution failure alone does not establish that installed state is unsafe.
+        if (
+          params.phase === "post-plugin" &&
+          !(isRecord(error) && error.isCanceled === true) &&
+          failureFacts.every((fact) => fact.check === "doctor" && fact.code === "doctor-failed")
+        ) {
+          warning = {
+            reason: "doctor-advisory",
+            // The ledger truncates this message; keep the next step ahead of the output.
+            message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}. Run \`openclaw update repair\` to retry post-update plugin repair.\n${message}`,
+            guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+          };
+          if (doctorStep) {
+            doctorStep.advisory = { kind: "recoverable-maintenance", message: warning.message };
+          }
+        } else {
+          throw new UpdateDoctorError(message, failureFacts, { cause: error, exitCode });
+        }
+      }
+    } catch (classificationError) {
+      failure = { error: classificationError };
+    }
+  }
+  try {
+    if (doctorSettled && doctorResult === undefined) {
+      doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    }
+    if (doctorResult?.status === "ok" && doctorResult.maintenanceRefusal) {
+      const refusal = new DoctorMaintenanceRefusalError(
+        doctorResult.warnings?.[0] ??
+          "Doctor maintenance remains pending; run openclaw doctor --fix.",
+        doctorResult.maintenanceRefusal,
+        { cause: commandFailure?.error, failureFacts: doctorResult.failureFacts },
+      );
+      failure = {
+        error: failure
+          ? new AggregateError([failure.error, refusal], "Doctor maintenance remains refused", {
+              cause: failure.error,
+            })
+          : refusal,
+      };
+    }
+    // Install the child's postimage before completion callbacks persist parent ledger writes.
+    const databaseReceipt = params.databaseBackup
+      ? recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, {
+          name: `${params.phase} doctor`,
+        })
+      : undefined;
+    if (processSettlement) {
+      params.onDoctorStep?.(processSettlement);
+    }
+    // Missing reports must replace earlier selector facts, including from older Doctors.
+    if (doctorStep) {
+      sectionTiming.annotate(doctorStep);
+      doctorStep.deferredInspectionCheckIds = doctorResult?.deferredInspectionCheckIds ?? null;
+      params.onDoctorStep?.(doctorStep);
+    }
+    if (databaseReceipt) {
+      params.onDoctorStep?.(databaseReceipt);
+    }
+    if (doctorResult?.warnings?.length) {
+      params.onWarnings?.(doctorResult.warnings);
+    }
+    // Clack writes directly to the child's stdout. Preserve diagnostics on either
+    // exit path without letting them share the parent's JSON result stream.
+    if (typeof result?.stdout === "string" && result.stdout.trim()) {
+      defaultRuntime[params.json ? "error" : "log"](result.stdout.trimEnd());
+    }
+    if (typeof result?.stderr === "string" && result.stderr.trim()) {
+      defaultRuntime.error(result.stderr.trimEnd());
+    }
+  } catch (error) {
+    failure = {
+      error: failure
+        ? new AggregateError([failure.error, error], "Doctor result recording failed", {
+            cause: error,
+          })
+        : error,
+    };
+  }
+  if (failure) {
+    throw failure.error;
+  }
+  return warning;
+}
+
+export async function completePostCorePluginUpdate(
+  params: Omit<
+    Parameters<typeof runUpdateFinalizationDoctorInFreshProcess>[0],
+    "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused" | "retirementOnly"
+  > & {
+    pluginUpdate: PostCorePluginUpdateResult;
+    beforeDoctor?: () => Promise<void>;
+  },
+): Promise<{
+  pluginUpdate: PostCorePluginUpdateResult;
+  configSnapshot: ConfigFileSnapshot;
+}> {
+  // Preserve the first refused assertion; Doctor error handling cannot retry it.
+  let authorityFailed = false;
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      authorityFailed = true;
+      throw error;
+    }
+  };
+  assertCurrent();
+  let pluginUpdate = params.pluginUpdate;
+  let entryPath: string | undefined;
+  let freshConfigValidation: PostPluginConfigValidation | undefined;
+  let includeOptionalInspections = false;
+  if (pluginUpdate.status !== "error") {
+    try {
+      entryPath = await resolveGatewayInstallEntrypoint(params.root);
+      assertCurrent();
+      if (!entryPath) {
+        throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
+      }
+      const freshDoctorRequired =
+        pluginUpdate.changed ||
+        hasDeferredUpdateModelRetirement(
+          params.opts?.run?.env,
+          params.opts?.run?.runId ?? params.runId,
+        ) ||
+        (await readDeferredPluginMigrationsAsync()).length > 0;
+      assertCurrent();
+      if (freshDoctorRequired) {
+        await params.beforeDoctor?.();
+        let inspectionCheckIds: string[] | null | undefined;
+        const warning = await runUpdateFinalizationDoctorInFreshProcess({
+          ...params,
+          ...(!pluginUpdate.changed ? { retirementOnly: true as const } : {}),
+          onDoctorStep: (step) => {
+            if (step.deferredInspectionCheckIds !== undefined) {
+              inspectionCheckIds = step.deferredInspectionCheckIds;
+            }
+            params.onDoctorStep?.(step);
+          },
+          assertCurrent,
+          onAuthorityRefused: () => {
+            authorityFailed = true;
+          },
+          entryPath,
+          phase: "post-plugin",
+        });
+        // A child without usable selectors cannot leave diagnostics for after ready.
+        includeOptionalInspections =
+          isUpdateDoctorInspectionReportMode(process.env) &&
+          !UpdateDoctorDeferredInspectionCheckIdsSchema.safeParse(inspectionCheckIds).success;
+        if (warning) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+            warnings: [...(pluginUpdate.warnings ?? []), warning],
+          };
+        }
+        const pending = await readDeferredPluginMigrationsAsync();
+        assertCurrent();
+        if (pending.length > 0) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            warnings: [
+              ...(pluginUpdate.warnings ?? []),
+              ...pending.map((migration) => ({
+                pluginId: migration.pluginId,
+                reason: "doctor-advisory",
+                // This is the final outcome, so do not tell operators to wait for this update.
+                message: formatDeferredPluginMigration(migration, {}),
+                guidance: [
+                  `Run "${migration.command}" to finish the plugin data/settings upgrade.`,
+                ],
+              })),
+            ],
+          };
+        }
+      }
+    } catch (err) {
+      if (
+        authorityFailed ||
+        hasCommandProcessCleanupError(err) ||
+        collectNestedErrorCandidates(err).some(
+          (cause) => cause instanceof DoctorMaintenanceRefusalError,
+        )
+      ) {
+        throw err;
+      }
+      // Lost updater authority must not become an advisory that starts more children.
+      assertCurrent();
+      const failedUpdate = params.pluginUpdate;
+      const reason = String(err);
+      const failureFacts = collectUpdateDoctorFailureFacts(err);
+      pluginUpdate = {
+        ...failedUpdate,
+        status: "error",
+        reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+        ...(failureFacts.length ? { failureFacts } : {}),
+        warnings: [
+          ...(failedUpdate.warnings ?? []),
+          {
+            reason,
+            message: `Post-update plugin Doctor did not complete: ${reason}`,
+            guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+          },
+        ],
+      };
+    }
+  }
+
+  assertCurrent();
+  // The target owns state writes and its version stamp. Read context without
+  // migrating target stores or warning about this parent's expected version skew.
+  const configSnapshot = await withUpdateEnv({ OPENCLAW_UPDATE_IN_PROGRESS: "0" }, () =>
+    readConfigFileSnapshot({ observe: false, suppressFutureVersionWarning: true }),
+  );
+  assertCurrent();
+  if (entryPath) {
+    let checkTimeoutMs = params.timeoutMs;
+    if (checkTimeoutMs === undefined) {
+      // Doctor can grow shared and agent stores. Measure once after its writes settle.
+      const env = { ...process.env };
+      const databases = await collectStateDatabasePaths(
+        { stateDir: resolveStateDir(env), config: configSnapshot.sourceConfig, env },
+        { includeUnconfiguredAgents: false },
+      );
+      assertCurrent();
+      checkTimeoutMs = resolveAggregateSqliteInspectionTimeoutMs(
+        "post-plugin checks",
+        await readUpdateStateDatabaseSizes(
+          Array.from(databases.values(), (database) => database.spellings[0]),
+          { nodeRunner: process.execPath, sourceEnv: env, stagingRoot: os.tmpdir() },
+        ),
+      );
+    }
+    assertCurrent();
+    // No authored file is a valid unconfigured install, not an invalid config.
+    // Existing files still need the target schema; every install needs readiness.
+    freshConfigValidation =
+      !configSnapshot.exists && configSnapshot.valid
+        ? { status: "valid" }
+        : await validatePostPluginConfigInFreshProcess({
+            ...params,
+            entryPath,
+            timeoutMs: checkTimeoutMs,
+          });
+    assertCurrent();
+    if (freshConfigValidation.status === "valid") {
+      pluginUpdate = await applyPostPluginUpdateReadiness({
+        root: params.root,
+        entryPath,
+        pluginUpdate,
+        timeoutMs: checkTimeoutMs,
+        includeOptionalInspections,
+        ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
+      });
+    }
+  }
+  assertCurrent();
+  // Strict validity belongs to the target runtime even when no plugin changed.
+  // The parent may retain the previous schema; its snapshot is best-effort context.
+  if (freshConfigValidation) {
+    pluginUpdate = applyPostPluginConfigValidation(pluginUpdate, freshConfigValidation);
+  }
+  return { pluginUpdate, configSnapshot };
+}

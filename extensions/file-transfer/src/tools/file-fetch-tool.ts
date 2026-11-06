@@ -1,0 +1,99 @@
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import {
+  FILE_FETCH_DEFAULT_MAX_BYTES,
+  FILE_FETCH_HARD_MAX_BYTES,
+} from "../shared/file-fetch-protocol.js";
+import { IMAGE_MIME_INLINE_SET, TEXT_INLINE_MAX_BYTES } from "../shared/mime.js";
+import { humanSize } from "../shared/params.js";
+import { FILE_FETCH_TOOL_DESCRIPTOR, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
+import { decodeFetchPayload } from "./fetch-payload.js";
+import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
+
+export function createFileFetchTool(): AnyAgentTool {
+  return {
+    ...FILE_FETCH_TOOL_DESCRIPTOR,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const { node, requestedPath: filePath } = readRequiredNodePath(params);
+      const requestedMax =
+        readPositiveIntegerParam(params, "maxBytes") ?? FILE_FETCH_DEFAULT_MAX_BYTES;
+      const maxBytes = Math.max(1, Math.min(requestedMax, FILE_FETCH_HARD_MAX_BYTES));
+
+      const { audit, payload } = await invokeNodeToolPayload({
+        node,
+        params,
+        command: "file.fetch",
+        commandParams: {
+          path: filePath,
+          maxBytes,
+        },
+        requestedPath: filePath,
+      });
+
+      const { canonicalPath, size, mimeType, base64, sha256, buffer } = decodeFetchPayload(
+        "file.fetch",
+        payload,
+      );
+
+      const saved = await saveMediaBuffer(
+        buffer,
+        mimeType,
+        FILE_TRANSFER_SUBDIR,
+        FILE_FETCH_HARD_MAX_BYTES,
+        canonicalPath,
+      );
+      const localPath = saved.path;
+      const shortHash = sha256.slice(0, 12);
+
+      // Extension-derived image MIME can accompany an empty payload when there
+      // are no bytes to sniff. Keep those fetches on the saved-path text fallback.
+      const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType) && base64.length > 0;
+      const isInlineText =
+        size <= TEXT_INLINE_MAX_BYTES &&
+        (mimeType.startsWith("text/") ||
+          mimeType === "application/json" ||
+          mimeType === "application/xml" ||
+          mimeType === "application/yaml");
+
+      // Direct model adapters read content, not details. Keep the saved handles
+      // alongside every payload so follow-up operations need no extra lookup.
+      let summaryText = `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\nmediaId: ${saved.id}`;
+      if (isInlineText) {
+        const decodedText = buffer.toString("utf-8");
+        const text = decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText;
+        summaryText += `\n\n--- contents ---\n${text}`;
+      }
+      const content: Array<
+        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+      > = [{ type: "text", text: wrapExternalContent(summaryText, { source: "unknown" }) }];
+      if (isInlineImage) {
+        content.push({ type: "image", data: base64, mimeType });
+      }
+
+      await audit({
+        canonicalPath,
+        decision: "allowed",
+        sizeBytes: size,
+        sha256,
+      });
+
+      return {
+        content,
+        details: {
+          path: canonicalPath,
+          size,
+          mimeType,
+          sha256,
+          localPath,
+          mediaId: saved.id,
+          media: {
+            mediaUrls: [localPath],
+          },
+        },
+      };
+    },
+  };
+}

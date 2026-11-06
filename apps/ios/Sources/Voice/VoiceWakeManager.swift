@@ -1,0 +1,472 @@
+import AVFAudio
+import Foundation
+import Observation
+import Speech
+import SwabbleKit
+
+private enum VoiceWakeAudioError: LocalizedError {
+    case invalidInputFormat
+
+    var errorDescription: String? {
+        String(localized: "Microphone input format unavailable")
+    }
+}
+
+enum VoiceWakeSuppressionReason: Hashable {
+    case auxiliaryAudio
+    case background
+    case talk
+    case pushToTalk
+    case voiceNote
+}
+
+@MainActor
+@Observable
+final class VoiceWakeManager {
+    var isEnabled: Bool = false
+    var isListening: Bool = false
+    var statusText: String = "Off"
+    var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
+    var lastTriggeredCommand: String?
+
+    private let audioEngine = AVAudioEngine()
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var recognitionGeneration: UInt64 = 0
+    private var scheduledStartTask: Task<Void, Never>?
+    private var commandTask: Task<Void, Never>?
+    private var isStarting: Bool = false
+    private var audioSessionIsActive = false
+
+    private var lastDispatched: (generation: UInt64, command: String)?
+    private var onCommand: (@MainActor @Sendable (String) async throws -> Void)?
+    private var userDefaultsObserver: NSObjectProtocol?
+    private var suppressionReasons: Set<VoiceWakeSuppressionReason> = []
+
+    private let recognitionErrorRestartDelayNs: UInt64
+    private let audioSessionDeactivationAction: (@MainActor () throws -> Void)?
+
+    convenience init() {
+        self.init(recognitionErrorRestartDelayNs: 700_000_000, audioSessionDeactivationAction: nil)
+    }
+
+    private init(
+        recognitionErrorRestartDelayNs: UInt64,
+        audioSessionDeactivationAction: (@MainActor () throws -> Void)?)
+    {
+        self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
+        self.audioSessionDeactivationAction = audioSessionDeactivationAction
+        self.userDefaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard,
+            queue: .main,
+            using: { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleUserDefaultsDidChange()
+                }
+            })
+    }
+
+    @MainActor deinit {
+        if let userDefaultsObserver = self.userDefaultsObserver {
+            NotificationCenter.default.removeObserver(userDefaultsObserver)
+        }
+    }
+
+    var activeTriggerWords: [String] {
+        VoiceWakePreferences.sanitizeTriggerWords(self.triggerWords)
+    }
+
+    private func handleUserDefaultsDidChange() {
+        let updated = VoiceWakePreferences.loadTriggerWords()
+        if updated != self.triggerWords {
+            self.triggerWords = updated
+        }
+    }
+
+    func configure(onCommand: @escaping @MainActor @Sendable (String) async throws -> Void) {
+        self.onCommand = onCommand
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        self.isEnabled = enabled
+        if enabled {
+            self.scheduleStart()
+        } else {
+            self.stop()
+        }
+    }
+
+    func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
+        if suppressed {
+            self.suppressionReasons.insert(reason)
+        } else {
+            self.suppressionReasons.remove(reason)
+        }
+
+        // Each microphone owner clears only its own reason, so Talk ending
+        // cannot restart Voice Wake over an active voice-note recording.
+        if !self.suppressionReasons.isEmpty {
+            self.cancelScheduledStart()
+            let hasRecognitionPipeline = self.isListening ||
+                self.recognitionRequest != nil ||
+                self.recognitionTask != nil ||
+                self.commandTask != nil ||
+                self.audioSessionIsActive ||
+                self.audioEngine.isRunning
+            if hasRecognitionPipeline {
+                self.isListening = false
+                self.tearDownRecognitionPipeline()
+            }
+            if self.isEnabled {
+                self.statusText = String(localized: "Paused")
+            }
+        } else if self.isEnabled {
+            self.scheduleStart()
+        }
+    }
+
+    private func scheduleStart(after delayNs: UInt64 = 0) {
+        guard self.isEnabled else { return }
+
+        self.scheduledStartTask?.cancel()
+        self.scheduledStartTask = Task { [weak self] in
+            if delayNs > 0 {
+                try? await Task.sleep(nanoseconds: delayNs)
+            }
+            guard !Task.isCancelled else { return }
+            self?.scheduledStartTask = nil
+            await self?.start()
+        }
+    }
+
+    private func cancelScheduledStart() {
+        self.scheduledStartTask?.cancel()
+        self.scheduledStartTask = nil
+    }
+
+    func start() async {
+        guard self.isEnabled else { return }
+        if self.isListening { return }
+        if self.isStarting { return }
+
+        self.isStarting = true
+        defer { self.isStarting = false }
+
+        guard self.suppressionReasons.isEmpty else {
+            self.isListening = false
+            self.statusText = String(localized: "Paused")
+            return
+        }
+
+        if ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] != nil ||
+            ProcessInfo.processInfo.environment["SIMULATOR_UDID"] != nil
+        {
+            // The iOS Simulator’s audio stack is unreliable for long-running microphone capture.
+            // (We’ve observed CoreAudio deadlocks after TCC permission prompts.)
+            self.isListening = false
+            self.statusText = String(localized: "Voice Wake isn’t supported on Simulator")
+            return
+        }
+
+        self.statusText = String(localized: "Requesting permissions…")
+
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission()
+        guard micOk else {
+            self.statusText = Self.microphonePermissionMessage(
+                kind: String(localized: "Microphone"))
+            self.isListening = false
+            return
+        }
+
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission()
+        guard speechOk else {
+            self.statusText = VoicePermissionSupport.speechPermissionMessage(
+                kind: String(localized: "Speech recognition"),
+                status: SFSpeechRecognizer.authorizationStatus())
+            self.isListening = false
+            return
+        }
+
+        self.speechRecognizer = SFSpeechRecognizer()
+        guard self.speechRecognizer != nil else {
+            self.statusText = String(localized: "Speech recognizer unavailable")
+            self.isListening = false
+            return
+        }
+
+        guard self.isEnabled, self.suppressionReasons.isEmpty else {
+            self.isListening = false
+            self.statusText = self.isEnabled
+                ? String(localized: "Paused")
+                : String(localized: "Off")
+            return
+        }
+
+        do {
+            try self.configureOwnedAudioSession()
+            try self.startRecognition()
+            self.isListening = true
+            self.statusText = String(localized: "Listening")
+        } catch {
+            self.isListening = false
+            self.tearDownRecognitionPipeline()
+            self.statusText = String(
+                format: String(localized: "Start failed: %@"),
+                error.localizedDescription)
+        }
+    }
+
+    func stop() {
+        self.isEnabled = false
+        self.isListening = false
+        self.statusText = String(localized: "Off")
+        self.cancelScheduledStart()
+        self.tearDownRecognitionPipeline()
+    }
+
+    private func startRecognition() throws {
+        guard self.isEnabled, self.suppressionReasons.isEmpty else { return }
+
+        self.invalidatePendingCommand()
+        self.recognitionGeneration &+= 1
+        let recognitionGeneration = self.recognitionGeneration
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        self.recognitionRequest = request
+
+        let inputNode = self.audioEngine.inputNode
+        inputNode.removeTap(onBus: 0)
+
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            throw VoiceWakeAudioError.invalidInputFormat
+        }
+
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: recordingFormat,
+            block: SpeechRecognitionAudioTap.make(request: request))
+
+        self.audioEngine.prepare()
+        try self.audioEngine.start()
+
+        let handler = self.makeRecognitionResultHandler(recognitionGeneration: recognitionGeneration)
+        self.recognitionTask = self.speechRecognizer?.recognitionTask(with: request, resultHandler: handler)
+    }
+
+    private func tearDownRecognitionPipeline() {
+        // Speech can deliver buffered results after cancellation. Retire the
+        // callback owner before any task or audio teardown begins.
+        self.recognitionGeneration &+= 1
+        self.invalidatePendingCommand()
+        let hadRecognitionPipeline = self.recognitionRequest != nil
+
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+
+        if self.audioEngine.isRunning {
+            self.audioEngine.stop()
+        }
+        if hadRecognitionPipeline {
+            // Accessing inputNode initializes RemoteIO. Only touch it after
+            // startRecognition created a request and may have installed a tap.
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        self.recognitionRequest = nil
+
+        self.deactivateOwnedAudioSession()
+    }
+
+    private nonisolated func makeRecognitionResultHandler(
+        recognitionGeneration: UInt64) -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void
+    {
+        { [weak self] result, error in
+            let transcript = result?.bestTranscription.formattedString
+            let segments = result.map { result in
+                WakeWordSpeechSegments.from(
+                    transcription: result.bestTranscription,
+                    transcript: result.bestTranscription.formattedString)
+            } ?? []
+            let errorText = error?.localizedDescription
+
+            Task { @MainActor in
+                self?.handleRecognitionCallback(
+                    transcript: transcript,
+                    segments: segments,
+                    errorText: errorText,
+                    recognitionGeneration: recognitionGeneration)
+            }
+        }
+    }
+
+    private func handleRecognitionCallback(
+        transcript: String?,
+        segments: [WakeWordSegment],
+        errorText: String?,
+        recognitionGeneration: UInt64)
+    {
+        guard self.recognitionGeneration == recognitionGeneration else { return }
+        if let errorText {
+            self.statusText = String(
+                format: String(localized: "Recognizer error: %@"),
+                errorText)
+            self.isListening = false
+            self.tearDownRecognitionPipeline()
+            self.scheduleStart(after: self.recognitionErrorRestartDelayNs)
+            return
+        }
+
+        guard let transcript else { return }
+        guard let cmd = Self.extractCommand(
+            from: transcript, segments: segments, triggers: self.activeTriggerWords)
+        else { return }
+
+        if self.lastDispatched?.generation == recognitionGeneration,
+           self.lastDispatched?.command == cmd { return }
+        self.lastDispatched = (recognitionGeneration, cmd)
+        self.lastTriggeredCommand = cmd
+        self.statusText = String(localized: "Triggered")
+
+        self.commandTask?.cancel()
+        self.commandTask = Task { @MainActor [weak self] in
+            guard let self,
+                  self.isCurrentCommand(recognitionGeneration: recognitionGeneration)
+            else { return }
+            defer {
+                if !Task.isCancelled {
+                    self.commandTask = nil
+                }
+            }
+            do {
+                try await self.onCommand?(cmd)
+            } catch {
+                guard !(error is CancellationError), self.isCurrentCommand(
+                    recognitionGeneration: recognitionGeneration)
+                else { return }
+                self.statusText = error.localizedDescription
+                return
+            }
+            guard self.isCurrentCommand(recognitionGeneration: recognitionGeneration)
+            else { return }
+            self.scheduleStart()
+        }
+    }
+
+    private func isCurrentCommand(recognitionGeneration: UInt64) -> Bool {
+        !Task.isCancelled &&
+            self.recognitionGeneration == recognitionGeneration &&
+            self.isEnabled &&
+            self.suppressionReasons.isEmpty
+    }
+
+    func invalidatePendingCommand() {
+        self.commandTask?.cancel()
+        self.commandTask = nil
+    }
+
+    nonisolated static func extractCommand(
+        from transcript: String,
+        segments: [WakeWordSegment],
+        triggers: [String],
+        minPostTriggerGap: TimeInterval = 0.45) -> String?
+    {
+        let config = WakeWordGateConfig(triggers: triggers, minPostTriggerGap: minPostTriggerGap)
+        return WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command
+    }
+
+    private func configureOwnedAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .measurement, options: [
+            .duckOthers,
+            .mixWithOthers,
+            .allowBluetoothHFP,
+            .defaultToSpeaker,
+        ])
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
+        try session.setActive(true, options: [])
+        self.audioSessionIsActive = true
+    }
+
+    private func deactivateOwnedAudioSession() {
+        guard self.audioSessionIsActive else { return }
+        do {
+            if let audioSessionDeactivationAction {
+                try audioSessionDeactivationAction()
+            } else {
+                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
+            self.audioSessionIsActive = false
+        } catch {
+            // Retain ownership so a later teardown retries instead of claiming
+            // the shared session was released when AVAudioSession rejected it.
+        }
+    }
+
+    private nonisolated static func microphonePermissionMessage(kind: String) -> String {
+        let status = AVAudioApplication.shared.recordPermission
+        if status == .undetermined {
+            return String(
+                format: String(localized: "%@ permission not granted"),
+                kind)
+        }
+        return String(
+            format: String(localized: "%@ permission denied"),
+            kind)
+    }
+}
+
+#if DEBUG
+extension VoiceWakeManager {
+    static func _test_withoutRestartDelays(
+        audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil) -> VoiceWakeManager
+    {
+        VoiceWakeManager(
+            recognitionErrorRestartDelayNs: 0,
+            audioSessionDeactivationAction: audioSessionDeactivationAction)
+    }
+
+    func _test_handleRecognitionCallback(
+        transcript: String?,
+        segments: [WakeWordSegment],
+        errorText: String?,
+        recognitionGeneration: UInt64? = nil)
+    {
+        self.handleRecognitionCallback(
+            transcript: transcript,
+            segments: segments,
+            errorText: errorText,
+            recognitionGeneration: recognitionGeneration ?? self.recognitionGeneration)
+    }
+
+    func _test_recognitionGeneration() -> UInt64 {
+        self.recognitionGeneration
+    }
+
+    func _test_setAudioSessionIsActive(_ isActive: Bool) {
+        self.audioSessionIsActive = isActive
+    }
+
+    func _test_isSuppressedByPushToTalk() -> Bool {
+        self.suppressionReasons.contains(.pushToTalk)
+    }
+
+    func _test_isSuppressedForBackground() -> Bool {
+        self.suppressionReasons.contains(.background)
+    }
+
+    func _test_isSuppressedForAuxiliaryAudio() -> Bool {
+        self.suppressionReasons.contains(.auxiliaryAudio)
+    }
+
+    func _test_waitForScheduledStart() async {
+        let task = self.scheduledStartTask
+        await task?.value
+    }
+}
+#endif

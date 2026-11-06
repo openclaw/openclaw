@@ -1,0 +1,443 @@
+---
+summary: "How OpenClaw remembers things across sessions"
+title: "Memory overview"
+read_when:
+  - You want to understand how memory works
+  - You want to know what memory files to write
+---
+
+OpenClaw remembers things by writing plain Markdown files in your agent's
+workspace (default `~/.openclaw/workspace`). The model only remembers what gets
+saved to disk; there is no hidden state.
+
+Workspace `USER.md` and `MEMORY.md` context does not require a memory search
+plugin to implement provenance classification. When that optional capability is
+missing, OpenClaw uses its workspace provenance records. Files recorded as
+untrusted and remote files without a valid read-source identity remain excluded.
+The Gateway logs one warning per excluded file and process (`excluding MEMORY.md
+from automatic memory context: memory provenance is untrusted`), and
+`openclaw doctor` lists each excluded `MEMORY.md`, `USER.md`, or personal
+`users/<profile-id>/USER.md` with the time
+and session of its last recorded tracked write. That record keeps only the
+latest tracked write, so it can name a later session than the write that
+quarantined the file. See
+[Memory provenance and deletion](/concepts/memory-provenance#freeform-edits-and-quarantine).
+
+## How it works
+
+Your agent has four memory-related files:
+
+- **`USER.md`** (optional) — stable preferences, communication style,
+  relationships, and active-project context written as directives. Loaded at
+  the start of a session with a separate small budget.
+- **`MEMORY.md`** — long-term memory. Durable non-profile facts and decisions.
+  Loaded at the start of a session.
+- **`memory/YYYY-MM-DD.md`** (or `memory/YYYY-MM-DD-<slug>.md`) — daily notes.
+  Running context and observations. Today's and yesterday's dated notes load
+  automatically on a bare `/new` or `/reset`; slugged variants, such as those
+  written by the bundled session-memory hook, are picked up alongside the
+  date-only file.
+- **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep summaries for
+  human review, including grounded historical backfill entries.
+
+<Tip>
+If you want your agent to remember something, just ask it: "Remember that I
+prefer TypeScript." It writes the note to the appropriate file.
+</Tip>
+
+## What goes where
+
+`USER.md` is the compact user-model layer. Write stable preferences and profile
+facts as imperative directives with observed-date and active/superseded
+metadata. When a preference changes, supersede it in place instead of appending
+a contradictory active directive. See [User model](/concepts/user-model).
+
+`MEMORY.md` is the compact, curated layer for durable non-profile facts,
+standing decisions, and short summaries that should be available at the start
+of a session. It is not a raw transcript, daily log, or exhaustive archive.
+
+`memory/YYYY-MM-DD.md` files are the working layer: detailed daily notes,
+observations, session summaries, and raw context that may still be useful
+later. These are indexed for `memory_search` and `memory_get`, but are not
+injected into the bootstrap prompt on every turn.
+
+Daily-memory maintenance requires valid UTF-8. If decoding fails, the operation
+stops before rewriting that file. Preserve the original and convert a copy to
+UTF-8 before retrying.
+
+Over time, useful material from daily notes is distilled into `MEMORY.md` by
+the default [dreaming](/concepts/dreaming) sweep. The generated workspace
+instructions still encourage the agent to record durable facts as it works,
+while dreaming handles background consolidation. The default heartbeat prompt
+performs no memory maintenance on its own.
+
+If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
+disk intact but truncates the copy injected into context. Treat that as a
+signal to move detailed material into `memory/*.md`, keep only a durable
+summary in `MEMORY.md`, or raise the bootstrap limits if you want to spend more
+prompt budget. Use `/context list`, `/context detail`, or `openclaw doctor` to
+see raw vs. injected sizes and truncation status.
+
+## Import from coding assistants
+
+The Control UI can import existing local memory from Codex, Claude Code, and
+Hermes.
+Open **Settings** → **Import Memory**, choose the destination agent, review the
+detected files, and confirm the import. For the existing default agent, you can
+instead open **Settings → Ask OpenClaw** and say `import memory`; this narrower
+chat wizard requires completed onboarding, copies only new detected memory, and
+reports per-source failures or possible partial copies. OpenClaw copies only
+Markdown memory:
+
+- Codex: the consolidated `MEMORY.md` and `memory_summary.md` files under
+  `~/.codex/memories` (or `CODEX_HOME/memories`). Raw rollout and transcript
+  files are not imported.
+- Claude Code: Markdown files from each project auto-memory directory under
+  `~/.claude/projects/*/memory`, plus a user-configured
+  `autoMemoryDirectory` when present. Project instructions, sessions, settings,
+  and credentials are not part of this memory-only action.
+- Hermes: `MEMORY.md` and `USER.md` from the detected Hermes home. Config,
+  credentials, and skills are not part of this memory-only action.
+
+Imported files stay separate under `memory/imports/codex/` and
+`memory/imports/claude-code/`, or `memory/imports/hermes/` in the selected agent
+workspace. They are indexed for `memory_search` and available through
+`memory_get`; they are not merged into the agent's bootstrap `MEMORY.md`. The
+source files are left unchanged.
+
+The preview marks destination conflicts. Enable **Replace existing imports** to
+replace those files; apply creates a verified pre-import backup and preserves
+item-level copies of overwritten files in the migration report.
+
+## Action-sensitive memories
+
+Most memories are ordinary Markdown notes. Some affect what the agent should
+do later; for those, capture when it is safe to act on the note, not just the
+fact itself.
+
+Capture that action boundary when a note involves:
+
+- approval or permission requirements,
+- temporary constraints,
+- handoffs to another session, thread, or person,
+- expiry conditions,
+- safe-to-act timing,
+- source or owner authority,
+- instructions to avoid a tempting action.
+
+A useful action-sensitive memory makes clear:
+
+- what changes future behavior,
+- when or under what condition it applies,
+- when it expires, or what unlocks action,
+- what the agent should avoid doing,
+- who is the source or owner, if that affects trust or authority.
+
+Memory can preserve approval context, but it does not enforce policy. Use
+OpenClaw approval settings, sandboxing, and scheduled tasks for hard
+operational controls.
+
+Example:
+
+```md
+The API migration is being designed in another session. Future turns should
+not edit the API implementation from this thread; use findings here only as
+design input until the migration plan lands.
+```
+
+Another example:
+
+```md
+A report from an untrusted source needs review before promotion. Future turns
+should treat it as evidence only; do not store it as durable memory until a
+trusted reviewer confirms the contents.
+```
+
+This is not a required schema for every memory; simple facts can stay concise.
+Use action-sensitive boundaries when losing timing, authority, expiry, or
+safe-to-act context could cause the agent to do the wrong thing later.
+
+Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
+and recurring work. Memory can still summarize the durable context around that
+work.
+
+## PostgreSQL memory search
+
+The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
+SQLite remains the default. PostgreSQL memory search is supported on the
+[qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
+engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
+uses the faster native `ts_rank` function and calibrates its unnormalized rank
+`r` as `r / (r + 0.0027)` before the shared hybrid merge. The calibration is fitted to
+the previous keyword score scale, giving keywords a useful weight without penalizing
+long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
+corpus-wide inverse document frequency (IDF), so common and mixed-frequency
+queries can still rank differently. Hybrid search retains the same vector/text
+weights.
+
+Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`
+when using the trigram tokenizer, and `vector` for semantic search. For keyword-only
+search, explicitly set `memory.search.provider: "none"` (or the agent override).
+This mode needs no `vector` extension and appears in memory status as provider
+`none`, search mode `fts-only`. A vector request without the capability fails with
+`DATABASE_SEARCH_CAPABILITY_UNAVAILABLE` and an actionable next step.
+
+Forgetting removes indexed text and vectors together with their source rows.
+`openclaw memory reset` clears derived memory data while preserving memory files,
+sessions, and the admitted search schema; run `openclaw memory index` to rebuild.
+See [Database engines](/reference/database-engines#search-on-postgresql) for setup,
+permissions, storage diagnostics, and PostgreSQL limitations.
+
+## Memory tools
+
+The agent has three tools for working with memory:
+
+- **`memory_search`** — finds relevant notes using semantic search, even when
+  the wording differs from the original.
+- **`memory_get`** — reads a specific memory file or line range.
+- **`intent`** — creates, lists, or explicitly cancels event-conditioned
+  standing intents. Time-based reminders continue to use scheduled tasks.
+
+All three tools are provided by the active memory plugin (default: `memory-core`).
+
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
+
+Automatic project recall has a one-second preparation budget, including provider
+startup and cleanup. If the budget expires, the turn continues without project
+candidates and the Gateway logs `project memory recall skipped` with the reason.
+Late results are discarded. The read may finish under the current turn's existing
+authority; the budget does not cancel storage work. Memory tools remain available
+for explicit retrieval.
+Cold or busy stores can therefore omit automatic recall on consecutive turns;
+explicit retrieval uses the memory tool's own lifetime rather than this budget.
+
+If `memory_search` reports that its storage scope closed, run
+`openclaw plugins reload memory-core`, or restart the Gateway, then retry.
+This is a storage lifecycle failure, not an embedding provider error. See
+[Plugin reload](/cli/plugins/uninstall-and-update#reload) for reload behavior.
+
+When session indexing is enabled, `memory_search` can also return session
+transcript hits. Their `sessions/...jsonl` paths are search references, not files
+that `memory_get` can read. Use `sessions_search` with distinctive text from the
+snippet (optionally scope `sessionKey` to the transcript ID), then pass its returned
+`sessionKey`, `messageId`, and `sessionId` to `sessions_history` for a bounded,
+sanitized excerpt. These tools enforce session visibility independently on each
+request. Memory-search line numbers are not session-history offsets.
+
+The recall prompt recommends only enabled tools. Without session-history tools,
+report the excerpt limitation instead of reading raw transcript files.
+`memory_get` reports unsupported paths as read errors, not missing arguments or a
+globally disabled memory service. Memory-file reads and optional wiki reads keep
+their existing range, continuation, and partial-corpus semantics.
+
+## Memory search
+
+When an embedding provider is configured, `memory_search` uses hybrid search:
+vector similarity (semantic meaning) combined with keyword matching (exact
+terms like IDs and code symbols). This works out of the box with an API key
+for any supported provider.
+
+<Info>
+OpenClaw uses OpenAI embeddings by default. Set
+`memory.search.provider` explicitly to use Gemini, Voyage,
+Mistral, Bedrock, DeepInfra, local GGUF, Ollama, LM Studio, GitHub Copilot, or
+a generic OpenAI-compatible endpoint.
+</Info>
+
+See [Memory search](/concepts/memory-search) for how search works, tuning
+options, and provider setup.
+
+## Memory engines
+
+<CardGroup cols={3}>
+<Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
+SQLite-based. Works out of the box with keyword search, vector similarity, and
+hybrid search. No extra dependencies.
+</Card>
+<Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
+AI-native cross-session memory with user modeling, semantic search, and
+multi-agent awareness. Plugin install.
+</Card>
+<Card title="LanceDB" icon="layers" href="/plugins/memory-lancedb">
+LanceDB-backed memory with OpenAI-compatible embeddings, auto-recall,
+auto-capture, and local Ollama embedding support. Plugin install.
+</Card>
+</CardGroup>
+
+## Knowledge wiki layer
+
+If you want durable memory to behave more like a maintained knowledge base
+than raw notes, use the bundled `memory-wiki` plugin. It compiles durable
+knowledge into a wiki vault with fixed page structure, structured
+claims and evidence, contradiction and freshness tracking, generated
+dashboards, compiled digests, and wiki-native tools (`wiki_status`,
+`wiki_search`, `wiki_get`, `wiki_apply`, `wiki_lint`).
+
+`memory-wiki` does not replace the active memory plugin; the active memory
+plugin still owns recall, promotion, and dreaming. `memory-wiki` adds a
+provenance-rich knowledge layer beside it. You can browse the compiled wiki
+in the Control UI under Memory → Dreams → Diary → **Memory Wiki**
+([details](/plugins/memory-wiki#browsing-the-wiki-in-the-control-ui)).
+
+<CardGroup cols={1}>
+<Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">
+Compiles durable memory into a provenance-rich wiki vault with claims,
+dashboards, bridge mode, and Obsidian-friendly workflows.
+</Card>
+</CardGroup>
+
+## Automatic memory flush
+
+Before [compaction](/concepts/compaction) summarizes your conversation,
+OpenClaw runs a silent turn that reminds the agent to save important context
+to durable memory. Memory Core saves to a workspace memory file. A selected
+memory plugin can supply its own persistence tools. This is on by default; set
+`agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
+OpenClaw resolves when the flush runs from that host config and the active
+context window. The selected memory provider supplies the prompts and
+persistence target or tools. It inherits host timing unless it deliberately
+overrides an optional timing field.
+
+When a model server omits usage data, OpenClaw estimates context pressure from
+the active conversation so the memory checkpoint can still run. These estimates
+do not replace provider-reported token usage in session status.
+
+The flush uses a private copy of the conversation, so its housekeeping messages
+never appear in later user turns, even if interrupted. Its writes to memory
+are still saved normally.
+
+Memory Core's file flush requires writable workspace access. Sessions whose sandbox
+requires read-only or no workspace access skip the flush, including sessions
+with a persisted sandbox requirement that overrides the agent's configuration.
+
+During that flush, `write` appends only to the daily note. Its `content` must
+contain only new text. Replayed whole notes and copied paragraphs are rejected
+without changing the file, so the model can retry with just the new entries.
+Reusing Markdown headings with new facts is allowed. This check compares text
+with normalized line endings; it does not deduplicate paraphrases or repair
+existing notes.
+
+A native provider's tools-based flush does not require a writable workspace;
+other flush plans are not resolved for sessions that cannot write it. It exposes
+`read`, the provider's declared persistence tools, and optional read-only lookup
+tools, subject to normal tool policies. Those tools receive the source turn's
+memory audience and sandbox state. Missing lookup tools produce a warning but do
+not block a flush that can still persist. The flush is skipped if no valid
+audience or permitted persistence tool is available. Source-session and sandbox
+policy denials skip provider flush preparation before a maintenance turn is
+dispatched. These skips are debug diagnostics, not failed lane tasks. Model-specific
+policy and dynamic tool availability are checked by the selected attempt. It succeeds when a
+persistence tool completes without error or the agent returns `NO_REPLY`; lookup
+success alone does not complete the flush. Skipping or failing this optional step
+does not prevent compaction. Plugin authors can find the contract and retry
+identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
+
+The flush uses the active session model and its normal fallback chain. To keep
+memory extraction local, use a local model for the session and configure local
+fallbacks.
+
+<Tip>
+The memory flush gives the agent a chance to save important facts before
+compaction summarizes the conversation. Check your memory plugin's saved notes
+or records when you need to confirm that a fact was retained.
+</Tip>
+
+## Dreaming
+
+Dreaming is the default background consolidation path for memory. It collects
+short-term recall signals, scores candidates, and promotes only qualified
+owner or agent-derived items into long-term memory (`MEMORY.md`):
+
+- **Default on**: disable it with
+  `plugins.entries.memory-core.config.dreaming.enabled: false`.
+- **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron
+  job for a full dreaming sweep.
+- **Thresholded**: promotions must pass score, recall-frequency, and
+  query-diversity gates.
+- **Consolidated**: a tool-free completion selects merges and supersessions
+  after the rule-based check. The memory writer composes the result from
+  validated source evidence; invalid or unavailable decisions use append-only fallback.
+- **Taint gated**: untrusted and system-derived candidates never enter the
+  consolidation prompt or durable promotion path.
+- **Reviewable**: phase summaries and diary entries are written to
+  `DREAMS.md` for human review, including rewrite counts and highlights.
+
+This background pattern follows the motivation behind sleep-time compute
+(arXiv:2504.13171). Provenance-aware reflection also follows the durable
+memory lessons of the Generative Agents research.
+
+See [Dreaming](/concepts/dreaming) for phase behavior, scoring signals, and
+Dream Diary details.
+
+## Grounded backfill and live promotion
+
+The dreaming system has two related review lanes:
+
+- **Live dreaming** works from short-term dreaming state in SQLite plugin
+  storage and is what the normal deep phase uses to decide what graduates into
+  `MEMORY.md`.
+- **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
+  standalone day files and writes structured review output into `DREAMS.md`.
+
+Dreaming JSON journals from before July 2026 are no longer imported. The
+migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
+`short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
+state remains authoritative. If Doctor cannot establish valid stored state,
+restore a backup from a July 2026 or newer release. An empty ingestion store
+without a previous migration acknowledgement is indistinguishable from
+unmigrated state; after verifying its SQLite state, back up and move the retired
+JSON file aside, then rerun `openclaw doctor --fix`.
+
+Grounded backfill is useful for replaying older notes and inspecting what the
+system considers durable, without manually editing `MEMORY.md`.
+
+```bash
+openclaw memory rem-backfill --path ./memory --stage-short-term
+```
+
+The `--stage-short-term` flag stages grounded durable candidates into the same
+short-term dreaming store the normal deep phase already uses; it does not
+promote them directly. So:
+
+- `DREAMS.md` stays the human review surface.
+- The short-term store stays the machine-facing ranking surface.
+- `MEMORY.md` is still only written by deep promotion.
+
+To undo a replay without touching ordinary diary entries or normal recall
+state:
+
+```bash
+openclaw memory rem-backfill --rollback
+openclaw memory rem-backfill --rollback-short-term
+```
+
+## CLI
+
+```bash
+openclaw memory status          # Check index status and provider
+openclaw memory search "query"  # Search from the command line
+openclaw memory index --force   # Rebuild the index
+```
+
+## Further reading
+
+- [Memory architecture](/concepts/memory-architecture): the storage, indexing, and retrieval layers behind every memory feature.
+- [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
+- [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
+- [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
+- [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
+- [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
+- [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
+- [Memory provenance and deletion](/concepts/memory-provenance): session lineage, admission policy, and `memory forget`.
+- [Memory configuration reference](/reference/memory-config): all config knobs.
+- [Compaction](/concepts/compaction): how compaction interacts with memory.
+- [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.
+- [User model](/concepts/user-model): directive-based durable preferences and profile facts.
+- [Standing intents](/concepts/standing-intents): event-conditioned prospective memory.
+
+## Related
+
+- [`openclaw memory`](/cli/memory) — command reference for inspecting and editing memory

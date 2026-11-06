@@ -1,0 +1,21 @@
+const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
+  "Browser service rate limit reached. " +
+  "Wait for the current session to complete, or retry later.";
+
+const BROWSERBASE_RATE_LIMIT_MESSAGE =
+  "Browserbase rate limit reached (max concurrent sessions). " +
+  "Wait for the current session to complete, or upgrade your plan.";
+
+function isBrowserbaseUrl(url: string): boolean {
+  if (!/^https?:\/\//i.test(url.trim())) {
+    return false;
+  }
+  const host = URL.parse(url)?.hostname.trim().toLowerCase() ?? "";
+  return host === "browserbase.com" || host.endsWith(".browserbase.com");
+}
+
+export function resolveBrowserRateLimitMessage(url: string): string {
+  return isBrowserbaseUrl(url)
+    ? BROWSERBASE_RATE_LIMIT_MESSAGE
+    : BROWSER_SERVICE_RATE_LIMIT_MESSAGE;
+}

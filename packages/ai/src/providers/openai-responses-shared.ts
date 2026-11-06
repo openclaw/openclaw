@@ -1,0 +1,325 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  ResponseCreateParamsStreaming,
+  ResponseStreamEvent,
+} from "openai/resources/responses/responses.js";
+import { codeModeToolSurfaceObserver, type BaseOpenAIStreamOptions } from "../provider-options.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "../transports/openai-responses-compaction-replay.js";
+import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
+import {
+  responsesServiceTierObserver,
+  type OpenAIResponsesRequestParams,
+} from "../transports/openai-responses-contracts.js";
+import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
+import { createResponsesStreamWithRecovery } from "../transports/openai-responses-replay-internal.js";
+import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
+import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
+import {
+  assertCodeModeResponsesToolSurface,
+  enforceCodeModeResponsesToolSurface,
+  resolveCodeModeResponsesVisibleToolNames,
+} from "../transports/openai-transport-params.js";
+import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
+import {
+  awaitProviderLifecycleCallback,
+  failTransportStream,
+  finalizeTransportStream,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
+import type { Api, AssistantMessage, Context, Model, StreamOptions, Usage } from "../types.js";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+import type { AssistantMessageEventStream } from "../utils/event-stream.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  type FirstStreamEventInternalOptions,
+} from "../utils/stream-first-event-timeout.js";
+import { readOpenAIMisalignmentReview } from "./openai-provider-refusal.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import {
+  resolveOpenAIRequestReasoning,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
+import { convertResponsesToolPayload } from "./openai-responses-tools.js";
+import { clampMaxTokensToModel } from "./simple-options.js";
+
+export { convertResponsesToolPayload };
+
+type ResponsesRequestOptions = {
+  signal?: AbortSignal;
+  timeout?: number;
+  maxRetries?: number;
+};
+
+export {
+  convertProviderResponsesMessages as convertResponsesMessages,
+  createOpenAIResponsesAssistantOutput as createResponsesAssistantOutput,
+} from "../transports/openai-responses-replay-internal.js";
+
+export function applyResponsesServiceTierPricing(
+  usage: Usage,
+  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+  model: Pick<Model, "id">,
+): void {
+  let multiplier = 1;
+  if (serviceTier === "flex") {
+    multiplier = 0.5;
+  } else if (serviceTier === "priority") {
+    multiplier = model.id === "gpt-5.5" ? 2.5 : 2;
+  }
+  if (multiplier === 1) {
+    return;
+  }
+
+  usage.cost.input *= multiplier;
+  usage.cost.output *= multiplier;
+  usage.cost.cacheRead *= multiplier;
+  usage.cost.cacheWrite *= multiplier;
+  usage.cost.total =
+    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+}
+
+export function applyCommonResponsesParams<TApi extends Api>(
+  params: Omit<ResponseCreateParamsStreaming, "prompt_cache_options"> &
+    Pick<OpenAIResponsesRequestParams, "prompt_cache_options">,
+  model: Model<TApi>,
+  context: Context,
+  options?: Pick<StreamOptions, "maxTokens" | "temperature" | "responseFormat" | "onPayload"> & {
+    reasoningEffort?: OpenAIRequestReasoningEffort;
+    reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  },
+  config?: { setDefaultReasoningOff?: boolean },
+): void {
+  if (options?.maxTokens) {
+    params.max_output_tokens = clampMaxTokensToModel(model, Math.max(options.maxTokens, 16));
+  }
+
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
+    params.temperature = options.temperature;
+  }
+
+  if (options?.responseFormat !== undefined) {
+    params.text = {
+      ...params.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
+  }
+
+  if (context.tools) {
+    const tools = convertResponsesToolPayload(context.tools, {
+      model,
+      mutableParameters: Boolean(options?.onPayload),
+    });
+    if (tools.length > 0) {
+      params.tools = tools;
+    }
+  }
+
+  if (!model.reasoning) {
+    return;
+  }
+
+  const requestedEffort =
+    options?.reasoningEffort ??
+    (options?.reasoningSummary
+      ? "medium"
+      : (config?.setDefaultReasoningOff ?? true)
+        ? "off"
+        : undefined);
+  const effort =
+    requestedEffort === undefined
+      ? undefined
+      : resolveOpenAIRequestReasoning(model, requestedEffort).effort;
+  if (effort === undefined) {
+    return;
+  }
+  params.reasoning = { effort: effort as NonNullable<typeof params.reasoning>["effort"] };
+  if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary !== undefined)) {
+    // Explicit null disables summaries; only an omitted summary defaults to auto.
+    params.reasoning.summary =
+      options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary;
+    params.include = ["reasoning.encrypted_content"];
+  }
+}
+
+export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
+  stream: AssistantMessageEventStream;
+  model: Model<TApi>;
+  output: AssistantMessage;
+  context?: Pick<Context, "tools">;
+  options?: Pick<StreamOptions, "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"> &
+    Pick<
+      BaseOpenAIStreamOptions,
+      | "authProfileId"
+      | "onCompactionRejected"
+      | "openclawCodeModeToolSurface"
+      | "openclawCodeModeAllowedHostedToolTypes"
+    > &
+    FirstStreamEventInternalOptions;
+  resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
+  createClient: (model: Model<TApi>) => {
+    responses: {
+      create(
+        params: ResponseCreateParamsStreaming,
+        options: ResponsesRequestOptions,
+      ): {
+        withResponse(): Promise<{
+          data: AsyncIterable<ResponseStreamEvent>;
+          response: Response;
+        }>;
+      };
+    };
+  };
+  buildParams: (
+    model: Model<TApi>,
+    replayMode: OpenAIResponsesReplayMode,
+  ) => OpenAIResponsesRequestParams;
+  processStreamOptions?: Pick<ResponsesStreamOptions, "serviceTier" | "applyServiceTierPricing">;
+}): Promise<void> {
+  const { stream, output, options } = params;
+
+  let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
+  try {
+    const model = params.resolveRequestModel?.(params.model) ?? params.model;
+    const client = params.createClient(model);
+    const encodeBody = prepareModelRequestBody(options);
+    const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
+      let request = params.buildParams(model, replayMode);
+      const nextRequest = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(request, model) : undefined,
+        options?.signal,
+      );
+      if (nextRequest !== undefined) {
+        request = nextRequest as OpenAIResponsesRequestParams;
+      }
+      if (options?.openclawCodeModeToolSurface === true) {
+        const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(params.context ?? {});
+        const allowedHostedToolTypes = options.openclawCodeModeAllowedHostedToolTypes;
+        enforceCodeModeResponsesToolSurface(
+          request,
+          visibleToolNames,
+          allowedHostedToolTypes,
+          codeModeToolSurfaceObserver.get(options),
+        );
+        assertCodeModeResponsesToolSurface(request, visibleToolNames, allowedHostedToolTypes);
+      }
+      return request;
+    };
+    const requestParams = await buildRequest("checkpoint");
+
+    const firstEvent = createFirstStreamEventAbortController(options?.signal);
+    firstEventAbort = firstEvent;
+    let started = false;
+    let admittedRequest: OpenAIResponsesRequestParams | undefined;
+    let requestedTier: unknown;
+    const requestOptions: ResponsesRequestOptions = {
+      signal: firstEvent.signal,
+      ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+      maxRetries: 0,
+    };
+    const { stream: hookedOpenAIStream } = await createResponsesStreamWithRecovery({
+      client: client as never,
+      request: requestParams as never,
+      requestOptions,
+      model,
+      encodeBody,
+      buildFullHistoryRequest: () => buildRequest("full-history"),
+      onCompactionRejected: (checkpoint) =>
+        suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
+      canRetryStream: () => output.content.length === 0,
+      onServiceTierRejected: (tier) => responsesServiceTierObserver.reject(options, tier),
+      wrapStream: ({ stream: openaiStream, response, attempt }) => {
+        requestedTier = attempt.request.service_tier;
+        admittedRequest = attempt.kind === "initial" ? attempt.request : undefined;
+        return withProviderResponseHook({
+          stream: openaiStream,
+          signal: firstEvent.signal,
+          abort: firstEvent.abort,
+          hook: createOpenAIProviderAcceptanceHook(options, response, model),
+          onReady: () => {
+            if (!started) {
+              started = true;
+              stream.push({ type: "start", partial: output });
+            }
+          },
+        });
+      },
+    });
+
+    const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
+    const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
+    const processStreamOptions =
+      params.processStreamOptions ||
+      firstEventTimeoutMs !== undefined ||
+      onFirstEventTimeout !== undefined
+        ? {
+            ...params.processStreamOptions,
+            firstEventTimeoutMs,
+            abortFirstEventStream: firstEventAbort.abort,
+            onFirstEventTimeout,
+            signal: options?.signal,
+          }
+        : undefined;
+    const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
+      ...processStreamOptions,
+      promptCacheTtl: requestParams.prompt_cache_options?.ttl,
+      resolveServiceTier: (responseTier, originalTier) =>
+        responseTier ??
+        (requestedTier === "priority" || requestedTier === "default"
+          ? requestedTier
+          : originalTier),
+      onServiceTier: (responseTier, response) =>
+        responsesServiceTierObserver.observe(options, requestedTier, responseTier, response),
+      canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
+      reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: options?.sessionId,
+        authProfileId: options?.authProfileId,
+      }),
+    });
+
+    if (terminal && admittedRequest && !options?.signal?.aborted) {
+      recordResponsesContextUsage(
+        output,
+        model,
+        options,
+        admittedRequest,
+        terminal.output,
+        "provider",
+      );
+    }
+    finalizeTransportStream({ stream, output, signal: options?.signal });
+  } catch (error) {
+    const response = error instanceof ResponsesStreamFailure ? error.response : error;
+    const rawError = isRecord(response) && isRecord(response.error) ? response.error : response;
+    if (
+      params.model.provider === "openai" &&
+      params.model.api === "openai-responses" &&
+      isRecord(rawError) &&
+      rawError.code === "misalignment_policy_violation"
+    ) {
+      // The ordinary API has no reviewed-continuation contract. Preserve findings only.
+      const review = readOpenAIMisalignmentReview(rawError.misalignment, false);
+      appendAssistantMessageDiagnostic(output, {
+        type: "provider_refusal",
+        timestamp: Date.now(),
+        details: { provider: "openai", category: "misalignment", ...(review ? { review } : {}) },
+      });
+    }
+    failTransportStream({
+      stream,
+      output,
+      signal: options?.signal,
+      error,
+    });
+  } finally {
+    firstEventAbort?.dispose();
+  }
+}

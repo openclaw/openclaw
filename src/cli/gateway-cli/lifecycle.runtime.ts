@@ -1,0 +1,57 @@
+// Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
+// run-loop.ts primes this hub before the HTTP listener binds, so each re-export
+// must target the module that defines the symbol rather than a re-export facade;
+// a facade also evaluates its siblings and drags their graphs onto cold start.
+export {
+  resolveGatewayRestartDecision,
+  registerGatewayRuntimeRecovery,
+  respawnGatewayProcessForUpdate,
+  restartGatewayProcessWithFreshPid,
+} from "../../infra/process-respawn.js";
+export {
+  consumeGatewayRestartIntent,
+  consumeGatewayRestartAuthorization,
+  isGatewayRestartExternallyAllowed,
+  markGatewayRestartHandled,
+  peekGatewayRestartReason,
+  resetGatewayRestartStateForInProcessRestart,
+  requestGatewayRestartWithSignalAdmission,
+  rollbackGatewayRestartSignalAdmission,
+  scheduleGatewayRestart,
+} from "../../infra/restart.js";
+export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
+export { writeGatewayRestartHandoff } from "../../infra/restart-handoff.js";
+export {
+  cancelManagedServiceUpdateHandoff,
+  claimManagedServiceUpdateHandoff,
+  commitManagedServiceUpdateHandoff,
+  isForegroundUpdateHandoff,
+  completeForegroundUpdateHandoffAfterClose,
+  captureForegroundUpdateHandoffStop,
+  requestManagedServiceUpdateHandoffPark,
+  waitForSystemServiceUpdateHandoffs,
+} from "../../infra/update-managed-service-handoff.js";
+export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
+export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+export {
+  markUpdateRestartSentinelFailure,
+  readRestartSentinelReadOnly,
+  writeRestartSentinelIfUnchanged,
+} from "../../infra/restart-sentinel.js";
+export { waitForGatewayHealthyRestart } from "../daemon-cli/restart-health.js";
+export { detectGatewayRespawnSupervisorIdentity } from "../../infra/supervisor-markers.js";
+export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
+export {
+  advanceCronActiveJobGeneration,
+  resetCronActiveJobs,
+  waitForActiveCronJobs,
+} from "../../cron/active-jobs.js";
+export {
+  abortActiveCronTaskRuns,
+  retireActiveCronTaskRunTracking,
+  waitForActiveCronTaskRuns,
+} from "../../cron/service/active-run-cancellation.js";
+export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
+export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
+
+export { stopActiveManagedProviderLocalServices } from "../../agents/provider-runtime-lifecycle.js";

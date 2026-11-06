@@ -1,0 +1,67 @@
+import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
+
+export type MusicGenerationOutputFormat = "mp3" | "wav";
+
+/** Non-empty in-memory audio asset returned from a music generation provider. */
+export type GeneratedMusicAsset = {
+  buffer: Buffer;
+  mimeType: string;
+  fileName?: string;
+  metadata?: Record<string, unknown>;
+};
+
+/** Optional source image passed to image-conditioned music edit models. */
+export type MusicGenerationSourceImage = {
+  url?: string;
+  buffer?: Buffer;
+  mimeType?: string;
+  fileName?: string;
+  metadata?: Record<string, unknown>;
+};
+
+/** Provider result before runtime fallback metadata is attached. */
+export type MusicGenerationResult = {
+  tracks: GeneratedMusicAsset[];
+  model?: string;
+  lyrics?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+/** Caller override dropped because the selected provider/model does not support it. */
+export type MusicGenerationIgnoredOverride = {
+  key: "lyrics" | "instrumental" | "durationSeconds" | "format";
+  value: string | boolean | number;
+};
+
+export type MusicGenerationMode = "generate" | "edit";
+
+/** Capability block for prompt-only music generation. */
+export type MusicGenerationModeCapabilities = {
+  maxTracks?: number;
+  maxDurationSeconds?: number;
+  supportsLyrics?: boolean;
+  supportsLyricsByModel?: Readonly<Record<string, boolean>>;
+  supportsInstrumental?: boolean;
+  supportsInstrumentalByModel?: Readonly<Record<string, boolean>>;
+  supportsDuration?: boolean;
+  supportsFormat?: boolean;
+  supportedFormats?: readonly MusicGenerationOutputFormat[];
+  supportedFormatsByModel?: Readonly<Record<string, readonly MusicGenerationOutputFormat[]>>;
+};
+
+/** Capability block for image-conditioned music generation. */
+export type MusicGenerationEditCapabilities = MusicGenerationModeCapabilities & {
+  enabled: boolean;
+  maxInputImages?: number;
+};
+
+/** Provider capability declaration, including optional mode-specific overrides. */
+export type MusicGenerationProviderCapabilities = MusicGenerationModeCapabilities & {
+  maxInputImages?: number;
+  generate?: MusicGenerationModeCapabilities;
+  edit?: MusicGenerationEditCapabilities;
+};
+
+export type MusicGenerationNormalization = {
+  durationSeconds?: MediaNormalizationEntry<number>;
+};

@@ -1,0 +1,318 @@
+import type {
+  ContentBlock,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolKind,
+} from "@agentclientprotocol/sdk";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readParsedField } from "../utils/string-readers.js";
+
+type GatewayAttachment = {
+  type: string;
+  mimeType: string;
+  content: string;
+};
+
+const TOOL_LOCATION_PATH_KEYS = [
+  "path",
+  "filePath",
+  "file_path",
+  "targetPath",
+  "target_path",
+  "targetFile",
+  "target_file",
+  "sourcePath",
+  "source_path",
+  "destinationPath",
+  "destination_path",
+  "oldPath",
+  "old_path",
+  "newPath",
+  "new_path",
+  "outputPath",
+  "output_path",
+  "inputPath",
+  "input_path",
+] as const;
+
+const TOOL_LOCATION_LINE_KEYS = [
+  "line",
+  "lineNumber",
+  "line_number",
+  "startLine",
+  "start_line",
+] as const;
+const TOOL_RESULT_PATH_MARKER_RE = /^(?:FILE|MEDIA):(.+)$/gm;
+const TOOL_LOCATION_MAX_DEPTH = 4;
+const TOOL_LOCATION_MAX_NODES = 100;
+
+const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
+  "\0": "\\0",
+  "\r": "\\r",
+  "\n": "\\n",
+  "\t": "\\t",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+function escapeInlineControlChars(value: string): string {
+  return value.replace(
+    /[\p{Cc}\u2028\u2029]/gu,
+    (char) =>
+      INLINE_CONTROL_ESCAPE_MAP[char] || `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
+}
+
+function escapeResourceTitle(value: string): string {
+  // Keep title content, but escape characters that can break the resource-link annotation shape.
+  return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
+}
+
+function normalizeToolLocationPath(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    trimmed.length > 4096 ||
+    trimmed.includes("\u0000") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n")
+  ) {
+    return undefined;
+  }
+  if (hasHttpUrlPrefix(trimmed)) {
+    return undefined;
+  }
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return decodeURIComponent(parsed.pathname || "") || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return trimmed;
+}
+
+function addToolLocation(
+  locations: Map<string, ToolCallLocation>,
+  rawPath: string,
+  line?: number,
+): void {
+  const path = normalizeToolLocationPath(rawPath);
+  if (!path) {
+    return;
+  }
+  for (const [existingKey, existing] of locations.entries()) {
+    if (existing.path !== path) {
+      continue;
+    }
+    if (line === undefined || existing.line === line) {
+      return;
+    }
+    if (existing.line === undefined) {
+      locations.delete(existingKey);
+    }
+  }
+  locations.set(`${path}:${line ?? ""}`, line ? { path, line } : { path });
+}
+
+function collectLocationsFromTextMarkers(
+  text: string,
+  locations: Map<string, ToolCallLocation>,
+): void {
+  for (const match of text.matchAll(TOOL_RESULT_PATH_MARKER_RE)) {
+    const candidate = normalizeOptionalString(match[1]);
+    if (candidate) {
+      addToolLocation(locations, candidate);
+    }
+  }
+}
+
+function collectToolLocations(
+  value: unknown,
+  locations: Map<string, ToolCallLocation>,
+  state: { visited: number },
+  depth: number,
+): void {
+  if (state.visited >= TOOL_LOCATION_MAX_NODES || depth > TOOL_LOCATION_MAX_DEPTH) {
+    return;
+  }
+  state.visited += 1;
+
+  if (typeof value === "string") {
+    collectLocationsFromTextMarkers(value, locations);
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectToolLocations(item, locations, state, depth + 1);
+      if (state.visited >= TOOL_LOCATION_MAX_NODES) {
+        return;
+      }
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const line = readParsedField(
+    record,
+    TOOL_LOCATION_LINE_KEYS,
+    (lineValue) => floorPositiveFiniteNumber(lineValue) || undefined,
+  );
+  for (const key of TOOL_LOCATION_PATH_KEYS) {
+    const rawPath = record[key];
+    if (typeof rawPath === "string") {
+      addToolLocation(locations, rawPath, line);
+    }
+  }
+
+  const content = Array.isArray(record.content) ? record.content : undefined;
+  if (content) {
+    for (const block of content) {
+      const entry = asRecord(block);
+      if (entry?.type === "text" && typeof entry.text === "string") {
+        collectLocationsFromTextMarkers(entry.text, locations);
+      }
+    }
+  }
+
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "content") {
+      continue;
+    }
+    collectToolLocations(nested, locations, state, depth + 1);
+    if (state.visited >= TOOL_LOCATION_MAX_NODES) {
+      return;
+    }
+  }
+}
+
+export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
+  const parts: string[] = [];
+  // Enforce the byte budget before allocating the joined prompt.
+  let totalBytes = 0;
+  for (const block of prompt) {
+    let blockText: string | undefined;
+    if (block.type === "text") {
+      blockText = block.text;
+    } else if (block.type === "resource" && "text" in block.resource && block.resource.text) {
+      blockText = block.resource.text;
+    } else if (block.type === "resource_link") {
+      const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
+      const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
+      blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
+    }
+    if (blockText !== undefined) {
+      if (maxBytes !== undefined) {
+        const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
+        totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
+        if (totalBytes > maxBytes) {
+          throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
+        }
+      }
+      parts.push(blockText);
+    }
+  }
+  return parts.join("\n");
+}
+
+export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAttachment[] {
+  const attachments: GatewayAttachment[] = [];
+  for (const block of prompt) {
+    if (block.type !== "image") {
+      continue;
+    }
+    if (!block.data || !block.mimeType) {
+      continue;
+    }
+    attachments.push({
+      type: "image",
+      mimeType: block.mimeType,
+      content: block.data,
+    });
+  }
+  return attachments;
+}
+
+export function formatToolTitle(
+  name: string | undefined,
+  args: Record<string, unknown> | undefined,
+): string {
+  const base = name ?? "tool";
+  if (!args || Object.keys(args).length === 0) {
+    return base;
+  }
+  const parts = Object.entries(args).map(([key, value]) => {
+    const raw = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+    const safe = raw.length > 100 ? `${truncateUtf16Safe(raw, 100)}...` : raw;
+    return `${key}: ${safe}`;
+  });
+  // Sanitize at the source so session updates and permission requests never
+  // inherit raw control bytes from untrusted tool arguments.
+  return escapeInlineControlChars(`${base}: ${parts.join(", ")}`);
+}
+
+const TOOL_KIND_PATTERNS: ReadonlyArray<readonly [ToolKind, RegExp]> = [
+  ["read", /read/],
+  ["edit", /write|edit/],
+  ["delete", /delete|remove/],
+  ["move", /move|rename/],
+  ["search", /search|find/],
+  ["execute", /exec|run|bash/],
+  ["fetch", /fetch|http/],
+];
+
+export function inferToolKind(name?: string): ToolKind {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return TOOL_KIND_PATTERNS.find(([, pattern]) => pattern.test(normalized))?.[0] ?? "other";
+}
+
+export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
+  const texts: string[] = [];
+  if (hasNonEmptyString(value)) {
+    texts.push(value);
+  } else {
+    const record = asRecord(value);
+    if (!record) {
+      return undefined;
+    }
+    const blocks = Array.isArray(record.content) ? record.content : [];
+    for (const block of blocks) {
+      const entry = asRecord(block);
+      if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
+        texts.push(entry.text);
+      }
+    }
+    if (texts.length === 0) {
+      const fallbackText = readParsedField(record, ["text", "message", "error"], readStringValue);
+      if (hasNonEmptyString(fallbackText)) {
+        texts.push(fallbackText);
+      }
+    }
+  }
+  return texts.length > 0
+    ? texts.map((text) => ({ type: "content", content: { type: "text", text } }))
+    : undefined;
+}
+
+export function extractToolCallLocations(...values: unknown[]): ToolCallLocation[] | undefined {
+  const locations = new Map<string, ToolCallLocation>();
+  for (const value of values) {
+    collectToolLocations(value, locations, { visited: 0 }, 0);
+  }
+  return locations.size > 0 ? [...locations.values()] : undefined;
+}

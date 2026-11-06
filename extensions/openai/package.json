@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/openai-provider",
+  "version": "2026.11.1",
+  "private": true,
+  "description": "OpenClaw OpenAI provider plugins",
+  "type": "module",
+  "bundleDependencies": [
+    "@shinyoshiaki/binary-data"
+  ],
+  "dependencies": {
+    "@shinyoshiaki/binary-data": "0.6.1",
+    "jose": "6.2.13",
+    "libopus-wasm": "0.4.1",
+    "werift": "0.25.2",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "build": {
+      "workerEntries": [
+        "./realtime-quicksilver-audio.worker.ts",
+        "./realtime-quicksilver-socket.worker.ts"
+      ]
+    }
+  }
+}

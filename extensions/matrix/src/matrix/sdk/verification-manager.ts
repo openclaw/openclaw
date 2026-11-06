@@ -1,0 +1,590 @@
+import type { CryptoApi } from "matrix-js-sdk/lib/crypto-api/index.js";
+import {
+  VerificationPhase,
+  VerificationRequestEvent,
+  VerifierEvent,
+  type ShowSasCallbacks as MatrixShowSasCallbacks,
+  type ShowQrCodeCallbacks as MatrixShowQrCodeCallbacks,
+  type VerificationRequest,
+  type Verifier,
+} from "matrix-js-sdk/lib/crypto-api/verification.js";
+import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+
+export type MatrixVerificationMethod = "sas" | "show-qr" | "scan-qr";
+export type MatrixVerificationSummary = {
+  id: string;
+  transactionId?: string;
+  roomId?: string;
+  otherUserId: string;
+  otherDeviceId?: string;
+  isSelfVerification: boolean;
+  initiatedByMe: boolean;
+  phase: number;
+  phaseName: string;
+  pending: boolean;
+  methods: string[];
+  chosenMethod?: string | null;
+  canAccept: boolean;
+  hasSas: boolean;
+  sas?: MatrixShowSasCallbacks["sas"];
+  hasReciprocateQr: boolean;
+  completed: boolean;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
+
+export type MatrixVerificationCryptoApi = Pick<
+  CryptoApi,
+  | "requestOwnUserVerification"
+  | "getVerificationRequestsToDeviceInProgress"
+  | "findVerificationRequestDMInProgress"
+  | "requestDeviceVerification"
+  | "requestVerificationDM"
+>;
+
+type MatrixVerificationSession = {
+  id: string;
+  request: VerificationRequest;
+  createdAtMs: number;
+  updatedAtMs: number;
+  error?: string;
+  activeVerifier?: Verifier;
+  verifyPromise?: Promise<void>;
+  verifyStarted: boolean;
+  startRequested: boolean;
+  acceptRequested: boolean;
+  sasAutoConfirmStarted: boolean;
+  sasAutoConfirmTimer?: ReturnType<typeof setTimeout>;
+  sasCallbacks?: MatrixShowSasCallbacks;
+  reciprocateQrCallbacks?: MatrixShowQrCodeCallbacks;
+};
+
+const MAX_TRACKED_VERIFICATION_SESSIONS = 256;
+const TERMINAL_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
+const SAS_AUTO_CONFIRM_DELAY_MS = 30_000;
+
+export class MatrixVerificationManager {
+  private readonly verificationSessions = new Map<string, MatrixVerificationSession>();
+  private verificationSessionCounter = 0;
+  private readonly trackedVerificationRequests = new WeakSet<object>();
+  private readonly trackedVerificationVerifiers = new WeakSet<object>();
+
+  constructor(
+    private readonly opts: {
+      trustOwnDeviceAfterSas?: MatrixVerificationOwnerTrustCallback;
+      onSummaryChanged?: (summary: MatrixVerificationSummary) => void;
+    } = {},
+  ) {}
+
+  private readRequestValue<T>(reader: () => T, fallback: T): T {
+    // The SDK leaves methods unimplemented; phase and phase-derived getters can also throw.
+    try {
+      return reader();
+    } catch {
+      return fallback;
+    }
+  }
+
+  private isSameLogicalVerificationRequest(
+    left: VerificationRequest,
+    right: VerificationRequest,
+  ): boolean {
+    const transactionId = left.transactionId?.trim();
+    const leftDeviceId = left.otherDeviceId;
+    const rightDeviceId = right.otherDeviceId;
+    return (
+      Boolean(transactionId) &&
+      transactionId === right.transactionId?.trim() &&
+      (left.roomId ?? "") === (right.roomId ?? "") &&
+      left.otherUserId === right.otherUserId &&
+      (!leftDeviceId || !rightDeviceId || leftDeviceId === rightDeviceId) &&
+      left.isSelfVerification === right.isSelfVerification &&
+      left.initiatedByMe === right.initiatedByMe
+    );
+  }
+
+  private pruneVerificationSessions(nowMs: number): void {
+    for (const [id, session] of this.verificationSessions) {
+      const phase = this.readRequestValue<VerificationPhase | -1>(() => session.request.phase, -1);
+      const isTerminal = phase === VerificationPhase.Done || phase === VerificationPhase.Cancelled;
+      if (isTerminal && nowMs - session.updatedAtMs > TERMINAL_SESSION_RETENTION_MS) {
+        this.verificationSessions.delete(id);
+      }
+    }
+
+    if (this.verificationSessions.size <= MAX_TRACKED_VERIFICATION_SESSIONS) {
+      return;
+    }
+
+    const sortedByAge = Array.from(this.verificationSessions.entries()).toSorted(
+      (a, b) => a[1].updatedAtMs - b[1].updatedAtMs,
+    );
+    const overflow = this.verificationSessions.size - MAX_TRACKED_VERIFICATION_SESSIONS;
+    for (const [id] of sortedByAge.slice(0, overflow)) {
+      this.verificationSessions.delete(id);
+    }
+  }
+
+  private emitVerificationSummary(session: MatrixVerificationSession): MatrixVerificationSummary {
+    const summary = this.buildVerificationSummary(session);
+    this.opts.onSummaryChanged?.(summary);
+    return summary;
+  }
+
+  private touchVerificationSession(session: MatrixVerificationSession): MatrixVerificationSummary {
+    session.updatedAtMs = Date.now();
+    return this.emitVerificationSummary(session);
+  }
+
+  private observeVerificationOperation(
+    session: MatrixVerificationSession,
+    operation: Promise<void>,
+    onError?: () => void,
+  ): Promise<void> {
+    return operation
+      .then(() => {
+        this.touchVerificationSession(session);
+      })
+      .catch((err: unknown) => {
+        onError?.();
+        session.error = formatErrorMessage(err);
+        this.touchVerificationSession(session);
+      });
+  }
+
+  private clearSasAutoConfirmTimer(session: MatrixVerificationSession): void {
+    if (!session.sasAutoConfirmTimer) {
+      return;
+    }
+    clearTimeout(session.sasAutoConfirmTimer);
+    session.sasAutoConfirmTimer = undefined;
+  }
+
+  private buildVerificationSummary(session: MatrixVerificationSession): MatrixVerificationSummary {
+    const request = session.request;
+    const phase = this.readRequestValue(() => request.phase, VerificationPhase.Requested);
+    const accepting = request.accepting;
+    const declining = request.declining;
+    const pending = this.readRequestValue(() => request.pending, false);
+    const methods = this.readRequestValue(() => request.methods, []).slice();
+    const sasCallbacks = session.sasCallbacks ?? session.activeVerifier?.getShowSasCallbacks();
+    if (sasCallbacks) {
+      session.sasCallbacks = sasCallbacks;
+    }
+    const canAccept = phase < VerificationPhase.Ready && !accepting && !declining;
+    return {
+      id: session.id,
+      transactionId: request.transactionId,
+      roomId: request.roomId,
+      otherUserId: request.otherUserId,
+      otherDeviceId: request.otherDeviceId,
+      isSelfVerification: request.isSelfVerification,
+      initiatedByMe: request.initiatedByMe,
+      phase,
+      phaseName: VerificationPhase[phase]?.toLowerCase() ?? `unknown(${phase})`,
+      pending,
+      methods,
+      chosenMethod: this.readRequestValue(() => request.chosenMethod ?? null, null),
+      canAccept,
+      hasSas: Boolean(sasCallbacks),
+      sas: sasCallbacks
+        ? {
+            decimal: sasCallbacks.sas.decimal,
+            emoji: sasCallbacks.sas.emoji,
+          }
+        : undefined,
+      hasReciprocateQr: Boolean(session.reciprocateQrCallbacks),
+      completed: phase === VerificationPhase.Done,
+      error: session.error,
+      createdAt: new Date(session.createdAtMs).toISOString(),
+      updatedAt: new Date(session.updatedAtMs).toISOString(),
+    };
+  }
+
+  private findVerificationSession(id: string): MatrixVerificationSession {
+    const direct = this.verificationSessions.get(id);
+    if (direct) {
+      return direct;
+    }
+    const transactionMatches = Array.from(this.verificationSessions.values()).filter((session) => {
+      const txId = session.request.transactionId?.trim();
+      return txId === id;
+    });
+    if (transactionMatches.length === 1) {
+      return expectDefined(transactionMatches[0], "single Matrix verification session");
+    }
+    if (transactionMatches.length > 1) {
+      throw new Error(
+        `Matrix verification request id is ambiguous for transaction ${id}; use the verification id instead`,
+      );
+    }
+    throw new Error(`Matrix verification request not found: ${id}`);
+  }
+
+  private ensureVerificationRequestTracked(session: MatrixVerificationSession): void {
+    const requestObj = session.request;
+    if (this.trackedVerificationRequests.has(requestObj)) {
+      return;
+    }
+    this.trackedVerificationRequests.add(requestObj);
+    session.request.on(VerificationRequestEvent.Change, () => {
+      this.touchVerificationSession(session);
+      this.maybeAutoAcceptInboundRequest(session);
+      this.attachRequestVerifier(session);
+      this.maybeAutoStartInboundSas(session);
+    });
+  }
+
+  private maybeAutoAcceptInboundRequest(session: MatrixVerificationSession): void {
+    if (session.acceptRequested) {
+      return;
+    }
+    const request = session.request;
+    const isSelfVerification = request.isSelfVerification;
+    const initiatedByMe = request.initiatedByMe;
+    const phase = this.readRequestValue(() => request.phase, VerificationPhase.Requested);
+    const accepting = request.accepting;
+    const declining = request.declining;
+    if (isSelfVerification || initiatedByMe) {
+      return;
+    }
+    if (phase !== VerificationPhase.Requested || accepting || declining) {
+      return;
+    }
+
+    session.acceptRequested = true;
+    void this.observeVerificationOperation(session, request.accept(), () => {
+      session.acceptRequested = false;
+    });
+  }
+
+  private maybeAutoStartInboundSas(session: MatrixVerificationSession): void {
+    if (session.activeVerifier || session.verifyStarted || session.startRequested) {
+      return;
+    }
+    if (session.request.initiatedByMe) {
+      return;
+    }
+    if (!session.request.isSelfVerification) {
+      return;
+    }
+    const phase = this.readRequestValue(() => session.request.phase, VerificationPhase.Requested);
+    if (phase < VerificationPhase.Ready || phase >= VerificationPhase.Cancelled) {
+      return;
+    }
+    const methods = this.readRequestValue(() => session.request.methods, []);
+    const chosenMethod = this.readRequestValue(() => session.request.chosenMethod, null);
+    const supportsSas =
+      methods.includes(VerificationMethod.Sas) || chosenMethod === VerificationMethod.Sas;
+    if (!supportsSas) {
+      return;
+    }
+
+    session.startRequested = true;
+    void session.request
+      .startVerification(VerificationMethod.Sas)
+      .then((verifier) => {
+        this.attachVerifierToVerificationSession(session, verifier);
+        this.touchVerificationSession(session);
+      })
+      .catch(() => {
+        session.startRequested = false;
+      });
+  }
+
+  private attachRequestVerifier(
+    session: MatrixVerificationSession,
+    request = session.request,
+  ): void {
+    const verifier = this.readRequestValue(() => request.verifier, null);
+    if (verifier) {
+      this.attachVerifierToVerificationSession(session, verifier);
+    }
+  }
+
+  private attachVerifierToVerificationSession(
+    session: MatrixVerificationSession,
+    verifier: Verifier,
+  ): void {
+    session.activeVerifier = verifier;
+    this.touchVerificationSession(session);
+
+    const maybeSas = verifier.getShowSasCallbacks();
+    if (maybeSas) {
+      session.sasCallbacks = maybeSas;
+      this.maybeAutoConfirmSas(session);
+    }
+    const maybeReciprocateQr = verifier.getReciprocateQrCodeCallbacks();
+    if (maybeReciprocateQr) {
+      session.reciprocateQrCallbacks = maybeReciprocateQr;
+    }
+
+    const verifierObj = verifier;
+    if (this.trackedVerificationVerifiers.has(verifierObj)) {
+      this.ensureVerificationStarted(session);
+      return;
+    }
+    this.trackedVerificationVerifiers.add(verifierObj);
+
+    verifier.on(VerifierEvent.ShowSas, (sas) => {
+      session.sasCallbacks = sas;
+      this.touchVerificationSession(session);
+      this.maybeAutoConfirmSas(session);
+    });
+    verifier.on(VerifierEvent.ShowReciprocateQr, (qr) => {
+      session.reciprocateQrCallbacks = qr;
+      this.touchVerificationSession(session);
+    });
+    verifier.on(VerifierEvent.Cancel, (err) => {
+      this.clearSasAutoConfirmTimer(session);
+      session.error = formatErrorMessage(err);
+      this.touchVerificationSession(session);
+    });
+    this.ensureVerificationStarted(session);
+  }
+
+  private maybeAutoConfirmSas(session: MatrixVerificationSession): void {
+    if (session.sasAutoConfirmStarted || session.sasAutoConfirmTimer) {
+      return;
+    }
+    if (session.request.initiatedByMe) {
+      return;
+    }
+    const callbacks = session.sasCallbacks ?? session.activeVerifier?.getShowSasCallbacks();
+    if (!callbacks) {
+      return;
+    }
+    session.sasCallbacks = callbacks;
+    // Give the remote client a moment to surface the compare-emoji UI before
+    // we send our MAC and finish our side of the SAS flow.
+    session.sasAutoConfirmTimer = setTimeout(() => {
+      session.sasAutoConfirmTimer = undefined;
+      const phase = this.readRequestValue(() => session.request.phase, VerificationPhase.Requested);
+      if (phase >= VerificationPhase.Cancelled) {
+        return;
+      }
+      session.sasAutoConfirmStarted = true;
+      void this.observeVerificationOperation(
+        session,
+        this.confirmSasForSession(session, callbacks),
+      );
+    }, SAS_AUTO_CONFIRM_DELAY_MS);
+  }
+
+  private async confirmSasForSession(
+    session: MatrixVerificationSession,
+    callbacks: MatrixShowSasCallbacks,
+  ): Promise<void> {
+    await callbacks.confirm();
+    await this.trustOwnDeviceAfterConfirmedSas(session);
+  }
+
+  private ensureVerificationStarted(session: MatrixVerificationSession): void {
+    if (!session.activeVerifier || session.verifyStarted) {
+      return;
+    }
+    session.verifyStarted = true;
+    session.verifyPromise = this.observeVerificationOperation(
+      session,
+      session.activeVerifier.verify(),
+    );
+  }
+
+  private async trustOwnDeviceAfterConfirmedSas(session: MatrixVerificationSession): Promise<void> {
+    if (!session.request.isSelfVerification) {
+      return;
+    }
+    const deviceId = session.request.otherDeviceId?.trim();
+    if (!deviceId || !this.opts.trustOwnDeviceAfterSas) {
+      return;
+    }
+    await this.opts.trustOwnDeviceAfterSas(deviceId);
+  }
+
+  trackVerificationRequest(request: VerificationRequest): MatrixVerificationSummary {
+    this.pruneVerificationSessions(Date.now());
+    const requestObj = request;
+    for (const existing of this.verificationSessions.values()) {
+      if (existing.request === requestObj) {
+        return this.touchVerificationSession(existing);
+      }
+    }
+    const txId = request.transactionId?.trim();
+    if (txId) {
+      for (const existing of this.verificationSessions.values()) {
+        if (this.isSameLogicalVerificationRequest(existing.request, request)) {
+          existing.request = request;
+          this.ensureVerificationRequestTracked(existing);
+          this.attachRequestVerifier(existing, request);
+          return this.touchVerificationSession(existing);
+        }
+      }
+    }
+
+    const now = Date.now();
+    const id = `verification-${++this.verificationSessionCounter}`;
+    const session: MatrixVerificationSession = {
+      id,
+      request,
+      createdAtMs: now,
+      updatedAtMs: now,
+      verifyStarted: false,
+      startRequested: false,
+      acceptRequested: false,
+      sasAutoConfirmStarted: false,
+    };
+    this.verificationSessions.set(session.id, session);
+    this.ensureVerificationRequestTracked(session);
+    this.maybeAutoAcceptInboundRequest(session);
+    this.attachRequestVerifier(session, request);
+    this.maybeAutoStartInboundSas(session);
+    return this.emitVerificationSummary(session);
+  }
+
+  listVerifications(): MatrixVerificationSummary[] {
+    this.pruneVerificationSessions(Date.now());
+    const summaries = Array.from(this.verificationSessions.values()).map((session) =>
+      this.buildVerificationSummary(session),
+    );
+    return summaries.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async requestVerification(
+    crypto: MatrixVerificationCryptoApi | undefined,
+    params: {
+      ownUser?: boolean;
+      userId?: string;
+      deviceId?: string;
+      roomId?: string;
+    },
+  ): Promise<MatrixVerificationSummary> {
+    if (!crypto) {
+      throw new Error("Matrix crypto is not available");
+    }
+    let request: VerificationRequest;
+    if (params.ownUser) {
+      request = await crypto.requestOwnUserVerification();
+    } else if (params.userId && params.deviceId) {
+      request = await crypto.requestDeviceVerification(params.userId, params.deviceId);
+    } else if (params.userId && params.roomId) {
+      request = await crypto.requestVerificationDM(params.userId, params.roomId);
+    } else {
+      throw new Error(
+        "Matrix verification request requires one of: ownUser, userId+deviceId, or userId+roomId",
+      );
+    }
+
+    return this.trackVerificationRequest(request);
+  }
+
+  async acceptVerification(id: string): Promise<MatrixVerificationSummary> {
+    const session = this.findVerificationSession(id);
+    await session.request.accept();
+    return this.touchVerificationSession(session);
+  }
+
+  async cancelVerification(
+    id: string,
+    params?: { reason?: string; code?: string },
+  ): Promise<MatrixVerificationSummary> {
+    const session = this.findVerificationSession(id);
+    await session.request.cancel(params);
+    return this.touchVerificationSession(session);
+  }
+
+  async startVerification(
+    id: string,
+    method: MatrixVerificationMethod = "sas",
+  ): Promise<MatrixVerificationSummary> {
+    const session = this.findVerificationSession(id);
+    if (method !== "sas") {
+      throw new Error("Matrix startVerification currently supports only SAS directly");
+    }
+    const verifier = await session.request.startVerification(VerificationMethod.Sas);
+    this.attachVerifierToVerificationSession(session, verifier);
+    return this.buildVerificationSummary(session);
+  }
+
+  async generateVerificationQr(id: string): Promise<{ qrDataBase64: string }> {
+    const session = this.findVerificationSession(id);
+    const qr = await session.request.generateQRCode();
+    if (!qr) {
+      throw new Error("Matrix verification QR data is not available yet");
+    }
+    return { qrDataBase64: Buffer.from(qr).toString("base64") };
+  }
+
+  async scanVerificationQr(id: string, qrDataBase64: string): Promise<MatrixVerificationSummary> {
+    const session = this.findVerificationSession(id);
+    const trimmed = qrDataBase64.trim();
+    if (!trimmed) {
+      throw new Error("Matrix verification QR payload is required");
+    }
+    const qrBytes = Buffer.from(trimmed, "base64");
+    if (qrBytes.length === 0) {
+      throw new Error("Matrix verification QR payload is invalid base64");
+    }
+    const verifier = await session.request.scanQRCode(new Uint8ClampedArray(qrBytes));
+    this.attachVerifierToVerificationSession(session, verifier);
+    return this.buildVerificationSummary(session);
+  }
+
+  async confirmVerificationSas(id: string): Promise<MatrixVerificationSummary> {
+    const session = this.findVerificationSession(id);
+    const callbacks = this.requireSasCallbacks(session, "confirmation");
+    this.clearSasAutoConfirmTimer(session);
+    session.sasAutoConfirmStarted = true;
+    await this.confirmSasForSession(session, callbacks);
+    // Join the done exchange and cross-signing uploads before the operator's next /keys/query.
+    await session.verifyPromise;
+    return this.touchVerificationSession(session);
+  }
+
+  mismatchVerificationSas(id: string): MatrixVerificationSummary {
+    const session = this.findVerificationSession(id);
+    const callbacks = this.requireSasCallbacks(session, "mismatch");
+    this.clearSasAutoConfirmTimer(session);
+    callbacks.mismatch();
+    return this.touchVerificationSession(session);
+  }
+
+  confirmVerificationReciprocateQr(id: string): MatrixVerificationSummary {
+    const session = this.findVerificationSession(id);
+    const callbacks =
+      session.reciprocateQrCallbacks ?? session.activeVerifier?.getReciprocateQrCodeCallbacks();
+    if (!callbacks) {
+      throw new Error(
+        "Matrix reciprocate-QR confirmation is not available for this verification request",
+      );
+    }
+    session.reciprocateQrCallbacks = callbacks;
+    callbacks.confirm();
+    return this.touchVerificationSession(session);
+  }
+
+  getVerificationSas(id: string): MatrixShowSasCallbacks["sas"] {
+    const session = this.findVerificationSession(id);
+    const callbacks = this.requireSasCallbacks(session, "data");
+    return {
+      decimal: callbacks.sas.decimal,
+      emoji: callbacks.sas.emoji,
+    };
+  }
+
+  private requireSasCallbacks(
+    session: MatrixVerificationSession,
+    operation: "confirmation" | "mismatch" | "data",
+  ): MatrixShowSasCallbacks {
+    const callbacks = session.sasCallbacks ?? session.activeVerifier?.getShowSasCallbacks();
+    if (!callbacks) {
+      throw new Error(`Matrix SAS ${operation} is not available for this verification request`);
+    }
+    session.sasCallbacks = callbacks;
+    return callbacks;
+  }
+}

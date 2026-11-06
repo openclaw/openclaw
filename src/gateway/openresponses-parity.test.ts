@@ -1,0 +1,83 @@
+import { describe, expect, it } from "vitest";
+import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
+import { CreateResponseBodySchema } from "./open-responses.schema.js";
+import { buildAgentPrompt } from "./openresponses-prompt.js";
+import { createAssistantOutputItem } from "./openresponses-shape.js";
+
+describe("OpenResponses aggregate behavior", () => {
+  it.each([
+    createAssistantOutputItem({
+      id: "msg_1",
+      text: "Checking.",
+      phase: "commentary",
+      status: "completed",
+    }),
+    {
+      type: "function_call",
+      id: "fc_1",
+      call_id: "call_1",
+      name: "lookup",
+      arguments: "{}",
+      status: "completed",
+    },
+  ])("accepts supported output metadata on replay: $type", (item) => {
+    const body = { model: "openclaw", input: [item] };
+    expect(CreateResponseBodySchema.safeParse(body).success).toBe(true);
+    for (const extra of [{ unexpected: true }, { status: "invented" }]) {
+      expect(
+        CreateResponseBodySchema.safeParse({ ...body, input: [{ ...item, ...extra }] }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("preserves function identities and arguments alongside multiple returned results", () => {
+    const result = buildAgentPrompt([
+      { type: "message", role: "user", content: "Compare the accounts." },
+      {
+        type: "function_call",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"account":"alpha"}',
+      },
+      { type: "function_call", call_id: "call_2", name: "lookup", arguments: '{"account":"beta"}' },
+      { type: "function_call_output", call_id: "call_2", output: "42" },
+      { type: "function_call_output", call_id: "call_1", output: "17" },
+    ]);
+    expect(result.message).toContain(
+      'tool_call id=call_1 name=lookup arguments={"account":"alpha"}',
+    );
+    expect(result.message).toContain(
+      'tool_call id=call_2 name=lookup arguments={"account":"beta"}',
+    );
+    expect(result.message).toContain("Tool:call_2: 42");
+    expect(result.message).toContain("Tool:call_1: 17");
+    expect(result.message.indexOf("tool_call id=call_2")).toBeLessThan(
+      result.message.indexOf("Tool:call_2"),
+    );
+  });
+
+  it("preserves attachment-only turn placeholders", () => {
+    expect(
+      buildAgentPrompt([
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", source: { type: "url", url: "https://example.com/cat.png" } },
+          ],
+        },
+      ]).message,
+    ).toBe(IMAGE_ONLY_USER_MESSAGE);
+    expect(
+      buildAgentPrompt([
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_file", source: { type: "url", url: "https://example.com/a.pdf" } },
+          ],
+        },
+      ]).message.toLowerCase(),
+    ).toContain("file");
+  });
+});

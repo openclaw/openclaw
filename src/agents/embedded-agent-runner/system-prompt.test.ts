@@ -1,0 +1,339 @@
+import { Type } from "typebox";
+// Embedded system prompt tests cover prompt assembly for provider guidance,
+// delegation mode, workspace-only safety, memory sections, and active processes.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../plugins/memory-state.test-fixtures.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
+}));
+
+function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
+  return {
+    workspaceDir: "/tmp/openclaw",
+    reasoningTagHint: false,
+    runtimeInfo: {
+      host: "local",
+      os: "darwin",
+      arch: "arm64",
+      node: process.version,
+      model: "gpt-5.4",
+    },
+    tools: [],
+    modelAliasLines: [],
+  };
+}
+
+function fixedEmbeddedPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
+  return {
+    workspaceDir: "/tmp/openclaw-prompt-agent",
+    runtimeCwd: "/tmp/openclaw-prompt-project",
+    reasoningTagHint: true,
+    runtimeInfo: {
+      host: "fixture-host",
+      os: "linux",
+      arch: "arm64",
+      node: "v24.14.0",
+      model: "fixture-model",
+      channel: "discord",
+      chatType: "direct",
+    },
+    tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
+    capabilityToolNames: ["tool_search", "web_search"],
+    ownerNumbers: ["fixture-owner"],
+    modelAliasLines: ["- direct-alias: fixture/direct"],
+    ttsHint: "Fixture direct TTS hint.",
+    skillsPrompt: "<available_skills>Fixture skill guidance.</available_skills>",
+    contextFiles: [{ path: "AGENTS.md", content: "Fixture project guidance." }],
+    extraSystemPrompt: "Fixture turn context.",
+    promptContribution: {
+      stablePrefix: "Fixture stable provider guidance.",
+      dynamicSuffix: "Fixture dynamic provider guidance.",
+    },
+  };
+}
+
+describe("buildConfiguredAgentSystemPrompt", () => {
+  afterEach(() => {
+    // Memory prompt sections are shared plugin state, so each prompt-rendering
+    // test leaves the global registry clean.
+    clearMemoryPluginState();
+  });
+
+  it("lets explicit skill workflow gates override execution bias while preserving user authority and safety", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      config: {},
+      tools: [createStubTool("read")],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>publish</name>\n    <location>/skills/publish/SKILL.md</location>\n  </skill>\n</available_skills>",
+    });
+    expect(prompt).toContain("read exact <location>");
+    expect(prompt).toContain(
+      "## Execution Bias\n- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
+    );
+  });
+
+  it.each(["available", "source-reply-only", "absent"] as const)(
+    "advertises ClawHub from the actual %s message tool schema",
+    async (surface) => {
+      const message = createStubTool("message");
+      message.parameters = Type.Object({
+        message: Type.Optional(Type.String()),
+        ...(surface === "available" ? { clawhub: Type.Object({ query: Type.String() }) } : {}),
+      });
+      const prompt = await buildConfiguredAgentSystemPrompt({
+        ...fixedEmbeddedPromptInputs(),
+        runtimeInfo: { ...fixedEmbeddedPromptInputs().runtimeInfo, channel: "webchat" },
+        tools: surface === "absent" ? [] : [message],
+      });
+
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(surface === "available");
+      expect(prompt.includes('message(action="send", clawhub={query:"capability"})')).toBe(
+        surface === "available",
+      );
+    },
+  );
+
+  it("forwards provider prompt contributions into the embedded prompt", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      runtimeCwd: "/tmp/task-repo",
+      promptContribution: {
+        stablePrefix: "## Embedded Stable\n\nStable provider guidance.",
+      },
+    });
+
+    expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
+    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw");
+  });
+
+  it("keeps post-compaction curated context scoped to the prepared project", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      activeProjectKeys: ["github.com/acme/Alpha"],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/MEMORY.md",
+          content: [
+            "- Alpha compaction fact. <!-- project: github.com/acme/Alpha -->",
+            "- Beta compaction fact. <!-- project: github.com/acme/Beta -->",
+            "- Global compaction fact.",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Alpha compaction fact");
+    expect(prompt).toContain("Global compaction fact");
+    expect(prompt).not.toContain("Beta compaction fact");
+  });
+
+  it.each(["create", "rename-only", "absent"] as const)(
+    "routes explicit task creation from the native %s tool surface in default suggest mode",
+    async (surface) => {
+      const sessions = createStubTool(surface === "create" ? "sessions_create" : "sessions");
+      const prompt = await buildConfiguredAgentSystemPrompt({
+        ...basicPromptInputs(),
+        tools: surface === "absent" ? [] : [sessions],
+      });
+
+      expect(prompt.includes('"spin up a new task"')).toBe(surface === "create");
+      expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
+      if (surface === "create") {
+        expect(prompt).toContain("omit it to create an idle session");
+        expect(prompt).toContain("no completion event or yield expectation");
+      }
+      expect(prompt).not.toContain("## Delegation");
+    },
+  );
+
+  it("uses config-backed sub-agent delegation mode", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              delegationMode: "prefer",
+            },
+          },
+        },
+      },
+      agentId: "main",
+      runtimeInfo: { ...basicPromptInputs().runtimeInfo, agentId: "main" },
+      tools: [{ name: "sessions_spawn" } as never],
+    });
+
+    expect(prompt).toContain("## Delegation");
+  });
+
+  it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      config: {
+        tools: {
+          fs: {
+            workspaceOnly: false,
+          },
+        },
+      },
+    });
+
+    expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
+    expect(prompt).not.toContain("never exec-write `/tmp`");
+  });
+
+  it("forwards the subagent prompt surface to embedded prompt rendering", async () => {
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      promptSurface: "subagent",
+      tools: [{ name: "sessions_spawn" } as never],
+      nativeCommandGuidanceLines: ["Subagent-only command guidance."],
+      promptMode: "minimal",
+    });
+
+    expect(prompt).toContain("- sessions_spawn");
+    expect(prompt).not.toContain("OpenClaw lists the standard tools above");
+    expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
+    expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
+    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).toContain("## Promised Work");
+    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
+  });
+
+  it("can omit base memory guidance for non-legacy context engines", async () => {
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
+
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...basicPromptInputs(),
+      includeMemorySection: false,
+    });
+
+    expect(prompt).not.toContain("## Memory Recall");
+  });
+
+  it("includes background process guidance whenever process is callable", async () => {
+    const params = {
+      ...basicPromptInputs(),
+      tools: [{ name: "process" } as never],
+    } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
+    const prompt = await buildConfiguredAgentSystemPrompt(params);
+
+    expect(prompt).not.toContain("Active exec sessions");
+    expect(prompt).toContain("Before input: process log");
+    expect(prompt).toContain("waitingForInput/stdinWritable");
+    expect(prompt).toContain("process list");
+
+    const restrictedPrompt = await buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
+    expect(restrictedPrompt).not.toContain("Active exec sessions");
+    expect(restrictedPrompt).not.toContain("process log");
+    expect(restrictedPrompt).not.toContain("process list");
+  });
+
+  it.each([
+    ["runtime agent fallback", {}, { agentId: "strict" }, true],
+    ["explicit loose agent", { agentId: "loose" }, { agentId: "strict" }, false],
+    ["explicit strict agent", { agentId: "strict" }, { agentId: "loose" }, true],
+    ["loose runtime agent", {}, { agentId: "loose" }, false],
+    ["no agent identity", {}, {}, false],
+  ])("resolves embedded prompt policy for %s", async (name, selector, runtime, restricted) => {
+    const inputs = fixedEmbeddedPromptInputs();
+    const prompt = await buildConfiguredAgentSystemPrompt({
+      ...inputs,
+      ...selector,
+      runtimeInfo: { ...inputs.runtimeInfo, ...runtime },
+      config: {
+        tools: { fs: { workspaceOnly: false } },
+        agents: {
+          entries: {
+            strict: { tools: { fs: { workspaceOnly: true } } },
+            loose: { tools: { fs: { workspaceOnly: false } } },
+          },
+        },
+      },
+    });
+    expect(prompt.includes("tools.fs.workspaceOnly ON"), name).toBe(restricted);
+    expect(prompt).toContain("Fixture stable provider guidance.");
+    expect(prompt).toContain("Fixture dynamic provider guidance.");
+  });
+
+  it.each(["full", "minimal", "none"] as const)(
+    "preserves the fixed embedded prompt in %s mode",
+    async (promptMode) => {
+      const prompt = await buildConfiguredAgentSystemPrompt({
+        ...fixedEmbeddedPromptInputs(),
+        promptMode,
+      });
+      expect(prompt).toContain("You are a personal assistant running inside OpenClaw.");
+      if (promptMode === "none") {
+        expect(prompt).not.toContain("Fixture");
+        expect(prompt).not.toContain("## Tooling");
+      } else {
+        expect(prompt).toContain("Fixture stable provider guidance.");
+        expect(prompt).toContain("Fixture project guidance.");
+        expect(prompt).toContain("Working directory: /tmp/openclaw-prompt-project");
+      }
+      expect(prompt.includes("- direct-alias: fixture/direct")).toBe(promptMode === "full");
+    },
+  );
+
+  it.each([
+    { name: "absent config", configInput: {}, directHint: true },
+    { name: "empty config", configInput: { config: {} }, directHint: false },
+    {
+      name: "populated config",
+      configInput: {
+        config: {
+          agents: { defaults: { models: { "fixture/configured": { alias: "configured-alias" } } } },
+        },
+        preparedModelRuntime: {
+          isCurrent: () => true,
+          configuredModelAliases: [
+            { alias: "configured-alias", provider: "fixture", model: "configured" },
+          ],
+        },
+      },
+      directHint: false,
+    },
+  ])("preserves absent optional fields with $name", async ({ name, configInput, directHint }) => {
+    const inputs = { ...fixedEmbeddedPromptInputs(), ...configInput };
+    const prompt = await buildConfiguredAgentSystemPrompt(inputs);
+    const explicitUndefined = await buildConfiguredAgentSystemPrompt({
+      ...inputs,
+      reactionGuidance: undefined,
+      workspaceNotes: undefined,
+      silentReplyPromptMode: undefined,
+      sourceReplyDeliveryMode: undefined,
+      nativeCommandNames: undefined,
+      nativeCommandGuidanceLines: undefined,
+      messageToolHints: undefined,
+      toolSchemaDirectoryPrompt: undefined,
+      sandboxInfo: undefined,
+      bootstrapMode: undefined,
+      bootstrapTruncationNotice: undefined,
+      includeMemorySection: undefined,
+      preparedMemoryPrompt: undefined,
+      preparedWatchedSessions: undefined,
+      projectMemoryBootstrap: undefined,
+      activeProjectKeys: undefined,
+    });
+    expect(explicitUndefined).toBe(prompt);
+    expect(prompt.includes("- direct-alias: fixture/direct")).toBe(directHint);
+    expect(prompt.includes("Fixture direct TTS hint.")).toBe(directHint);
+    expect(prompt.includes("- configured-alias: fixture/configured")).toBe(
+      name === "populated config",
+    );
+  });
+});

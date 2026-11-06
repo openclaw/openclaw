@@ -1,0 +1,411 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveModelAuthLabel,
+  resolveModelAuthLabelAsync,
+} from "../../agents/model-auth-label.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../../agents/prepared-model-runtime.errors.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import type { ReplyPayload } from "../types.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import {
+  loadModelsProviderData,
+  type ModelsCommandSessionEntry,
+  type PreparedModelsProviderData,
+} from "./commands-models-catalog.js";
+import type { ModelsProviderMenu } from "./commands-models-menu.js";
+import type { CommandHandler } from "./commands-types.js";
+
+const PAGE_SIZE_DEFAULT = 20;
+const PAGE_SIZE_MAX = 100;
+const MODELS_ADD_DEPRECATED_TEXT =
+  "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+export const MODEL_PICKER_CHANGED_MESSAGE =
+  "Available models changed. Open /models and choose again.";
+
+type ParsedModelsCommand =
+  | { action: "providers" }
+  | {
+      action: "list";
+      provider?: string;
+      page: number;
+      pageSize: number;
+      all: boolean;
+    }
+  | { action: "add" };
+
+function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action: "list" }> {
+  const provider = tokens[0];
+  let page = 1;
+  let pageSize = PAGE_SIZE_DEFAULT;
+  let all = false;
+  for (const [index, token] of tokens.entries()) {
+    const lower = token.toLowerCase();
+    if (index > 0 && (lower === "all" || lower === "--all")) {
+      all = true;
+      continue;
+    }
+    const isPageSize = lower.startsWith("limit=") || lower.startsWith("size=");
+    const value = parseStrictPositiveInteger(
+      isPageSize || lower.startsWith("page=") ? lower.slice(lower.indexOf("=") + 1) : lower,
+    );
+    if (value !== undefined) {
+      if (isPageSize) {
+        pageSize = Math.min(PAGE_SIZE_MAX, value);
+      } else if (index > 0) {
+        page = value;
+      }
+    }
+  }
+
+  return {
+    action: "list",
+    provider: provider ? normalizeProviderId(provider) : undefined,
+    page,
+    pageSize,
+    all,
+  };
+}
+
+function parseModelsArgs(raw: string): ParsedModelsCommand {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { action: "providers" };
+  }
+
+  const tokens = trimmed.split(/\s+/g);
+  const first = tokens[0]?.toLowerCase();
+  switch (first) {
+    case "providers":
+      return { action: "providers" };
+    case "list":
+      return parseListArgs(tokens.slice(1));
+    case "add":
+      return { action: "add" };
+    default:
+      return parseListArgs(tokens);
+  }
+}
+
+type ProviderLabelParams = {
+  provider: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+};
+
+function formatProviderLabel(provider: string, authLabel: string | undefined): string {
+  if (!authLabel || authLabel === "unknown") {
+    return provider;
+  }
+  return `${provider} · 🔑 ${authLabel}`;
+}
+
+async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<string> {
+  return formatProviderLabel(params.provider, await resolveModelAuthLabelAsync(params));
+}
+
+/** @deprecated Use formatModelsAvailableHeaderAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+export function formatModelsAvailableHeader(params: {
+  provider: string;
+  total: number;
+  cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+  availability?: ModelsProviderMenu;
+}): string {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "formatModelsAvailableHeader",
+    replacement: "formatModelsAvailableHeaderAsync",
+  });
+  const providerLabel = formatProviderLabel(params.provider, resolveModelAuthLabel(params));
+  return formatModelsHeader(params, providerLabel);
+}
+
+export async function formatModelsAvailableHeaderAsync(
+  params: Parameters<typeof formatModelsAvailableHeader>[0],
+): Promise<string> {
+  return formatModelsHeader(params, await resolveProviderLabelAsync(params));
+}
+
+function formatModelsHeader(
+  params: Parameters<typeof formatModelsAvailableHeader>[0],
+  providerLabel: string,
+): string {
+  const count =
+    params.availability && params.availability.available !== params.total
+      ? `${params.availability.available} of ${params.total}`
+      : String(params.total);
+  return [`Models (${providerLabel}) — ${count} available`, params.availability?.notice]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+type ModelsCommandReplyParams = {
+  cfg: OpenClawConfig;
+  commandBodyNormalized: string;
+  surface?: string;
+  currentModel?: string;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+};
+
+export async function resolveModelsCommandReply(
+  params: ModelsCommandReplyParams,
+): Promise<ReplyPayload | null> {
+  const body = params.commandBodyNormalized.trim();
+  if (!body.startsWith("/models")) {
+    return null;
+  }
+
+  const argText = body.replace(/^\/models\b/i, "").trim();
+  const parsed = parseModelsArgs(argText);
+
+  let data: PreparedModelsProviderData;
+  try {
+    data = await loadModelsProviderData(
+      params.cfg,
+      params.agentId,
+      {
+        ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
+        workspaceDir: params.workspaceDir,
+        sessionEntry: params.sessionEntry,
+      },
+      params.agentDir,
+    );
+  } catch (error) {
+    if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+      return {
+        text: "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+      };
+    }
+    if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+      return { text: MODEL_PICKER_CHANGED_MESSAGE };
+    }
+    throw error;
+  }
+  const reply = await buildModelsCommandReply(params, parsed, data);
+  return { ...reply, text: [data.refreshWarning, reply.text].filter(Boolean).join("\n\n") };
+}
+
+async function buildModelsCommandReply(
+  params: ModelsCommandReplyParams,
+  parsed: ParsedModelsCommand,
+  data: PreparedModelsProviderData,
+): Promise<ReplyPayload & { text: string }> {
+  const { byProvider, providers } = data;
+  const availability =
+    parsed.action === "list" && parsed.provider
+      ? data.modelMenu?.byProvider.get(parsed.provider)
+      : undefined;
+  const modelNames = data.modelMenu?.modelNames ?? data.modelNames;
+  const notice =
+    parsed.action === "list" && parsed.provider
+      ? availability?.notice
+      : [...(data.modelMenu?.byProvider.values() ?? [])]
+          .map((provider) => provider.notice)
+          .filter(Boolean)
+          .join("\n");
+  const checking = data.pendingProviders
+    ?.filter(
+      (provider) => parsed.action !== "list" || !parsed.provider || parsed.provider === provider,
+    )
+    .map((provider) => `${provider}: checking models…`)
+    .join("\n");
+  const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
+  const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+  const providerInfos = providers.map((provider) => ({
+    id: provider,
+    count: byProvider.get(provider)?.size ?? 0,
+  }));
+
+  const providerMenuReply = (preferMenu: boolean): ReplyPayload & { text: string } => {
+    const channelData =
+      (preferMenu
+        ? commandPlugin?.commands?.buildModelsMenuChannelData?.({ providers: providerInfos })
+        : undefined) ??
+      commandPlugin?.commands?.buildModelsProviderChannelData?.({
+        providers: providerInfos,
+      });
+    if (channelData) {
+      return {
+        text: withAvailability("Select a provider:"),
+        channelData,
+      };
+    }
+    return {
+      text: withAvailability(
+        [
+          "Providers:",
+          ...providers.map((provider) => `- ${provider} (${byProvider.get(provider)?.size ?? 0})`),
+          "",
+          "Use: /models <provider>",
+          "Switch: /model <provider/model>",
+        ].join("\n"),
+      ),
+    };
+  };
+
+  if (parsed.action === "providers") {
+    return providerMenuReply(true);
+  }
+
+  if (parsed.action === "add") {
+    return { text: MODELS_ADD_DEPRECATED_TEXT };
+  }
+
+  const { provider, page, pageSize, all } = parsed;
+  if (!provider) {
+    return providerMenuReply(false);
+  }
+
+  const providerModels = byProvider.get(provider);
+  if (!providerModels) {
+    return {
+      text: [
+        `Unknown provider: ${provider}`,
+        "",
+        "Available providers:",
+        ...providers.map((entry) => `- ${entry}`),
+        "",
+        "Use: /models <provider>",
+      ].join("\n"),
+    };
+  }
+
+  const models = [...providerModels];
+  const total = models.length;
+
+  if (total === 0) {
+    if (checking) {
+      return { text: checking };
+    }
+    const emptyProviderLabel = await resolveProviderLabelAsync({ ...params, provider });
+    return {
+      text: [
+        `Models (${emptyProviderLabel}) — none`,
+        "",
+        "Browse: /models",
+        "Switch: /model <provider/model>",
+      ].join("\n"),
+    };
+  }
+
+  const interactivePageSize = 8;
+  const interactiveTotalPages = Math.max(1, Math.ceil(total / interactivePageSize));
+  const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
+  const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
+    provider,
+    // Interactive callback offsets are interpreted against alphabetical rows.
+    models: models.toSorted(),
+    currentModel: params.currentModel,
+    currentPage: interactivePage,
+    totalPages: interactiveTotalPages,
+    pageSize: interactivePageSize,
+    modelNames,
+  });
+  if (interactiveChannelData) {
+    return {
+      text: await formatModelsAvailableHeaderAsync({
+        ...params,
+        provider,
+        total,
+        availability,
+      }),
+      channelData: interactiveChannelData,
+    };
+  }
+  const currentIndex = models.findIndex((model) => params.currentModel === `${provider}/${model}`);
+  if (currentIndex > 0) {
+    models.unshift(...models.splice(currentIndex, 1));
+  }
+
+  const effectivePageSize = all ? total : pageSize;
+  const pageCount = Math.ceil(total / effectivePageSize);
+  const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
+  const pageSizeSuffix = pageSize === PAGE_SIZE_DEFAULT ? "" : ` limit=${pageSize}`;
+
+  if (!all && page !== safePage) {
+    return {
+      text: [
+        `Page out of range: ${page} (valid: 1-${pageCount})`,
+        "",
+        `Try: /models list ${provider} ${safePage}${pageSizeSuffix}`,
+        `All: /models list ${provider} all`,
+      ].join("\n"),
+    };
+  }
+
+  const startIndex = (safePage - 1) * effectivePageSize;
+  const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
+  const pageModels = models.slice(startIndex, endIndexExclusive);
+  const providerLabel = await resolveProviderLabelAsync({ ...params, provider });
+  const lines = [
+    `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
+  ];
+  for (const id of pageModels) {
+    const key = `${provider}/${id}`;
+    const label = modelNames.get(key);
+    lines.push(`- ${key}${label && label !== data.modelNames.get(key) ? ` (${label})` : ""}`);
+  }
+  lines.push("", "Switch: /model <provider/model>");
+  if (!all && safePage < pageCount) {
+    lines.push(`More: /models list ${provider} ${safePage + 1}${pageSizeSuffix}`);
+  }
+  if (!all) {
+    lines.push(`All: /models list ${provider} all`);
+  }
+  return { text: withAvailability(lines.join("\n")) };
+}
+
+export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/models",
+    match: (body) => (body.trim().startsWith("/models") ? body.trim() : null),
+  },
+  async (params, commandBodyNormalized) => {
+    const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
+    if (parsed.action === "add") {
+      return commandReply(MODELS_ADD_DEPRECATED_TEXT);
+    }
+
+    const modelsAgentId = params.sessionKey
+      ? resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: params.cfg,
+        })
+      : (params.agentId ?? "main");
+    const currentAgentId = params.agentId ?? "main";
+    const modelsAgentDir =
+      modelsAgentId === currentAgentId && params.agentDir
+        ? params.agentDir
+        : resolveAgentDir(params.cfg, modelsAgentId);
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+    const reply = await resolveModelsCommandReply({
+      cfg: params.cfg,
+      commandBodyNormalized,
+      surface: params.ctx.Surface,
+      currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+      agentId: modelsAgentId,
+      agentDir: modelsAgentDir,
+      workspaceDir:
+        targetSessionEntry?.spawnedWorkspaceDir ??
+        (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
+      sessionEntry: targetSessionEntry,
+    });
+    return reply ? commandReply(reply) : null;
+  },
+);

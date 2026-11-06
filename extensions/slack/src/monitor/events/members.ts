@@ -1,0 +1,146 @@
+import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { readSlackMessages } from "../../actions.js";
+import { SlackSystemEventAuthRetryError } from "../auth.js";
+import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
+import type { SlackMemberChannelEvent } from "../types.js";
+import { qualifySlackConversationId } from "../workspace-routing.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+
+export function registerSlackMemberEvents(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}) {
+  const { ctx, trackEvent } = params;
+
+  for (const verb of ["joined", "left"] as const) {
+    ctx.app.event(
+      `member_${verb}_channel`,
+      async (
+        args: SlackEventMiddlewareArgs<"member_joined_channel" | "member_left_channel"> &
+          AllMiddlewareArgs,
+      ) => {
+        const { event, body, context, client } = args;
+        const eventId = body.event_id;
+        try {
+          const runtimeContext = await params.ctx.readRuntimeContext();
+          const eventScope = resolveSlackMonitorEventScope({
+            ctx: runtimeContext,
+            body,
+            context,
+            client,
+          });
+          if (eventScope === null) {
+            return;
+          }
+          if (runtimeContext.shouldDropMismatchedSlackEvent(body)) {
+            return;
+          }
+          trackEvent?.();
+          const payload: SlackMemberChannelEvent & { inviter?: string } = event;
+          const channelId = payload.channel;
+          const channelInfo = channelId
+            ? await runtimeContext.resolveChannelName(channelId, eventScope)
+            : {};
+          const channelType = channelInfo.type ?? payload.channel_type;
+          if (verb === "joined" && payload.user === runtimeContext.botUserId && channelId) {
+            // Native C/G markers cannot distinguish private channels from multi-person DMs.
+            const roomType = channelInfo.type;
+            if (!roomType) {
+              runtimeContext.runtime.log?.(
+                `slack join introduction skipped: channel=${channelId} reason=channel-type-unavailable`,
+              );
+              return;
+            }
+            if (roomType === "channel" || roomType === "group") {
+              // Joining is conversation admission, not a human message: sender allowlists
+              // and requireMention cannot apply to the bot's own membership event.
+              const roomAllowed = runtimeContext.isChannelAllowed({
+                teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                channelId,
+                channelName: channelInfo.name,
+                channelType: roomType,
+              });
+              const inviterLabel =
+                roomAllowed && payload.inviter
+                  ? ((await runtimeContext.resolveUserName(payload.inviter, eventScope)).name ??
+                    payload.inviter)
+                  : undefined;
+              await reportChannelRoomJoin({
+                cfg: runtimeContext.cfg,
+                channel: "slack",
+                accountId: runtimeContext.accountId,
+                conversationId: qualifySlackConversationId(channelId, eventScope),
+                deliverTo: qualifySlackConversationId(`channel:${channelId}`, eventScope),
+                route: await runtimeContext.resolveSlackSystemEventRoute({
+                  channelId,
+                  channelType: roomType,
+                  eventScope,
+                }),
+                inviterLabel,
+                roomAllowed,
+                resolveRoomContext: async ({ messageLimit }) => {
+                  const purpose = [channelInfo.purpose, channelInfo.topic]
+                    .filter((value): value is string => Boolean(value?.trim()))
+                    .join("\n");
+                  const roomContext = {
+                    title: channelInfo.name ? `#${channelInfo.name}` : undefined,
+                    purpose: purpose || undefined,
+                  };
+                  try {
+                    const { messages } = await readSlackMessages(channelId, {
+                      limit: messageLimit,
+                      client: eventScope?.client ?? runtimeContext.app.client,
+                    });
+                    return {
+                      ...roomContext,
+                      recentMessages: messages
+                        .toReversed()
+                        .flatMap(({ user, text }) =>
+                          text?.trim() ? [{ sender: user, text }] : [],
+                        ),
+                    };
+                  } catch {
+                    return roomContext;
+                  }
+                },
+              });
+              return;
+            }
+          }
+          const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+            ctx: runtimeContext,
+            senderId: payload.user,
+            channelId,
+            channelType,
+            eventKind: `member-${verb}`,
+            eventScope,
+          });
+          if (!ingressContext) {
+            return;
+          }
+          const userInfo = payload.user
+            ? await runtimeContext.resolveUserName(payload.user, eventScope)
+            : {};
+          const userLabel = userInfo?.name ?? payload.user ?? "someone";
+          enqueueRoutedSystemEvent(
+            `Slack: ${userLabel} ${verb} ${ingressContext.channelLabel}.`,
+            ingressContext.route,
+            {
+              contextKey: `slack:member:${eventScope ? `${eventScope.teamId}:` : ""}${verb}:${channelId ?? "unknown"}:${payload.user ?? "unknown"}:${eventId}`,
+            },
+          );
+        } catch (err) {
+          ctx.runtime.error?.(danger(`slack ${verb} handler failed: ${formatErrorMessage(err)}`));
+          if (err instanceof SlackSystemEventAuthRetryError) {
+            throw err;
+          }
+        }
+      },
+    );
+  }
+}

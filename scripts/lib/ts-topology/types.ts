@@ -1,0 +1,107 @@
+import type { Checker, Project } from "typescript/sync";
+
+export type UsageBucket = "internal" | "production" | "test";
+
+export const TOPOLOGY_REPORT_NAMES = [
+  "public-surface-usage",
+  "owner-map",
+  "single-owner-shared",
+  "unused-public-surface",
+  "consumer-topology",
+] as const;
+export type TopologyReportName = (typeof TOPOLOGY_REPORT_NAMES)[number];
+
+export type SymbolKind =
+  | "function"
+  | "class"
+  | "interface"
+  | "type"
+  | "enum"
+  | "variable"
+  | "unknown";
+
+export type ProgramContext = {
+  repoRoot: string;
+  tsconfigPath: string;
+  project: Project;
+  checker: Checker;
+  close: () => void;
+  normalizePath: (filePath: string) => string;
+  relativeToRepo: (filePath: string) => string;
+};
+
+export type CanonicalSymbol = {
+  canonicalKey: string;
+  declarationPath: string;
+  declarationLine: number;
+  kind: SymbolKind;
+  aliasName?: string;
+};
+
+export type PublicEntrypoint = {
+  entrypoint: string;
+  sourcePath: string;
+  importSpecifier: string;
+};
+
+export type TopologyRecord = CanonicalSymbol & {
+  entrypoints: string[];
+  exportNames: string[];
+  publicSpecifiers: string[];
+  internalRefCount: number;
+  productionRefCount: number;
+  testRefCount: number;
+  internalImportCount: number;
+  productionImportCount: number;
+  testImportCount: number;
+  internalConsumers: string[];
+  productionConsumers: string[];
+  testConsumers: string[];
+  productionExtensions: string[];
+  productionPackages: string[];
+  productionOwners: string[];
+  isTypeOnlyCandidate: boolean;
+  sharednessScore: number;
+  moveBackToOwnerScore: number;
+};
+
+export type TopologyScope = {
+  id: string;
+  description: string;
+  entrypoints: PublicEntrypoint[];
+  internalRoots: string[];
+};
+
+export type RankedCandidates = {
+  candidateToMove: TopologyRecord[];
+  duplicatedPublicExports: TopologyRecord[];
+  singleOwnerShared: TopologyRecord[];
+};
+
+export type TopologyEnvelope = {
+  metadata: {
+    tool: "ts-topology";
+    version: 1;
+    generatedAt: string;
+    repoRevision: string | null;
+    tsconfigPath: string;
+  };
+  scope: {
+    id: string;
+    description: string;
+    repoRoot: string;
+    entrypoints: PublicEntrypoint[];
+    includeTests: boolean;
+  };
+  report: TopologyReportName;
+  totals: {
+    exports: number;
+    usedByProduction: number;
+    usedByTests: number;
+    usedInternally: number;
+    singleOwnerShared: number;
+    unused: number;
+  };
+  rankedCandidates?: RankedCandidates;
+  records: TopologyRecord[];
+};

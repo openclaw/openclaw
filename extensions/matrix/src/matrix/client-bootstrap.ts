@@ -1,0 +1,109 @@
+import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { CoreConfig } from "../types.js";
+import type { SharedMatrixClientLease } from "./client/shared.js";
+import type { MatrixClient } from "./sdk.js";
+
+type ResolvedRuntimeMatrixClient = {
+  client: MatrixClient;
+  lease?: SharedMatrixClientLease;
+};
+
+export type MatrixRuntimeClientOptions = {
+  client?: MatrixClient;
+  cfg?: CoreConfig;
+  timeoutMs?: number;
+  accountId?: string | null;
+  readiness?: "none" | "prepared" | "started";
+};
+
+const loadMatrixSharedClientRuntimeDeps = createLazyRuntimeModule(() => import("./client.js"));
+
+async function ensureResolvedClientReadiness(params: {
+  client: MatrixClient;
+  lease?: SharedMatrixClientLease;
+  readiness?: MatrixRuntimeClientOptions["readiness"];
+  preparedByDefault: boolean;
+}): Promise<void> {
+  if (params.readiness === "started") {
+    if (params.lease) {
+      await params.lease.start();
+    } else {
+      await params.client.start();
+    }
+    return;
+  }
+  if (params.readiness === "prepared" || (!params.readiness && params.preparedByDefault)) {
+    await params.client.prepareForOneOff();
+  }
+}
+
+export async function resolveRuntimeMatrixClientWithReadiness(
+  opts: MatrixRuntimeClientOptions,
+): Promise<ResolvedRuntimeMatrixClient> {
+  const assertCurrent = captureChannelReadAuthority();
+  assertCurrent?.();
+  if (opts.client) {
+    await ensureResolvedClientReadiness({
+      client: opts.client,
+      readiness: opts.readiness,
+      preparedByDefault: false,
+    });
+    assertCurrent?.();
+    return { client: opts.client };
+  }
+
+  if (!opts.cfg) {
+    throw new Error(
+      "Matrix runtime client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = opts.cfg;
+  const { acquireSharedMatrixClient } = await loadMatrixSharedClientRuntimeDeps();
+  assertCurrent?.();
+  const lease = await acquireSharedMatrixClient({
+    cfg,
+    timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
+    role: "transient",
+  });
+  try {
+    assertCurrent?.();
+    await ensureResolvedClientReadiness({
+      client: lease.client,
+      lease,
+      readiness: opts.readiness,
+      preparedByDefault: true,
+    });
+    assertCurrent?.();
+  } catch (err) {
+    // Readiness may have initialized Rust crypto before failing. Publish its final
+    // state before relinquishing custody so a normal retry can acquire the store.
+    await lease.release({ mode: "persist" });
+    throw err;
+  }
+  return {
+    client: lease.client,
+    lease,
+  };
+}
+
+export async function withResolvedRuntimeMatrixClient<T>(
+  opts: MatrixRuntimeClientOptions,
+  run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const assertCurrent = captureChannelReadAuthority();
+  assertCurrent?.();
+  const resolved = await resolveRuntimeMatrixClientWithReadiness(opts);
+  try {
+    assertCurrent?.();
+    return await run(resolved.client, resolved.lease?.abortSignal);
+  } finally {
+    try {
+      // Even diagnostic reads may initialize crypto; publish its final state before release.
+      await resolved.lease?.release({ mode: "persist" });
+    } finally {
+      assertCurrent?.();
+    }
+  }
+}

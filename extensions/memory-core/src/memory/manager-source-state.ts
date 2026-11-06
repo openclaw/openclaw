@@ -1,0 +1,133 @@
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  buildFileEntry,
+  listMemoryFiles,
+  runWithConcurrency,
+  type MemoryFileEntry,
+  type MemorySource,
+  type MemoryWorkspaceFiles,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
+
+export type MemorySourceFileStateRow = {
+  path: string;
+  hash: string;
+  mtime?: number;
+  size?: number;
+};
+
+type MemorySourceDatabase = {
+  memory_index_sources: MemorySourceFileStateRow & { source: MemorySource };
+};
+
+type MemorySourceInspection = {
+  source: MemorySource;
+  dirty: boolean;
+  eligible: number | null;
+  issues: string[];
+};
+
+/** Resolve exactly the entries eligible for indexing, including validated multimodal files. */
+export async function resolveMemorySourceFileEntries(params: {
+  workspaceDir: string;
+  settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
+  concurrency: number;
+  onSkippedSymlinkRoot?: (root: string) => void;
+  files?: MemoryWorkspaceFiles;
+}): Promise<MemoryFileEntry[]> {
+  const files = await (params.files?.listFiles ?? listMemoryFiles)(
+    params.workspaceDir,
+    params.settings.extraPaths,
+    params.settings.multimodal,
+    params.onSkippedSymlinkRoot,
+  );
+  return (
+    await runWithConcurrency(
+      files.map(
+        (file) => async () =>
+          await (params.files?.inspectFile ?? buildFileEntry)(
+            file,
+            params.workspaceDir,
+            params.settings.multimodal,
+          ),
+      ),
+      params.concurrency,
+    )
+  ).filter((entry): entry is MemoryFileEntry => entry !== null);
+}
+
+export async function inspectMemorySourceState(params: {
+  readIndexedRows: () => Promise<MemorySourceFileStateRow[]>;
+  workspaceDir: string;
+  settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
+  concurrency: number;
+  files?: MemoryWorkspaceFiles;
+}): Promise<MemorySourceInspection> {
+  const skippedRoots = new Set<string>();
+  const entries = await resolveMemorySourceFileEntries({
+    ...params,
+    onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
+  });
+  const indexedByPath = new Map((await params.readIndexedRows()).map((row) => [row.path, row]));
+  return {
+    source: "memory",
+    dirty:
+      indexedByPath.size !== entries.length ||
+      entries.some((entry) => {
+        const indexed = indexedByPath.get(entry.path);
+        return (
+          indexed?.hash !== entry.hash ||
+          indexed.mtime !== entry.mtimeMs ||
+          indexed.size !== entry.size
+        );
+      }),
+    eligible: entries.length,
+    issues: [
+      ...(entries.length === 0 ? ["no eligible memory files found"] : []),
+      ...Array.from(
+        skippedRoots,
+        (root) =>
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its resolved absolute directory instead`,
+      ),
+    ],
+  };
+}
+
+export function loadMemorySourceFileState(params: {
+  db: EngineConnection;
+  source: MemorySource;
+  paths?: readonly string[];
+}): MemorySourceFileStateRow[] {
+  let query = getNodeSqliteKysely<MemorySourceDatabase>(params.db)
+    .selectFrom("memory_index_sources")
+    .select(["path", "hash", "mtime", "size"])
+    .where("source", "=", params.source);
+  if (params.paths) {
+    query = query.where("path", "in", sqliteStringSet(params.paths));
+  }
+  return executeSqliteQuerySync(params.db, query).rows;
+}
+
+export function refreshMemorySessionSourceState(
+  db: EngineConnection,
+  input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
+): boolean {
+  return (
+    Number(
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<MemorySourceDatabase>(db)
+          .updateTable("memory_index_sources")
+          .set({ hash: input.hash, mtime: input.mtime, size: input.size })
+          .where("path", "=", input.path)
+          .where("source", "=", "sessions")
+          .where("hash", "=", input.expectedHash),
+      ).numAffectedRows,
+    ) === 1
+  );
+}

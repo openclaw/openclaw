@@ -1,0 +1,396 @@
+import { randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { readRequestBodyWithLimit } from "../../infra/http-body.js";
+import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { safeEqualSecret } from "../../security/secret-equal.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import {
+  isNativeHookRelayBridgeStaleRegistrationError,
+  NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+} from "./native-hook-relay-client.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  NativeHookRelayBridgeRegistration,
+} from "./native-hook-relay-contexts.js";
+import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import {
+  deleteNativeHookRelayBridgeRecordIfOwned,
+  pruneNativeHookRelayBridgeRecords,
+  readNativeHookRelayBridgeRecord as readNativeHookRelayBridgeRecordFromStore,
+  renewOrRestoreNativeHookRelayBridgeRecord,
+  writeNativeHookRelayBridgeRecord,
+  type NativeHookRelayBridgeRecord,
+} from "./native-hook-relay-store.js";
+import type {
+  InvokeNativeHookRelayParams,
+  NativeHookRelayProcessResponse,
+  NativeHookRelayProvider,
+} from "./native-hook-relay-types.js";
+import {
+  isJsonObject,
+  normalizePositiveInteger,
+  readNonEmptyString,
+} from "./native-hook-relay-utils.js";
+
+const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
+const log = createSubsystemLogger("agents/harness/native-hook-relay");
+
+export {
+  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+  NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+} from "./native-hook-relay-client.js";
+
+const { relays, relayBridges, pendingOperations } = nativeHookRelayState;
+
+type InvokeNativeHookRelay = (
+  params: InvokeNativeHookRelayParams,
+  signal?: AbortSignal,
+) => Promise<NativeHookRelayProcessResponse>;
+
+type NativeHookRelayBridgeRenewalResult = "renewed" | "unavailable" | "ownership-changed";
+
+type NativeHookRelayBridgeRequestAuth = {
+  provider: NativeHookRelayProvider;
+  relayId: string;
+  token: string;
+  registration: ActiveNativeHookRelayRegistration;
+  bridge: NativeHookRelayBridgeRegistration;
+  invokeRelay: InvokeNativeHookRelay;
+  remote?: boolean;
+};
+
+export function registerNativeHookRelayBridge(
+  registration: ActiveNativeHookRelayRegistration,
+  stateDbPath: string,
+  invokeRelay: InvokeNativeHookRelay,
+): NativeHookRelayBridgeRegistration {
+  const token = randomUUID();
+  const server = createServer();
+  const listening = createDeferredCore();
+  server.once("listening", listening.resolve);
+  server.once("error", listening.reject);
+  const bridge: NativeHookRelayBridgeRegistration = {
+    relayId: registration.relayId,
+    stateDbPath,
+    token,
+    server,
+    ready: listening.promise,
+    pending: listening.promise,
+    cancelStartup: () =>
+      listening.reject(new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR)),
+  };
+  server.on("request", (req, res) => {
+    void handleNativeHookRelayBridgeRequest(req, res, {
+      provider: registration.provider,
+      relayId: registration.relayId,
+      token,
+      registration,
+      bridge,
+      invokeRelay,
+    });
+  });
+  relayBridges.set(registration.relayId, bridge);
+  server.on("error", (error) => {
+    log.debug("native hook relay bridge server error", { error, relayId: registration.relayId });
+  });
+  bridge.ready = listening.promise.then(async () => {
+    assertNativeHookRelayBridgeCurrent(registration, bridge);
+    await pruneNativeHookRelayBridges(stateDbPath);
+    assertNativeHookRelayBridgeCurrent(registration, bridge);
+    const record = resolveNativeHookRelayBridgeRecord(registration, bridge);
+    if (!record) {
+      throw new Error("native hook relay bridge server address unavailable");
+    }
+    await writeNativeHookRelayBridgeRecord({
+      record,
+      stateDbPath,
+      assertCurrent: () => assertNativeHookRelayBridgeCurrent(registration, bridge),
+    });
+  });
+  bridge.pending = bridge.ready;
+  retainNativeHookRelayOperation(bridge.relayId, bridge.ready);
+  server.listen(0, "127.0.0.1");
+  server.unref();
+  return bridge;
+}
+
+export function retainNativeHookRelayOperation(relayId: string, operation: Promise<void>): void {
+  pendingOperations.add(operation);
+  void operation.then(
+    () => pendingOperations.delete(operation),
+    (error: unknown) => {
+      pendingOperations.delete(operation);
+      log.debug("native hook relay operation failed", { error, relayId });
+    },
+  );
+}
+
+export async function drainNativeHookRelayBridge(bridge: NativeHookRelayBridgeRegistration) {
+  let pending: Promise<void>;
+  let failure: { error: unknown } | undefined;
+  do {
+    pending = bridge.pending;
+    try {
+      await pending;
+    } catch (error) {
+      failure ??= { error };
+    }
+  } while (pending !== bridge.pending);
+  if (failure) {
+    throw failure.error;
+  }
+}
+
+function assertNativeHookRelayBridgeCurrent(
+  registration: ActiveNativeHookRelayRegistration,
+  bridge: NativeHookRelayBridgeRegistration,
+): void {
+  if (
+    relays.get(registration.relayId) !== registration ||
+    relayBridges.get(registration.relayId) !== bridge ||
+    bridge.closing
+  ) {
+    throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+  }
+}
+
+async function pruneNativeHookRelayBridges(stateDbPath: string): Promise<void> {
+  // Liveness checks stay outside the transaction; deletion checks the token
+  // owner and current expiry so renewal or replacement wins the race.
+  try {
+    await pruneNativeHookRelayBridgeRecords({
+      currentPid: process.pid,
+      isPidDead: isPidDefinitelyDead,
+      stateDbPath,
+    });
+  } catch (error) {
+    log.debug("native hook relay bridge record prune skipped", { error });
+  }
+}
+
+function resolveNativeHookRelayBridgeRecord(
+  registration: ActiveNativeHookRelayRegistration,
+  bridge: NativeHookRelayBridgeRegistration,
+  expiresAtMs = registration.expiresAtMs,
+): NativeHookRelayBridgeRecord | undefined {
+  const address = bridge.server.address();
+  if (!address || typeof address === "string") {
+    log.debug("native hook relay bridge server address unavailable", {
+      relayId: registration.relayId,
+    });
+    return undefined;
+  }
+  return {
+    relayId: registration.relayId,
+    pid: process.pid,
+    hostname: "127.0.0.1",
+    port: address.port,
+    token: bridge.token,
+    expiresAtMs,
+  };
+}
+
+export async function renewNativeHookRelayBridgeRecord(
+  registration: ActiveNativeHookRelayRegistration,
+  bridge: NativeHookRelayBridgeRegistration,
+  expiresAtMs: number,
+): Promise<NativeHookRelayBridgeRenewalResult> {
+  // Keep each rejection observable without poisoning a later eligible renewal.
+  const renewal = bridge.pending
+    .catch(() => undefined)
+    .then<NativeHookRelayBridgeRenewalResult>(async () => {
+      assertNativeHookRelayBridgeCurrent(registration, bridge);
+      const record = resolveNativeHookRelayBridgeRecord(registration, bridge, expiresAtMs);
+      if (!record) {
+        return "unavailable";
+      }
+      return (await renewOrRestoreNativeHookRelayBridgeRecord({
+        record,
+        stateDbPath: bridge.stateDbPath,
+        assertCurrent: () => assertNativeHookRelayBridgeCurrent(registration, bridge),
+      }))
+        ? "renewed"
+        : "ownership-changed";
+    });
+  bridge.pending = renewal.then(() => undefined);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.pending);
+  return await renewal;
+}
+
+export function unregisterNativeHookRelayBridge(
+  relayId: string,
+  options?: {
+    deferListenerCloseMs?: number;
+    expectedBridge?: NativeHookRelayBridgeRegistration;
+  },
+): Promise<void> | undefined {
+  const bridge = options?.expectedBridge ?? relayBridges.get(relayId);
+  if (!bridge) {
+    return undefined;
+  }
+  if (bridge.closing) {
+    return bridge.closing;
+  }
+  if (relayBridges.get(relayId) === bridge) {
+    relayBridges.delete(relayId);
+  }
+  if (!bridge.server.listening) {
+    bridge.cancelStartup();
+  }
+  // Stop advertising the retired endpoint before its listener can close.
+  // Token-scoped removal cannot delete an already-published successor.
+  bridge.closing = bridge.pending
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        await deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
+      } finally {
+        const deferListenerCloseMs = normalizePositiveInteger(options?.deferListenerCloseMs, 0);
+        if (deferListenerCloseMs > 0) {
+          // Captured old locators keep receiving stale-owner rejection during replacement.
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, deferListenerCloseMs).unref();
+          });
+        }
+        await new Promise<void>((resolve, reject) => {
+          bridge.server.close((error?: Error) => {
+            if (error && !hasErrnoCode(error, "ERR_SERVER_NOT_RUNNING")) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
+    });
+  bridge.pending = bridge.closing;
+  retainNativeHookRelayOperation(bridge.relayId, bridge.closing);
+  return bridge.closing;
+}
+
+export async function handleNativeHookRelayBridgeRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  auth: NativeHookRelayBridgeRequestAuth,
+): Promise<void> {
+  const requestAbort = createHttpRequestAbortSignal(req, res);
+  const fail = (statusCode: number, error: string) =>
+    writeNativeHookRelayBridgeJson(res, statusCode, { ok: false, error });
+  try {
+    if (req.method !== "POST" || (!auth.remote && req.url !== "/invoke")) {
+      fail(404, "not found");
+      return;
+    }
+    if (!safeEqualSecret(req.headers.authorization, `Bearer ${auth.token}`)) {
+      fail(403, "forbidden");
+      return;
+    }
+    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+      fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+      return;
+    }
+    const body = auth.remote
+      ? await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES,
+          timeoutMs: 5_000,
+        })
+      : // Preserve the native iterator's request/socket closure on overflow.
+        (
+          await readByteStreamWithLimit(req[Symbol.asyncIterator](), {
+            maxBytes: MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES,
+            onOverflow: () => new Error("native hook relay bridge payload too large"),
+          })
+        ).toString("utf8");
+    const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
+    if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
+      fail(403, "native hook relay bridge target mismatch");
+      return;
+    }
+    // Remote credentials never use the local canonical-fork generation grace.
+    if (
+      !isCurrentNativeHookRelayBridgeRequest(auth) ||
+      (auth.remote && payload.generation !== auth.registration.generation)
+    ) {
+      fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+      return;
+    }
+    const result = await runInDetachedAsyncContext(() =>
+      auth.invokeRelay({ ...payload, requireGeneration: true }, requestAbort.signal),
+    );
+    writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
+  } catch (error) {
+    if (requestAbort.signal.aborted) {
+      return;
+    }
+    fail(
+      isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
+      auth.remote
+        ? "Native hook callback failed"
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    );
+  } finally {
+    requestAbort.cleanup();
+  }
+}
+
+function isCurrentNativeHookRelayBridgeRequest(auth: NativeHookRelayBridgeRequestAuth): boolean {
+  return (
+    relays.get(auth.relayId) === auth.registration &&
+    relayBridges.get(auth.relayId) === auth.bridge &&
+    !auth.bridge.closing
+  );
+}
+
+function readNativeHookRelayBridgePayload(value: unknown): InvokeNativeHookRelayParams {
+  if (!isJsonObject(value)) {
+    throw new Error("native hook relay bridge payload must be an object");
+  }
+  return {
+    provider: value.provider,
+    relayId: value.relayId,
+    generation: readNonEmptyString(value.generation, "generation"),
+    event: value.event,
+    rawPayload: value.rawPayload,
+  };
+}
+
+function writeNativeHookRelayBridgeJson(
+  res: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+export async function readNativeHookRelayBridgeRecordIfExists(
+  relayId: string,
+  stateDbPath?: string,
+): Promise<NativeHookRelayBridgeRecord | undefined> {
+  try {
+    return await readNativeHookRelayBridgeRecordFromStore({ relayId, stateDbPath });
+  } catch (error) {
+    log.debug("failed to read native hook relay bridge record", { error, relayId });
+  }
+  return undefined;
+}
+
+export async function clearNativeHookRelayBridgesForTests(): Promise<void> {
+  for (const relayId of relayBridges.keys()) {
+    void unregisterNativeHookRelayBridge(relayId);
+  }
+  while (pendingOperations.size > 0) {
+    await Promise.allSettled(pendingOperations);
+  }
+}

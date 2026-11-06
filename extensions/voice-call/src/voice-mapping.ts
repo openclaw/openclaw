@@ -1,0 +1,36 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+const OPENAI_TO_POLLY_MAP = new Map<string, string>([
+  ["alloy", "Polly.Joanna"], // neutral, warm
+  ["echo", "Polly.Matthew"], // male, warm
+  ["fable", "Polly.Amy"], // British, expressive
+  ["onyx", "Polly.Brian"], // deep male
+  ["nova", "Polly.Salli"], // female, friendly
+  ["shimmer", "Polly.Kimberly"], // female, clear
+]);
+
+const DEFAULT_POLLY_VOICE = "Polly.Joanna";
+
+export function mapVoiceToPolly(voice: string | undefined): string {
+  if (!voice) {
+    return DEFAULT_POLLY_VOICE;
+  }
+
+  if (voice.startsWith("Polly.") || voice.startsWith("Google.")) {
+    return voice;
+  }
+
+  // Voice names are caller-controlled (Twilio playTts / notify TwiML), so a
+  // name such as "constructor" or "__proto__" must not read through to
+  // Object.prototype and interpolate Function/Object into <Say voice="...">.
+  return OPENAI_TO_POLLY_MAP.get(normalizeLowercaseStringOrEmpty(voice)) ?? DEFAULT_POLLY_VOICE;
+}

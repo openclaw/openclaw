@@ -1,0 +1,67 @@
+---
+summary: "CLI reference for `openclaw uninstall` (remove gateway service + local data)"
+read_when:
+  - You want to remove the gateway service and/or local state
+  - You want a dry-run first
+title: "Uninstall CLI"
+---
+
+# `openclaw uninstall`
+
+Uninstall the Gateway service and/or local data. There is no separate CLI-removal scope.
+Remove any remaining CLI through the [installation-specific steps](/install/uninstall#remove-the-cli).
+
+## Options
+
+| Flag                | Default | Description                                          |
+| ------------------- | ------- | ---------------------------------------------------- |
+| `--service`         | `false` | Remove the Gateway service.                          |
+| `--state`           | `false` | Remove state and config.                             |
+| `--workspace`       | `false` | Remove workspace directories.                        |
+| `--app`             | `false` | Remove the macOS app.                                |
+| `--all`             | `false` | Shorthand for `--service --state --workspace --app`. |
+| `--yes`             | `false` | Skip confirmation prompts.                           |
+| `--non-interactive` | `false` | Disable prompts; requires `--yes`.                   |
+| `--dry-run`         | `false` | Print planned actions without removing files.        |
+
+With no scope flags, an interactive multiselect prompts for which components
+to remove (defaults to the Gateway service only). Take an archive with
+[`openclaw backup`](/cli/backup) first if you may want the state back.
+
+## Examples
+
+```bash
+openclaw backup create
+openclaw uninstall
+openclaw uninstall --service --yes --non-interactive
+openclaw uninstall --state --workspace --yes --non-interactive
+openclaw uninstall --all --yes
+openclaw uninstall --dry-run
+```
+
+## Notes
+
+Uninstall reports each requested scope and exits nonzero if any requested cleanup fails or is blocked. A failed gateway service inspection, stop, or uninstall blocks state and workspace mutation, but independent macOS app cleanup is still attempted. After service teardown is safe, other permitted scopes continue so failures can be reported together. On non-macOS systems, `--app` reports that the scope is not applicable.
+
+- Run `openclaw backup create` first for a restorable snapshot before removing
+  state or workspaces.
+- Before removing state, `--state` requires exclusive state ownership. If an
+  unmanaged or externally supervised Gateway is still running, uninstall
+  refuses and asks you to stop it first.
+- `--state` preserves configured workspace directories unless `--workspace` is
+  also selected.
+- Before deleting completion caches, `--state` removes their literal source
+  registrations from supported shell profiles, including both Bash startup
+  files and both Windows PowerShell profile directories. It preserves other
+  state directories' registrations, user-managed portable hooks, orphan
+  markers, and unrelated profile content and permissions.
+- `--dry-run --state` reports affected profiles without changing them. If a
+  profile cannot be read or updated, state removal stops; resolve the reported
+  profile error and retry. A concurrent profile edit detected before replacement
+  also stops cleanup. Profiles are not changed when state ownership is blocked.
+  `reset` does not remove completion registrations.
+
+## Related
+
+- [CLI reference](/cli)
+- [Uninstall](/install/uninstall)

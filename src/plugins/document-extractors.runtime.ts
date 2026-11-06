@@ -1,0 +1,68 @@
+/** Resolves bundled document extractor providers from enabled manifest contracts. */
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
+import { normalizePluginsConfig } from "./config-state.js";
+import type {
+  DocumentExtractorPlugin,
+  PluginDocumentExtractorEntry,
+} from "./document-extractor-types.js";
+import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
+import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
+
+const log = createSubsystemLogger("plugins");
+
+/** Returns enabled document extractors in deterministic auto-detect order. */
+export function resolvePluginDocumentExtractors(params?: {
+  config?: OpenClawConfig;
+}): PluginDocumentExtractorEntry[] {
+  const extractors: PluginDocumentExtractorEntry[] = [];
+  const loadErrors: unknown[] = [];
+  // Document allowlists stay restrictive when upgrade compatibility broadens activation.
+  const allowlist = normalizePluginsConfig(params?.config?.plugins).allow;
+  for (const plugin of resolveEnabledBundledManifestContractPlugins({
+    config: params?.config,
+    onlyPluginIds: allowlist.length > 0 ? allowlist : undefined,
+    contract: "documentExtractors",
+  })) {
+    let loaded: PluginDocumentExtractorEntry[] | null;
+    try {
+      loaded = loadBundledPublicArtifactEntries({
+        dirName: plugin.id,
+        pluginId: plugin.id,
+        owner: plugin,
+        artifactCandidates: ["document-extractor.js", "document-extractor-api.js"],
+        suffix: "DocumentExtractor",
+        isArtifact: (value): value is DocumentExtractorPlugin =>
+          isRecord(value) &&
+          typeof value.id === "string" &&
+          typeof value.label === "string" &&
+          Array.isArray(value.mimeTypes) &&
+          value.mimeTypes.every((mimeType) => typeof mimeType === "string" && mimeType.trim()) &&
+          (value.autoDetectOrder === undefined || typeof value.autoDetectOrder === "number") &&
+          typeof value.extract === "function",
+        partialFailureLabel: "document extractors",
+      });
+    } catch (error) {
+      loadErrors.push(error);
+      continue;
+    }
+    if (loaded) {
+      extractors.push(...loaded);
+    }
+  }
+  if (extractors.length === 0 && loadErrors.length > 0) {
+    throw new Error("Unable to load document extractor plugins", {
+      cause: loadErrors.length === 1 ? loadErrors[0] : new AggregateError(loadErrors),
+    });
+  }
+  for (const error of loadErrors) {
+    log.warn("Unable to load some document extractor plugins; using healthy extractors", {
+      error,
+      detail: formatErrorMessage(error),
+    });
+  }
+  return sortPluginEntriesForAutoDetect(extractors);
+}

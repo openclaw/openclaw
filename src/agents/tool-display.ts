@@ -1,0 +1,124 @@
+/**
+ * User-facing tool display formatter.
+ *
+ * Builds labels and compact details from tool metadata without affecting execution semantics.
+ */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { shortenHomeInString } from "../utils.js";
+import { unwrapToolCallForDisplay } from "./tool-display-call.js";
+import {
+  defaultTitle,
+  formatDetailKey,
+  normalizeToolDisplayName,
+  resolveToolDetailForArgs,
+} from "./tool-display-common.js";
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
+import type { ToolDetailMode } from "./tool-display-exec.js";
+
+type ToolDisplay = {
+  name: string;
+  icon: string;
+  title: string;
+  label: string;
+  detail?: string;
+};
+
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback;
+const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools;
+const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
+  agentId: "agent",
+  sessionKey: "session",
+  targetId: "target",
+  targetUrl: "url",
+  nodeId: "node",
+  requestId: "request",
+  messageId: "message",
+  threadId: "thread",
+  channelId: "channel",
+  guildId: "guild",
+  userId: "user",
+  runTimeoutSeconds: "timeout",
+  timeoutSeconds: "timeout",
+  includeTools: "tools",
+  pollQuestion: "poll",
+  maxChars: "max chars",
+};
+
+/** Resolves the display model for a tool invocation. */
+export function resolveToolDisplay(params: {
+  name?: string;
+  args?: unknown;
+  meta?: string;
+  detailMode?: ToolDetailMode;
+}): ToolDisplay {
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
+  const key = normalizeLowercaseStringOrEmpty(name);
+  const spec = TOOL_MAP[key];
+  const title = spec?.title ?? defaultTitle(name);
+  const label = spec?.label ?? title;
+  const detail = resolveToolDetailForArgs({
+    toolKey: key,
+    args: call.args,
+    meta: params.meta,
+    spec,
+    fallbackDetailKeys: FALLBACK.detailKeys,
+    detailMode: "summary",
+    toolDetailMode: params.detailMode,
+    detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
+  });
+  return {
+    name,
+    icon: spec?.icon ?? FALLBACK.icon,
+    title,
+    label,
+    detail: detail ? shortenHomeInString(detail) : detail,
+  };
+}
+
+/** Formats detail text for display. */
+export function formatToolDetail(display: ToolDisplay): string | undefined {
+  return display.detail || undefined;
+}
+
+export function inferToolMetaFromArgsCore(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolDetailMode },
+): string | undefined {
+  return formatToolDetail(
+    resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode }),
+  );
+}
+
+/**
+ * Shell-family tools render their command as the whole line instead of
+ * "Label: detail". Backends spell the same tool differently — the Claude CLI
+ * sends "Bash" where embedded runs send "bash"/"exec" — so every caller must
+ * compare the normalized name or the shell line silently loses its detail.
+ */
+export function isShellToolDisplayName(name: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return normalized === "bash" || normalized === "exec" || normalized === "shell";
+}
+
+/** Provider-defined tool names are not enough: namespaced tools can carry executable commands. */
+export function isCommandBearingToolCall(name: string | undefined, args?: unknown): boolean {
+  if (isShellToolDisplayName(name)) {
+    return true;
+  }
+  return normalizeOptionalString(asOptionalObjectRecord(args)?.command) !== undefined;
+}
+
+/** Builds the compact one-line summary shown in transcripts and logs. */
+export function formatToolSummary(display: ToolDisplay): string {
+  const detail = formatToolDetail(display);
+  if (detail && isShellToolDisplayName(display.name)) {
+    return detail;
+  }
+  return detail ? `${display.label}: ${detail}` : display.label;
+}

@@ -1,0 +1,242 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildDefaultControlUiAllowedOrigins,
+  hasConfiguredControlUiAllowedOrigins,
+  isGatewayNonLoopbackBindMode,
+  resolveGatewayPortWithDefault,
+} from "../../../config/gateway-control-ui-origins.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { deleteRetiredPath } from "./legacy-config-record-shared.js";
+
+const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
+  ["0.0.0.0", "lan"],
+  ["::", "lan"],
+  ["[::]", "lan"],
+  ["*", "lan"],
+  ["127.0.0.1", "loopback"],
+  ["localhost", "loopback"],
+  ["::1", "loopback"],
+  ["[::1]", "loopback"],
+]);
+
+function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized ? (LEGACY_GATEWAY_BIND_HOST_ALIASES.get(normalized) ?? null) : null;
+}
+
+function escapeControlForLog(value: string): string {
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+}
+
+export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  {
+    id: "gateway.controlUi.experimental.claws->templates",
+    legacyRules: [
+      {
+        path: ["gateway", "controlUi", "experimental", "claws"],
+        message:
+          'gateway.controlUi.experimental.claws moved to gateway.controlUi.experimental.templates. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      const experimental = getRecord(getRecord(getRecord(raw.gateway)?.controlUi)?.experimental);
+      if (!experimental || !Object.hasOwn(experimental, "claws")) {
+        return;
+      }
+      if (Object.hasOwn(experimental, "templates")) {
+        changes.push(
+          "Removed gateway.controlUi.experimental.claws; kept explicit gateway.controlUi.experimental.templates.",
+        );
+      } else {
+        experimental.templates = experimental.claws;
+        changes.push(
+          "Moved gateway.controlUi.experimental.claws to gateway.controlUi.experimental.templates.",
+        );
+      }
+      delete experimental.claws;
+    },
+  },
+  {
+    id: "gateway.control-ui-tool-titles-remove",
+    legacyRules: [
+      {
+        path: ["gateway", "controlUi", "toolTitles"],
+        message:
+          'gateway.controlUi.toolTitles is retired. Tool activity uses agent-provided descriptions automatically, without utility-model calls. Run "openclaw doctor --fix" to remove it.',
+      },
+    ],
+    apply: (raw, changes) => {
+      if (deleteRetiredPath(getRecord(raw.gateway)?.controlUi, ["toolTitles"])) {
+        changes.push(
+          "Removed retired gateway.controlUi.toolTitles; tool activity descriptions are automatic and make no utility-model calls.",
+        );
+      }
+    },
+  },
+  {
+    id: "gateway.tailscale.service-name-remove",
+    legacyRules: [
+      {
+        path: ["gateway", "tailscale", "serviceName"],
+        message:
+          'gateway.tailscale.serviceName is retired because named Services require persistent background routes that cannot follow the Gateway lifecycle. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!tailscale || !Object.hasOwn(tailscale, "serviceName")) {
+        return;
+      }
+      const wasManagedService = tailscale.mode === "serve";
+      delete tailscale.serviceName;
+      if (wasManagedService) {
+        tailscale.mode = "off";
+      }
+      changes.push(
+        wasManagedService
+          ? "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
+              "Inspect the retained Service route, then run `tailscale serve clear <service-name>`; set gateway.tailscale.mode=serve to use device Serve instead."
+          : "Removed retired gateway.tailscale.serviceName; the current Tailscale mode is unchanged because named Services applied only to Serve.",
+      );
+    },
+  },
+  {
+    id: "gateway.tailscale.reset-on-exit-remove",
+    legacyRules: [
+      {
+        path: ["gateway", "tailscale", "resetOnExit"],
+        message:
+          'gateway.tailscale.resetOnExit is retired because managed routes now follow the Gateway lifecycle automatically. Run "openclaw doctor --fix".',
+        match: (value) => typeof value === "boolean",
+      },
+    ],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!tailscale || !Object.hasOwn(tailscale, "resetOnExit")) {
+        return;
+      }
+      const cleanupWasEnabled = tailscale.resetOnExit === true;
+      delete tailscale.resetOnExit;
+      changes.push(
+        cleanupWasEnabled
+          ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now end automatically with the Gateway lifecycle."
+          : "Removed retired gateway.tailscale.resetOnExit config.",
+      );
+    },
+  },
+  {
+    id: "gateway.control-ui-device-auth-bypass->pairing-migration",
+    legacyRules: [
+      {
+        path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
+        message:
+          'gateway.controlUi.dangerouslyDisableDeviceAuth is retired and ignored. Control UI browsers pair through the normal device flow; run "openclaw doctor --fix" to remove the legacy key.',
+        match: (value) => typeof value === "boolean",
+      },
+    ],
+    apply: (raw, changes) => {
+      if (!deleteRetiredPath(getRecord(raw.gateway)?.controlUi, ["dangerouslyDisableDeviceAuth"])) {
+        return;
+      }
+      changes.push("Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.");
+    },
+  },
+  {
+    id: "gateway.port-oob-repair",
+    legacyRules: [
+      {
+        path: ["gateway", "port"],
+        message:
+          'gateway.port is outside the valid TCP range (1–65535) and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+        match: (value) => typeof value === "number" && (value < 1 || value > 65_535),
+      },
+    ],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "port")) {
+        return;
+      }
+      const port = gateway.port;
+      if (typeof port !== "number" || (port >= 1 && port <= 65_535)) {
+        return;
+      }
+      delete gateway.port;
+      if (Object.keys(gateway).length === 0) {
+        delete raw.gateway;
+      }
+      changes.push(
+        `Removed out-of-range gateway.port (${String(port)}). ` +
+          `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
+      );
+    },
+  },
+  {
+    id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bind = normalizeLegacyGatewayBindHostAlias(gateway.bind) ?? gateway.bind;
+      if (!isGatewayNonLoopbackBindMode(bind)) {
+        return;
+      }
+      const controlUi = getRecord(gateway.controlUi) ?? {};
+      if (
+        hasConfiguredControlUiAllowedOrigins({
+          allowedOrigins: controlUi.allowedOrigins,
+          publicOrigin: gateway.publicOrigin,
+          dangerouslyAllowHostHeaderOriginFallback:
+            controlUi.dangerouslyAllowHostHeaderOriginFallback,
+        })
+      ) {
+        return;
+      }
+      const port = resolveGatewayPortWithDefault(gateway.port);
+      const origins = buildDefaultControlUiAllowedOrigins({
+        port,
+        bind,
+        customBindHost:
+          typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined,
+      });
+      gateway.controlUi = { ...controlUi, allowedOrigins: origins };
+      changes.push(
+        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${bind}. ` +
+          "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
+      );
+    },
+  },
+  {
+    id: "gateway.bind.host-alias->bind-mode",
+    legacyRules: [
+      {
+        path: ["gateway", "bind"],
+        message:
+          'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
+        match: (value) => normalizeLegacyGatewayBindHostAlias(value) !== null,
+        requireSourceLiteral: true,
+      },
+    ],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bindRaw = gateway.bind;
+      if (typeof bindRaw !== "string") {
+        return;
+      }
+
+      const mapped = normalizeLegacyGatewayBindHostAlias(bindRaw);
+      if (!mapped) {
+        return;
+      }
+
+      gateway.bind = mapped;
+      changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
+    },
+  },
+];

@@ -1,0 +1,54 @@
+// OC Path tests cover edit emit roundtrip plugin behavior.
+import { describe, expect, it } from "vitest";
+import { setJsoncOcPath } from "../../jsonc/edit.js";
+import { parseJsonc } from "../../jsonc/parse.js";
+import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
+import { parseOcPath } from "../../oc-path.js";
+
+describe("edit-then-emit round-trip", () => {
+  it("jsonc nested edit preserves untouched siblings", () => {
+    const ast = parseJsonc('{ "a": 1, "b": { "c": 2, "d": 3 }, "e": 4 }');
+    const r = setJsoncOcPath(ast, parseOcPath("oc://config/b.c"), {
+      kind: "number",
+      value: 99,
+    });
+    expect(JSON.parse(r.raw)).toEqual({
+      a: 1,
+      b: { c: 99, d: 3 },
+      e: 4,
+    });
+  });
+
+  it("jsonc edit composes: two sequential edits both land", () => {
+    let ast = parseJsonc('{ "a": 1, "b": 2 }');
+    let r = setJsoncOcPath(ast, parseOcPath("oc://config/a"), {
+      kind: "number",
+      value: 10,
+    });
+    ast = r;
+    r = setJsoncOcPath(ast, parseOcPath("oc://config/b"), {
+      kind: "number",
+      value: 20,
+    });
+    ast = r;
+    expect(JSON.parse(ast.raw)).toEqual({ a: 10, b: 20 });
+  });
+
+  it("jsonc parser-backed edit preserves comments", () => {
+    const raw = '{\n  "k": 1 // comment\n}\n';
+    const ast = parseJsonc(raw);
+    const r = setJsoncOcPath(ast, parseOcPath("oc://config/k"), {
+      kind: "number",
+      value: 2,
+    });
+    expect(r.raw).toContain("// comment");
+    const reparsed = resolveJsoncOcPath(r, parseOcPath("oc://config/k"));
+    expect(reparsed?.kind).toBe("object-entry");
+    if (reparsed?.kind === "object-entry") {
+      expect(reparsed.node.value.kind).toBe("number");
+      if (reparsed.node.value.kind === "number") {
+        expect(reparsed.node.value.value).toBe(2);
+      }
+    }
+  });
+});

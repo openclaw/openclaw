@@ -1,0 +1,223 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
+import {
+  expectedIntegrityForUpdate,
+  isPackageVersionDowngrade,
+  readInstalledPackageVersion,
+} from "../infra/package-update-utils.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
+import { resolvePluginInstallTransactionRequest } from "../plugins/install-transaction.js";
+import type { PluginLifecycleLeaseContext } from "../plugins/plugin-lifecycle-lease.js";
+import { stageHookInstall } from "./install-record-transaction.js";
+import {
+  installHooksFromNpmSpec,
+  type HookNpmIntegrityDriftParams,
+  resolveHookInstallDir,
+} from "./install.js";
+import { readHookInstalls } from "./installs.js";
+
+type HookPackUpdateOutcome = {
+  hookId: string;
+  status: "updated" | "unchanged" | "skipped" | "error";
+  message: string;
+  currentVersion?: string;
+  nextVersion?: string;
+};
+
+/** Integrity drift payload enriched with hook pack identity and dry-run state. */
+type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
+  hookId: string;
+  resolvedSpec?: string;
+  resolvedVersion?: string;
+  dryRun: boolean;
+};
+
+/** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
+export async function updateNpmInstalledHookPacks(params: {
+  config: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  logger?: Parameters<typeof installHooksFromNpmSpec>[0]["logger"];
+  hookIds?: string[];
+  dryRun?: boolean;
+  lease?: PluginLifecycleLeaseContext;
+  beforePersistentApply?: () => void;
+  specOverrides?: Record<string, string>;
+  onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+}) {
+  const logger = params.logger ?? {};
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
+  // The caller owns the config commit and settles every staged payload/record together.
+  const persistence = params.dryRun
+    ? undefined
+    : {
+        lease: expectDefined(params.lease, "hook update lifecycle lease"),
+        transactions: expectDefined(
+          transactionRequest?.transactionSink,
+          "hook update transaction sink",
+        ),
+      };
+  const beforePersistentApply = () => {
+    persistence?.lease.assertOwned();
+    params.beforePersistentApply?.();
+  };
+  if (persistence) {
+    beforePersistentApply();
+  }
+  const installs = readHookInstalls(persistence ? { path: persistence.lease.databasePath } : {});
+  const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
+  const outcomes: HookPackUpdateOutcome[] = [];
+  let changed = false;
+
+  for (const hookId of targets) {
+    const record = installs[hookId];
+    if (!record) {
+      outcomes.push({
+        hookId,
+        status: "skipped",
+        message: `No install record for hook pack "${hookId}".`,
+      });
+      continue;
+    }
+    if (record.source !== "npm") {
+      outcomes.push({
+        hookId,
+        status: "skipped",
+        message: `Skipping hook pack "${hookId}" (source: ${record.source}).`,
+      });
+      continue;
+    }
+
+    const effectiveSpec = params.specOverrides?.[hookId] ?? record.spec;
+    // Only enforce the stored integrity when the update uses the same spec.
+    // Spec overrides intentionally resolve a new tarball identity.
+    const expectedIntegrity =
+      effectiveSpec === record.spec
+        ? expectedIntegrityForUpdate(record.spec, record.integrity)
+        : undefined;
+    if (!effectiveSpec) {
+      outcomes.push({
+        hookId,
+        status: "skipped",
+        message: `Skipping hook pack "${hookId}" (missing npm spec).`,
+      });
+      continue;
+    }
+
+    let installPath: string;
+    try {
+      installPath = record.installPath ?? resolveHookInstallDir(hookId);
+    } catch (err) {
+      outcomes.push({
+        hookId,
+        status: "error",
+        message: `Invalid install path for hook pack "${hookId}": ${String(err)}`,
+      });
+      continue;
+    }
+    const currentVersion = await readInstalledPackageVersion(installPath);
+    // Preserve the callback's captured options and receiver during asynchronous installation.
+    const integrityDriftContext = {
+      hookId,
+      dryRun: Boolean(params.dryRun),
+      logger,
+      onIntegrityDrift: params.onIntegrityDrift,
+    };
+    const result = await installHooksFromNpmSpec(
+      requestDeferredPackageDirInstall(
+        {
+          config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          spec: effectiveSpec,
+          mode: "update",
+          dryRun: params.dryRun,
+          beforePersistentApply,
+          expectedHookPackId: hookId,
+          expectedIntegrity,
+          onIntegrityDrift: async (drift) => {
+            const payload: HookPackUpdateIntegrityDriftParams = {
+              hookId: integrityDriftContext.hookId,
+              spec: drift.spec,
+              expectedIntegrity: drift.expectedIntegrity,
+              actualIntegrity: drift.actualIntegrity,
+              resolution: drift.resolution,
+              resolvedSpec: drift.resolution.resolvedSpec,
+              resolvedVersion: drift.resolution.version,
+              dryRun: integrityDriftContext.dryRun,
+            };
+            if (integrityDriftContext.onIntegrityDrift) {
+              return await integrityDriftContext.onIntegrityDrift(payload);
+            }
+            integrityDriftContext.logger.warn?.(
+              `Integrity drift for hook pack "${integrityDriftContext.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+            );
+            return false;
+          },
+          logger,
+        },
+        transactionRequest?.assertOwned,
+      ),
+    );
+
+    if (!result.ok) {
+      outcomes.push({
+        hookId,
+        status: "error",
+        message: `Failed to ${params.dryRun ? "check" : "update"} hook pack "${hookId}": ${result.error}`,
+      });
+      continue;
+    }
+
+    const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
+    const currentLabel = currentVersion ?? "unknown";
+    const nextLabel = nextVersion ?? "unknown";
+    const status =
+      currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
+    const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
+
+    if (persistence) {
+      persistence.transactions.push(
+        await stageHookInstall({
+          update: {
+            hookId,
+            source: "npm",
+            spec: effectiveSpec,
+            installPath: result.targetDir,
+            version: nextVersion,
+            ...buildNpmResolutionFields(result.npmResolution),
+            hooks: result.hooks,
+          },
+          payloadTransaction: resolvePackageDirInstallTransaction(result),
+          lease: persistence.lease,
+          beforePersistentApply,
+        }),
+      );
+      changed = true;
+    }
+    const action = persistence
+      ? downgraded
+        ? "Downgraded"
+        : "Updated"
+      : downgraded
+        ? "Would downgrade"
+        : "Would update";
+    outcomes.push({
+      hookId,
+      status,
+      currentVersion,
+      nextVersion,
+      message:
+        status === "unchanged"
+          ? persistence
+            ? `Hook pack "${hookId}" already at ${currentLabel}.`
+            : `Hook pack "${hookId}" is up to date (${currentLabel}).`
+          : `${action} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+    });
+  }
+
+  return { config: params.config, changed, outcomes };
+}

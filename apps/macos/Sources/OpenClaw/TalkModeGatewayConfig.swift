@@ -1,0 +1,66 @@
+import Foundation
+import OpenClawKit
+
+struct TalkModeGatewayConfigState {
+    let snapshot: TalkConfigSnapshot
+    let voiceId: String?
+    let modelId: String?
+    let outputFormat: String?
+    let apiKey: String?
+    let referenceAudioPath: String?
+    let referenceText: String?
+
+    var interruptOnSpeech: Bool {
+        self.snapshot.interruptOnSpeech ?? true
+    }
+
+    var hasGatewayRealtimeRelayTuple: Bool {
+        self.snapshot.realtime.mode == "realtime" &&
+            self.snapshot.realtime.transport == "gateway-relay" &&
+            self.snapshot.realtime.brain == "agent-consult"
+    }
+}
+
+enum TalkModeGatewayConfigParser {
+    static func parse(
+        snapshot: ConfigSnapshot? = nil,
+        defaultProvider: String = "elevenlabs",
+        defaultModelIdFallback: String,
+        defaultSilenceTimeoutMs: Int,
+        envVoice: String?,
+        sagVoice: String?,
+        envApiKey: String?) -> TalkModeGatewayConfigState
+    {
+        let talk = snapshot?.config?["talk"]?.dictionaryValue
+        let common = TalkConfigSnapshot(
+            talk, defaultProvider: defaultProvider, defaultSilenceTimeoutMs: defaultSilenceTimeoutMs)
+        let activeProvider = common.activeProvider
+        let activeConfig = common.providerConfig
+        let voice = activeConfig?["voiceId"]?.stringValue
+        let resolvedModel = activeConfig?["modelId"]?.stringValue?.nonEmpty
+            ?? (activeProvider == defaultProvider ? defaultModelIdFallback : nil)
+        let apiKey = activeConfig?["apiKey"]?.stringValue
+        let resolvedVoice: String? = if activeProvider == defaultProvider {
+            (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
+                (envVoice?.isEmpty == false ? envVoice : nil) ??
+                (sagVoice?.isEmpty == false ? sagVoice : nil)
+        } else {
+            (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil)
+        }
+        let resolvedApiKey: String? = if activeProvider == defaultProvider {
+            (envApiKey?.isEmpty == false ? envApiKey : nil) ??
+                (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
+        } else {
+            nil
+        }
+
+        return TalkModeGatewayConfigState(
+            snapshot: common,
+            voiceId: resolvedVoice,
+            modelId: resolvedModel,
+            outputFormat: activeConfig?["outputFormat"]?.stringValue,
+            apiKey: resolvedApiKey,
+            referenceAudioPath: activeConfig?["referenceAudioPath"]?.stringValue?.nonEmpty,
+            referenceText: activeConfig?["referenceText"]?.stringValue?.nonEmpty)
+    }
+}

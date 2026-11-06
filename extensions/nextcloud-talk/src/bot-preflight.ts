@@ -1,0 +1,142 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
+import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
+import { buildNextcloudTalkOcsOptions, readNextcloudTalkErrorBody } from "./guarded-response.js";
+
+const BOT_FEATURE_RESPONSE = 2;
+
+type NextcloudTalkBotAdminEntry = {
+  id?: number | string;
+  name?: string;
+  url?: string;
+  features?: number | string;
+};
+
+function normalizeUrlForMatch(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  const url = URL.parse(trimmed);
+  if (url) {
+    url.hash = "";
+  }
+  return (url?.toString() ?? trimmed).replace(/\/$/, "");
+}
+
+function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, features?: number) {
+  const id = bot.id == null ? "unknown" : String(bot.id);
+  const name = bot.name?.trim() || "matching bot";
+  const featureText = typeof features === "number" ? ` (features=${features})` : "";
+  return `Nextcloud Talk bot "${name}" (${id}) is missing the response feature${featureText}; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction ${id} 1 or reinstall the bot with --feature response.`;
+}
+
+export async function probeNextcloudTalkBotResponseFeature(params: {
+  account: ResolvedNextcloudTalkAccount;
+  timeoutMs?: number;
+}) {
+  const { account, timeoutMs } = params;
+  const baseUrl = account.baseUrl?.trim();
+  if (!baseUrl) {
+    return {
+      ok: true,
+      skipped: true,
+      code: "missing_base_url" as const,
+      message: "Nextcloud Talk bot response feature check skipped: baseUrl is not configured.",
+    };
+  }
+
+  const webhookUrl = normalizeUrlForMatch(account.config.webhookPublicUrl);
+  if (!webhookUrl) {
+    return {
+      ok: true,
+      skipped: true,
+      code: "missing_webhook_url" as const,
+      message:
+        "Nextcloud Talk bot response feature check skipped: webhookPublicUrl is not configured.",
+    };
+  }
+
+  const credentials = resolveNextcloudTalkApiCredentials({
+    apiUser: account.config.apiUser,
+    apiPassword: account.config.apiPassword,
+    apiPasswordFile: account.config.apiPasswordFile,
+  });
+  if (!credentials) {
+    return {
+      ok: true,
+      skipped: true,
+      code: "missing_api_credentials" as const,
+      message:
+        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
+    };
+  }
+
+  const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/admin`;
+  const auth = Buffer.from(`${credentials.apiUser}:${credentials.apiPassword}`, "utf-8").toString(
+    "base64",
+  );
+
+  try {
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      ...buildNextcloudTalkOcsOptions(auth, account.config.network?.dangerouslyAllowPrivateNetwork),
+      auditContext: "nextcloud-talk.bot-response-preflight",
+      timeoutMs,
+    });
+    try {
+      if (!response.ok) {
+        const body = await readNextcloudTalkErrorBody(response, auth, credentials.apiPassword);
+        return {
+          ok: false,
+          code: "api_error" as const,
+          status: response.status,
+          message: `Nextcloud Talk bot response feature check failed (${response.status})${body ? `: ${body}` : ""}`,
+        };
+      }
+
+      const payload = await readProviderJsonResponse<{
+        ocs?: { data?: NextcloudTalkBotAdminEntry[] };
+      }>(response, "Nextcloud Talk bot response feature check failed");
+      const bots = Array.isArray(payload.ocs?.data) ? payload.ocs.data : [];
+      const bot = bots.find((entry) => normalizeUrlForMatch(entry.url) === webhookUrl);
+      if (!bot) {
+        return {
+          ok: false,
+          code: "bot_not_found" as const,
+          message: `Nextcloud Talk bot response feature check could not find a bot with webhook URL ${webhookUrl}.`,
+        };
+      }
+
+      const features = parseStrictNonNegativeInteger(bot.features);
+      if (features == null || (features & BOT_FEATURE_RESPONSE) !== BOT_FEATURE_RESPONSE) {
+        return {
+          ok: false,
+          code: "missing_response_feature" as const,
+          botId: bot.id == null ? undefined : String(bot.id),
+          botName: bot.name,
+          features,
+          message: formatMissingResponseFeatureMessage(bot, features),
+        };
+      }
+
+      return {
+        ok: true,
+        code: "ok" as const,
+        botId: bot.id == null ? undefined : String(bot.id),
+        botName: bot.name,
+        features,
+        message: `Nextcloud Talk bot "${bot.name ?? bot.id ?? "matching bot"}" has the response feature.`,
+      };
+    } finally {
+      await release();
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : formatErrorMessage(error);
+    return {
+      ok: false,
+      code: "request_failed" as const,
+      message: `Nextcloud Talk bot response feature check failed: ${detail}`,
+    };
+  }
+}

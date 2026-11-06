@@ -1,0 +1,584 @@
+// Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  ErrorCodes,
+  PROTOCOL_VERSION,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
+import { sha256Base64Url } from "../../../infra/crypto-digest.js";
+import {
+  redeemDeviceBootstrapTokenProfile,
+  restoreGenericDeviceBootstrapToken,
+} from "../../../infra/device-bootstrap.js";
+import {
+  finalizeNodePairingCleanupClaim,
+  recordPairedNodeConnection,
+} from "../../../infra/device-pairing-node.js";
+import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
+import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { NODE_MCP_ELICITATION_CAPABILITY } from "../../../infra/node-commands.js";
+import { commitPresence } from "../../../infra/system-presence.js";
+import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
+import { isOpenClawIdEnabled } from "../../../shared/openclaw-id-policy.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
+import {
+  resolveRuntimeServiceBuildId,
+  resolveRuntimeServiceCommit,
+  resolveRuntimeServiceBuiltAt,
+  resolveRuntimeServiceVersion,
+} from "../../../version.js";
+import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
+import { resolveControlUiIdentity } from "../../control-ui-identity.js";
+import {
+  listControlUiPluginTabs,
+  listControlUiLinkReaders,
+  listControlUiPluginWidgetKinds,
+} from "../../control-ui-plugin-tabs.js";
+import { normalizeControlUiBasePath } from "../../control-ui-shared.js";
+import {
+  broadcastSetupHandoffDeliveryUncertain,
+  broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
+  consumeSetupHandoff,
+  type SetupHandoff,
+} from "../../device-pair-setup-completion.js";
+import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { projectHealthSummary } from "../../health/presentation.js";
+import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
+import { ADMIN_SCOPE } from "../../method-scopes.js";
+import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import {
+  resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForProfile,
+} from "../../operator-role-policy.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
+import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
+import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
+import {
+  MAX_BUFFERED_BYTES,
+  TICK_INTERVAL_MS,
+  WEBSOCKET_OPEN_READY_STATE,
+} from "../../server-constants.js";
+import { resolveProfileActivityViewerId } from "../../session-profile-activity-policy.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
+import { allowedSessionVisibilities } from "../../session-sharing.js";
+import { formatForLog, logWs } from "../../ws-log.js";
+import { shouldScheduleBackgroundHealthRefresh } from "../health-refresh-admission.js";
+import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
+import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
+import type {
+  DeviceAuthorizedGatewayConnect,
+  GatewayConnectPhaseContext,
+} from "./message-handler-types.js";
+
+export async function sendGatewayHello(
+  context: GatewayConnectPhaseContext,
+  state: DeviceAuthorizedGatewayConnect,
+  pluginSurfaceUrls: Record<string, string>,
+  authenticatedUserProfileId?: string,
+): Promise<void> {
+  const {
+    connId,
+    bootId,
+    nodeReapprovalCoordinator,
+    gatewayMethods,
+    events,
+    buildRequestContext,
+    refreshHealthSnapshot,
+    close,
+    advanceHandshakePhase,
+    setCloseCause,
+    logGateway,
+    logHealth,
+  } = context.handler;
+  const {
+    frame,
+    connectParams,
+    sendFrame,
+    onHelloDelivered,
+    pendingNodePairingCleanup,
+    releasePendingNodePairingCleanup,
+  } = context;
+  const {
+    resolvedAuth,
+    role,
+    scopes,
+    device,
+    devicePublicKey,
+    hasTokenAuth,
+    hasPasswordAuth,
+    bootstrapTokenCandidate,
+    authResult,
+    authMethod,
+    sessionSharedGatewaySessionGeneration,
+    issuedBootstrapProfile,
+    handoffBootstrapProfile,
+    deviceToken,
+    bootstrapDeviceTokens,
+  } = state;
+  // Only an upstream-verified identity owns principal recovery; owner profiles
+  // attribute shared-secret/device connections without changing their recovery scope.
+  const authenticatedPrincipal = authResult.user
+    ? (authenticatedUserProfileId ?? authResult.user)
+    : undefined;
+  const recoveryScopeMaterial = authenticatedPrincipal
+    ? ["principal", authenticatedPrincipal, device?.id ?? ""]
+    : deviceToken?.token
+      ? ["device-token", deviceToken.token]
+      : sessionSharedGatewaySessionGeneration
+        ? ["shared-auth", sessionSharedGatewaySessionGeneration, device?.id ?? ""]
+        : device?.id
+          ? ["device", device.id]
+          : undefined;
+  const recoveryScope =
+    role === "operator" && recoveryScopeMaterial
+      ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
+      : undefined;
+  const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
+  const sessionRowProjection = getSessionRowProjection(buildRequestContext());
+  const snapshot = buildGatewaySnapshot({
+    client: context.handler.getClient(),
+    includeSensitive: scopes.includes(ADMIN_SCOPE),
+    includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
+    revisionProjector: buildRequestContext().configRevisionProjector,
+    sessionRowProjection,
+  });
+  if (scopes.includes(ADMIN_SCOPE)) {
+    // What this process runs with, which startup flags can set apart from the config file.
+    snapshot.authMode = resolvedAuth.mode;
+    Object.assign(snapshot, context.handler.gatewayExposure);
+  }
+  const cachedHealth = getHealthCache();
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
+    snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+      ? projectHealthSummary(cachedHealth)
+      : cachedHealth;
+    snapshot.stateVersion.health = getHealthVersion();
+  }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
+  const controlUiTabs = listControlUiPluginTabs(scopes, {
+    requireGatewayAuthGrant: resolvedAuth.mode !== "none",
+  });
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  const controlUiLinkReaders = listControlUiLinkReaders(
+    scopes,
+    buildRequestContext().getGatewayMethodRegistry?.(),
+  );
+  const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiBasePath = normalizeControlUiBasePath(
+    context.configSnapshot.gateway?.controlUi?.basePath,
+  );
+  const controlUiLocation = ingress
+    ? { origin: ingress.publicOrigin, basePath: controlUiBasePath }
+    : resolveControlUiLinkLocation(context.configSnapshot);
+  // Gateway runtime provenance is independent of the UI artifact source.
+  // Consumers use the source field to decide whether UI build comparison applies.
+  const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
+    ? ("configured" as const)
+    : ("bundled" as const);
+  const serverBuildId = resolveRuntimeServiceBuildId();
+  const serverCommit = resolveRuntimeServiceCommit();
+  const serverBuiltAt = resolveRuntimeServiceBuiltAt();
+  const rolePolicy =
+    role === "operator"
+      ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
+      : undefined;
+  const sessionCap = rolePolicy?.sessions.others;
+  const activityClient = context.handler.getClient();
+  const profileActivityViewerId =
+    role === "operator" && activityClient
+      ? resolveProfileActivityViewerId(
+          activityClient,
+          resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
+            ? undefined
+            : resolveOperatorRolePolicyForProfile(
+                activityClient.authenticatedUserProfile?.profileId,
+                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
+              )?.scopes,
+          activityClient.authenticatedUserProfile?.profileId,
+        )
+      : undefined;
+  const helloOk = {
+    type: "hello-ok",
+    // Admission already verified range overlap; this field reports the server's current protocol.
+    protocol: PROTOCOL_VERSION,
+    server: {
+      version: resolveRuntimeServiceVersion(process.env),
+      ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      ...(serverCommit ? { commit: serverCommit } : {}),
+      ...(serverBuiltAt ? { builtAt: serverBuiltAt } : {}),
+      bootId,
+      controlUiBuildSource,
+      connId,
+    },
+    features: {
+      methods: gatewayMethods.filter(
+        (method) =>
+          (method !== "mcp.authLogin" ||
+            Boolean(resolveBrowserAuthOrigin(context.browserOrigin))) &&
+          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+            !method.startsWith("openclawId.")),
+      ),
+      events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
+        ? events
+        : events.filter((event) => !event.startsWith("openclawId.")),
+      capabilities: [
+        GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
+        SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
+        GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+        GATEWAY_SERVER_CAPS.CHAT_INPUT_CUSTODY,
+        GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+        // Configured UI roots may serve an older route contract than this Gateway.
+        ...(controlUiBuildSource === "bundled" &&
+        context.configSnapshot.gateway?.controlUi?.enabled !== false
+          ? [GATEWAY_SERVER_CAPS.CONTROL_UI_BROWSER_FOCUS]
+          : []),
+        GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+        GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
+        GATEWAY_SERVER_CAPS.MODELS_AUTH_SET_API_KEY_OWNER,
+        GATEWAY_SERVER_CAPS.MODELS_AUTH_LOGIN_OWNER,
+        GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_LIST_OWNER,
+        GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
+        GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_RECOVER_REMOVAL_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
+        GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS,
+        ...(context.configSnapshot.mcp?.apps?.enabled ? [NODE_MCP_ELICITATION_CAPABILITY] : []),
+        GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE,
+        WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
+        GATEWAY_SERVER_CAPS.PROFILE_BINDING,
+        GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+        GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
+        GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
+        GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
+        GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
+        GATEWAY_SERVER_CAPS.SENDER_RESTRICTED_HIDDEN_HELPERS,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
+      ],
+    },
+    snapshot,
+    ...(controlUiLocation
+      ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
+      : {}),
+    ...(controlUiBasePath && context.configSnapshot.gateway?.controlUi?.enabled !== false
+      ? { controlUiBasePath }
+      : {}),
+    ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
+    ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
+    ...(controlUiLinkReaders.length > 0 ? { controlUiLinkReaders } : {}),
+    ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+    auth: {
+      method: authMethod,
+      role,
+      scopes,
+      ...(role === "operator"
+        ? { roleAllowsAdmin: !rolePolicy || rolePolicy.scopes.includes(ADMIN_SCOPE) }
+        : {}),
+      ...(sessionCap !== undefined ? { sessionCap } : {}),
+      ...(profileActivityViewerId !== undefined ? { profileActivityViewerId } : {}),
+      ...(recoveryScope ? { recoveryScope } : {}),
+      ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
+      ...(deviceToken
+        ? {
+            deviceToken: deviceToken.token,
+            issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
+            ...(bootstrapDeviceTokens.length > 1
+              ? { deviceTokens: bootstrapDeviceTokens.slice(1) }
+              : {}),
+          }
+        : {}),
+    },
+    policy: {
+      maxPayload: MAX_PAYLOAD_BYTES,
+      maxBufferedBytes: MAX_BUFFERED_BYTES,
+      tickIntervalMs: TICK_INTERVAL_MS,
+      attachments: resolveChatAttachmentPolicy(context.configSnapshot),
+      allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
+      hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
+    },
+  };
+  // Capture the advertised fact before bootstrap bookkeeping can await. Committed
+  // policy changes must retire this hello, never overwrite it with a newer claim.
+  if (role === "operator" && activityClient) {
+    activityClient.profileActivity = { viewerId: profileActivityViewerId };
+  }
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
+  advanceHandshakePhase("hello_payload_prepared");
+
+  let bootstrapHandoff: SetupHandoff | undefined;
+  if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
+    try {
+      if (handoffBootstrapProfile || issuedBootstrapProfile) {
+        const redemption = await redeemDeviceBootstrapTokenProfile({
+          token: bootstrapTokenCandidate,
+          role,
+          scopes,
+        });
+        if (handoffBootstrapProfile || redemption.fullyRedeemed) {
+          const consumed = await consumeSetupHandoff({
+            token: bootstrapTokenCandidate,
+            deviceId: device.id,
+            admitsCloudWorkerSetup: context.handler.admitsNodeSetupCompletion,
+            pairedDeviceMatches: (paired) => paired?.publicKey === devicePublicKey,
+          });
+          if (!consumed) {
+            await releasePendingNodePairingCleanup();
+            setCloseCause("bootstrap-token-consume-failed");
+            context.sendHandshakeErrorResponse(
+              ErrorCodes.UNAVAILABLE,
+              "bootstrap token unavailable",
+            );
+            close(1008, "bootstrap token unavailable");
+            return;
+          }
+          bootstrapHandoff = consumed;
+        }
+      }
+    } catch (err) {
+      logGateway.warn(
+        `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
+      );
+      await releasePendingNodePairingCleanup();
+      throw err;
+    }
+  }
+  let helloWriteStarted = false;
+  try {
+    // Bootstrap bookkeeping can await; read live ingress and suspension at delivery.
+    if (role === "operator") {
+      const identity = resolveControlUiIdentity(context.configSnapshot, resolvedAuth);
+      if (identity) {
+        snapshot.controlUiIdentityUrl = identity.url;
+        if (identity.signal && !context.handler.isClosed()) {
+          const signal = identity.signal;
+          const withdraw = () => {
+            setCloseCause("browser-identity-route-withdrawn");
+            close(1012, "browser identity route changed");
+          };
+          // Hello is frozen for this connection. Bind its route lifetime before
+          // delivery can await, so a vanished claim cannot remain advertised.
+          signal.addEventListener("abort", withdraw, { once: true });
+          context.handler.socket.once("close", () => signal.removeEventListener("abort", withdraw));
+        }
+      }
+    }
+    snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    helloWriteStarted = true;
+    await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+  } catch (err) {
+    if (bootstrapHandoff) {
+      if (bootstrapHandoff.completion) {
+        try {
+          broadcastSetupHandoffDeliveryUncertain({
+            handoff: bootstrapHandoff,
+            broadcast: buildRequestContext().broadcast,
+          });
+        } catch (broadcastError) {
+          logGateway.warn(
+            `setup delivery-uncertain broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(broadcastError)}`,
+          );
+        }
+      } else {
+        try {
+          await restoreGenericDeviceBootstrapToken({ record: bootstrapHandoff.record });
+        } catch (restoreError) {
+          logGateway.warn(
+            `generic bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreError)}`,
+          );
+        }
+      }
+    }
+    await releasePendingNodePairingCleanup();
+    if (!helloWriteStarted) {
+      throw err;
+    }
+    setCloseCause("hello-send-failed", { error: formatForLog(err) });
+    logGateway.warn(`hello delivery failed conn=${connId}: ${formatForLog(err)}`);
+    close(1011, "gateway hello delivery failed");
+    return;
+  }
+  onHelloDelivered();
+  const metadata = context.pendingDeviceMetadata;
+  if (metadata) {
+    context.runDetachedConnectWork(
+      () => recordPairedDeviceAccess(metadata.deviceId, metadata.patch, metadata.identity),
+      (err) =>
+        logGateway.warn(
+          `device access metadata refresh failed conn=${connId}: ${formatForLog(err)}`,
+        ),
+    );
+  }
+  try {
+    const client = context.handler.getClient();
+    if (
+      client?.presenceKey &&
+      !client.invalidated &&
+      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+      !context.handler.isClosed()
+    ) {
+      commitPresence(client.presenceKey, connId);
+    }
+  } catch (err) {
+    logGateway.warn(`presence commit failed conn=${connId}: ${formatForLog(err)}`);
+  }
+  if (bootstrapHandoff) {
+    try {
+      const confirmedHandoff = await confirmSetupHandoffDelivery({ handoff: bootstrapHandoff });
+      if (confirmedHandoff) {
+        broadcastSetupHandoffCompletion({
+          handoff: confirmedHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } else {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      }
+    } catch (err) {
+      logGateway.warn(
+        `setup completion confirmation failed device=${device?.id ?? "unknown"}: ${formatForLog(err)}`,
+      );
+      try {
+        broadcastSetupHandoffDeliveryUncertain({
+          handoff: bootstrapHandoff,
+          broadcast: buildRequestContext().broadcast,
+        });
+      } catch {
+        // The durable uncertain row remains the status-reconciliation path.
+      }
+    }
+  }
+  let authProvided = authMethod;
+  if (authMethod !== "device-token" && authMethod !== "bootstrap-token") {
+    if (hasPasswordAuth) {
+      authProvided = "password";
+    } else if (hasTokenAuth) {
+      authProvided = "token";
+    }
+  }
+  emitGatewayAuthSecurityEvent({
+    action: "gateway.auth.succeeded",
+    outcome: "success",
+    severity: "low",
+    authMode: resolvedAuth.mode,
+    authMethod,
+    authProvided,
+    role,
+    scopes,
+    clientMode: connectParams.client.mode,
+    deviceId: device?.id,
+  });
+  advanceHandshakePhase("ready");
+  if (role === "node") {
+    const requestContext = buildRequestContext();
+    const nodeId = connectParams.device?.id ?? connectParams.client.id;
+    const nodeSession = requestContext.nodeRegistry.get(nodeId);
+    const pairingGeneration = nodeSession?.pairingGeneration;
+    if (nodeSession?.connId === connId && pairingGeneration) {
+      try {
+        const connection = await recordPairedNodeConnection(
+          nodeSession.nodeId,
+          nodeSession.connectedAtMs,
+          undefined,
+          { nodeId: nodeSession.nodeId, key: pairingGeneration },
+        );
+        if (!connection.recorded) {
+          logGateway.warn(`failed to record last connect for ${nodeSession.nodeId}: not paired`);
+        } else {
+          const currentSession = requestContext.nodeRegistry.getForPairingGeneration(
+            nodeSession.nodeId,
+            pairingGeneration,
+          );
+          // A rapid same-generation reconnect may take over the durable
+          // first-connection claim; generation lookup excludes stale replacements.
+          if (currentSession) {
+            scheduleNodeConnectionNotification(requestContext.nodeRegistry, currentSession, {
+              isFirstConnection: connection.firstConnection,
+            });
+          }
+        }
+      } catch (err) {
+        logGateway.warn(
+          `failed to record last connect for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+        );
+      }
+    }
+  }
+  if (pendingNodePairingCleanup.value) {
+    const requestContext = buildRequestContext();
+    const cleanupClaim = pendingNodePairingCleanup.value;
+    pendingNodePairingCleanup.value = undefined;
+    try {
+      const resolvedPairings = nodeReapprovalCoordinator
+        ? await nodeReapprovalCoordinator.finalizeCleanup(cleanupClaim)
+        : await finalizeNodePairingCleanupClaim(cleanupClaim);
+      const resolvedAt = Date.now();
+      for (const resolved of resolvedPairings) {
+        broadcastRejectedNodePairing(requestContext.broadcast, resolved, resolvedAt);
+      }
+    } catch (error) {
+      logGateway.warn(
+        `failed to clear stale pending pairings for ${cleanupClaim.nodeId}: ${formatForLog(error)}`,
+      );
+    }
+  }
+  logWs("out", "hello-ok", {
+    connId,
+    methods: gatewayMethods.length,
+    events: events.length,
+    presence: snapshot.presence.length,
+    stateVersion: snapshot.stateVersion.presence,
+  });
+  // Post-connect refresh only needs a cached/config snapshot for UI state;
+  // live channel probes here pulled slow Discord/Telegram HTTP checks into
+  // reply-adjacent websocket handshakes.
+  if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, Date.now())) {
+    void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
+      logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
+    );
+  }
+  const client = context.handler.getClient();
+  if (
+    client?.presenceKey &&
+    !client.invalidated &&
+    client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+    !context.handler.isClosed()
+  ) {
+    // The row is already in hello's snapshot. Notify established readers now,
+    // without queueing this connection's redundant snapshot ahead of hello.
+    buildRequestContext().publishPresence();
+  }
+}

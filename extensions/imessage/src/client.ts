@@ -1,0 +1,513 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { recoverIMessageBridge } from "./bridge-recovery.js";
+import { expandIMessageUserPath } from "./cli-path.js";
+import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import {
+  describeIMessageAutomationFailure,
+  normalizeIMessageFullDiskAccessError,
+} from "./process-diagnostics.js";
+
+// Match only the documented Contacts reconciliation diagnostic; other Apple
+// framework messages must keep their error level.
+const IMSG_APPLE_FRAMEWORK_STDERR_PATTERN =
+  /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ imsg\[\d+:\d+\] )?Could not fetch group for change type \d+ with identifier [^:]+:ABGroup, making it a delete change type\.$/u;
+
+type IMessageRpcError = {
+  code?: number;
+  message?: string;
+  data?: unknown;
+};
+
+type IMessageRpcResponse<T> = {
+  jsonrpc?: string;
+  id?: string | number | null;
+  result?: T;
+  error?: IMessageRpcError;
+  method?: string;
+  params?: unknown;
+};
+
+type IMessageRpcNotification = {
+  method: string;
+  params?: unknown;
+};
+
+type IMessageRpcClientOptions = {
+  cliPath?: string;
+  dbPath?: string;
+  remoteHost?: string;
+  runtime?: RuntimeEnv;
+  onNotification?: (msg: IMessageRpcNotification) => void;
+};
+
+export class IMessageRpcRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = "IMessageRpcRequestError";
+  }
+}
+
+// Only imsg's helper wait errors prove a bridge stall; our client timeout can
+// also mean a slow wrapper and must not evict a healthy capability cache.
+// imsg reports legacy waits as "Timed out waiting for response to '<action>'",
+// but bridge_v2 mutations (send-message) return structured delivery data whose
+// detail starts with the deadline sentence below.
+function isIMessageBridgeStall(error: unknown): boolean {
+  if (error instanceof IMessageRpcRequestError && isRecord(error.data)) {
+    const { transport, detail } = error.data;
+    if (
+      transport === "bridge_v2" &&
+      typeof detail === "string" &&
+      detail.startsWith("The bridge response deadline expired.")
+    ) {
+      return true;
+    }
+  }
+  return error instanceof Error && error.message.includes("Timed out waiting for response");
+}
+
+const BRIDGE_STALL_GUIDANCE =
+  "The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, " +
+  "then `openclaw channels status --probe` to refresh capability detection.";
+
+// Direct sends bypass the capability cache. Preserve the original error prefix,
+// class, code, and data so recovery guidance does not break send reconciliation.
+function describeIMessageBridgeStall(error: unknown): unknown {
+  if (error instanceof IMessageRpcRequestError) {
+    return new IMessageRpcRequestError(
+      `${error.message} ${BRIDGE_STALL_GUIDANCE}`,
+      error.code,
+      error.data,
+    );
+  }
+  if (error instanceof Error) {
+    return new Error(`${error.message} ${BRIDGE_STALL_GUIDANCE}`, { cause: error });
+  }
+  return error;
+}
+
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+};
+
+const IMESSAGE_RPC_CLOSE_GRACE_MS = 500;
+
+function isTestEnv(): boolean {
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
+  const vitest = normalizeLowercaseStringOrEmpty(process.env.VITEST);
+  return Boolean(vitest);
+}
+
+function createLfLineFramer(onLine: (line: string) => void): {
+  write(chunk: Buffer | string): void;
+  flush(): void;
+} {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  return {
+    write(chunk) {
+      buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        onLine(line);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    },
+    flush() {
+      buffer += decoder.end();
+      if (!buffer) {
+        return;
+      }
+      const line = buffer;
+      buffer = "";
+      onLine(line);
+    },
+  };
+}
+
+export class IMessageRpcClient {
+  private readonly cliPath: string;
+  // The private-API cache is keyed by the *configured* cliPath (see
+  // actions.ts, which passes `account.config.cliPath` to both the probe and
+  // this client), so invalidation has to use the same unexpanded string. Using
+  // the expanded one silently misses for any `~`-relative cliPath.
+  private readonly configuredCliPath: string;
+  private readonly dbPath?: string;
+  private readonly remoteHost?: string;
+  private readonly runtime?: RuntimeEnv;
+  private readonly onNotification?: (msg: IMessageRpcNotification) => void;
+  private readonly pending = new Map<string, PendingRequest>();
+  private readonly terminal: Promise<Error>;
+  private terminalResolve: ((error: Error) => void) | null = null;
+  private readonly reaped: Promise<void>;
+  private reapedResolve: (() => void) | null = null;
+  private child: ChildProcessWithoutNullStreams | null = null;
+  private stopPromise: Promise<void> | null = null;
+  private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
+  private readonly stderrFramer = createLfLineFramer((line) => this.handleStderrLine(line));
+  private nextId = 1;
+  private publicProcessError: string | null = null;
+
+  constructor(opts: IMessageRpcClientOptions = {}) {
+    this.configuredCliPath = opts.cliPath?.trim() || "imsg";
+    this.cliPath = expandIMessageUserPath(this.configuredCliPath);
+    const dbPath = opts.dbPath?.trim();
+    this.remoteHost = opts.remoteHost?.trim();
+    // An explicitly remote database belongs to the Messages Mac. Only local
+    // database paths are relative to the Gateway user's home directory.
+    this.dbPath = dbPath ? (this.remoteHost ? dbPath : resolveUserPath(dbPath)) : undefined;
+    this.runtime = opts.runtime;
+    this.onNotification = opts.onNotification;
+    this.terminal = new Promise((resolve) => {
+      this.terminalResolve = resolve;
+    });
+    this.reaped = new Promise((resolve) => {
+      this.reapedResolve = resolve;
+    });
+  }
+
+  async start(): Promise<void> {
+    if (this.child) {
+      return;
+    }
+    if (isTestEnv()) {
+      throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
+    }
+    const args = ["rpc", "--json"];
+    if (this.dbPath) {
+      args.push("--db", this.dbPath);
+    }
+    const child = spawn(this.cliPath, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    this.child = child;
+
+    for (const [stream, framer] of [
+      [child.stdout, this.stdoutFramer],
+      [child.stderr, this.stderrFramer],
+    ] as const) {
+      stream.on("data", (chunk) => {
+        if (this.child === child) {
+          framer.write(chunk);
+        }
+      });
+    }
+
+    // Every process/stdio error is terminal for this RPC transport. Settle the
+    // client once and terminate a helper whose pipe failed; otherwise the
+    // monitor can wait forever on an unusable child. #75438 covered stdin only.
+    const failFromProcessError = (err: unknown) => this.failTransport(err, child);
+    child.on("error", failFromProcessError);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", failFromProcessError);
+      stream.once("close", () => {
+        // Bun can close an errored stdio stream without emitting its error event.
+        const error = stream.errored;
+        if (error) {
+          failFromProcessError(error);
+        }
+      });
+    }
+
+    child.on("close", (code, signal) => {
+      if (this.child === child) {
+        // Complete both byte streams before selecting the terminal error so a
+        // final split diagnostic can still provide its public recovery guidance.
+        this.stdoutFramer.flush();
+        this.stderrFramer.flush();
+        this.child = null;
+      }
+      this.finish(this.buildCloseError(code, signal));
+      const resolve = this.reapedResolve;
+      this.reapedResolve = null;
+      resolve?.();
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopPromise) {
+      return await this.stopPromise;
+    }
+    const child = this.child;
+    if (!child) {
+      return;
+    }
+    this.stopPromise = this.stopChild(child);
+    return await this.stopPromise;
+  }
+
+  async waitForClose(): Promise<void> {
+    const error = await this.terminal;
+    throw error;
+  }
+
+  async request<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    opts?: { timeoutMs?: number; assertCurrent?: () => void },
+  ): Promise<T> {
+    const child = this.child;
+    const stdin = child?.stdin;
+    const assertReadAuthority = captureChannelReadAuthority();
+    return captureEffectAuthority().initiate(() => {
+      if (child !== this.child || stdin !== this.child?.stdin) {
+        throw new Error("imsg rpc process changed before request initiation");
+      }
+      assertReadAuthority?.();
+      opts?.assertCurrent?.();
+      return this.initiateRequest<T>(method, params, opts);
+    });
+  }
+
+  private async initiateRequest<T>(
+    method: string,
+    params?: Record<string, unknown>,
+    opts?: { timeoutMs?: number },
+  ): Promise<T> {
+    if (!this.child || !this.child.stdin) {
+      throw new Error("imsg rpc not running");
+    }
+    const id = this.nextId++;
+    const payload = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: params ?? {},
+    };
+    const line = `${JSON.stringify(payload)}\n`;
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+
+    const key = String(id);
+    const pendingResponse = new Promise<T>((resolve, reject) => {
+      this.pending.set(key, {
+        resolve: (value) => resolve(value as T),
+        reject,
+      });
+    });
+    const response =
+      timeoutMs > 0
+        ? raceWithTimeout(pendingResponse, timeoutMs, () => {
+            this.pending.delete(key);
+            throw new Error(`imsg rpc timeout (${method})`);
+          })
+        : pendingResponse;
+
+    // Reject the specific pending request on write error (e.g. EPIPE)
+    // instead of letting it hang until timeout. (#75438)
+    try {
+      this.child.stdin.write(line, (err) => {
+        if (err) {
+          this.failTransport(err, this.child);
+        }
+      });
+    } catch (err) {
+      this.failTransport(err, this.child);
+    }
+    try {
+      return await response;
+    } catch (err) {
+      // Successful capability probes have no TTL; invalidate before recovery
+      // so later actions cannot reuse the stalled bridge's available verdict.
+      if (isIMessageBridgeStall(err)) {
+        invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        try {
+          await recoverIMessageBridge(this.configuredCliPath);
+        } catch (recoveryError) {
+          this.runtime?.error?.(
+            normalizeIMessageFullDiskAccessError(formatErrorMessage(recoveryError)) ??
+              `imessage: automatic bridge recovery failed. ${BRIDGE_STALL_GUIDANCE}`,
+          );
+        }
+        throw describeIMessageBridgeStall(err);
+      }
+      throw err;
+    }
+  }
+
+  private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+    try {
+      child.stdin.end();
+    } catch (err) {
+      this.failTransport(err, child);
+    }
+    if (await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS)) {
+      return;
+    }
+    this.signalChild(child, "SIGTERM");
+    if (await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS)) {
+      return;
+    }
+    this.signalChild(child, "SIGKILL");
+    if (!(await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS))) {
+      throw new Error("imsg rpc did not exit after SIGKILL");
+    }
+  }
+
+  private async waitForReap(timeoutMs: number): Promise<boolean> {
+    if (!this.reapedResolve) {
+      return true;
+    }
+    return await raceWithTimeout(
+      this.reaped.then(() => true),
+      timeoutMs,
+      () => false,
+    );
+  }
+
+  private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    try {
+      child.kill(signal);
+    } catch {
+      // The helper may have exited between the grace timer and the signal.
+    }
+  }
+
+  private failTransport(err: unknown, child: ChildProcessWithoutNullStreams | null): void {
+    if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
+      return;
+    }
+    if (child) {
+      this.signalChild(child, "SIGTERM");
+    }
+  }
+
+  private handleStdoutLine(line: string) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.handleLine(trimmed);
+  }
+
+  private handleStderrLine(line: string) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    // The Full Disk Access promotion below must still see every line, including
+    // the benign ones, so record before choosing the log level.
+    this.recordProcessDiagnostic(trimmed);
+    if (IMSG_APPLE_FRAMEWORK_STDERR_PATTERN.test(trimmed)) {
+      return;
+    }
+    this.runtime?.error?.(
+      normalizeIMessageFullDiskAccessError(trimmed) ?? "imsg rpc: stderr diagnostic received",
+    );
+  }
+
+  private handleLine(line: string) {
+    let parsed: IMessageRpcResponse<unknown>;
+    try {
+      parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
+    } catch {
+      this.recordProcessDiagnostic(line);
+      this.runtime?.error?.("imsg rpc: failed to parse JSON response");
+      return;
+    }
+
+    if (parsed.id !== undefined && parsed.id !== null) {
+      const key = String(parsed.id);
+      const pending = this.pending.get(key);
+      if (!pending) {
+        return;
+      }
+      this.pending.delete(key);
+
+      if (parsed.error) {
+        const baseMessage = parsed.error.message ?? "imsg rpc error";
+        const details = parsed.error.data;
+        const code = parsed.error.code;
+        const suffixes = [] as string[];
+        if (typeof code === "number") {
+          suffixes.push(`code=${code}`);
+        }
+        if (details !== undefined) {
+          const detailText =
+            typeof details === "string" ? details : JSON.stringify(details, null, 2);
+          if (detailText) {
+            suffixes.push(detailText);
+          }
+        }
+        const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
+        const guidance = describeIMessageAutomationFailure(details, this.remoteHost);
+        pending.reject(
+          new IMessageRpcRequestError(
+            guidance ? `${msg} ${guidance}` : msg,
+            typeof code === "number" ? code : undefined,
+            details,
+          ),
+        );
+        return;
+      }
+      pending.resolve(parsed.result);
+      return;
+    }
+
+    if (parsed.method) {
+      this.onNotification?.({
+        method: parsed.method,
+        params: parsed.params,
+      });
+    }
+  }
+
+  private recordProcessDiagnostic(line: string): void {
+    this.publicProcessError ??= normalizeIMessageFullDiskAccessError(line) ?? null;
+  }
+
+  private buildCloseError(code: number | null, signal: NodeJS.Signals | null): Error {
+    if (this.publicProcessError) {
+      return new Error(this.publicProcessError);
+    }
+    if (code !== 0 && code !== null) {
+      const reason = signal ? `signal ${signal}` : `code ${code}`;
+      return new Error(`imsg rpc exited (${reason})`);
+    }
+    return new Error("imsg rpc closed");
+  }
+
+  private finish(err: Error): boolean {
+    const resolve = this.terminalResolve;
+    if (!resolve) {
+      return false;
+    }
+    this.terminalResolve = null;
+    for (const [key, pending] of this.pending.entries()) {
+      pending.reject(err);
+      this.pending.delete(key);
+    }
+    resolve(err);
+    return true;
+  }
+}
+
+export async function createIMessageRpcClient(
+  opts: IMessageRpcClientOptions = {},
+): Promise<IMessageRpcClient> {
+  const client = new IMessageRpcClient(opts);
+  await client.start();
+  return client;
+}

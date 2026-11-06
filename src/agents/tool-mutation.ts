@@ -1,0 +1,392 @@
+/** Tool mutation and replay-safety classification. */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveCoreToolFacts } from "./tool-catalog.js";
+import { isAutomationsToolName } from "./tools/automations-tool-name.js";
+import { isComputerObservationAction } from "./tools/computer-tool-shared.js";
+
+const READ_ONLY_ACTIONS = new Set([
+  "get",
+  "list",
+  "read",
+  "status",
+  "show",
+  "fetch",
+  "search",
+  "query",
+  "view",
+  "poll",
+  "log",
+  "inspect",
+  "check",
+  "probe",
+  "runs",
+]);
+
+const PROCESS_MUTATING_ACTIONS = new Set([
+  "write",
+  "send_keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+]);
+
+const PROCESS_REPLAY_SAFE_ACTIONS = new Set(["list", "log"]);
+
+const MESSAGE_READ_ONLY_ACTIONS = new Set([
+  "reactions",
+  "read",
+  "list_pins",
+  "permissions",
+  "thread_list",
+  "search",
+  "sticker_search",
+  "member_info",
+  "role_info",
+  "emoji_list",
+  "channel_info",
+  "channel_list",
+  "voice_status",
+  "event_list",
+]);
+
+const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
+// These tools use the same closed action set for mutation and replay decisions.
+// Missing and unknown actions remain mutating and cannot be replayed.
+const READ_ONLY_TOOL_ACTIONS = new Map<string, ReadonlySet<string>>([
+  ["message", MESSAGE_READ_ONLY_ACTIONS],
+  ["sessions", new Set(["group_list"])],
+  ["mobile_ui", new Set(["observe"])],
+  ["gateway", new Set(["config.get", "config.schema.lookup"])],
+  ["portal", new Set(["list"])],
+  ["theme", new Set(["list", "get"])],
+  ["nodes", new Set(["status", "describe", "pending"])],
+]);
+const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
+
+const READ_ONLY_SHELL_COMMANDS = new Set([
+  "cat",
+  "grep",
+  "head",
+  "ls",
+  "pwd",
+  "rg",
+  "stat",
+  "tail",
+  "wc",
+]);
+
+const READ_ONLY_GH_PR_SUBCOMMANDS = new Set(["checks", "diff", "list", "status", "view"]);
+const READ_ONLY_GH_ISSUE_SUBCOMMANDS = new Set(["list", "status", "view"]);
+
+const UNSAFE_RG_FLAGS = new Set(["--hostname-bin", "--pre", "--pre-glob", "--search-zip", "-z"]);
+const UNSAFE_RG_VALUE_FLAGS = ["--hostname-bin", "--pre", "--pre-glob"] as const;
+const SHELL_EXPANSION_CHARS = new Set(["$", "*", "?", "[", "]", "{", "}", "~"]);
+
+type ToolMutationState = {
+  mutatingAction: boolean;
+  replaySafe: boolean;
+};
+
+function normalizeActionName(value: unknown): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(value)?.replace(/[\s-]+/g, "_");
+  return normalized || undefined;
+}
+
+function readShellCommand(record: Record<string, unknown> | undefined): string | undefined {
+  return normalizeOptionalString(record?.command ?? record?.cmd);
+}
+
+function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined {
+  const commands: string[][] = [];
+  let tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let tokenStarted = false;
+  const flushToken = () => {
+    if (tokenStarted) {
+      tokens.push(current);
+      current = "";
+      tokenStarted = false;
+    }
+  };
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index]!;
+    if (!quote && (char === "|" || char === "&")) {
+      if (char === "&" && command[index + 1] === "&") {
+        index++;
+      } else if (char !== "|" || command[index + 1] === "|") {
+        return undefined;
+      }
+      flushToken();
+      if (!tokens.length) {
+        return undefined;
+      }
+      commands.push(tokens);
+      tokens = [];
+      continue;
+    }
+    // Quoted regex syntax is literal, not a shell pipeline or glob. Double quotes
+    // still expand substitutions; keep those and all escape syntax unclassified.
+    if (
+      char === "\\" ||
+      char === "\n" ||
+      char === "\r" ||
+      (quote === '"' && (char === "$" || char === "`")) ||
+      (!quote && (/[;&|<>`()]/.test(char) || SHELL_EXPANSION_CHARS.has(char)))
+    ) {
+      return undefined;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      tokenStarted = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      flushToken();
+      continue;
+    }
+    current += char;
+    tokenStarted = true;
+  }
+  if (quote) {
+    return undefined;
+  }
+  flushToken();
+  if (!tokens.length) {
+    return undefined;
+  }
+  commands.push(tokens);
+  return commands;
+}
+
+function isReadOnlySedCommand(tokens: readonly string[]): boolean {
+  const args = tokens.slice(1);
+  // `sed -e 'w /tmp/out'`, attached scripts such as `-e$w /tmp/out`, and
+  // mixed option forms are easy to misclassify. Only allow the exact
+  // suppress-auto-print flags plus the simple line-print shape agents use for
+  // file inspection.
+  if (
+    args.some(
+      (token) =>
+        token.startsWith("-") &&
+        token !== "-" &&
+        token !== "-n" &&
+        token !== "--quiet" &&
+        token !== "--silent",
+    )
+  ) {
+    return false;
+  }
+  let sawSuppressAutoPrint = false;
+  let expression: string | undefined;
+  for (const token of args) {
+    if (token === "-n" || token === "--quiet" || token === "--silent") {
+      sawSuppressAutoPrint = true;
+      continue;
+    }
+    expression = token;
+    break;
+  }
+  return sawSuppressAutoPrint && expression != null && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+}
+
+function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
+  return tokens.some((token) => {
+    const normalized = normalizeLowercaseStringOrEmpty(token);
+    return (
+      UNSAFE_RG_FLAGS.has(normalized) ||
+      UNSAFE_RG_VALUE_FLAGS.some((flag) => normalized.startsWith(`${flag}=`))
+    );
+  });
+}
+
+function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
+  if (
+    tokens.some((token) => {
+      const normalized = normalizeLowercaseStringOrEmpty(token);
+      return (
+        normalized === "--web" ||
+        normalized.startsWith("--web=") ||
+        /^-[a-z]*w[a-z]*(?:=.*)?$/.test(normalized)
+      );
+    })
+  ) {
+    return false;
+  }
+  const area = normalizeLowercaseStringOrEmpty(tokens[1]);
+  const action = normalizeLowercaseStringOrEmpty(tokens[2]);
+  if (area === "search") {
+    return action.length > 0;
+  }
+  if (area === "pr") {
+    return READ_ONLY_GH_PR_SUBCOMMANDS.has(action);
+  }
+  if (area === "issue") {
+    return READ_ONLY_GH_ISSUE_SUBCOMMANDS.has(action);
+  }
+  return false;
+}
+
+function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
+  // Only known inspection predicates. Never admit -exec, -delete, -fprint,
+  // platform extensions, or an unknown action by assuming it is harmless.
+  let index = 1;
+  while (index < tokens.length && !tokens[index]!.startsWith("-")) {
+    index++;
+  }
+  for (; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === "-print" || token === "-print0" || token === "!" || token === "-not") {
+      continue;
+    }
+    const value = tokens[++index];
+    if (value === undefined) {
+      return false;
+    }
+    if (token === "-type" && /^[bcdflps]$/.test(value)) {
+      continue;
+    }
+    if ((token === "-maxdepth" || token === "-mindepth") && /^\d+$/.test(value)) {
+      continue;
+    }
+    if (token === "-name" || token === "-iname" || token === "-path" || token === "-ipath") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const commands = tokenizeReadOnlyShellCommands(command);
+  return commands !== undefined && commands.every(isReadOnlyShellTokens);
+}
+
+function isReadOnlyShellTokens(tokens: readonly string[]): boolean {
+  const executable = normalizeLowercaseStringOrEmpty(tokens[0]);
+  if (executable === "rg" && hasUnsafeRipgrepFlag(tokens)) {
+    return false;
+  }
+  if (READ_ONLY_SHELL_COMMANDS.has(executable)) {
+    return true;
+  }
+  if (executable === "find") {
+    return isReadOnlyFindCommand(tokens);
+  }
+  if (executable === "sed") {
+    return isReadOnlySedCommand(tokens);
+  }
+  if (executable === "gh") {
+    return isReadOnlyGhCommand(tokens);
+  }
+  return false;
+}
+
+function classifyToolCall(toolName: string, args: unknown): ToolMutationState {
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const record = asRecord(args);
+  const action = normalizeActionName(record?.action);
+  const readOnlyActions = READ_ONLY_TOOL_ACTIONS.get(normalized);
+  if (readOnlyActions) {
+    const replaySafe = action != null && readOnlyActions.has(action);
+    return { mutatingAction: !replaySafe, replaySafe };
+  }
+  const safety = resolveCoreToolFacts(normalized)?.replay;
+  let replaySafe = safety === "both" || safety === "recorded";
+  let mutatingAction = false;
+  switch (normalized) {
+    case "write":
+    case "edit":
+    case "apply_patch":
+    case "sessions_spawn":
+    case "sessions_send":
+    case "conversations_send":
+    case "conversations_turn":
+    case "create_goal":
+    case "update_goal":
+      mutatingAction = true;
+      break;
+    case "exec":
+    case "bash":
+      mutatingAction = !isPlainReadOnlyShellCommand(readShellCommand(record));
+      break;
+    case "process":
+      mutatingAction = action != null && PROCESS_MUTATING_ACTIONS.has(action);
+      replaySafe = action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
+      break;
+    case "computer":
+      replaySafe = isComputerObservationAction(action, record?.dialogAction);
+      mutatingAction = !replaySafe;
+      break;
+    case "subagents":
+      mutatingAction = action === "cancel" || action === "kill" || action === "steer";
+      replaySafe = action == null || action === "list";
+      break;
+    case "session_status":
+      mutatingAction = typeof record?.model === "string" && record.model.trim().length > 0;
+      replaySafe = !mutatingAction;
+      break;
+    case "presence":
+      mutatingAction = action != null && !PRESENCE_REPLAY_SAFE_ACTIONS.has(action);
+      replaySafe = !mutatingAction;
+      break;
+    case "browser":
+      replaySafe = action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
+      break;
+    case "skill_workshop":
+    case "skill_library":
+      replaySafe = action === "list" || action === "inspect" || action === "read";
+      break;
+    case "transcripts":
+      replaySafe = action === "status";
+      break;
+    default: {
+      if (isAutomationsToolName(normalized) || normalized === "canvas") {
+        replaySafe = action != null && READ_ONLY_ACTIONS.has(action);
+        mutatingAction = !replaySafe;
+      } else if (normalized.endsWith("_actions")) {
+        mutatingAction = action == null || !READ_ONLY_ACTIONS.has(action);
+      } else {
+        mutatingAction = normalized.startsWith("message_") || normalized.includes("send");
+      }
+    }
+  }
+  return { mutatingAction, replaySafe };
+}
+
+export function isMutatingToolCall(toolName: string, args: unknown): boolean {
+  return classifyToolCall(toolName, args).mutatingAction;
+}
+
+/** Return true only for tool calls whose structured contract proves replay safety. */
+export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
+  return classifyToolCall(toolName, args).replaySafe;
+}
+
+export function buildToolMutationState(
+  toolName: string,
+  args: unknown,
+  options?: { ownerKey?: string },
+): ToolMutationState {
+  return options?.ownerKey !== undefined
+    ? { mutatingAction: true, replaySafe: false }
+    : classifyToolCall(toolName, args);
+}

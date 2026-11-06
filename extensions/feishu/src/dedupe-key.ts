@@ -1,0 +1,102 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { FeishuMessageEvent } from "./event-types.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { parsePostContent } from "./post.js";
+
+type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message" | "sender">;
+
+function resolvePostMediaParts(content: string): string[] {
+  const { attachments } = parsePostContent(content, { includeTopLevelFiles: false });
+  // Replay keys live for 24 hours across restarts; keep their shipped grouped
+  // order and duplicates. Top-level post files[] belong to download only;
+  // including them here would invalidate pre-upgrade captioned-post records.
+  return (["image", "file"] as const).flatMap((kind) =>
+    attachments
+      .filter((attachment) => attachment.kind === kind)
+      .map((attachment) => `${kind}_key:${attachment.key}`),
+  );
+}
+
+function resolveMessageMediaParts(messageType: string, content: string): string[] {
+  if (messageType === "post") {
+    return resolvePostMediaParts(content);
+  }
+
+  const parsed = readRecord(safeParseJson(content));
+  if (!parsed) {
+    return [];
+  }
+
+  const imageKey = normalizeFeishuExternalKey(parsed.image_key);
+  const fileKey = normalizeFeishuExternalKey(parsed.file_key);
+  switch (messageType) {
+    case "image":
+      return imageKey ? [`image_key:${imageKey}`] : [];
+    case "file":
+    case "audio":
+    case "sticker":
+      return fileKey ? [`file_key:${fileKey}`] : [];
+    default:
+      return fileKey ? [`file_key:${fileKey}`] : imageKey ? [`image_key:${imageKey}`] : [];
+  }
+}
+
+function resolveSenderIdentity(event: FeishuMessageDedupeInput): string | undefined {
+  const senderId = event.sender?.sender_id;
+  return (
+    senderId?.open_id?.trim() ||
+    senderId?.union_id?.trim() ||
+    senderId?.user_id?.trim() ||
+    undefined
+  );
+}
+
+// Feishu can redeliver the same logical text message with a fresh message_id
+// (retry/reconnect), defeating message_id-based dedupe (#46778). For text we key
+// on a stable retry identity instead: same sender + chat + create_time + content
+// is the same logical message. create_time is the message's own server timestamp
+// and stays fixed across redeliveries, so genuine repeat sends (which get a new
+// create_time) keep distinct keys and are never suppressed. Falls back to
+// message_id when any field is missing so behavior is unchanged then.
+function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | undefined {
+  const createTime = event.message.create_time?.trim();
+  const chatId = event.message.chat_id?.trim();
+  const senderId = resolveSenderIdentity(event);
+  if (
+    !createTime ||
+    parseStrictNonNegativeInteger(createTime) === undefined ||
+    !chatId ||
+    !senderId
+  ) {
+    return undefined;
+  }
+  const contentHash = sha256Hex(event.message.content).slice(0, 32);
+  return JSON.stringify(["text-retry", senderId, chatId, createTime, contentHash]);
+}
+
+export function resolveFeishuMessageDedupeKey(event: FeishuMessageDedupeInput): string | undefined {
+  const messageId = event.message.message_id?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  const messageType = event.message.message_type.trim();
+  const mediaParts = resolveMessageMediaParts(messageType, event.message.content);
+  if (mediaParts.length > 0) {
+    return JSON.stringify([messageId, ...mediaParts]);
+  }
+  if (messageType === "text") {
+    return resolveTextRetryDedupeKey(event) ?? messageId;
+  }
+  if (messageType === "post") {
+    const retryKey = resolveTextRetryDedupeKey(event);
+    if (!retryKey) {
+      return messageId;
+    }
+    const topicId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+    return topicId ? JSON.stringify([retryKey, topicId]) : retryKey;
+  }
+  return messageId;
+}

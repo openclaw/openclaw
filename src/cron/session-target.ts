@@ -1,0 +1,90 @@
+/** Resolves and validates session-target keys used by cron jobs and delivery. */
+
+const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
+
+/** Returns whether an error came from cron session target id validation. */
+export function isInvalidCronSessionTargetIdError(error: unknown): boolean {
+  return error instanceof Error && error.message === INVALID_CRON_SESSION_TARGET_ID_ERROR;
+}
+
+/** Validates the opaque session id portion of a `session:` cron target. */
+export function assertSafeCronSessionTargetId(sessionId: string): string {
+  const trimmed = sessionId.trim();
+  if (!trimmed) {
+    throw new Error(INVALID_CRON_SESSION_TARGET_ID_ERROR);
+  }
+  if (trimmed.includes("\0")) {
+    throw new Error(INVALID_CRON_SESSION_TARGET_ID_ERROR);
+  }
+  return trimmed;
+}
+
+/** Extracts the persistent session key from a `session:` cron target, if present. */
+export function resolveCronSessionTargetSessionKey(
+  sessionTarget?: string | null,
+): string | undefined {
+  if (typeof sessionTarget !== "string" || !sessionTarget.startsWith("session:")) {
+    return undefined;
+  }
+  return assertSafeCronSessionTargetId(sessionTarget.slice(8));
+}
+
+/**
+ * Returns whether cron executes the job under its own `cron:<jobId>` run key. A
+ * `current` job is still a child of its creating conversation; this decides only the key.
+ */
+export function isDetachedCronSessionTarget(sessionTarget?: string | null): boolean {
+  return sessionTarget === "isolated" || sessionTarget === "current";
+}
+
+/**
+ * Whether a captured operator source's session is this job's parent: the session
+ * an in-session job runs in, or the conversation a detached child reports to.
+ */
+export function isCronOperatorSourceParent(
+  job: {
+    sessionTarget?: string | null;
+    sourceConversation?: { sessionKey: string };
+  },
+  sessionKey: string,
+): boolean {
+  if (job.sessionTarget === `session:${sessionKey}`) {
+    return true;
+  }
+  return (
+    isDetachedCronSessionTarget(job.sessionTarget) &&
+    job.sourceConversation?.sessionKey === sessionKey
+  );
+}
+
+/** Preserves `current` with a creation-time sessionKey so future active UI state is irrelevant. */
+export function resolveCronCurrentSessionTarget(params: {
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): string | undefined {
+  if (params.sessionTarget !== "current") {
+    return params.sessionTarget ?? undefined;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  return sessionKey ? "current" : "isolated";
+}
+
+/** Result conversation selection is independent from the execution session and channel target. */
+export function resolveCronDeliverySessionKey(job: {
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+  sourceConversation?: { sessionKey: string };
+}): string | undefined {
+  const conversationKey = job.sourceConversation?.sessionKey.trim();
+  if (conversationKey) {
+    return conversationKey;
+  }
+  const sessionTargetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  if (sessionTargetKey) {
+    return sessionTargetKey;
+  }
+
+  return typeof job.sessionKey === "string" && job.sessionKey.trim()
+    ? job.sessionKey.trim()
+    : undefined;
+}

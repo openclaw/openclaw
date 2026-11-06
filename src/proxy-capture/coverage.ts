@@ -1,0 +1,160 @@
+import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import type { CaptureProtocol } from "./types.js";
+
+// Debug-proxy coverage records which transport seams are fully captured versus
+// merely routed through a proxy, so operators know where packet evidence is weak.
+export type DebugProxyCoverageStatus = "captured" | "proxy-only" | "uncovered";
+
+export type DebugProxyCoverageEntry = {
+  id: string;
+  label: string;
+  modulePath: string;
+  protocols: CaptureProtocol[];
+  status: DebugProxyCoverageStatus;
+  notes: string;
+};
+
+const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
+  {
+    id: "provider-transport-fetch",
+    label: "Provider HTTP transport",
+    modulePath: "src/agents/provider-transport-fetch.ts",
+    protocols: ["http", "https", "sse"],
+    status: "captured",
+    notes:
+      "Central provider request path routes through explicit proxy overrides and records request/response payloads.",
+  },
+  {
+    id: "discord-rest",
+    label: "Discord REST monitor fetch",
+    modulePath: "extensions/discord/src/monitor/rest-fetch.ts",
+    protocols: ["http", "https"],
+    status: "captured",
+    notes: "Discord monitor REST calls inherit the debug proxy and record HTTP exchanges.",
+  },
+  {
+    id: "discord-gateway",
+    label: "Discord gateway monitor",
+    modulePath: "extensions/discord/src/monitor/gateway-plugin.ts",
+    protocols: ["https", "wss"],
+    status: "captured",
+    notes:
+      "Gateway metadata fetches and websocket lifecycle events are captured for monitor traffic.",
+  },
+  {
+    id: "telegram-fetch",
+    label: "Telegram fetch resolver",
+    modulePath: "extensions/telegram/src/fetch.ts",
+    protocols: ["http", "https"],
+    status: "captured",
+    notes:
+      "Telegram API fetch fallback picks up debug proxy env and records outbound/inbound exchanges.",
+  },
+  {
+    id: "mattermost-ws",
+    label: "Mattermost monitor websocket",
+    modulePath: "extensions/mattermost/src/mattermost/monitor-websocket.ts",
+    protocols: ["ws", "wss"],
+    status: "captured",
+    notes: "Mattermost websocket monitor uses the debug proxy agent and records frame activity.",
+  },
+  {
+    id: "openai-realtime-voice",
+    label: "OpenAI realtime voice bridge",
+    modulePath: "extensions/openai/realtime-voice-provider.ts",
+    protocols: ["wss"],
+    status: "captured",
+    notes:
+      "Realtime voice bridge now routes through the debug proxy agent and records websocket frames.",
+  },
+  {
+    id: "openai-realtime-transcription",
+    label: "OpenAI realtime transcription",
+    modulePath: "extensions/openai/realtime-transcription-provider.ts",
+    protocols: ["wss"],
+    status: "captured",
+    notes:
+      "Realtime transcription sessions now route through the debug proxy agent and record websocket frames.",
+  },
+  {
+    id: "openai-tts",
+    label: "OpenAI text-to-speech",
+    modulePath: "extensions/openai/speech-provider.ts",
+    protocols: ["https"],
+    status: "captured",
+    notes:
+      "Direct OpenAI TTS fetches record request/response payloads while inheriting proxy env routing.",
+  },
+  {
+    id: "microsoft-voices",
+    label: "Microsoft voice discovery",
+    modulePath: "extensions/microsoft/speech-provider.ts",
+    protocols: ["https"],
+    status: "captured",
+    notes:
+      "Microsoft voice listing fetches record HTTP exchanges and follow process-wide proxy routing.",
+  },
+  {
+    id: "feishu-client-http",
+    label: "Feishu SDK HTTP client",
+    modulePath: "extensions/feishu/src/client.ts",
+    protocols: ["https"],
+    status: "proxy-only",
+    notes:
+      "Feishu SDK traffic can inherit ambient proxying, but decrypted request/response capture is not yet wired at the SDK integration.",
+  },
+  {
+    id: "feishu-client-ws",
+    label: "Feishu SDK websocket client",
+    modulePath: "extensions/feishu/src/client.ts",
+    protocols: ["wss"],
+    status: "proxy-only",
+    notes:
+      "Feishu websocket creation can inherit ambient proxying, but websocket frame capture is not yet wired.",
+  },
+];
+
+let warnedCoverageSessionKey: string | null = null;
+
+export function buildDebugProxyCoverageReport() {
+  const counts = { captured: 0, "proxy-only": 0, uncovered: 0 };
+  for (const entry of DEBUG_PROXY_COVERAGE_ENTRIES) {
+    counts[entry.status] += 1;
+  }
+  const summary = {
+    total: DEBUG_PROXY_COVERAGE_ENTRIES.length,
+    captured: counts.captured,
+    proxyOnly: counts["proxy-only"],
+    uncovered: counts.uncovered,
+  };
+  return { summary, entries: DEBUG_PROXY_COVERAGE_ENTRIES };
+}
+
+export function maybeWarnAboutDebugProxyCoverage(
+  settings: DebugProxySettings = resolveDebugProxySettings(),
+  warn: (message: string) => void = (message) => console.warn(message),
+): void {
+  if (!settings.enabled || !settings.required) {
+    return;
+  }
+  const sessionKey = `${settings.sessionId}:${settings.proxyUrl ?? ""}`;
+  // Warn once per capture session/proxy URL; the gaps are static enough that
+  // repeating them during a run only adds noise.
+  if (warnedCoverageSessionKey === sessionKey) {
+    return;
+  }
+  warnedCoverageSessionKey = sessionKey;
+
+  const report = buildDebugProxyCoverageReport();
+  const { summary } = report;
+  const partial = report.entries.filter((entry) => entry.status !== "captured");
+  if (partial.length === 0) {
+    return;
+  }
+  warn(
+    `[openclaw proxy] debug proxy coverage: ${summary.captured}/${summary.total} captured, ${summary.proxyOnly} proxy-only, ${summary.uncovered} uncovered.`,
+  );
+  warn(
+    `[openclaw proxy] remaining gaps: ${partial.map((entry) => entry.id).join(", ")}. Run \`openclaw proxy coverage\` for details.`,
+  );
+}

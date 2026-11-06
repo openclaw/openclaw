@@ -1,0 +1,214 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type {
+  TuiChatSubmitAdmission,
+  TuiChatSubmitBlock,
+  TuiChatSubmitSnapshot,
+} from "./tui-submit-state.js";
+
+export type TuiSubmitAction = "local shell" | "command" | "message";
+
+function isBrowserSetupInput(text: string): boolean {
+  return /^\/browser-setup(?:\s|$)/i.test(text.trimStart());
+}
+
+function resolveEditorSubmitAction(text: string): TuiSubmitAction {
+  // Reject pasted extra arguments locally, without leaking them into model chat or recall.
+  if (isBrowserSetupInput(text)) {
+    return "command";
+  }
+  if (text.includes("\n")) {
+    return "message";
+  }
+  if (text.startsWith("!") && text.trimEnd() !== "!") {
+    return "local shell";
+  }
+  return text.trimStart().startsWith("/") ? "command" : "message";
+}
+
+function runSubmitAction(
+  action: TuiSubmitAction,
+  run: () => Promise<void> | void,
+  onError: (action: TuiSubmitAction, error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(run()).catch((error: unknown) => {
+      onError(action, error);
+    });
+  } catch (error) {
+    onError(action, error);
+  }
+}
+
+export function createEditorSubmitHandler(params: {
+  editor: {
+    getText?: () => string;
+    getExpandedText: () => string;
+    setText: (value: string) => void;
+    addToHistory: (value: string) => void;
+  };
+  handleCommand: (value: string, onBlockedChat?: () => void) => Promise<void> | void;
+  sendMessage: (value: string) => Promise<void> | void;
+  handleBangLine: (value: string) => Promise<void> | void;
+  onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
+  admitMessage?: (value: string, snapshot?: TuiChatSubmitSnapshot) => TuiChatSubmitAdmission;
+  onBlockedMessageSubmit?: (admission: TuiChatSubmitBlock) => void;
+}) {
+  const clearSubmittedEditor = () => {
+    // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
+    if (!params.editor.getText?.()) {
+      params.editor.setText("");
+    }
+  };
+
+  const restoreBlockedEditor = (value: string) => {
+    // Expand newer pastes before setText clears their backing storage, then
+    // prepend the blocked submit to the newer editor-owned draft.
+    const newerDraft = params.editor.getExpandedText();
+    params.editor.setText(newerDraft ? `${value}\n${newerDraft}` : value);
+  };
+
+  return (text: string, snapshot?: TuiChatSubmitSnapshot) => {
+    const raw = text;
+    const value = raw.trim();
+    const action = resolveEditorSubmitAction(raw);
+    const trimChangesAction = resolveEditorSubmitAction(value) !== action;
+
+    if (!value) {
+      clearSubmittedEditor();
+      return;
+    }
+
+    if (action !== "message") {
+      clearSubmittedEditor();
+      const command = action === "local shell" ? raw : value;
+      if (!isBrowserSetupInput(command)) {
+        params.editor.addToHistory(command);
+      }
+      runSubmitAction(
+        action,
+        () =>
+          action === "local shell"
+            ? params.handleBangLine(command)
+            : params.handleCommand(command, () => restoreBlockedEditor(command)),
+        params.onSubmitError,
+      );
+      return;
+    }
+
+    const admission: TuiChatSubmitAdmission = (snapshot
+      ? params.admitMessage?.(value, snapshot)
+      : params.admitMessage?.(value)) ?? { status: "allowed" };
+    if (admission.status === "blocked") {
+      restoreBlockedEditor(trimChangesAction ? raw : value);
+      params.onBlockedMessageSubmit?.(admission);
+      return;
+    }
+
+    clearSubmittedEditor();
+    // Keep editor dispatch stable on recall; shared chat commands still belong to sendMessage.
+    if (!trimChangesAction) {
+      params.editor.addToHistory(value);
+    }
+    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
+  };
+}
+
+export function shouldEnableWindowsGitBashPasteFallback(): boolean {
+  const termProgram = normalizeLowercaseStringOrEmpty(process.env.TERM_PROGRAM);
+
+  // Some macOS terminals emit multiline paste as rapid single-line submits.
+  // Enable burst coalescing so pasted blocks stay as one user message.
+  if (process.platform === "darwin") {
+    return termProgram.includes("iterm") || termProgram.includes("apple_terminal");
+  }
+
+  if (process.platform !== "win32") {
+    return false;
+  }
+
+  const msystem = (process.env.MSYSTEM ?? "").toUpperCase();
+  const shell = process.env.SHELL ?? "";
+  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
+    return true;
+  }
+  if (normalizeLowercaseStringOrEmpty(shell).includes("bash")) {
+    return true;
+  }
+  return termProgram.includes("mintty");
+}
+
+export function createSubmitBurstCoalescer(params: {
+  submit: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
+  captureSnapshot?: () => TuiChatSubmitSnapshot;
+  enabled: boolean;
+  burstWindowMs?: number;
+  onCapture?: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
+}) {
+  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
+  let pending: { value: string; snapshot?: TuiChatSubmitSnapshot } | null = null;
+  let pendingAt = 0;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+
+  const clearFlushTimer = () => {
+    clearTimeout(flushTimer ?? undefined);
+    flushTimer = null;
+  };
+
+  const submit = (value: string, snapshot?: TuiChatSubmitSnapshot) => {
+    if (snapshot) {
+      params.submit(value, snapshot);
+    } else {
+      params.submit(value);
+    }
+  };
+
+  const flushPending = () => {
+    if (disposed || !pending) {
+      return;
+    }
+    const { value, snapshot } = pending;
+    pending = null;
+    pendingAt = 0;
+    clearFlushTimer();
+    submit(value, snapshot);
+  };
+
+  const submitBurst = (value: string) => {
+    if (disposed) {
+      return;
+    }
+    if (!params.enabled) {
+      submit(value, params.captureSnapshot?.());
+      return;
+    }
+    if (value.includes("\n")) {
+      flushPending();
+      submit(value, params.captureSnapshot?.());
+      return;
+    }
+    const ts = Date.now();
+    const snapshot = params.captureSnapshot?.();
+    params.onCapture?.(value, snapshot);
+    if (pending && ts - pendingAt <= windowMs) {
+      pending = {
+        value: `${pending.value}\n${value}`,
+        ...(pending.snapshot || snapshot ? { snapshot: pending.snapshot ?? snapshot } : {}),
+      };
+    } else {
+      flushPending();
+      pending = { value, ...(snapshot ? { snapshot } : {}) };
+    }
+    pendingAt = ts;
+    clearFlushTimer();
+    flushTimer = setTimeout(flushPending, windowMs);
+  };
+
+  const dispose = () => {
+    disposed = true;
+    pending = null;
+    clearFlushTimer();
+  };
+
+  return Object.assign(submitBurst, { dispose });
+}

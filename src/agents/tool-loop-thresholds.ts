@@ -1,0 +1,1 @@
+export const TOOL_LOOP_WARNING_THRESHOLD = 10;

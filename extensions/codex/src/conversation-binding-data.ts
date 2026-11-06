@@ -1,0 +1,192 @@
+import { createHash, randomUUID } from "node:crypto";
+import process from "node:process";
+import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
+
+const APP_SERVER_BINDING_DATA_VERSION = 2;
+const CLI_BINDING_DATA_VERSION = 1;
+
+export type CodexAppServerConversationBindingData = {
+  kind: "codex-app-server-session";
+  version: 2;
+  bindingId: string;
+  workspaceDir: string;
+  agentId?: string;
+  agentDir?: string;
+  source?: CodexAppServerConversationSource;
+  start?: CodexAppServerConversationStart;
+  legacyBinding?: true;
+};
+
+type CodexAppServerConversationSource = {
+  agentId: string;
+  sessionId: string;
+  threadId: string;
+  sessionKey?: string;
+  storePath?: string;
+};
+
+type CodexAppServerConversationStart = {
+  id: string;
+  threadId?: string;
+  model?: string;
+  modelProvider?: string;
+  authProfileId?: string;
+};
+
+type CodexCliNodeConversationBindingData = {
+  kind: "codex-cli-node-session";
+  version: 1;
+  nodeId: string;
+  sessionId: string;
+  agentId?: string;
+  cwd?: string;
+};
+
+type CodexConversationBindingData =
+  | CodexAppServerConversationBindingData
+  | CodexCliNodeConversationBindingData;
+
+export function createCodexConversationBindingData(params: {
+  bindingId?: string;
+  workspaceDir: string;
+  agentId?: string;
+  agentDir?: string;
+  source?: CodexAppServerConversationSource;
+  start?: CodexAppServerConversationStart;
+}): CodexAppServerConversationBindingData {
+  const agentId = params.agentId?.trim();
+  const agentDir = params.agentDir?.trim();
+  return {
+    kind: "codex-app-server-session",
+    version: APP_SERVER_BINDING_DATA_VERSION,
+    bindingId: params.bindingId?.trim() || randomUUID(),
+    workspaceDir: params.workspaceDir,
+    ...(agentId ? { agentId } : {}),
+    ...(agentDir ? { agentDir } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.start ? { start: params.start } : {}),
+  };
+}
+
+export function createCodexCliNodeConversationBindingData(params: {
+  nodeId: string;
+  sessionId: string;
+  agentId?: string;
+  cwd?: string;
+}): CodexCliNodeConversationBindingData {
+  const agentId = params.agentId?.trim();
+  const cwd = params.cwd?.trim();
+  return {
+    kind: "codex-cli-node-session",
+    version: CLI_BINDING_DATA_VERSION,
+    nodeId: params.nodeId,
+    sessionId: params.sessionId,
+    ...(agentId ? { agentId } : {}),
+    ...(cwd ? { cwd } : {}),
+  };
+}
+
+export function readCodexConversationBindingData(
+  binding: PluginConversationBinding | null | undefined,
+): CodexConversationBindingData | undefined {
+  const data = readRecord(binding?.data);
+  return data ? readCodexConversationBindingDataRecord(data) : undefined;
+}
+
+export function readCodexConversationBindingDataRecord(
+  data: Record<string, unknown>,
+): CodexConversationBindingData | undefined {
+  if (data.kind === "codex-cli-node-session") {
+    const nodeId = normalizeOptionalString(data.nodeId);
+    const sessionId = normalizeOptionalString(data.sessionId);
+    if (data.version !== CLI_BINDING_DATA_VERSION || !nodeId || !sessionId) {
+      return undefined;
+    }
+    return {
+      kind: "codex-cli-node-session",
+      version: CLI_BINDING_DATA_VERSION,
+      nodeId,
+      sessionId,
+      agentId: normalizeOptionalString(data.agentId),
+      cwd: normalizeOptionalString(data.cwd),
+    };
+  }
+  if (data.kind !== "codex-app-server-session") {
+    return undefined;
+  }
+  const bindingId =
+    data.version === APP_SERVER_BINDING_DATA_VERSION &&
+    typeof data.bindingId === "string" &&
+    data.bindingId.trim()
+      ? data.bindingId.trim()
+      : data.version === 1 && typeof data.sessionFile === "string" && data.sessionFile.trim()
+        ? legacyCodexConversationBindingId(data.sessionFile)
+        : undefined;
+  if (!bindingId) {
+    return undefined;
+  }
+  const start = readConversationStart(readRecord(data.start));
+  const source = readConversationSource(readRecord(data.source));
+  return {
+    kind: "codex-app-server-session",
+    version: APP_SERVER_BINDING_DATA_VERSION,
+    bindingId,
+    workspaceDir: readNonBlankString(data.workspaceDir) ?? process.cwd(),
+    agentId: normalizeOptionalString(data.agentId),
+    agentDir: normalizeOptionalString(data.agentDir),
+    ...(source ? { source } : {}),
+    ...(start ? { start } : {}),
+    ...(data.version === 1 ? { legacyBinding: true } : {}),
+  };
+}
+
+function readConversationSource(
+  value: Record<string, unknown> | undefined,
+): CodexAppServerConversationSource | undefined {
+  const agentId = normalizeOptionalString(value?.agentId);
+  const sessionId = normalizeOptionalString(value?.sessionId);
+  const threadId = normalizeOptionalString(value?.threadId);
+  const sessionKey = normalizeOptionalString(value?.sessionKey);
+  const storePath = normalizeOptionalString(value?.storePath);
+  if (!agentId || !sessionId || !threadId) {
+    return undefined;
+  }
+  return {
+    agentId,
+    sessionId,
+    threadId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+  };
+}
+
+/** Doctor/runtime v1 decoder key for shipped conversation bindings that stored a file locator. */
+export function legacyCodexConversationBindingId(sessionFile: string): string {
+  return `legacy-${createHash("sha256").update(sessionFile).digest("base64url")}`;
+}
+
+export function resolveCodexDefaultWorkspaceDir(pluginConfig?: CodexPluginConfig): string {
+  const configured = normalizeOptionalString(pluginConfig?.appServer?.defaultWorkspaceDir);
+  return configured ?? process.cwd();
+}
+
+function readConversationStart(
+  value: Record<string, unknown> | undefined,
+): CodexAppServerConversationStart | undefined {
+  const read = (key: keyof CodexAppServerConversationStart) =>
+    normalizeOptionalString(value?.[key]);
+  const start = {
+    id: read("id"),
+    threadId: read("threadId"),
+    model: read("model"),
+    modelProvider: read("modelProvider"),
+    authProfileId: read("authProfileId"),
+  };
+  return start.id ? { ...start, id: start.id } : undefined;
+}

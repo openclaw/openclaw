@@ -1,0 +1,565 @@
+/** Doctor-owned migration from workspace TOOLS.md into the AGENTS.md Tools section. */
+import { isUtf8 } from "node:buffer";
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveBootstrapMaxChars } from "../agents/embedded-agent-helpers/bootstrap.js";
+import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../agents/workspace.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
+import { publishFileNoClobber, syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
+import { shortenHomePath } from "../utils.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
+
+const MIGRATED_SUBSECTION_HEADING = "### Local notes (migrated from TOOLS.md)";
+const NO_CLOBBER_PUBLICATION = {
+  strategy: "link-or-copy",
+  durability: "degrade",
+} as const;
+
+type ToolsMdMigrationResult = {
+  changes: string[];
+  warnings: string[];
+};
+
+type ToolsMdSource = {
+  path: string;
+  content: string;
+  sha256: string;
+  stat: syncFs.Stats;
+};
+
+type MigrationFileSnapshot = {
+  content: string;
+  stat?: syncFs.Stats;
+};
+
+const LEGACY_TOOLS_MD_TEMPLATE =
+  "# TOOLS.md - Local Notes\n\nSkills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup: camera names and locations, SSH hosts and aliases, preferred TTS voices, speaker/room names, device nicknames, anything environment-specific.\n\n## Examples\n\n```markdown\n### Cameras\n\n" +
+  "- living-room → Main area, 180° wide angle\n- front-door → Entrance, motion-triggered\n\n### SSH\n\n- home-server → 192.168.1.100, user: admin\n\n### TTS\n\n" +
+  '- Preferred voice: "Nova" (warm, slightly British)\n- Default speaker: Kitchen HomePod\n```\n\n## Why Separate?\n\n' +
+  "Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.\n\n---\n\nAdd whatever helps you do your job. This is your cheat sheet.\n\n## Related\n\n- [Agent workspace](/concepts/agent-workspace)\n";
+
+const LEGACY_TOOLS_DEV_MD_TEMPLATE =
+  "# TOOLS.md - User Tool Notes (editable)\n\nThis file is for _your_ notes about external tools and conventions. It does not define which tools exist; OpenClaw provides built-in tools internally, and skills add the rest.\n\n## Examples\n\n### imsg\n\n" +
+  "- Send an iMessage/SMS: describe who/what, confirm before sending.\n- Prefer short messages; avoid sending secrets.\n\n### sag\n\n" +
+  "- Text-to-speech: specify voice, target speaker/room, and whether to stream.\n\nAdd whatever else you want the assistant to know about your local toolchain.\n\n## Related\n\n- [TOOLS.md template](/reference/templates/TOOLS)\n";
+const LEGACY_TOOLS_DEV_FALLBACK =
+  "# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n";
+
+function shouldMergeToolsMd(content: string): boolean {
+  return (
+    content.trim().length > 0 &&
+    content !== LEGACY_TOOLS_MD_TEMPLATE &&
+    content !== LEGACY_TOOLS_DEV_MD_TEMPLATE &&
+    content !== LEGACY_TOOLS_DEV_FALLBACK
+  );
+}
+
+const CURRENT_AGENTS_TOOLS_GUIDANCE =
+  "Skills define how tools work. Keep environment-specific local notes in this section.";
+
+const LEGACY_AGENTS_TOOLS_GUIDANCE_REWRITES = [
+  [
+    "Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.",
+    CURRENT_AGENTS_TOOLS_GUIDANCE,
+  ],
+  [
+    "- Keep environment-specific notes in `TOOLS.md` (notes for skills).",
+    "- Keep environment-specific notes in this file's `## Tools` section.",
+  ],
+  [
+    "- Keep environment-specific notes in `TOOLS.md` (Notes for Skills).",
+    "- Keep environment-specific notes in this file's `## Tools` section.",
+  ],
+  [
+    "- You learn a lesson -> update `AGENTS.md`, `TOOLS.md`, or the relevant skill.",
+    "- You learn a lesson -> update `AGENTS.md` or the relevant skill.",
+  ],
+  [
+    "- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill",
+    "- When you learn a lesson → update AGENTS.md or the relevant skill",
+  ],
+  [
+    "Skills 提供你的工具。当你需要某个工具时，查看它的 `SKILL.md`。在 `TOOLS.md` 中保存本地笔记（摄像头名称、SSH 详情、语音偏好等）。",
+    "Skills 定义工具的使用方式。请将环境特定的本地笔记保存在本节中。",
+  ],
+  [
+    "技能提供你的工具。当你需要某个工具时，查看它的 `SKILL.md`。在 `TOOLS.md` 中保存本地笔记（摄像头名称、SSH 详情、语音偏好等）。",
+    "技能定义工具的使用方式。请将环境特定的本地笔记保存在本节中。",
+  ],
+  [
+    "- 在 `TOOLS.md` 中保存环境特定的笔记（Skills 注意事项）。",
+    "- 将环境特定的笔记保存在本文件的 `## Tools` 部分。",
+  ],
+  [
+    "- 将环境相关的备注保存在 `TOOLS.md`（Skills 备注）中。",
+    "- 将环境相关的备注保存在本文件的 `## Tools` 部分。",
+  ],
+  [
+    "- 将环境相关的备注保存在 `TOOLS.md`（技能备注）中。",
+    "- 将环境相关的备注保存在本文件的 `## Tools` 部分。",
+  ],
+  [
+    "- 当你学到教训 → 更新 AGENTS.md、TOOLS.md 或相关 Skills 文件",
+    "- 当你学到教训 → 更新 AGENTS.md 或相关 Skills 文件",
+  ],
+  [
+    "- 当你学到教训 → 更新 AGENTS.md、TOOLS.md 或相关技能文件",
+    "- 当你学到教训 → 更新 AGENTS.md 或相关技能文件",
+  ],
+] as const;
+
+type ToolsMdMigrationWorkspaceTarget = {
+  primaryAgentId: string;
+  agentIds: string[];
+  workspaceDir: string;
+};
+
+function resolveToolsMdMigrationWorkspaceTargets(
+  cfg: OpenClawConfig,
+): ToolsMdMigrationWorkspaceTarget[] {
+  const targets = new Map<string, ToolsMdMigrationWorkspaceTarget>();
+  for (const agentId of listAgentIds(cfg)) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const key = path.resolve(workspaceDir);
+    const target = targets.get(key) ?? { primaryAgentId: agentId, agentIds: [], workspaceDir };
+    target.agentIds.push(agentId);
+    targets.set(key, target);
+  }
+  return [...targets.values()];
+}
+
+type PosixFilePermissions = Pick<syncFs.Stats, "uid" | "gid" | "mode">;
+
+function sameFileIdentity(left?: syncFs.Stats, right?: syncFs.Stats): boolean {
+  return left?.dev === right?.dev && left?.ino === right?.ino;
+}
+
+function samePosixPermissions(left: PosixFilePermissions, right: PosixFilePermissions): boolean {
+  return (
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    (left.mode & 0o7777) === (right.mode & 0o7777)
+  );
+}
+
+function addsPosixReaders(
+  source: PosixFilePermissions,
+  destination: PosixFilePermissions,
+): boolean {
+  // Owner and group membership take precedence over other bits, including denied owner reads.
+  for (const uid of new Set([source.uid, destination.uid, undefined])) {
+    for (const sourceGroup of [false, true]) {
+      for (const destinationGroup of [false, true]) {
+        if (source.gid === destination.gid && sourceGroup !== destinationGroup) {
+          continue;
+        }
+        const sourceBit = uid === source.uid ? 0o400 : sourceGroup ? 0o040 : 0o004;
+        const destinationBit = uid === destination.uid ? 0o400 : destinationGroup ? 0o040 : 0o004;
+        if ((destination.mode & destinationBit) !== 0 && (source.mode & sourceBit) === 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+async function assertSourceReadersPreserved(
+  source: ToolsMdSource,
+  destination: PosixFilePermissions,
+): Promise<void> {
+  const current = await readMigrationFileSnapshot(source.path);
+  if (
+    current.content !== source.content ||
+    !current.stat ||
+    !sameFileIdentity(current.stat, source.stat) ||
+    !samePosixPermissions(current.stat, source.stat)
+  ) {
+    throw new Error("TOOLS.md changed during migration");
+  }
+  if (addsPosixReaders(current.stat, destination)) {
+    throw new Error(
+      "Merging TOOLS.md would grant additional POSIX readers. Review both files' owners, groups, and read permissions before rerunning doctor.",
+    );
+  }
+}
+
+async function readMigrationFileSnapshot(
+  filePath: string,
+  allowMissing = false,
+): Promise<MigrationFileSnapshot> {
+  let stat: syncFs.Stats;
+  try {
+    stat = await fs.lstat(filePath);
+  } catch (error) {
+    if (allowMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { content: "" };
+    }
+    throw error;
+  }
+  if (!stat.isFile() || stat.nlink > 1) {
+    throw new Error(
+      `${path.basename(filePath)} must be an unlinked regular file for automatic migration`,
+    );
+  }
+  const file = await readRegularFile({ filePath });
+  const currentStat = await fs.lstat(filePath);
+  if (
+    file.stat.nlink !== 1 ||
+    !sameFileIdentity(file.stat, stat) ||
+    !sameFileIdentity(currentStat, file.stat)
+  ) {
+    throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
+  }
+  // Both the merged file and archive must preserve the source bytes; decoding
+  // with replacement would corrupt content before the source is unlinked.
+  if (!isUtf8(file.buffer)) {
+    throw new Error(
+      `File is not valid UTF-8: ${filePath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
+    );
+  }
+  return { content: file.buffer.toString("utf8"), stat: currentStat };
+}
+
+async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefined> {
+  const entries = await fs.readdir(workspaceDir).catch(() => [] as string[]);
+  const betaArtifacts = entries.filter(
+    (entry) =>
+      entry.startsWith(`${DEFAULT_TOOLS_FILENAME}.doctor-importing-`) ||
+      entry.startsWith(`${DEFAULT_AGENTS_FILENAME}.doctor-backup-`),
+  );
+  if (betaArtifacts.length > 0) {
+    throw new Error(
+      `Interrupted v2026.7.2-beta.5 migration artifact(s) left untouched: ${betaArtifacts.join(", ")}. Restore the desired file manually before rerunning doctor.`,
+    );
+  }
+  const toolsPath = path.join(workspaceDir, DEFAULT_TOOLS_FILENAME);
+  const snapshot = await readMigrationFileSnapshot(toolsPath, true);
+  if (!snapshot.stat) {
+    return undefined;
+  }
+  return {
+    path: toolsPath,
+    content: snapshot.content,
+    sha256: sha256Hex(snapshot.content),
+    stat: snapshot.stat,
+  };
+}
+
+function appendWithSpacing(before: string, addition: string, after = ""): string {
+  const spacing = (text: string) =>
+    text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+  const prefix = before.length === 0 ? "" : spacing(before);
+  const suffix = after.length === 0 ? "" : spacing(addition);
+  return `${before}${prefix}${addition}${suffix}${after}`;
+}
+
+function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
+  const mergedAgentsContent = rewriteLegacyAgentsToolsGuidance(agentsContent);
+  const headingIndex = mergedAgentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
+  if (headingIndex >= 0 && mergedAgentsContent.includes(toolsContent)) {
+    return mergedAgentsContent;
+  }
+  const block =
+    headingIndex >= 0 ? toolsContent : `${MIGRATED_SUBSECTION_HEADING}\n\n${toolsContent}`;
+  const insertAt =
+    headingIndex >= 0
+      ? headingIndex + MIGRATED_SUBSECTION_HEADING.length
+      : findToolsSection(mergedAgentsContent)?.insertAt;
+  if (insertAt === undefined) {
+    return appendWithSpacing(mergedAgentsContent, `## Tools\n\n${block}`);
+  }
+  return appendWithSpacing(
+    mergedAgentsContent.slice(0, insertAt),
+    block,
+    mergedAgentsContent.slice(insertAt),
+  );
+}
+
+function rewriteLegacyAgentsToolsGuidance(content: string): string {
+  let rewritten = content;
+  for (const [legacy, current] of LEGACY_AGENTS_TOOLS_GUIDANCE_REWRITES) {
+    rewritten = rewritten.replaceAll(legacy, current);
+  }
+  return rewritten === content ? content : ensureLocalNotesHeading(rewritten);
+}
+
+function findToolsSection(content: string): { headingEnd: number; insertAt: number } | undefined {
+  let offset = 0;
+  let headingEnd = 0;
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+  for (const lineWithEnding of content.match(/.*(?:\n|$)/gu) ?? []) {
+    if (lineWithEnding === "") {
+      continue;
+    }
+    const line = lineWithEnding.replace(/\n$/u, "");
+    const fenceRun = /^\s*(`{3,}|~{3,})/u.exec(line)?.[1];
+    const closingFenceRun = /^\s*(`{3,}|~{3,})\s*$/u.exec(line)?.[1];
+    const marker = fenceRun?.[0] as "`" | "~" | undefined;
+    if (marker && !fence) {
+      fence = { marker, length: fenceRun!.length };
+    } else if (
+      closingFenceRun &&
+      fence &&
+      closingFenceRun[0] === fence.marker &&
+      closingFenceRun.length >= fence.length
+    ) {
+      fence = undefined;
+    } else if (!fence) {
+      const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
+      if (heading) {
+        const depth = heading[1]!.length;
+        if (headingEnd > 0 && depth <= 2) {
+          return { headingEnd, insertAt: offset };
+        }
+        if (depth === 2 && heading[2]!.trim().toLowerCase() === "tools") {
+          headingEnd = offset + lineWithEnding.length;
+        }
+      }
+    }
+    offset += lineWithEnding.length;
+  }
+  return headingEnd > 0 ? { headingEnd, insertAt: content.length } : undefined;
+}
+
+function ensureLocalNotesHeading(content: string): string {
+  const section = findToolsSection(content);
+  if (!section) {
+    return content;
+  }
+  const body = content.slice(section.headingEnd, section.insertAt);
+  if (/^###\s+Local notes(?:\s|$)/imu.test(body)) {
+    return content;
+  }
+  return `${content.slice(0, section.headingEnd)}\n### Local notes\n${content.slice(section.headingEnd)}`;
+}
+
+export async function collectToolsMdMigrationFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const MIGRATION_FINDING_DEFAULTS = {
+    checkId: "core/doctor/tools-md-migration",
+    severity: "warning",
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to merge TOOLS.md into AGENTS.md.`,
+  } as const;
+  const findings: HealthFinding[] = [];
+  for (const target of resolveToolsMdMigrationWorkspaceTargets(cfg)) {
+    try {
+      const source = await readToolsMd(target.workspaceDir);
+      if (source) {
+        findings.push({
+          ...MIGRATION_FINDING_DEFAULTS,
+          target: target.primaryAgentId,
+          path: source.path,
+          message: `Agent "${target.primaryAgentId}" still stores local tool notes in TOOLS.md.`,
+          requirement: "legacy-tools-md",
+        });
+        if (shouldMergeToolsMd(source.content)) {
+          const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
+          const agentsContent = (await readMigrationFileSnapshot(agentsPath, true)).content;
+          const mergedChars = mergeToolsMdIntoAgentsMd(agentsContent, source.content).length;
+          /** One finding per agent whose own bootstrap budget cannot hold the merged file. */
+          for (const agentId of target.agentIds) {
+            const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
+            if (mergedChars <= bootstrapMaxChars) {
+              continue;
+            }
+            findings.push({
+              ...MIGRATION_FINDING_DEFAULTS,
+              target: agentId,
+              path: agentsPath,
+              message: `Agent "${agentId}" TOOLS.md migration will produce a ${mergedChars}-character AGENTS.md, exceeding its configured bootstrapMaxChars limit of ${bootstrapMaxChars}. Raise \`agents.entries.*.bootstrapMaxChars\` for this agent, or \`agents.defaults.bootstrapMaxChars\` as fallback, to preserve all migrated instructions.`,
+              requirement: "tools-md-merged-bootstrap-limit",
+            });
+          }
+        }
+      }
+    } catch (error) {
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        target: target.primaryAgentId,
+        path: path.join(target.workspaceDir, DEFAULT_TOOLS_FILENAME),
+        message: `Agent "${target.primaryAgentId}" TOOLS.md cannot be migrated: ${errorMessage(error)}`,
+        severity: "error",
+        requirement: "tools-md-migration-blocked",
+      });
+    }
+  }
+  return findings;
+}
+
+export async function maybeMigrateToolsMd(params: {
+  cfg: OpenClawConfig;
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ToolsMdMigrationResult> {
+  const env = params.env ?? process.env;
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const target of resolveToolsMdMigrationWorkspaceTargets(params.cfg)) {
+    try {
+      const source = await readToolsMd(target.workspaceDir);
+      if (!source) {
+        continue;
+      }
+      if (!params.shouldRepair) {
+        note(
+          `${shortenHomePath(source.path)} will be archived and merged into AGENTS.md when customized.`,
+          "TOOLS.md migration preview",
+        );
+        continue;
+      }
+
+      const shouldMerge = shouldMergeToolsMd(source.content);
+      const safeAgentId = target.primaryAgentId.replace(/[^A-Za-z0-9._-]+/g, "-");
+      const archivePath = path.join(
+        resolveStateDir(env),
+        "backups",
+        "tools-md-migration",
+        `${safeAgentId}-${source.sha256}.md`,
+      );
+      const archiveDir = path.dirname(archivePath);
+      await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
+      const archiveTempPath = `${archivePath}.doctor-writing-${process.pid}-${Date.now()}`;
+      try {
+        {
+          await using handle = await fs.open(archiveTempPath, "wx", 0o600);
+          await handle.writeFile(source.content, "utf8");
+          await handle.sync();
+        }
+        await publishFileNoClobber(archiveTempPath, archivePath, NO_CLOBBER_PUBLICATION);
+        await fs.rm(archiveTempPath);
+        await syncDirectoryIfSupported(archiveDir);
+      } catch (error) {
+        await fs.rm(archiveTempPath, { force: true });
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+        if (sha256Hex(await fs.readFile(archivePath, "utf8")) !== source.sha256) {
+          throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, {
+            cause: error,
+          });
+        }
+      }
+      const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
+      const dir = path.dirname(agentsPath);
+      const prefix = `${path.basename(agentsPath)}.doctor-writing-`;
+      const entries = (await fs.readdir(dir).catch(() => [] as string[])).filter((entry) =>
+        entry.startsWith(prefix),
+      );
+      for (const entry of entries) {
+        const tempPath = path.join(dir, entry);
+        const stat = await fs.lstat(tempPath);
+        if (!stat.isFile() || stat.nlink !== 1) {
+          throw new Error(
+            `interrupted AGENTS.md write must be an unlinked regular file: ${tempPath}`,
+          );
+        }
+        await fs.rm(tempPath);
+      }
+      if (entries.length > 0) {
+        await syncDirectoryIfSupported(dir);
+      }
+      const agentsContent = (await readMigrationFileSnapshot(agentsPath, true)).content;
+      const merged = shouldMerge
+        ? mergeToolsMdIntoAgentsMd(agentsContent, source.content)
+        : rewriteLegacyAgentsToolsGuidance(agentsContent);
+      if (merged !== agentsContent) {
+        const importedSource =
+          shouldMerge && !agentsContent.includes(source.content) ? source : undefined;
+        const snapshot = await readMigrationFileSnapshot(agentsPath, true);
+        if (snapshot.content !== agentsContent) {
+          throw new Error("AGENTS.md changed during TOOLS.md migration");
+        }
+        const stat = snapshot.stat;
+        const mode = stat?.mode ?? 0o600;
+        const tempPath = `${agentsPath}.doctor-writing-${process.pid}-${Date.now()}`;
+        try {
+          let prepared: syncFs.Stats;
+          {
+            await using handle = await fs.open(tempPath, "wx", 0o600);
+            await handle.writeFile(merged, "utf8");
+            if (process.platform !== "win32" && stat) {
+              // Changing the owner must not grant the new UID the staging file's owner-read bit.
+              await handle.chmod(0o000);
+              await handle.chown(stat.uid, stat.gid);
+            }
+            if (process.platform !== "win32" && importedSource) {
+              await assertSourceReadersPreserved(importedSource, stat ?? (await handle.stat()));
+            }
+            if (stat) {
+              await handle.chmod(mode);
+            }
+            prepared = await handle.stat();
+            if (process.platform !== "win32" && stat && !samePosixPermissions(prepared, stat)) {
+              throw new Error("AGENTS.md ownership or permissions could not be preserved");
+            }
+            await handle.sync();
+          }
+          // Doctor is a single-operator flow. This final snapshot catches edits before
+          // commit without retaining the retired cross-process claim protocol.
+          const current = await readMigrationFileSnapshot(agentsPath, true);
+          if (
+            current.content !== agentsContent ||
+            !sameFileIdentity(current.stat, stat) ||
+            (process.platform !== "win32" &&
+              current.stat &&
+              stat &&
+              !samePosixPermissions(current.stat, stat))
+          ) {
+            throw new Error("AGENTS.md changed during TOOLS.md migration");
+          }
+          if (process.platform !== "win32" && importedSource) {
+            await assertSourceReadersPreserved(importedSource, prepared);
+          }
+          await fs.rename(tempPath, agentsPath);
+          await syncDirectoryIfSupported(path.dirname(agentsPath));
+        } catch (error) {
+          await fs.rm(tempPath, { force: true });
+          throw error;
+        }
+        if ((await readMigrationFileSnapshot(agentsPath)).content !== merged) {
+          throw new Error("AGENTS.md changed after TOOLS.md migration was written");
+        }
+      }
+      // Fence an earlier AGENTS rename before the durable source unlink, including reruns.
+      await syncDirectoryIfSupported(target.workspaceDir);
+      const current = await readMigrationFileSnapshot(source.path);
+      if (sha256Hex(current.content) !== source.sha256) {
+        throw new Error("TOOLS.md changed during migration");
+      }
+      // The original bytes are durable in both the archive and merged AGENTS.md;
+      // the single-operator migration deliberately has no concurrent-writer claim.
+      const currentStat = syncFs.lstatSync(source.path);
+      if (
+        !current.stat ||
+        !sameFileIdentity(currentStat, current.stat) ||
+        !sameFileIdentity(currentStat, source.stat)
+      ) {
+        throw new Error("TOOLS.md changed during migration");
+      }
+      syncFs.unlinkSync(source.path);
+      await syncDirectoryIfSupported(target.workspaceDir);
+      changes.push(
+        shouldMerge
+          ? `Merged ${shortenHomePath(source.path)} into AGENTS.md and archived the original.`
+          : `Removed untouched ${shortenHomePath(source.path)} after archiving it.`,
+      );
+    } catch (error) {
+      warnings.push(
+        `Agent "${target.primaryAgentId}" TOOLS.md was not migrated: ${errorMessage(error)}`,
+      );
+    }
+  }
+  noteDoctorMigrationResult({ changes, warnings }, { changesTitle: "TOOLS.md migration" });
+  return { changes, warnings };
+}

@@ -1,0 +1,185 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
+import type { CodexAppServerAuthRequirement } from "./auth-types.js";
+import type { CodexAppServerStartOptions } from "./config.js";
+import { assertCodexModelListResponse } from "./protocol-validators.js";
+import type { CodexModel } from "./protocol.js";
+import type { CodexAppServerScopedRequest } from "./request.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadRequest = createLazyRuntimeModule(() => import("./request.js"));
+
+type CyberAccessProgram = NonNullable<
+  import("openclaw/plugin-sdk/provider-catalog-shared").ProviderCatalogOutcome["modelAccessPrograms"]
+>[number]["cyber"][number];
+
+// Allow Codex's five-second remote catalog refresh to finish or fall back,
+// with headroom for client acquisition, response transit, and account/read.
+export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+
+export type CodexAppServerModel = {
+  id: string;
+  model: string;
+  displayName?: string;
+  description?: string;
+  hidden?: boolean;
+  isDefault?: boolean;
+  inputModalities: string[];
+  supportedReasoningEfforts: string[];
+  serviceTiers?: string[];
+  availableAccessPrograms?: { cyber: CyberAccessProgram[] };
+  defaultReasoningEffort?: string;
+  multiAgentVersion?: "disabled" | "v1" | "v2" | null;
+};
+
+export type CodexAppServerModelListResult = {
+  models: CodexAppServerModel[];
+  nextCursor?: string;
+  truncated?: boolean;
+};
+
+type CodexAppServerListModelsOptions = {
+  /** Caller-owned request scope for related catalog/account reads. */
+  request?: CodexAppServerScopedRequest;
+  limit?: number;
+  cursor?: string;
+  includeHidden?: boolean;
+  timeoutMs?: number;
+  startOptions?: CodexAppServerStartOptions;
+  authProfileId?: string;
+  authRequirement?: CodexAppServerAuthRequirement;
+  agentDir?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+};
+
+export async function listCodexAppServerModels(
+  options: CodexAppServerListModelsOptions = {},
+): Promise<CodexAppServerModelListResult> {
+  return await withCodexAppServerModelRequest(options, async (request) =>
+    requestModelListPage(request, options),
+  );
+}
+
+export async function listAllCodexAppServerModels(
+  options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
+): Promise<CodexAppServerModelListResult> {
+  const maxPages = floorPositiveFiniteNumber(options.maxPages) ?? 20;
+  return await withCodexAppServerModelRequest(options, async (request) => {
+    const models: CodexAppServerModel[] = [];
+    let nextCursor: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await requestModelListPage(request, {
+        ...options,
+        cursor: page === 0 ? options.cursor : nextCursor,
+      });
+      models.push(...result.models);
+      nextCursor = result.nextCursor;
+      if (!nextCursor) {
+        return { models };
+      }
+    }
+    return { models, nextCursor, truncated: true };
+  });
+}
+
+async function withCodexAppServerModelRequest<T>(
+  options: CodexAppServerListModelsOptions,
+  run: (request: CodexAppServerScopedRequest) => Promise<T>,
+): Promise<T> {
+  if (options.request) {
+    return await run(options.request);
+  }
+  const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
+  const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
+    await loadSharedClient();
+  const { requestCodexAppServerClientJson } = await loadRequest();
+  // Standalone listing retains the initialize diagnostic and per-page budget;
+  // catalog/account callers supply their shared operation scope above.
+  const client = await getLeasedSharedCodexAppServerClient({
+    startOptions: options.startOptions,
+    timeoutMs,
+    authProfileId: options.authProfileId,
+    authRequirement: options.authRequirement,
+    agentDir: options.agentDir,
+    config: options.config,
+  });
+  try {
+    return await run((request) =>
+      requestCodexAppServerClientJson({ ...request, client, timeoutMs, config: options.config }),
+    );
+  } finally {
+    releaseLeasedSharedCodexAppServerClient(client);
+  }
+}
+
+async function requestModelListPage(
+  request: CodexAppServerScopedRequest,
+  options: CodexAppServerListModelsOptions,
+): Promise<CodexAppServerModelListResult> {
+  const response = await request({
+    method: "model/list",
+    requestParams: {
+      limit: options.limit ?? null,
+      cursor: options.cursor ?? null,
+      includeHidden: options.includeHidden ?? null,
+    },
+  });
+  return readModelListResult(response);
+}
+
+export function readModelListResult(value: unknown): CodexAppServerModelListResult {
+  const response = assertCodexModelListResponse(value);
+  const models = response.data.map(readCodexModel);
+  const nextCursor = response.nextCursor;
+  return { models, ...(nextCursor ? { nextCursor } : {}) };
+}
+
+function readCodexModel(value: CodexModel): CodexAppServerModel {
+  const id = normalizeOptionalString(value.id);
+  const model = normalizeOptionalString(value.model);
+  if (!id || !model) {
+    throw new Error(
+      "Invalid Codex app-server model/list response: model id and name must be non-empty strings",
+    );
+  }
+  const displayName = normalizeOptionalString(value.displayName);
+  const description = normalizeOptionalString(value.description);
+  const defaultReasoningEffort = normalizeOptionalString(value.defaultReasoningEffort);
+  return {
+    id,
+    model,
+    ...(displayName ? { displayName } : {}),
+    ...(description ? { description } : {}),
+    hidden: value.hidden,
+    ...(value.availableAccessPrograms
+      ? {
+          availableAccessPrograms: {
+            cyber: value.availableAccessPrograms.cyber.map((program) =>
+              program === "daybreakBlue"
+                ? "daybreak_blue"
+                : program === "daybreakRed"
+                  ? "daybreak_red"
+                  : "standard",
+            ),
+          },
+        }
+      : {}),
+    isDefault: value.isDefault,
+    inputModalities: value.inputModalities ?? ["text", "image"],
+    serviceTiers: normalizeUniqueTrimmedStringList(
+      (value.serviceTiers ?? []).map((tier) => tier.id),
+    ),
+    supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
+      value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
+    ),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(value.multiAgentVersion !== undefined
+      ? { multiAgentVersion: value.multiAgentVersion }
+      : {}),
+  };
+}

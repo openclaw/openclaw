@@ -1,0 +1,794 @@
+import {
+  onInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+  type DiagnosticMemoryUsage,
+} from "../infra/diagnostic-events.js";
+import {
+  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  type DiagnosticMemoryPressureMetrics,
+} from "../infra/diagnostic-process-types.js";
+import {
+  DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY,
+  normalizeDiagnosticStabilityQuery,
+} from "./diagnostic-stability-query.js";
+
+export {
+  MAX_DIAGNOSTIC_STABILITY_LIMIT,
+  normalizeDiagnosticStabilityQuery,
+} from "./diagnostic-stability-query.js";
+
+const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
+const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
+
+const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
+
+export type DiagnosticStabilityEventRecord = DiagnosticMemoryPressureMetrics & {
+  seq: number;
+  ts: number;
+  type: DiagnosticEventPayload["type"];
+  channel?: string;
+  pluginId?: string;
+  source?: string;
+  target?: string;
+  surface?: string;
+  action?: string;
+  reason?: string;
+  errorCategory?: string;
+  outcome?: string;
+  mode?: string;
+  level?: string;
+  phase?: string;
+  detector?: string;
+  deliveryKind?: string;
+  talkEventType?: string;
+  transport?: string;
+  brain?: string;
+  toolName?: string;
+  approvalId?: string;
+  activeWorkKind?: string;
+  pairedToolName?: string;
+  provider?: string;
+  model?: string;
+  durationMs?: number;
+  providerProcessingMs?: number;
+  providerWaitEstimateMs?: number;
+  requestBytes?: number;
+  responseBytes?: number;
+  timeToFirstByteMs?: number;
+  resultCount?: number;
+  commandLength?: number;
+  exitCode?: number;
+  timedOut?: boolean;
+  final?: boolean;
+  costUsd?: number;
+  count?: number;
+  bytes?: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuCoreRatio?: number;
+  ageMs?: number;
+  queueDepth?: number;
+  queueSize?: number;
+  queueLength?: number;
+  waitMs?: number;
+  failureKind?: string;
+  active?: number;
+  waiting?: number;
+  queued?: number;
+  droppedEvents?: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  maxQueueLength?: number;
+  drainBatchSize?: number;
+  webhooks?: {
+    received: number;
+    processed: number;
+    errors: number;
+  };
+  memory?: DiagnosticMemoryUsage;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    promptTokens?: number;
+    total?: number;
+  };
+  context?: {
+    limit?: number;
+    used?: number;
+  };
+};
+
+export type DiagnosticStabilitySnapshot = {
+  generatedAt: string;
+  capacity: number;
+  count: number;
+  dropped: number;
+  firstSeq?: number;
+  lastSeq?: number;
+  events: DiagnosticStabilityEventRecord[];
+  summary: {
+    byType: Record<string, number>;
+    memory?: {
+      latest?: DiagnosticMemoryUsage;
+      maxRssBytes?: number;
+      maxHeapUsedBytes?: number;
+      pressureCount: number;
+    };
+    payloadLarge?: {
+      count: number;
+      rejected: number;
+      truncated: number;
+      chunked: number;
+      bySurface: Record<string, number>;
+    };
+  };
+};
+
+type DiagnosticStabilityState = {
+  records: Array<DiagnosticStabilityEventRecord | undefined>;
+  capacity: number;
+  nextIndex: number;
+  count: number;
+  dropped: number;
+  exporterSeq: number;
+  exporterRecords: Map<string, DiagnosticStabilityEventRecord>;
+  exporterDropped: number;
+  unsubscribe: (() => void) | null;
+};
+
+export type DiagnosticExporterHealthUpdate = {
+  signal: "traces" | "metrics" | "logs";
+  transport: string;
+  endpointMode?: "configured" | "default_endpoint";
+  status: "started" | "failure" | "recovered" | "dropped";
+  reason?:
+    | "configured"
+    | "default_endpoint"
+    | "export_failed"
+    | "handler_failed"
+    | "emit_failed"
+    | "queue_full"
+    | "shutdown_failed"
+    | "start_failed"
+    | "unsupported_protocol";
+  errorCategory?: string;
+};
+
+function createState(capacity = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY): DiagnosticStabilityState {
+  return {
+    records: Array.from<DiagnosticStabilityEventRecord | undefined>({ length: capacity }),
+    capacity,
+    nextIndex: 0,
+    count: 0,
+    dropped: 0,
+    exporterSeq: 0,
+    exporterRecords: new Map(),
+    exporterDropped: 0,
+    unsubscribe: null,
+  };
+}
+
+function getDiagnosticStabilityState(): DiagnosticStabilityState {
+  const globalStore = globalThis as typeof globalThis & {
+    __openclawDiagnosticStabilityState?: DiagnosticStabilityState;
+  };
+  globalStore["__openclawDiagnosticStabilityState"] ??= createState();
+  return globalStore["__openclawDiagnosticStabilityState"];
+}
+
+function copyReasonCode(reason: unknown): string | undefined {
+  if (typeof reason !== "string" || !SAFE_REASON_CODE.test(reason)) {
+    return undefined;
+  }
+  return reason;
+}
+
+function copyExporterCode(value: unknown): string | undefined {
+  return typeof value === "string" && SAFE_EXPORTER_CODE.test(value) ? value : undefined;
+}
+
+function isDiagnosticExporterSignal(
+  value: unknown,
+): value is DiagnosticExporterHealthUpdate["signal"] {
+  return value === "traces" || value === "metrics" || value === "logs";
+}
+
+function isDiagnosticExporterStatus(
+  value: unknown,
+): value is DiagnosticExporterHealthUpdate["status"] {
+  return value === "started" || value === "failure" || value === "recovered" || value === "dropped";
+}
+
+function assignReasonCode(
+  record: DiagnosticStabilityEventRecord,
+  reason: string | undefined,
+): void {
+  const reasonCode = copyReasonCode(reason);
+  if (reasonCode) {
+    record.reason = reasonCode;
+  }
+}
+
+function resolveDiagnosticLivenessRecordLevel(
+  event: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
+): "warning" | "info" {
+  const hasBlockingWork = event.waiting > 0 || event.queued > 0;
+  const hasSustainedEventLoopDelay =
+    (event.eventLoopDelayP99Ms ?? 0) >= LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
+  return event.degradedSinceMs !== undefined ||
+    hasBlockingWork ||
+    (event.active > 0 && hasSustainedEventLoopDelay)
+    ? "warning"
+    : "info";
+}
+
+function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabilityEventRecord {
+  const record: DiagnosticStabilityEventRecord = {
+    seq: event.seq,
+    ts: event.ts,
+    type: event.type,
+  };
+
+  const copy = <Key extends keyof DiagnosticStabilityEventRecord>(
+    source: Pick<DiagnosticStabilityEventRecord, Key>,
+    ...keys: Key[]
+  ): void => {
+    for (const key of keys) {
+      record[key] = source[key];
+    }
+  };
+
+  switch (event.type) {
+    case "model.usage":
+      copy(event, "channel", "provider", "model");
+      record.usage = { ...event.usage };
+      record.context = event.context ? { ...event.context } : undefined;
+      copy(event, "costUsd", "durationMs");
+      break;
+    case "webhook.received":
+    case "webhook.error":
+      record.channel = event.channel;
+      break;
+    case "webhook.processed":
+      copy(event, "channel", "durationMs");
+      break;
+    case "message.queued":
+      copy(event, "channel", "source", "queueDepth");
+      break;
+    case "message.received":
+    case "message.dispatch.started":
+      copy(event, "channel", "source");
+      break;
+    case "message.dispatch.completed":
+      copy(event, "channel", "source", "durationMs", "outcome");
+      assignReasonCode(record, event.reason);
+      break;
+    case "message.processed":
+      copy(event, "channel", "durationMs", "outcome");
+      assignReasonCode(record, event.reason);
+      break;
+    case "message.delivery.started":
+    case "message.delivery.completed":
+    case "message.delivery.error":
+      copy(event, "channel", "deliveryKind");
+      if (event.type !== "message.delivery.started") {
+        record.durationMs = event.durationMs;
+        if (event.type === "message.delivery.completed") {
+          record.resultCount = event.resultCount;
+          record.outcome = "completed";
+        } else {
+          record.outcome = "error";
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
+      break;
+    case "talk.event":
+      copy(event, "talkEventType", "mode", "transport", "brain", "provider", "final", "durationMs");
+      record.bytes = event.byteLength;
+      break;
+    case "session.state":
+      record.outcome = event.state;
+      assignReasonCode(record, event.reason);
+      record.queueDepth = event.queueDepth;
+      break;
+    case "session.long_running":
+    case "session.stalled":
+    case "session.stuck":
+      record.outcome = event.state;
+      if (event.type === "session.stuck") {
+        record.level = "warning";
+      }
+      assignReasonCode(record, event.reason);
+      copy(event, "ageMs", "queueDepth");
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      if (event.activeToolName) {
+        record.toolName = event.activeToolName;
+      }
+      break;
+    case "session.recovery.requested":
+      record.outcome = event.state;
+      record.action = event.allowActiveAbort ? "abort" : "recover";
+      copy(event, "ageMs", "queueDepth");
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.reason);
+      break;
+    case "session.recovery.completed":
+      record.outcome = event.status;
+      copy(event, "action", "ageMs", "queueDepth");
+      record.count = event.released;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.outcomeReason ?? event.reason);
+      break;
+    case "session.turn.created":
+      record.source = event.agentId;
+      record.channel = event.channel;
+      record.outcome = event.trigger;
+      break;
+    case "queue.lane.enqueue":
+    case "queue.lane.dequeue":
+      record.source = event.lane;
+      record.queueSize = event.queueSize;
+      if (event.type === "queue.lane.dequeue") {
+        record.waitMs = event.waitMs;
+      }
+      break;
+    case "run.attempt":
+      record.count = event.attempt;
+      break;
+    case "run.progress":
+      assignReasonCode(record, event.reason);
+      break;
+    case "run.execution_phase":
+      copy(event, "phase", "provider", "model");
+      record.toolName = event.tool;
+      break;
+    case "context.assembled":
+      copy(event, "channel", "provider", "model");
+      record.count = event.messageCount;
+      record.bytes = event.promptChars;
+      record.context =
+        event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
+      break;
+    case "diagnostic.heartbeat":
+      record.webhooks = { ...event.webhooks };
+      copy(event, "active", "waiting", "queued");
+      break;
+    case "diagnostic.liveness.warning":
+      record.level = resolveDiagnosticLivenessRecordLevel(event);
+      record.durationMs = event.degradedSinceMs ?? event.intervalMs;
+      record.count = event.reasons.length;
+      assignReasonCode(record, event.reasons[0]);
+      copy(
+        event,
+        "eventLoopDelayP99Ms",
+        "eventLoopDelayMaxMs",
+        "eventLoopUtilization",
+        "cpuCoreRatio",
+        "active",
+        "waiting",
+        "queued",
+        "phase",
+      );
+      if (event.activeWorkLabels?.length) {
+        record.source = event.activeWorkLabels[0];
+      } else if (event.queuedWorkLabels?.length) {
+        record.source = event.queuedWorkLabels[0];
+      }
+      break;
+    case "diagnostic.phase.completed":
+      record.phase = event.name;
+      copy(event, "durationMs", "cpuCoreRatio");
+      break;
+    case "tool.loop":
+      copy(event, "toolName", "level", "action", "detector", "count", "pairedToolName");
+      break;
+    case "tool.execution.started":
+    case "tool.execution.completed":
+    case "tool.execution.error":
+    case "tool.execution.blocked":
+      record.toolName = event.toolName;
+      record.source = event.toolSource;
+      record.pluginId = event.toolOwner;
+      if (event.type === "tool.execution.completed" || event.type === "tool.execution.error") {
+        record.durationMs = event.durationMs;
+      }
+      if (event.type === "tool.execution.error") {
+        if (event.terminalReason) {
+          record.outcome = event.terminalReason;
+        }
+        assignReasonCode(record, event.errorCategory);
+      } else if (event.type === "tool.execution.blocked") {
+        record.outcome = "blocked";
+        assignReasonCode(record, event.deniedReason);
+      }
+      break;
+    case "skill.used":
+      record.toolName = event.toolName;
+      record.source = event.skillSource;
+      record.action = event.activation;
+      record.target = event.skillName;
+      break;
+    case "exec.process.completed":
+      copy(
+        event,
+        "target",
+        "mode",
+        "outcome",
+        "durationMs",
+        "commandLength",
+        "exitCode",
+        "timedOut",
+        "failureKind",
+      );
+      assignReasonCode(record, event.failureKind);
+      break;
+    case "exec.approval.followup_suppressed":
+      copy(event, "approvalId", "phase");
+      assignReasonCode(record, event.reason);
+      break;
+    case "run.started":
+    case "run.completed":
+      copy(event, "provider", "model", "channel");
+      if (event.type === "run.completed") {
+        copy(event, "durationMs", "outcome");
+        assignReasonCode(record, event.errorCategory);
+      }
+      break;
+    case "harness.run.started":
+    case "harness.run.completed":
+    case "harness.run.error":
+      record.source = event.harnessId;
+      copy(event, "pluginId", "provider", "model", "channel");
+      if (event.type !== "harness.run.started") {
+        record.durationMs = event.durationMs;
+        if (event.type === "harness.run.completed") {
+          record.outcome = event.outcome;
+          record.count = event.itemLifecycle?.completedCount;
+        } else {
+          record.outcome = "error";
+          record.action = event.phase;
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
+      break;
+    case "model.call.started":
+    case "model.call.completed":
+    case "model.call.error":
+      copy(event, "provider", "model");
+      if (event.type !== "model.call.started") {
+        copy(
+          event,
+          "durationMs",
+          "timeToFirstByteMs",
+          "providerProcessingMs",
+          "providerWaitEstimateMs",
+        );
+        record.requestBytes = event.requestPayloadBytes;
+        record.responseBytes = event.responseStreamBytes;
+        if (event.type === "model.call.error") {
+          record.failureKind = event.failureKind;
+          record.memory = event.memory ? { ...event.memory } : undefined;
+          assignReasonCode(record, event.errorCategory);
+        }
+      }
+      break;
+    case "security.event":
+      record.source = event.category;
+      copy(event, "action", "outcome");
+      record.level = event.severity;
+      record.target = event.target?.name ?? event.target?.kind;
+      assignReasonCode(record, event.reason ?? event.policy?.reason);
+      break;
+    case "diagnostic.memory.sample":
+      record.memory = { ...event.memory };
+      break;
+    case "diagnostic.memory.pressure":
+      record.level = event.level;
+      assignReasonCode(record, event.reason);
+      record.memory = { ...event.memory };
+      copy(event, ...DIAGNOSTIC_MEMORY_PRESSURE_METRICS);
+      break;
+    case "payload.large":
+      copy(event, "surface", "action", "bytes", "limitBytes", "count", "channel", "pluginId");
+      assignReasonCode(record, event.reason);
+      break;
+    case "diagnostic.async_queue.dropped":
+      copy(
+        event,
+        "droppedEvents",
+        "droppedTrustedEvents",
+        "droppedUntrustedEvents",
+        "droppedPriorityEvents",
+        "queueLength",
+        "maxQueueLength",
+        "drainBatchSize",
+      );
+      break;
+    case "model.failover":
+      record.provider = event.fromProvider;
+      record.model = event.fromModel;
+      assignReasonCode(record, event.reason);
+      break;
+    default:
+      // Other event families are excluded by the recorder subscription.
+      break;
+  }
+
+  return record;
+}
+
+function appendRecord(record: DiagnosticStabilityEventRecord): void {
+  const state = getDiagnosticStabilityState();
+  state.records[state.nextIndex] = record;
+  state.nextIndex = (state.nextIndex + 1) % state.capacity;
+  if (state.count < state.capacity) {
+    state.count += 1;
+    return;
+  }
+  state.dropped += 1;
+}
+
+function upsertExporterRecord(record: DiagnosticStabilityEventRecord): void {
+  const state = getDiagnosticStabilityState();
+  const key = `${record.source}\u0000${record.target ?? "unknown"}\u0000${record.transport ?? "unknown"}`;
+  if (record.outcome === "dropped") {
+    state.exporterRecords.delete(key);
+    return;
+  }
+  const previous = state.exporterRecords.get(key);
+  if (!record.mode && previous?.mode) {
+    record.mode = previous.mode;
+  }
+  if (
+    !state.exporterRecords.has(key) &&
+    state.exporterRecords.size >= MAX_DIAGNOSTIC_EXPORTER_STATES
+  ) {
+    const oldestKey = state.exporterRecords.keys().next().value;
+    if (oldestKey !== undefined) {
+      state.exporterRecords.delete(oldestKey);
+      state.exporterDropped += 1;
+    }
+  }
+  state.exporterRecords.delete(key);
+  state.exporterRecords.set(key, record);
+}
+
+/** Records a trusted diagnostics-exporter health transition outside the public event contract. */
+export function recordDiagnosticExporterHealth(
+  exporter: string,
+  update: DiagnosticExporterHealthUpdate,
+): void {
+  const source = copyExporterCode(exporter);
+  if (
+    !source ||
+    !isDiagnosticExporterSignal(update.signal) ||
+    !isDiagnosticExporterStatus(update.status)
+  ) {
+    return;
+  }
+  const state = getDiagnosticStabilityState();
+  state.exporterSeq += 1;
+  const record: DiagnosticStabilityEventRecord = {
+    seq: state.exporterSeq,
+    ts: Date.now(),
+    type: "telemetry.exporter",
+    source,
+    target: update.signal,
+    outcome: update.status,
+  };
+  const transport = copyExporterCode(update.transport);
+  if (transport) {
+    record.transport = transport;
+  }
+  if (update.endpointMode === "configured" || update.endpointMode === "default_endpoint") {
+    record.mode = update.endpointMode;
+  }
+  const errorCategory = copyReasonCode(update.errorCategory);
+  if (errorCategory) {
+    record.errorCategory = errorCategory;
+  }
+  assignReasonCode(record, update.reason ?? update.errorCategory);
+  upsertExporterRecord(record);
+}
+
+function listRecords(): DiagnosticStabilityEventRecord[] {
+  const state = getDiagnosticStabilityState();
+  const records: DiagnosticStabilityEventRecord[] = [];
+  const start = state.count < state.capacity ? 0 : state.nextIndex;
+  // Capture the ordered view before query normalization or summary getters can re-enter.
+  for (let offset = 0; offset < state.count; offset += 1) {
+    const record = state.records[(start + offset) % state.capacity];
+    if (record !== undefined) {
+      records.push(record);
+    }
+  }
+  return records;
+}
+
+function summarizeRecords(
+  records: DiagnosticStabilityEventRecord[],
+): DiagnosticStabilitySnapshot["summary"] {
+  const byType: Record<string, number> = {};
+  let latestMemory: DiagnosticMemoryUsage | undefined;
+  let maxRssBytes: number | undefined;
+  let maxHeapUsedBytes: number | undefined;
+  let pressureCount = 0;
+  const payloadLarge: NonNullable<DiagnosticStabilitySnapshot["summary"]["payloadLarge"]> = {
+    count: 0,
+    rejected: 0,
+    truncated: 0,
+    chunked: 0,
+    bySurface: {},
+  };
+
+  for (const record of records) {
+    byType[record.type] = (byType[record.type] ?? 0) + 1;
+    if (record.memory) {
+      latestMemory = record.memory;
+      maxRssBytes =
+        maxRssBytes === undefined
+          ? record.memory.rssBytes
+          : Math.max(maxRssBytes, record.memory.rssBytes);
+      maxHeapUsedBytes =
+        maxHeapUsedBytes === undefined
+          ? record.memory.heapUsedBytes
+          : Math.max(maxHeapUsedBytes, record.memory.heapUsedBytes);
+    }
+    if (record.type === "diagnostic.memory.pressure") {
+      pressureCount += 1;
+    }
+    if (record.type === "payload.large") {
+      payloadLarge.count += 1;
+      if (record.action === "rejected") {
+        payloadLarge.rejected += 1;
+      } else if (record.action === "truncated") {
+        payloadLarge.truncated += 1;
+      } else if (record.action === "chunked") {
+        payloadLarge.chunked += 1;
+      }
+      const surface = record.surface ?? "unknown";
+      payloadLarge.bySurface[surface] = (payloadLarge.bySurface[surface] ?? 0) + 1;
+    }
+  }
+
+  return {
+    byType,
+    ...(latestMemory || pressureCount > 0
+      ? {
+          memory: {
+            latest: latestMemory,
+            maxRssBytes,
+            maxHeapUsedBytes,
+            pressureCount,
+          },
+        }
+      : {}),
+    ...(payloadLarge.count > 0 ? { payloadLarge } : {}),
+  };
+}
+
+function selectRecords(
+  records: DiagnosticStabilityEventRecord[],
+  options?: {
+    limit?: number;
+    type?: string;
+    sinceSeq?: number;
+  },
+): {
+  filtered: DiagnosticStabilityEventRecord[];
+  events: DiagnosticStabilityEventRecord[];
+} {
+  const { limit, type, sinceSeq } = normalizeDiagnosticStabilityQuery(options);
+  const filtered = records.filter((record) => {
+    if (type && record.type !== type) {
+      return false;
+    }
+    if (sinceSeq !== undefined && record.seq <= sinceSeq) {
+      return false;
+    }
+    return true;
+  });
+  return {
+    filtered,
+    events: filtered.slice(Math.max(0, filtered.length - limit)),
+  };
+}
+
+export function startDiagnosticStabilityRecorder(): void {
+  const state = getDiagnosticStabilityState();
+  if (state.unsubscribe) {
+    return;
+  }
+  state.unsubscribe = onInternalDiagnosticEvent(
+    (event) => appendRecord(sanitizeDiagnosticEvent(event)),
+    {
+      includePromptStats: false, // Recovery consumes lifecycle facts, not prompt sizes.
+      includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
+      exclude: [
+        "log.record",
+        "telemetry.exporter",
+        "gateway.rpc",
+        "gateway.event_loop.sample",
+        "gateway.http.cancelled",
+        "diagnostic.gc",
+        "diagnostic.child_process.spawn",
+        "worker.request",
+        "secret.egress",
+        "tool.catalog",
+      ],
+    },
+  );
+}
+
+export function stopDiagnosticStabilityRecorder(): void {
+  const state = getDiagnosticStabilityState();
+  state.unsubscribe?.();
+  state.unsubscribe = null;
+}
+
+export function getDiagnosticStabilitySnapshot(options?: {
+  limit?: number;
+  type?: string;
+  sinceSeq?: number;
+}): DiagnosticStabilitySnapshot {
+  const state = getDiagnosticStabilityState();
+  const exporterQuery = options?.type === "telemetry.exporter";
+  const { filtered, events } = selectRecords(
+    exporterQuery
+      ? [...state.exporterRecords.values()].toSorted((left, right) => left.seq - right.seq)
+      : listRecords(),
+    options,
+  );
+  return {
+    generatedAt: new Date().toISOString(),
+    capacity: exporterQuery ? MAX_DIAGNOSTIC_EXPORTER_STATES : state.capacity,
+    count: filtered.length,
+    dropped: exporterQuery ? state.exporterDropped : state.dropped,
+    firstSeq: filtered[0]?.seq,
+    lastSeq: filtered.at(-1)?.seq,
+    events,
+    summary: summarizeRecords(filtered),
+  };
+}
+
+/** Applies filtering/limits to an existing snapshot without mutating its source records. */
+export function selectDiagnosticStabilitySnapshot(
+  snapshot: DiagnosticStabilitySnapshot,
+  options?: {
+    limit?: number;
+    type?: string;
+    sinceSeq?: number;
+  },
+): DiagnosticStabilitySnapshot {
+  const { filtered, events } = selectRecords(snapshot.events, options);
+  return {
+    ...snapshot,
+    count: filtered.length,
+    firstSeq: filtered[0]?.seq,
+    lastSeq: filtered.at(-1)?.seq,
+    events,
+    summary: summarizeRecords(filtered),
+  };
+}
+
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
+export function resetDiagnosticStabilityRecorderForTest(): void {
+  const state = getDiagnosticStabilityState();
+  state.unsubscribe?.();
+  const globalStore = globalThis as typeof globalThis & {
+    __openclawDiagnosticStabilityState?: DiagnosticStabilityState;
+  };
+  globalStore["__openclawDiagnosticStabilityState"] = createState(state.capacity);
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

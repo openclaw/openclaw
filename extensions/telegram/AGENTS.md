@@ -1,0 +1,132 @@
+# Telegram Plugin Guide
+
+## Reliability Invariants
+
+### Core drain contracts (do not re-implement in Telegram)
+
+- Claim, complete, retry, supersede: core drain
+  (`src/channels/AGENTS.md#durable-ingress`); never re-implement.
+
+### Telegram-owned (transport + channel policy)
+
+- Album and forward buffers hold flushes while the same-lane backlog contains a matching member; quiet windows stay sized for Telegram delivery, not local load.
+- Durable-before-ack on both transports. Polling: ingress worker advances its
+  offset only after the parent's committed spool enqueue
+  (`writeTelegramSpooledUpdate`). Webhook: respond 200 only after the spool
+  write; non-200 on write failure is the redelivery contract.
+- `update_id`↔event-id encoding and per-chat/topic lane derivation stay in
+  `telegram-ingress-spool.ts` / sequential-key.
+- Polling and webhook both: enqueue, then wake the monitor from
+  `telegram-ingress-drain-factory.ts`. No private claim loops.
+- Stall timeout: `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS` →
+  `adoptionStallTimeoutMs` (default 5 min) via
+  `resolveTelegramAdoptionStallTimeoutMs`.
+- Non-retryable classifier: `telegram-ingress-non-retryable.ts`
+  (missing harness, dispatch-dedupe rollback).
+- Supersede predicate: `telegram-ingress-supersede.ts` — authorized abort text
+  and `/new` or `/reset` may supersede pre-adoption user work. Settings and
+  other commands queue behind pending input; command entities alone do not cancel it.
+- room_event ambient work shares the sequential lane so a later user turn can
+  supersede it pre-adoption; adopted user turns are never touched (core drain
+  supersede is pre-adoption only).
+- No per-message full-store writes. Hot-path SQLite writes are per-entry.
+  Rewriting a cache on every send or read stalls the event loop, and that
+  stall masquerades as a polling stall (the sent-message-cache regression).
+- Transport error classification. The getUpdates worker retries Bot API 5xx
+  and 429 locally, honoring `parameters.retry_after`; 401/404 stay fatal; 409
+  must propagate to the parent session, which owns webhook-conflict recovery.
+  Bot API errors carry `error_code`, not `.code`; parse non-2xx bodies
+  defensively (a 502 HTML page is not JSON).
+- Send funnel parity. The durable funnel (`send.ts`) and the streaming funnel
+  (`bot/delivery.*`) must degrade identically: rich-entity 400 falls back to
+  plain text, caption parse 400 falls back to a plain caption, quote-not-found
+  400 falls back to a legacy reply. New recoveries go into the shared
+  predicates (`send-error-predicates.ts`, `reply-parameters.ts`), never into
+  one funnel only.
+- Outbound flood waits have one owner: `getOrCreateAccountThrottler` in
+  `account-throttler.ts` (wraps grammY `apiThrottler`); every client for a
+  token goes through it. A 429 pauses every call for that bot token until
+  `retry_after` (one fixed 1 s pause when it is missing; a shorter concurrent
+  429 never shortens an active pause).
+  Final replies wait and retry within `TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS`;
+  stream previews and typing run as replaceable requests and are skipped, not
+  queued. Send retry runners must not retry 429 themselves.
+- Webhook security ordering. The secret header is validated first
+  (constant-time compare, single-header enforcement, connection close on 401);
+  the request rate limit budgets only failed-auth attempts so Telegram's own
+  delivery is never throttled.
+- Every owned undici transport gets closed on all exit paths: polling session,
+  webhook shutdown and startup failure, probe-cache eviction.
+
+## Streaming
+
+- Do not reintroduce `sendMessageDraft` for answer streaming. Telegram drafts
+  are ephemeral 30-second previews in private chats; final delivery still
+  requires a separate `sendMessage`. OpenClaw uses `sendMessage` plus
+  `editMessageText`, then finalizes in place so the user sees one persistent
+  answer.
+- Streaming owns one visible preview message. Edit it forward. Do not send an
+  extra final bubble unless the final edit genuinely failed.
+- Keep the first-preview debounce. If a provider sends token-sized deltas,
+  coalesce them into cumulative preview text instead of removing the debounce.
+- Respect Telegram limits in the Telegram layer. Text over 4096 chars chains
+  into continuation messages. Polls keep the current Bot API 12-option cap.
+
+## Telegram API Ownership
+
+- Prefer grammY primitives and Telegram-native helpers when they model the
+  behavior directly. Avoid custom Bot API wrappers for behavior grammY already
+  owns.
+- Throttling is bot-token scoped. All Telegram API clients for the same token
+  share one limiter owned by `account-throttler.ts`. The limiter mirrors
+  grammY `apiThrottler()` defaults (upstream does not expose its Bottleneck
+  instances for disposal). Retirement runs in the Gateway process: the
+  account lifecycle hooks (config change, removal, `stopAccount`) release the
+  throttler once its token is no longer configured, settling queued group
+  sends and chat actions that have not started transport I/O — including
+  pacing and authorization-backoff waits — before disconnecting limiters
+  while in-flight requests finish; the final dispatch boundary re-checks
+  retirement for DM and group actions alike. A token still configured
+  (unchanged reloads, manual stops) keeps its limiter. The CLI lifecycle
+  hooks release in the mutating process as well.
+- Do not silently retry failed topic sends without topic metadata. A
+  wrong-surface success is worse than a loud Telegram error.
+- DM topics and forum topics are distinct. `direct_messages_topic_id` and
+  `message_thread_id` are not interchangeable.
+
+## Context And Authorization
+
+- Reply context comes from OpenClaw-observed messages. Bot API updates expose
+  `reply_to_message`, but there is no arbitrary `getMessage(chat, id)`
+  hydration path later.
+- Current local chat context must outrank stale reply ancestry in the prompt.
+  Old replied-to messages should not look like the active conversation.
+- The group history window is always on for groups and bounded by
+  `historyLimit`. Do not reintroduce prompt-history gating modes; that
+  regression blinded ambient rooms.
+- The group history window is rolling. Use self-entry watermark selection for
+  "since your last reply" views; do not reintroduce destructive clears because
+  room events are not persisted to the session and cleared context is
+  unrecoverable.
+- Pairing is DM-only. Group and topic authorization need explicit config
+  allowlists.
+- Telegram allowlists use numeric sender IDs. Usernames are optional, mutable,
+  and not a reliable arbitrary-user lookup key in the Bot API.
+- Group and channel visible replies are policy-controlled. Normal room replies
+  stay private unless `messages.groupChat.visibleReplies: "automatic"` is set
+  or the agent explicitly calls `message.send`.
+
+## Interactive Surfaces
+
+- Native callbacks stay structured. Approval, native command, plugin, select,
+  and multiselect callbacks must not fall through as raw callback text.
+- Preserve callback values exactly, including delimiters such as `env|prod`.
+- Native slash commands should remain fast-pathable before full workspace and
+  agent-turn setup.
+
+## Review Standard
+
+- Reliability PRs (spool, drain, retry, ack, offset paths) need crash-window
+  or restart-replay test proof, not just happy-path tests.
+- Test ownership, independent expected outcomes and discriminating negative
+  controls: follow [test-audit](../../.agents/skills/test-audit/SKILL.md).

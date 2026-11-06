@@ -1,0 +1,254 @@
+// Release-era repair for configs that imply official plugin installs before install records existed.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
+import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
+import { normalizeChatChannelId } from "../../../channels/registry.js";
+import { isChannelConfigured } from "../../../config/channel-configured.js";
+import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { compareOpenClawVersions } from "../../../config/version.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  type UpdatePostInstallDoctorResult,
+} from "../../../infra/update-doctor-result.js";
+import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalProviderContractPluginIds,
+} from "../../../plugins/official-external-plugin-catalog.js";
+import { VERSION } from "../../../version.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import {
+  collectConfiguredWebFetchPluginIds,
+  collectConfiguredWebSearchPluginIds,
+} from "./configured-provider-plugin-ids.js";
+import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
+import { acpxRuntimeIsConfigured } from "./configured-runtime-plugin-installs.js";
+import { collectBlockedPluginIds as collectBlockedPluginIdSet } from "./missing-configured-plugin-install.ids.js";
+import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
+
+const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
+
+type ReleaseConfiguredPluginIds = {
+  pluginIds: string[];
+  channelIds: string[];
+};
+
+function isDenied(cfg: OpenClawConfig, pluginId: string): boolean {
+  const deny = cfg.plugins?.deny;
+  return Array.isArray(deny) && deny.includes(pluginId);
+}
+
+function isPluginEntryDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
+  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
+}
+
+function isChannelDisabled(cfg: OpenClawConfig, channelId: string): boolean {
+  const channels = asNullableRecord(cfg.channels);
+  const entry = asNullableRecord(channels?.[channelId]);
+  return entry?.enabled === false;
+}
+
+function isDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
+  if (isPluginEntryDisabled(cfg, pluginId)) {
+    return true;
+  }
+  const channelId = normalizeChatChannelId(pluginId);
+  return channelId ? isChannelDisabled(cfg, channelId) : false;
+}
+
+function hasMaterialPluginEntry(entry: unknown): boolean {
+  const record = asNullableRecord(entry);
+  if (!record) {
+    return false;
+  }
+  return (
+    record.enabled === true ||
+    asNullableRecord(record.config) !== null ||
+    asNullableRecord(record.hooks) !== null ||
+    asNullableRecord(record.subagent) !== null ||
+    record.apiKey !== undefined ||
+    record.env !== undefined
+  );
+}
+
+function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
+  return Object.entries(asNullableRecord(cfg.plugins?.entries) ?? {})
+    .filter(
+      ([pluginId, entry]) =>
+        !isNativeSessionCatalogOptOutOnly(pluginId, entry) && hasMaterialPluginEntry(entry),
+    )
+    .map(([pluginId]) => pluginId.trim())
+    .filter((pluginId) => pluginId);
+}
+
+function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
+  const slots = asNullableRecord(cfg.plugins?.slots);
+  return ["memory", "contextEngine"]
+    .map((key) => normalizeId(slots?.[key]))
+    .filter(
+      (pluginId): pluginId is string =>
+        typeof pluginId === "string" && pluginId.toLowerCase() !== "none",
+    );
+}
+
+function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  return listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "enabled-or-meaningful",
+    env,
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    mapEnvironmentChannelId: (channelId) => normalizeChatChannelId(channelId) ?? channelId,
+    environmentChannelIsConfigured: (channelId) =>
+      !isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env),
+    sort: "locale",
+  });
+}
+
+function collectAllowOnlyOfficialPluginIds(cfg: OpenClawConfig): string[] {
+  const allow = cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return [];
+  }
+  const materialEntryIds = new Set(
+    collectMaterialPluginEntryIds(cfg).map((id) => id.toLowerCase()),
+  );
+  const ids: string[] = [];
+  for (const rawPluginId of allow) {
+    const pluginId = normalizeId(rawPluginId);
+    if (!pluginId || materialEntryIds.has(pluginId.toLowerCase())) {
+      continue;
+    }
+    if (getOfficialExternalPluginCatalogEntry(pluginId)) {
+      ids.push(pluginId);
+    }
+  }
+  return ids;
+}
+
+function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, pluginId: string): void {
+  const normalized = pluginId.trim();
+  if (!normalized || isDenied(cfg, normalized) || isDisabled(cfg, normalized)) {
+    return;
+  }
+  pluginIds.add(normalized);
+}
+
+/** Return true when this config has not yet crossed the configured-plugin install release gate. */
+function shouldRunConfiguredPluginInstallReleaseStep(params: {
+  currentVersion?: string | null;
+  touchedVersion?: string | null;
+}): boolean {
+  const currentComparedToRelease = compareOpenClawVersions(
+    params.currentVersion ?? VERSION,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
+  );
+  if (currentComparedToRelease === null || currentComparedToRelease < 0) {
+    return false;
+  }
+  const touchedComparedToRelease = compareOpenClawVersions(
+    params.touchedVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
+  );
+  return touchedComparedToRelease === null || touchedComparedToRelease < 0;
+}
+
+/** Collect plugin/channel ids implied by config for the release install backfill step. */
+function collectReleaseConfiguredPluginIds(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): ReleaseConfiguredPluginIds {
+  const env = params.env ?? process.env;
+  const pluginIds = new Set<string>();
+  if (params.cfg.plugins?.enabled === false) {
+    return { pluginIds: [], channelIds: [] };
+  }
+
+  for (const candidate of detectPluginAutoEnableCandidates({
+    config: params.cfg,
+    env,
+  })) {
+    addEligiblePluginId(params.cfg, pluginIds, candidate.pluginId);
+  }
+  for (const pluginId of [
+    ...collectMaterialPluginEntryIds(params.cfg),
+    ...collectSlotPluginIds(params.cfg),
+    ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
+    ...collectConfiguredAgentHarnessRuntimes(params.cfg).filter((id) => id === "codex"),
+    ...collectConfiguredWebSearchPluginIds(params.cfg, env, "backfill"),
+    ...collectConfiguredWebFetchPluginIds(params.cfg, env),
+    ...resolveOfficialExternalProviderContractPluginIds({
+      contract: "speechProviders",
+      providerIds: collectConfiguredSpeechProviderIds(params.cfg),
+    }),
+    ...(acpxRuntimeIsConfigured(params.cfg) ? ["acpx"] : []),
+    ...collectAllowOnlyOfficialPluginIds(params.cfg),
+  ]) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  const channelIds = collectConfiguredChannelIds(params.cfg, env).filter(
+    (channelId) =>
+      !isChannelDisabled(params.cfg, channelId) &&
+      !isDenied(params.cfg, channelId) &&
+      !isPluginEntryDisabled(params.cfg, channelId),
+  );
+
+  return {
+    pluginIds: [...pluginIds].toSorted((left, right) => left.localeCompare(right)),
+    channelIds,
+  };
+}
+
+/** Run the configured-plugin install release backfill when the config still needs it. */
+export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  touchedVersion?: string | null;
+  currentVersion?: string | null;
+}): Promise<{
+  changes: string[];
+  warnings: string[];
+  completed: boolean;
+  touchedConfig: boolean;
+  pluginInventoryChanged?: true;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+}> {
+  const env = params.env ?? process.env;
+  const updateInProgress = shouldDeferConfiguredPluginInstallRepair(env);
+  const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
+  const shouldRunReleaseStep = shouldRunConfiguredPluginInstallReleaseStep({
+    currentVersion: params.currentVersion,
+    touchedVersion: params.touchedVersion,
+  });
+  if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
+    // No configured plugins or channels means no backfill happened, so there is nothing to stamp.
+    // The Doctor state runner persists config whenever touchedConfig is true, which would rewrite
+    // an operator's authored file - or create one that never existed - for zero repair work.
+    return { changes: [], warnings: [], completed: shouldRunReleaseStep, touchedConfig: false };
+  }
+  const repaired = await repairMissingPluginInstallsForIds({
+    cfg: params.cfg,
+    pluginIds: configured.pluginIds,
+    channelIds: configured.channelIds,
+    blockedPluginIds: [...collectBlockedPluginIdSet(params.cfg)].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
+    env,
+  });
+  const completed = repaired.warnings.length === 0 && (!shouldRunReleaseStep || !updateInProgress);
+  const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
+  const postInstallDoctorResult =
+    updateInProgress && repaired.warnings.length === 0 && repaired.deferredRepairDetails?.length
+      ? createDeferredConfiguredPluginRepairDoctorResult(repaired.deferredRepairDetails)
+      : undefined;
+  return {
+    changes: repaired.changes,
+    warnings,
+    completed,
+    touchedConfig: shouldRunReleaseStep && completed,
+    ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
+    ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
+  };
+}

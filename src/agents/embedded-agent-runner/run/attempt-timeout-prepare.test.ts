@@ -1,0 +1,304 @@
+// Coverage for attempt timeout ownership and cleanup.
+import { getEventListeners } from "node:events";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
+import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type DeadlineChanged = NonNullable<EmbeddedRunAttemptParams["onAttemptDeadlineChanged"]>;
+const timeoutCleanups: Array<() => void> = [];
+
+function emitApproval(
+  phase: "waiting-approval" | "approval-resolved",
+  approvalId: string,
+  runId = "run-1",
+  sessionId = "session-1",
+) {
+  emitAgentEvent({ runId, sessionId, stream: "lifecycle", data: { phase, approvalId } });
+}
+
+function createTimeoutHarness(options?: {
+  pendingCompaction?: boolean;
+  compactionInFlight?: boolean;
+  timeoutMs?: number;
+  runAbortController?: AbortController;
+  onDeadline?: DeadlineChanged;
+  abortRun?: ReturnType<typeof createEmbeddedAttemptRunAbort>;
+}) {
+  const state = {
+    pendingCompaction: options?.pendingCompaction ?? false,
+    compactionInFlight: options?.compactionInFlight ?? false,
+    streaming: false,
+  };
+  const runAbortController = options?.runAbortController ?? new AbortController();
+  const abortRun = vi.fn(options?.abortRun);
+  const markTimedOutDuringCompaction = vi.fn();
+  const markTimedOutByRunBudget = vi.fn();
+  const onAttemptTimeoutArmed = vi.fn();
+  const onAttemptDeadlineChanged = vi.fn<DeadlineChanged>(options?.onDeadline);
+  const input = {
+    attempt: {
+      runId: "run-1",
+      sessionId: "session-1",
+      timeoutMs: options?.timeoutMs ?? 100,
+      onAttemptTimeoutArmed,
+      onAttemptDeadlineChanged,
+    },
+    runAbortSignal: runAbortController.signal,
+    activeSession: {
+      get isCompacting() {
+        return state.compactionInFlight;
+      },
+      get isStreaming() {
+        return state.streaming;
+      },
+    },
+    compactionState: {
+      isCompacting: () => state.pendingCompaction,
+    },
+    compactionTimeoutMs: 50,
+    isProbeSession: true,
+    abortRun,
+    markTimedOutDuringCompaction,
+    markTimedOutByRunBudget,
+  };
+  const timeout = prepareEmbeddedAttemptTimeout(input);
+  timeoutCleanups.push(timeout.clearTimers);
+  return {
+    abortRun,
+    markTimedOutDuringCompaction,
+    markTimedOutByRunBudget,
+    onAttemptTimeoutArmed,
+    onAttemptDeadlineChanged,
+    runAbortController,
+    state,
+    timeout,
+  };
+}
+
+function expectDeadlines(
+  harness: ReturnType<typeof createTimeoutHarness>,
+  ...deadlines: (number | null)[]
+) {
+  expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual(
+    deadlines.map((deadline) => [
+      deadline === null ? { kind: "unlimited" } : { kind: "bounded", deadlineAtMs: deadline },
+    ]),
+  );
+}
+
+function expectReleased(harness: ReturnType<typeof createTimeoutHarness>) {
+  expect(harness.abortRun).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(getEventListeners(harness.runAbortController.signal, "abort")).toHaveLength(0);
+}
+
+describe("prepareEmbeddedAttemptTimeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+
+  afterEach(() => {
+    for (const cleanup of timeoutCleanups.splice(0)) {
+      cleanup();
+    }
+    vi.useRealTimers();
+  });
+
+  it("publishes the exact execution deadline before firing the run budget timeout", async () => {
+    const harness = createTimeoutHarness();
+
+    expect(harness.onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+    expectDeadlines(harness, 100);
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(100);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+    // The run-budget marker must be recorded before the abort so settlement
+    // can re-confirm terminal ownership before committing partial output; the
+    // timeout callback itself never commits buffered text.
+    expect(harness.markTimedOutByRunBudget.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.abortRun.mock.invocationCallOrder[0] ?? -1,
+    );
+  });
+
+  it("propagates the built-in deadline reason", async () => {
+    const runAbortController = new AbortController();
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession: vi.fn(async () => {}),
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        runId: "run-deadline",
+        sessionFile: "agent:main:main",
+        sessionId: "session-deadline",
+        sessionKey: "agent:main:main",
+      },
+      getQueueHandle: () => undefined,
+      isProbeSession: true,
+      log: { warn: vi.fn() },
+      runAbortController,
+      state: { terminal: { kind: "ok" } },
+    });
+    createTimeoutHarness({ runAbortController, abortRun });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(runAbortController.signal.reason).toEqual(
+      expect.objectContaining({ name: "TimeoutError", message: "request timed out" }),
+    );
+  });
+
+  it.each([0, 10_000_000])("pauses approvals across %i ms clock step", async (clockStep) => {
+    const harness = createTimeoutHarness();
+    const observed: Array<number | undefined> = [];
+    const unsubscribe = harness.timeout.onRunAbortDeadlineChanged(() => {
+      observed.push(harness.timeout.getRunAbortDeadlineAtMs());
+    });
+
+    await vi.advanceTimersByTimeAsync(30);
+    vi.setSystemTime(Date.now() + clockStep);
+    emitApproval("waiting-approval", "first");
+    emitApproval("waiting-approval", "second");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBeUndefined();
+    expectDeadlines(harness, 100, null);
+
+    emitApproval("approval-resolved", "first", "another-run");
+    emitApproval("approval-resolved", "first", "run-1", "another-session");
+    emitApproval("approval-resolved", "first");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    expect(harness.onAttemptDeadlineChanged).toHaveBeenCalledTimes(2);
+
+    emitApproval("approval-resolved", "second");
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(700 + clockStep);
+    expectDeadlines(harness, 100, null, 700 + clockStep);
+    expect(observed).toEqual([undefined, 700 + clockStep]);
+    unsubscribe();
+    await vi.advanceTimersByTimeAsync(69);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+    expect(observed).toEqual([undefined, 700 + clockStep]);
+  });
+
+  it("pauses only the unused compaction grace budget during inline approval", async () => {
+    const harness = createTimeoutHarness({ pendingCompaction: true });
+    await vi.advanceTimersByTimeAsync(120);
+    emitApproval("waiting-approval", "grace");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBeUndefined();
+
+    harness.state.pendingCompaction = false;
+    emitApproval("approval-resolved", "grace");
+    expectDeadlines(harness, 100, 150, null, 650);
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(650);
+    await vi.advanceTimersByTimeAsync(29);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+  });
+
+  it("publishes only one grace deadline for in-flight compaction", async () => {
+    const harness = createTimeoutHarness({ compactionInFlight: true });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(150);
+    expectDeadlines(harness, 100, 150);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(harness.markTimedOutDuringCompaction).toHaveBeenCalledOnce();
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+    expect(harness.onAttemptDeadlineChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes an unlimited run without arming a timer or inventing a finite deadline", async () => {
+    const harness = createTimeoutHarness({ timeoutMs: MAX_TIMER_TIMEOUT_MS });
+
+    expectDeadlines(harness, null);
+    expect(harness.onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+    emitApproval("waiting-approval", "unlimited");
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS + 1);
+    emitApproval("approval-resolved", "unlimited");
+
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    expect(harness.markTimedOutByRunBudget).not.toHaveBeenCalled();
+    expectDeadlines(harness, null);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not publish or arm a pre-aborted unlimited run", async () => {
+    const runAbortController = new AbortController();
+    runAbortController.abort(new Error("cancelled before timer preparation"));
+    const harness = createTimeoutHarness({ timeoutMs: MAX_TIMER_TIMEOUT_MS, runAbortController });
+    emitApproval("waiting-approval", "late");
+    emitApproval("approval-resolved", "late");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(harness.onAttemptDeadlineChanged).not.toHaveBeenCalled();
+    expect(harness.onAttemptTimeoutArmed).not.toHaveBeenCalled();
+    expectReleased(harness);
+  });
+
+  it.each(["running", "approval-paused", "compaction-grace"] as const)(
+    "closes a %s deadline on local run abort without late approval resurrection",
+    async (phase) => {
+      const harness = createTimeoutHarness({ pendingCompaction: phase === "compaction-grace" });
+      await vi.advanceTimersByTimeAsync(phase === "compaction-grace" ? 120 : 30);
+      if (phase === "approval-paused") {
+        emitApproval("waiting-approval", "pending");
+      }
+      const published = harness.onAttemptDeadlineChanged.mock.calls.slice();
+
+      harness.runAbortController.abort(new Error("local run cancelled"));
+      emitApproval("approval-resolved", "pending");
+      emitApproval("waiting-approval", "late");
+      emitApproval("approval-resolved", "late");
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual(published);
+      expect(harness.markTimedOutByRunBudget).not.toHaveBeenCalled();
+      expectReleased(harness);
+    },
+  );
+
+  it("does not retain scheduling when deadline publication synchronously aborts the owner", async () => {
+    const runAbortController = new AbortController();
+    const harness = createTimeoutHarness({
+      runAbortController,
+      onDeadline: () => runAbortController.abort(new Error("owner closed during publication")),
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    expectDeadlines(harness, 100);
+    expect(harness.onAttemptTimeoutArmed).not.toHaveBeenCalled();
+    expectReleased(harness);
+  });
+
+  it("does not resurrect timers or deadline publications during synchronous timeout cleanup", async () => {
+    const harness = createTimeoutHarness();
+    harness.abortRun.mockImplementation(() => {
+      emitApproval("waiting-approval", "late");
+      emitApproval("approval-resolved", "late");
+      harness.timeout.clearTimers();
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(harness.abortRun).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expectDeadlines(harness, 100);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(harness.abortRun).toHaveBeenCalledOnce();
+  });
+});

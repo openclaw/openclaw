@@ -1,0 +1,443 @@
+import type { AwsCredentialIdentityProvider } from "@smithy/types";
+import {
+  debugEmbeddingsLog,
+  normalizeEmbeddingModelWithPrefixes,
+  sanitizeAndNormalizeEmbedding,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { bedrockCredentialDefaultProvider } from "./aws-credential-refresh.js";
+
+type BedrockEmbeddingClient = {
+  region: string;
+  model: string;
+  dimensions?: number;
+  endpoint?: string;
+  useFipsEndpoint?: true;
+  useDualstackEndpoint?: true;
+};
+
+export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
+
+type Family = "titan-v1" | "titan-v2" | "cohere-v3" | "cohere-v4" | "nova" | "twelvelabs";
+
+interface ModelSpec {
+  maxTokens: number;
+  dims: number;
+  validDims?: number[];
+  family: Family;
+}
+
+const MODELS: Record<string, ModelSpec> = {
+  "amazon.titan-embed-text-v2:0": {
+    maxTokens: 8192,
+    dims: 1024,
+    validDims: [256, 512, 1024],
+    family: "titan-v2",
+  },
+  "amazon.titan-embed-text-v1": { maxTokens: 8000, dims: 1536, family: "titan-v1" },
+  "amazon.titan-embed-g1-text-02": { maxTokens: 8000, dims: 1536, family: "titan-v1" },
+  "amazon.titan-embed-image-v1": { maxTokens: 128, dims: 1024, family: "titan-v1" },
+  "cohere.embed-english-v3": { maxTokens: 512, dims: 1024, family: "cohere-v3" },
+  "cohere.embed-multilingual-v3": { maxTokens: 512, dims: 1024, family: "cohere-v3" },
+  "cohere.embed-v4:0": {
+    maxTokens: 128000,
+    dims: 1536,
+    validDims: [256, 384, 512, 768, 1024, 1536],
+    family: "cohere-v4",
+  },
+  "amazon.nova-2-multimodal-embeddings-v1:0": {
+    maxTokens: 8192,
+    dims: 1024,
+    validDims: [256, 384, 1024, 3072],
+    family: "nova",
+  },
+  "twelvelabs.marengo-embed-2-7-v1:0": { maxTokens: 512, dims: 1024, family: "twelvelabs" },
+  "twelvelabs.marengo-embed-3-0-v1:0": { maxTokens: 512, dims: 512, family: "twelvelabs" },
+};
+
+function stripInferenceProfilePrefix(modelId: string): string {
+  return modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+}
+
+/** Resolve spec, stripping throughput suffixes like `:2:8k` or `:0:512`. */
+function resolveSpec(modelId: string): ModelSpec | undefined {
+  const bare = stripInferenceProfilePrefix(modelId);
+  if (MODELS[bare]) {
+    return MODELS[bare];
+  }
+  const parts = bare.split(":");
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const spec = MODELS[parts.slice(0, i).join(":")];
+    if (spec) {
+      return spec;
+    }
+  }
+  return undefined;
+}
+
+function inferFamily(modelId: string): Family {
+  const id = normalizeLowercaseStringOrEmpty(stripInferenceProfilePrefix(modelId));
+  if (id.startsWith("amazon.titan-embed-text-v2")) {
+    return "titan-v2";
+  }
+  if (id.startsWith("amazon.titan-embed")) {
+    return "titan-v1";
+  }
+  if (id.startsWith("amazon.nova")) {
+    return "nova";
+  }
+  if (id.startsWith("cohere.embed-v4")) {
+    return "cohere-v4";
+  }
+  if (id.startsWith("cohere.embed")) {
+    return "cohere-v3";
+  }
+  if (id.startsWith("twelvelabs.")) {
+    return "twelvelabs";
+  }
+  return "titan-v1"; // safest default — simplest request format
+}
+
+type AwsSdk = typeof import("@aws-sdk/client-bedrock-runtime");
+type AwsCredentialProvider = typeof import("@aws-sdk/credential-provider-node").defaultProvider;
+type AwsCredentialProviderLoader = () => Promise<AwsCredentialProvider | null>;
+
+let credentialProviderPromise: Promise<AwsCredentialProvider | null> | null = null;
+
+function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> {
+  return (credentialProviderPromise ??= import("@aws-sdk/credential-provider-node")
+    .then(({ defaultProvider }) => defaultProvider)
+    .catch(() => null));
+}
+
+const REGION_RE = /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\./;
+
+function regionFromUrl(url: string | undefined): string | undefined {
+  return url?.trim() ? REGION_RE.exec(url)?.[1] : undefined;
+}
+
+function buildBody(family: Family, text: string, dims?: number): string {
+  switch (family) {
+    case "titan-v2": {
+      const b: Record<string, unknown> = { inputText: text };
+      if (dims != null) {
+        b.dimensions = dims;
+        b.normalize = true;
+      }
+      return JSON.stringify(b);
+    }
+    case "titan-v1":
+      return JSON.stringify({ inputText: text });
+    case "nova":
+      return JSON.stringify({
+        taskType: "SINGLE_EMBEDDING",
+        singleEmbeddingParams: {
+          embeddingPurpose: "GENERIC_INDEX",
+          embeddingDimension: dims ?? 1024,
+          text: { truncationMode: "END", value: text },
+        },
+      });
+    case "twelvelabs":
+      return JSON.stringify({ inputType: "text", text: { inputText: text } });
+    default:
+      return JSON.stringify({ inputText: text });
+  }
+}
+
+type BedrockEmbeddingResponseJson = {
+  embedding?: unknown;
+  embeddings?: unknown;
+  data?: unknown;
+};
+
+function parseEmbeddingResponseJson(raw: Uint8Array | undefined): BedrockEmbeddingResponseJson {
+  try {
+    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Amazon Bedrock embedding response returned malformed JSON");
+    }
+    return parsed as BedrockEmbeddingResponseJson;
+  } catch {
+    throw new Error("Amazon Bedrock embedding response returned malformed JSON");
+  }
+}
+
+function malformedBedrockEmbeddingResponse(): Error {
+  return new Error("Amazon Bedrock embedding response returned malformed JSON");
+}
+
+function asNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw malformedBedrockEmbeddingResponse();
+  }
+  for (const entry of value) {
+    if (typeof entry !== "number" || !Number.isFinite(entry)) {
+      throw malformedBedrockEmbeddingResponse();
+    }
+  }
+  return value;
+}
+
+function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
+  const data = parseEmbeddingResponseJson(raw);
+  switch (family) {
+    case "nova":
+      return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
+    case "twelvelabs": {
+      if (Array.isArray(data.data)) {
+        return asNumberArray(asOptionalRecord(data.data[0])?.embedding);
+      }
+      const dataRecord = asOptionalRecord(data.data);
+      if (dataRecord) {
+        return asNumberArray(dataRecord.embedding);
+      }
+      return asNumberArray(data.embedding);
+    }
+    default:
+      return asNumberArray(data.embedding);
+  }
+}
+
+function parseCohereBatch(family: Family, raw: Uint8Array | undefined): number[][] {
+  const data = parseEmbeddingResponseJson(raw);
+  const embeddings =
+    family === "cohere-v4" && !Array.isArray(data.embeddings)
+      ? asOptionalRecord(data.embeddings)?.float
+      : data.embeddings;
+  if (!Array.isArray(embeddings)) {
+    throw malformedBedrockEmbeddingResponse();
+  }
+  return embeddings.map((embedding) => sanitizeAndNormalizeEmbedding(asNumberArray(embedding)));
+}
+
+export async function createBedrockEmbeddingProvider(
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
+  const { BedrockRuntimeClient, InvokeModelCommand } =
+    await import("@aws-sdk/client-bedrock-runtime").catch(() => {
+      throw new Error(
+        "No API key found for provider bedrock: @aws-sdk/client-bedrock-runtime is not installed. " +
+          "Install it with: npm install @aws-sdk/client-bedrock-runtime",
+      );
+    });
+  const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
+  const spec = resolveSpec(client.model);
+  const family = spec?.family ?? inferFamily(client.model);
+
+  debugEmbeddingsLog("memory embeddings: bedrock client", {
+    region: client.region,
+    model: client.model,
+    dimensions: client.dimensions,
+    family,
+  });
+
+  let credentialProvider: AwsCredentialIdentityProvider | undefined;
+  const credentialDefaultProvider: typeof bedrockCredentialDefaultProvider = (init) => {
+    const shared = (credentialProvider ??= bedrockCredentialDefaultProvider(init));
+    // SDK force-refresh calls share an in-flight resolution, but reread rotated
+    // profiles on the next request even when the previous role is not expired.
+    return (credentialOptions) => shared({ ...credentialOptions, forceRefresh: true });
+  };
+
+  const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
+    const sdk = new BedrockRuntimeClient({
+      credentialDefaultProvider,
+      region: client.region,
+      endpoint: client.endpoint,
+      useFipsEndpoint: client.useFipsEndpoint,
+      useDualstackEndpoint: client.useDualstackEndpoint,
+    });
+    try {
+      const res = await sdk.send(
+        new InvokeModelCommand({
+          modelId: client.model,
+          body,
+          contentType: "application/json",
+          accept: "application/json",
+        }),
+        signal ? { abortSignal: signal } : undefined,
+      );
+      return res.body;
+    } finally {
+      sdk.destroy();
+    }
+  };
+
+  const isCohere = family === "cohere-v3" || family === "cohere-v4";
+
+  const embedSingle = async (text: string, signal?: AbortSignal): Promise<number[]> => {
+    const raw = await invoke(buildBody(family, text, client.dimensions), signal);
+    return sanitizeAndNormalizeEmbedding(parseSingle(family, raw));
+  };
+
+  const embedCohere = async (
+    texts: string[],
+    inputType: "search_query" | "search_document",
+    signal?: AbortSignal,
+  ): Promise<number[][]> => {
+    const dims = client.dimensions;
+    const body: Record<string, unknown> = { texts, input_type: inputType, truncate: "END" };
+    if (family === "cohere-v4") {
+      body.embedding_types = ["float"];
+      if (dims != null) {
+        body.output_dimension = dims;
+      }
+    }
+    const raw = await invoke(JSON.stringify(body), signal);
+    return parseCohereBatch(family, raw);
+  };
+
+  const embedQuery = async (text: string, signal?: AbortSignal): Promise<number[]> => {
+    if (!text.trim()) {
+      return [];
+    }
+    if (isCohere) {
+      return (await embedCohere([text], "search_query", signal))[0] ?? [];
+    }
+    return embedSingle(text, signal);
+  };
+
+  const embedBatch = async (
+    inputs: Array<string | { text: string }>,
+    optionsLocal?: { signal?: AbortSignal; inputType?: string },
+  ): Promise<number[][]> => {
+    const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+    if (texts.length === 0) {
+      return [];
+    }
+    if (optionsLocal?.inputType === "query") {
+      return await Promise.all(texts.map((text) => embedQuery(text, optionsLocal.signal)));
+    }
+    if (isCohere) {
+      return embedCohere(texts, "search_document", optionsLocal?.signal);
+    }
+    return Promise.all(
+      texts.map((t) => (t.trim() ? embedSingle(t, optionsLocal?.signal) : Promise.resolve([]))),
+    );
+  };
+
+  return {
+    provider: {
+      id: "bedrock",
+      model: client.model,
+      maxInputTokens: spec?.maxTokens,
+      embed: async (input, optionsValue) => {
+        const text = typeof input === "string" ? input : input.text;
+        if (optionsValue?.inputType === "query") {
+          return await embedQuery(text, optionsValue.signal);
+        }
+        return (await embedBatch([text], { ...optionsValue, inputType: "document" }))[0] ?? [];
+      },
+      embedBatch,
+    },
+    client,
+  };
+}
+
+function resolveBedrockEmbeddingClient(
+  options: MemoryEmbeddingProviderCreateOptions,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
+): BedrockEmbeddingClient {
+  const model = normalizeEmbeddingModelWithPrefixes({
+    model: options.model,
+    defaultModel: DEFAULT_BEDROCK_EMBEDDING_MODEL,
+    prefixes: ["bedrock/", "amazon-bedrock/", "aws/"],
+  });
+  const spec = resolveSpec(model);
+  const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
+  let endpoint =
+    normalizeOptionalString(options.remote?.baseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
+  let useFipsEndpoint: true | undefined;
+  let useDualstackEndpoint: true | undefined;
+
+  const region =
+    regionFromUrl(options.remote?.baseUrl) ??
+    regionFromUrl(providerConfig?.baseUrl) ??
+    normalizeOptionalString(process.env.AWS_REGION) ??
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
+    "us-east-1";
+
+  if (endpoint) {
+    const sdk = new BedrockRuntimeClient({ region });
+    try {
+      const normalizedEndpoint = new URL(endpoint).href;
+      for (const fips of [false, true]) {
+        for (const dualstack of [false, true]) {
+          const endpointModes = { Region: region, UseFIPS: fips, UseDualStack: dualstack };
+          try {
+            if (sdk.config.endpointProvider(endpointModes).url.href !== normalizedEndpoint) {
+              continue;
+            }
+          } catch {
+            // Unsupported hypothetical modes must not reject a valid custom endpoint.
+            continue;
+          }
+          // SDK-owned endpoints must retain their security modes and environment overrides.
+          endpoint = undefined;
+          useFipsEndpoint = fips || undefined;
+          useDualstackEndpoint = dualstack || undefined;
+          break;
+        }
+        if (!endpoint) {
+          break;
+        }
+      }
+    } finally {
+      sdk.destroy();
+    }
+  }
+
+  let dimensions: number | undefined;
+  if (options.dimensions != null) {
+    if (spec?.validDims && !spec.validDims.includes(options.dimensions)) {
+      throw new Error(
+        `Invalid dimensions ${options.dimensions} for ${model}. Valid values: ${spec.validDims.join(", ")}`,
+      );
+    }
+    dimensions = options.dimensions;
+  } else {
+    dimensions = spec?.dims;
+  }
+
+  return {
+    region,
+    model,
+    dimensions,
+    ...(endpoint ? { endpoint } : {}),
+    ...(useFipsEndpoint ? { useFipsEndpoint } : {}),
+    ...(useDualstackEndpoint ? { useDualstackEndpoint } : {}),
+  };
+}
+
+export async function hasAwsCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+  loadCredentialProvider: AwsCredentialProviderLoader = loadDefaultCredentialProvider,
+): Promise<boolean> {
+  if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
+    return true;
+  }
+  if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
+    return true;
+  }
+  const defaultProvider = await loadCredentialProvider();
+  if (!defaultProvider) {
+    return false;
+  }
+  try {
+    const credentials = await defaultProvider({
+      ignoreCache: true,
+      timeout: 1000,
+      maxRetries: 0,
+    })();
+    return typeof credentials.accessKeyId === "string" && credentials.accessKeyId.trim().length > 0;
+  } catch {
+    return false;
+  }
+}

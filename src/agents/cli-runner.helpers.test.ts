@@ -1,0 +1,339 @@
+/** Tests CLI runner prompt/image/system-prompt helper utilities. */
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import type { ImageContent } from "openclaw/plugin-sdk/llm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { escapeRegExp } from "../shared/regexp.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+  readCliImageTurnContext,
+} from "./cli-image-turn-correlation.js";
+import {
+  buildCliArgs,
+  prepareCliPromptImagePayload,
+  resolveCliRunQueueKey,
+} from "./cli-runner/helpers.js";
+import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
+import * as toolImages from "./tool-images.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function imageWorkspace() {
+  return tempDirs.make("openclaw-cli-images-", resolvePreferredOpenClawTmpDir());
+}
+
+function pngImage(data: string | Buffer): ImageContent {
+  return {
+    type: "image",
+    data: typeof data === "string" ? data : data.toString("base64"),
+    mimeType: "image/png",
+  };
+}
+
+const codexImages = { command: "codex", imageArg: "--image", imageMode: "repeat" as const };
+const geminiImages = { command: "gemini", imageArg: "@", imagePathScope: "workspace" as const };
+
+async function writePng(filePath: string, image: Buffer) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, image);
+}
+
+describe("prepareCliPromptImagePayload prompt references", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not reload OpenClaw CLI image cache paths from prior prompt text", async () => {
+    const detectAndLoadPromptImagesSpy = vi.spyOn(promptImageUtils, "detectAndLoadPromptImages");
+    const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
+
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
+        prompt:
+          'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
+        workspaceDir: "/workspace",
+      }),
+    ).resolves.toStrictEqual({
+      prompt: 'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
+    });
+
+    // Cached image paths are generated output, not fresh user references.
+    expect(detectAndLoadPromptImagesSpy).not.toHaveBeenCalled();
+    expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
+  });
+
+  it("hydrates structured media from the active agent workspace without widening sibling access", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-agent-image-");
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    await writePng(imagePath, image);
+    await writePng(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        entries: {
+          arthur: { workspace: workspaceDir },
+          merlin: { workspace: siblingWorkspaceDir },
+        },
+      },
+    };
+
+    try {
+      const localRoots = getAgentScopedMediaLocalRoots(config, "arthur");
+      const prepared = await prepareCliPromptImagePayload({
+        backend: { command: "claude", input: "stdin" },
+        prompt: "describe the attachment",
+        workspaceDir,
+        localRoots,
+        media: [{ path: imagePath, contentType: "image/png" }],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(1);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "claude", input: "stdin" },
+          prompt: "describe the attachment",
+          workspaceDir,
+          localRoots,
+          media: [{ path: siblingImagePath, contentType: "image/png" }],
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("dedupes repeated refs and skips failed loads before sanitizing", async () => {
+    const workspaceDir = imageWorkspace();
+    const imagePath = path.join(workspaceDir, "a.png");
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 }));
+    const result = await prepareCliPromptImagePayload({
+      backend: { command: "gemini", imagePathScope: "workspace" },
+      prompt: `Compare ${imagePath} with ${imagePath} and ${path.join(workspaceDir, "missing.png")}`,
+      workspaceDir,
+    });
+
+    expect(result.imagePaths).toHaveLength(1);
+  });
+
+  it("surfaces inline sanitization failure when a preceding image fact is suppressed", async () => {
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "already described",
+        workspaceDir: "/tmp",
+        images: [pngImage("%%%")],
+        imageOrder: ["inline"],
+        media: [
+          {
+            path: "/tmp/described-missing.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+          { path: "/tmp/inline.png", contentType: "image/png" },
+        ],
+      }),
+    ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+  });
+});
+
+describe("writeCliImages", () => {
+  it("uses stable hashed file paths without synchronous fsync when rehydrating images", async ({
+    onTestFinished,
+  }) => {
+    const image = pngImage("c29tZS1pbWFnZQ==");
+    const params = {
+      backend: { command: "codex" },
+      prompt: "",
+      workspaceDir: imageWorkspace(),
+      images: [image],
+    };
+    const fsync = vi.spyOn(fsSync, "fsyncSync");
+    onTestFinished(() => fsync.mockRestore());
+    const first = await prepareCliPromptImagePayload(params);
+    const second = await prepareCliPromptImagePayload(params);
+
+    try {
+      expect(first.imagePaths).toStrictEqual([
+        expect.stringMatching(
+          new RegExp(
+            `^${escapeRegExp(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`)}.*\\.png$`,
+          ),
+        ),
+      ]);
+      expect(second.imagePaths).toEqual(first.imagePaths);
+      await expect(
+        fs.readFile(expectDefined(first.imagePaths?.[0], "first image path test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
+      expect(fsync).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(expectDefined(first.imagePaths?.[0], "first image path test invariant"), {
+        force: true,
+      });
+    }
+  });
+
+  it("carries exact image-turn correlation beside Claude prompt paths", async () => {
+    const turnKey = hashCliImageTurnEntryId("transcript-entry-1");
+    const prepared = await prepareCliPromptImagePayload({
+      backend: { command: "claude", imageArg: "@" },
+      prompt: "describe this",
+      workspaceDir: "/workspace",
+      images: [pngImage("aW1hZ2U=")],
+      imageTurnKey: turnKey,
+    });
+
+    try {
+      expect(readCliImageTurnContext(prepared.prompt)).toBe(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).not.toContain(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).toContain(
+        `@${expectDefined(prepared.imagePaths?.[0], "correlated image path")}`,
+      );
+    } finally {
+      await fs.rm(expectDefined(prepared.imagePaths?.[0], "correlated image path"), {
+        force: true,
+      });
+    }
+  });
+
+  it("rejects conflicting or malformed image-turn correlation", () => {
+    const first = hashCliImageTurnEntryId("transcript-entry-1");
+    const second = hashCliImageTurnEntryId("transcript-entry-2");
+
+    expect(
+      readCliImageTurnContext(
+        `${formatCliImageTurnContext(first)}\n\n${formatCliImageTurnContext(second)}`,
+      ),
+    ).toBeUndefined();
+    expect(readCliImageTurnContext(formatCliImageTurnContext("not-a-key"))).toBeUndefined();
+  });
+
+  it("appends Gemini prompt refs with @-prefixed image paths", async () => {
+    const tempDir = imageWorkspace();
+    const explicitImage = pngImage("c29tZS1leHBsaWNpdC1pbWFnZQ==");
+
+    const prepared = await prepareCliPromptImagePayload({
+      backend: { ...geminiImages, input: "arg" },
+      prompt: "What is in this image?",
+      workspaceDir: tempDir,
+      images: [explicitImage],
+    });
+
+    expect(prepared.prompt).toContain("\n\n@");
+    expect(prepared.prompt).toContain(prepared.imagePaths?.[0] ?? "");
+    expect(prepared.prompt.trimEnd().endsWith(`@${prepared.imagePaths?.[0] ?? ""}`)).toBe(true);
+    expect(prepared.imagePaths?.[0]?.startsWith(path.join(tempDir, ".openclaw-cli-images"))).toBe(
+      true,
+    );
+
+    const argv = buildCliArgs({
+      backend: geminiImages,
+      baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
+      modelId: "gemini-3.1-pro-preview",
+      promptArg: prepared.prompt,
+      imagePaths: prepared.imagePaths,
+      useResume: false,
+    });
+
+    expect(argv).toEqual(["--output-format", "json", "--prompt", prepared.prompt]);
+  });
+
+  it("prefers explicit images over prompt refs through the helper seams", async () => {
+    const tempDir = imageWorkspace();
+    const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
+    const explicitImage = pngImage("c29tZS1leHBsaWNpdC1pbWFnZQ==");
+
+    const prepared = await prepareCliPromptImagePayload({
+      backend: { ...codexImages, input: "arg" },
+      prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+      workspaceDir: tempDir,
+      images: [explicitImage],
+    });
+    const argv = buildCliArgs({
+      backend: codexImages,
+      baseArgs: ["exec", "--json"],
+      modelId: "gpt-5.4",
+      imagePaths: prepared.imagePaths,
+      useResume: false,
+    });
+
+    expect(argv.reduce((count, arg) => count + (arg === "--image" ? 1 : 0), 0)).toBe(1);
+    expect(argv[argv.indexOf("--image") + 1]).toContain("openclaw-cli-images");
+    await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(
+      Buffer.from(explicitImage.data, "base64"),
+    );
+  });
+
+  it("merges inline payloads with offloaded refs in attachment order", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-mixed-images-");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "offloaded.png";
+    const historyImagePath = path.join(workspaceDir, "history.png");
+    const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const historyImage = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    await writePng(path.join(inboundDir, mediaId), offloadedImage);
+    await writePng(historyImagePath, historyImage);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: { ...codexImages, input: "arg" },
+        prompt: `[Earlier history: ${historyImagePath}]\n\n[Retry after failure]\n\n${currentTurn}`,
+        imagePrompt: currentTurn,
+        workspaceDir,
+        images: [pngImage(inlineImage)],
+        imageOrder: ["offloaded", "inline"],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }],
+          suppressedFactIndexes: [],
+        },
+        media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(2);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(offloadedImage);
+      await expect(fs.readFile(prepared.imagePaths?.[1] ?? "")).resolves.toEqual(inlineImage);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+});
+
+it.each([
+  { backendId: "claude-cli", expected: "claude-cli:run-4" },
+  {
+    backendId: "acme-cli",
+    liveSession: "claude-stdio" as const,
+    ownerKey: "third-party-owner",
+    expected: "acme-cli:owner:third-party-owner",
+  },
+])("serializes $backendId only when its live owner requires it", ({ expected, ...backend }) => {
+  expect(
+    resolveCliRunQueueKey({
+      ...backend,
+      serialize: false,
+      runId: "run-4",
+      workspaceDir: "/tmp/project-a",
+    }),
+  ).toBe(expected);
+});

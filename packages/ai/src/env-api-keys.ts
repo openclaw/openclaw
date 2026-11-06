@@ -1,0 +1,156 @@
+// NEVER convert to top-level imports - breaks browser/Vite builds
+type NodeHelpers = {
+  existsSync: typeof import("node:fs").existsSync;
+  homedir: typeof import("node:os").homedir;
+  join: typeof import("node:path").join;
+};
+let nodeHelpers: NodeHelpers | undefined;
+
+function loadNodeHelpersSync(): NodeHelpers | undefined {
+  try {
+    const { existsSync } = process.getBuiltinModule("node:fs");
+    const { homedir } = process.getBuiltinModule("node:os");
+    const { join } = process.getBuiltinModule("node:path");
+    nodeHelpers = { existsSync, homedir, join };
+  } catch {
+    // Browser environments may expose process without Node builtins.
+  }
+  return nodeHelpers;
+}
+
+// Eagerly load in Node.js/Bun environment only
+if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+  loadNodeHelpersSync();
+}
+
+function getEnvValue(key: string): string | undefined {
+  return (typeof process === "undefined" ? undefined : process.env)?.[key]?.trim() || undefined;
+}
+
+let cachedVertexAdcCredentialsExists: true | null = null;
+
+function hasVertexAdcCredentials(): boolean {
+  if (cachedVertexAdcCredentialsExists === null) {
+    const helpers =
+      nodeHelpers ??
+      (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)
+        ? loadNodeHelpersSync()
+        : undefined);
+    if (!helpers) {
+      return false;
+    }
+    const { existsSync, homedir, join } = helpers;
+    const path =
+      getEnvValue("GOOGLE_APPLICATION_CREDENTIALS") ??
+      join(homedir(), ".config", "gcloud", "application_default_credentials.json");
+    cachedVertexAdcCredentialsExists = existsSync(path) ? true : null;
+  }
+  return cachedVertexAdcCredentialsExists === true;
+}
+
+function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
+  const envMap: Record<string, string | string[]> = {
+    "github-copilot": "COPILOT_GITHUB_TOKEN",
+    anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    moonshot: ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+    kimi: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+    openai: "OPENAI_API_KEY",
+    meta: "MODEL_API_KEY",
+    "azure-openai-responses": "AZURE_OPENAI_API_KEY",
+    deepseek: "DEEPSEEK_API_KEY",
+    google: "GEMINI_API_KEY",
+    "google-interactions": "GEMINI_API_KEY",
+    "google-vertex": "GOOGLE_CLOUD_API_KEY",
+    groq: "GROQ_API_KEY",
+    cerebras: "CEREBRAS_API_KEY",
+    xai: "XAI_API_KEY",
+    openrouter: "OPENROUTER_API_KEY",
+    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+    zai: "ZAI_API_KEY",
+    mistral: "MISTRAL_API_KEY",
+    minimax: "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_CN_API_KEY",
+    moonshotai: "MOONSHOT_API_KEY",
+    "moonshotai-cn": "MOONSHOT_API_KEY",
+    huggingface: "HF_TOKEN",
+    fireworks: "FIREWORKS_API_KEY",
+    together: "TOGETHER_API_KEY",
+    opencode: "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_API_KEY",
+    "cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
+    "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+    xiaomi: "XIAOMI_API_KEY",
+    "xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+    "xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+    "xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+  };
+
+  const envVar = envMap[provider];
+  return Array.isArray(envVar) ? envVar : envVar ? [envVar] : undefined;
+}
+
+/**
+ * Find configured environment variables that can provide an API key for a provider.
+ *
+ * This only reports actual API key variables. It intentionally excludes ambient
+ * credential sources such as AWS profiles, AWS IAM credentials, and Google
+ * Application Default Credentials.
+ */
+export function findEnvKeys(provider: string): string[] | undefined {
+  const envVars = getApiKeyEnvVars(provider);
+  if (!envVars) {
+    return undefined;
+  }
+
+  const found = envVars.filter((envVar) => Boolean(getEnvValue(envVar)));
+  return found.length > 0 ? found : undefined;
+}
+
+/**
+ * Get API key for provider from known environment variables, e.g. OPENAI_API_KEY.
+ *
+ * Will not return API keys for providers that require OAuth tokens.
+ */
+export function getEnvApiKey(provider: string): string | undefined {
+  const envKeys = findEnvKeys(provider);
+  if (envKeys?.[0]) {
+    return getEnvValue(envKeys[0]);
+  }
+
+  // Vertex AI supports either an explicit API key or Application Default Credentials.
+  // Auth is configured via `gcloud auth application-default login`.
+  if (provider === "google-vertex") {
+    const hasCredentials = hasVertexAdcCredentials();
+    const hasProject = Boolean(
+      getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
+    );
+    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
+
+    if (hasCredentials && hasProject && hasLocation) {
+      return "<authenticated>";
+    }
+  }
+
+  if (provider === "amazon-bedrock") {
+    // Amazon Bedrock supports multiple credential sources:
+    // 1. AWS_PROFILE - named profile from ~/.aws/credentials
+    // 2. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY - standard IAM keys
+    // 3. AWS_BEARER_TOKEN_BEDROCK - Bedrock bearer token
+    // 4. AWS_CONTAINER_CREDENTIALS_RELATIVE_URI - ECS task roles
+    // 5. AWS_CONTAINER_CREDENTIALS_FULL_URI - ECS task roles (full URI)
+    // 6. AWS_WEB_IDENTITY_TOKEN_FILE - IRSA (IAM Roles for Service Accounts)
+    if (
+      getEnvValue("AWS_PROFILE") ||
+      (getEnvValue("AWS_ACCESS_KEY_ID") && getEnvValue("AWS_SECRET_ACCESS_KEY")) ||
+      getEnvValue("AWS_BEARER_TOKEN_BEDROCK") ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
+      getEnvValue("AWS_CONTAINER_CREDENTIALS_FULL_URI") ||
+      getEnvValue("AWS_WEB_IDENTITY_TOKEN_FILE")
+    ) {
+      return "<authenticated>";
+    }
+  }
+
+  return undefined;
+}

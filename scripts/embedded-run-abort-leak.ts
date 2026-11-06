@@ -1,0 +1,351 @@
+/**
+ * Heap-leak harness for the runEmbeddedAttempt abort path. Loops aborted runs
+ * in a function-shaped scope that mimics the runner, snapshots the heap, and
+ * computes a PASS/FAIL verdict from RSS delta + tracked-instance retention.
+ *
+ * Usage:
+ *   node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts \
+ *     --mode production --iters 50 --batches 5
+ *
+ * Modes:
+ *   production (default):        imports the real abortable from src; PASS proves the fix works.
+ *   closure-extracted:           self-contained module-scope helper (mirrors production shape).
+ *   closure-inline:              pre-fix shape (closure inside runner scope).
+ *   synthetic-leak:              deliberately retains via module-level bucket
+ *                                (sanity check that the harness detects leaks).
+ *
+ * Exit code: 0 if PASS, 1 if FAIL (leak detected).
+ */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { setImmediate, setTimeout } from "node:timers/promises";
+import * as v8 from "node:v8";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { coerceErrorMessage, toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { parseNonNegativeInt, parsePositiveInt } from "./lib/numeric-options.mjs";
+
+type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
+type Abortable = <T>(signal: AbortSignal, promise: Promise<T>) => Promise<T>;
+
+type Options = {
+  iters: number;
+  batches: number;
+  snapDir: string;
+  mode: Mode;
+  maxRssGrowthMb: number;
+  maxTrackedRetention: number;
+  scopeBytes: number;
+  quiet: boolean;
+};
+
+const VALUE_FLAGS = new Set([
+  "--iters",
+  "--batches",
+  "--snap-dir",
+  "--mode",
+  "--max-rss-growth-mb",
+  "--max-tracked-retention",
+  "--scope-bytes",
+]);
+
+function readValue(raw: string | undefined, flag: string): string {
+  const value = raw?.trim() ?? "";
+  if (!value || value.startsWith("-")) {
+    fail(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function parseArgs(argv: string[]): Options {
+  const opts: Options = {
+    iters: 50,
+    batches: 5,
+    snapDir: ".tmp/embedded-run-abort-leak",
+    mode: "production",
+    maxRssGrowthMb: 64,
+    maxTrackedRetention: 16,
+    scopeBytes: 2_000_000,
+    quiet: false,
+  };
+  const seenValueFlags = new Set<string>();
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = expectDefined(argv[i], `embedded abort benchmark argument at index ${i}`);
+    let value = "";
+    if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        fail(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
+      value = readValue(argv[++i], arg);
+    }
+    switch (arg) {
+      case "--iters":
+        opts.iters = parsePositiveInt(value, arg);
+        break;
+      case "--batches":
+        opts.batches = parsePositiveInt(value, arg);
+        break;
+      case "--snap-dir":
+        opts.snapDir = value;
+        break;
+      case "--mode": {
+        const mode = value;
+        if (
+          mode === "production" ||
+          mode === "closure-extracted" ||
+          mode === "closure-inline" ||
+          mode === "synthetic-leak"
+        ) {
+          opts.mode = mode;
+        } else {
+          fail(
+            `--mode must be one of: production, closure-extracted, closure-inline, synthetic-leak`,
+          );
+        }
+        break;
+      }
+      case "--max-rss-growth-mb":
+        opts.maxRssGrowthMb = parseNonNegativeInt(value, arg);
+        break;
+      case "--max-tracked-retention":
+        opts.maxTrackedRetention = parseNonNegativeInt(value, arg);
+        break;
+      case "--scope-bytes":
+        opts.scopeBytes = parsePositiveInt(value, arg);
+        break;
+      case "--quiet":
+        opts.quiet = true;
+        break;
+      case "--help":
+      case "-h":
+        printUsage();
+        process.exit(0);
+      default:
+        fail(`Unknown arg: ${arg}`);
+    }
+  }
+  return opts;
+}
+
+function printUsage(): void {
+  process.stderr.write(
+    [
+      "Usage: node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts [flags]",
+      "  --mode <production|closure-extracted|closure-inline|synthetic-leak>",
+      "  --iters N            iterations per batch (default 50)",
+      "  --batches B          batches between snapshots (default 5)",
+      "  --snap-dir DIR       heap snapshot output dir (default .tmp/embedded-run-abort-leak)",
+      "  --scope-bytes N      simulated run-scope payload size (default 2_000_000)",
+      "  --max-rss-growth-mb  PASS threshold for RSS growth (default 64)",
+      "  --max-tracked-retention  PASS threshold for tracked finalizer retention (default 16)",
+      "  --quiet              only print final verdict",
+      "",
+    ].join("\n"),
+  );
+}
+
+function fail(msg: string): never {
+  process.stderr.write(`error: ${msg}\n`);
+  process.exit(2);
+}
+
+const KEEP_ALIVE: Array<Promise<unknown>> = [];
+const SYNTHETIC_LEAK_BUCKET: Uint8Array[] = [];
+const FINALIZED = { count: 0 };
+const finalizer = new FinalizationRegistry<number>(() => {
+  FINALIZED.count += 1;
+});
+let productionAbortable: Abortable | null = null;
+
+function abortableExtracted<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(new Error("aborted"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new Error("aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
+      },
+    );
+  });
+}
+
+function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
+  const transcript = new Uint8Array(scopeBytes);
+  const toolMetas = [{ data: new Uint8Array(scopeBytes / 4) }];
+  const subscription = {
+    onPartialReply: (_text: string) => {
+      void transcript;
+    },
+    onAssistantMessageStart: () => {
+      void toolMetas;
+    },
+  };
+  finalizer.register(transcript, iter);
+
+  const ac = new AbortController();
+  const neverSettling = new Promise<unknown>(() => {});
+  KEEP_ALIVE.push(neverSettling);
+
+  if (mode === "production") {
+    if (!productionAbortable) {
+      throw new Error("production abortable is not loaded");
+    }
+    void productionAbortable(ac.signal, neverSettling).catch(() => {});
+  } else if (mode === "closure-extracted") {
+    void abortableExtracted(ac.signal, neverSettling).catch(() => {});
+  } else if (mode === "closure-inline") {
+    const wrapped = new Promise<unknown>((resolve, reject) => {
+      const onAbort = () => reject(new Error("aborted"));
+      ac.signal.addEventListener("abort", onAbort, { once: true });
+      neverSettling.then(
+        (v) => {
+          void transcript;
+          void toolMetas;
+          void subscription;
+          resolve(v);
+        },
+        (e: unknown) => {
+          void transcript;
+          void toolMetas;
+          void subscription;
+          reject(toLintErrorObject(e, "Non-Error rejection"));
+        },
+      );
+    });
+    void wrapped.catch(() => {});
+  } else {
+    SYNTHETIC_LEAK_BUCKET.push(transcript);
+  }
+  ac.abort();
+
+  void transcript.length;
+  void toolMetas.length;
+  void subscription.onPartialReply;
+}
+
+async function settleAndGc(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) {
+    await setImmediate();
+    globalThis.gc?.();
+  }
+  await setTimeout(100);
+  globalThis.gc?.();
+}
+
+type SampleRow = {
+  rssBytes: number;
+  heapUsedBytes: number;
+  totalIters: number;
+  trackedFinalized: number;
+  snapshotPath: string;
+};
+
+function takeSnapshot(snapDir: string, label: string, totalIters: number): SampleRow {
+  fs.mkdirSync(snapDir, { recursive: true });
+  const snapshotPath = path.join(snapDir, `${label}-${process.pid}-${Date.now()}.heapsnapshot`);
+  v8.writeHeapSnapshot(snapshotPath);
+  return {
+    rssBytes: process.memoryUsage().rss,
+    heapUsedBytes: process.memoryUsage().heapUsed,
+    totalIters,
+    trackedFinalized: FINALIZED.count,
+    snapshotPath,
+  };
+}
+
+function fmtBytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+async function main(): Promise<void> {
+  let opts: Options;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    fail(coerceErrorMessage(error));
+  }
+  if (opts.mode === "production") {
+    productionAbortable = (await import("../src/agents/embedded-agent-runner/run/abortable.js"))
+      .abortable;
+  }
+  if (typeof globalThis.gc !== "function") {
+    fail("--expose-gc is required (run with: node --expose-gc ...)");
+  }
+
+  const startedAt = Date.now();
+
+  if (!opts.quiet) {
+    process.stdout.write(
+      `[harness] mode=${opts.mode} iters=${opts.iters} batches=${opts.batches} ` +
+        `scope=${fmtBytes(opts.scopeBytes)} pid=${process.pid}\n`,
+    );
+  }
+
+  await settleAndGc();
+  const baseline = takeSnapshot(opts.snapDir, "baseline", 0);
+  let final = baseline;
+  if (!opts.quiet) {
+    process.stdout.write(
+      `  baseline rss=${fmtBytes(baseline.rssBytes)} heap=${fmtBytes(baseline.heapUsedBytes)}\n`,
+    );
+  }
+
+  let totalIters = 0;
+  for (let b = 0; b < opts.batches; b += 1) {
+    for (let i = 0; i < opts.iters; i += 1) {
+      runOnce(opts.mode, opts.scopeBytes, totalIters);
+      totalIters += 1;
+    }
+    await settleAndGc();
+    const row = takeSnapshot(opts.snapDir, `batch-${b}`, totalIters);
+    final = row;
+    if (!opts.quiet) {
+      process.stdout.write(
+        `  batch ${b} totalIters=${row.totalIters} ` +
+          `rss=${fmtBytes(row.rssBytes)} heap=${fmtBytes(row.heapUsedBytes)} ` +
+          `trackedFinalized=${row.trackedFinalized}/${row.totalIters}\n`,
+      );
+    }
+  }
+
+  const rssGrowthMb = (final.rssBytes - baseline.rssBytes) / 1024 / 1024;
+  const trackedRetention = final.totalIters - final.trackedFinalized;
+
+  const durationSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+  const verdict =
+    rssGrowthMb > opts.maxRssGrowthMb || trackedRetention > opts.maxTrackedRetention
+      ? "FAIL"
+      : "PASS";
+
+  process.stdout.write(
+    `${verdict}: mode=${opts.mode} ` +
+      `rss_growth=${rssGrowthMb.toFixed(1)}MB ` +
+      `tracked_retention=${trackedRetention}/${final.totalIters} ` +
+      `duration=${durationSec}s ` +
+      `(thresholds: rss<${opts.maxRssGrowthMb}MB, tracked<${opts.maxTrackedRetention})\n`,
+  );
+  if (!opts.quiet) {
+    process.stdout.write(
+      `snapshots in ${opts.snapDir}/ — diff with:\n` +
+        `  node .agents/skills/openclaw-test-heap-leaks/scripts/heapsnapshot-delta.mjs ` +
+        `${baseline.snapshotPath} ${final.snapshotPath} --top 30\n`,
+    );
+  }
+  process.exit(verdict === "PASS" ? 0 : 1);
+}
+
+main().catch((err: unknown) => {
+  process.stderr.write(`harness crashed: ${String(err)}\n${(err as Error)?.stack ?? ""}\n`);
+  process.exit(2);
+});

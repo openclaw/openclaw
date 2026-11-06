@@ -1,0 +1,147 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+
+export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
+const TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS = 2_000;
+
+export type TelegramIngressWorkerMessage =
+  | {
+      type: "poll-start";
+      offset: number | null;
+      startedAt: number;
+    }
+  | {
+      type: "poll-success";
+      offset: number | null;
+      count: number;
+      finishedAt: number;
+    }
+  | {
+      type: "poll-error";
+      message: string;
+      /** Telegram Bot API error_code (e.g. 409 for getUpdates conflicts). */
+      errorCode?: number;
+      /** Actual server-directed flood wait currently being honored by the worker. */
+      retryAfterMs?: number;
+      finishedAt: number;
+    }
+  | {
+      type: "spooled";
+      updateId: number;
+      queued: number;
+    }
+  | {
+      type: "updates";
+      requestId: string;
+      updates: unknown[];
+      queued: number;
+    };
+
+export type TelegramIngressWorkerCommand =
+  | {
+      type: "stop";
+    }
+  | {
+      type: "spool-ack";
+      requestId: string;
+      result:
+        | {
+            ok: true;
+            updateId: number;
+          }
+        | {
+            ok: false;
+            message: string;
+          };
+    };
+
+export type TelegramIngressWorkerOptions = {
+  token: string;
+  accountId: string;
+  initialUpdateId: number | null;
+  apiRoot?: string;
+  timeoutSeconds?: number;
+  network?: TelegramNetworkConfig;
+  proxy?: string;
+};
+
+type TelegramIngressWorkerHandle = {
+  onMessage?: (message: TelegramIngressWorkerMessage) => void;
+  ackSpooledUpdate?(
+    requestId: string,
+    result: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
+  ): void;
+  stop(): Promise<void>;
+  task(): Promise<void>;
+};
+
+export type TelegramIngressWorkerFactory = (
+  options: TelegramIngressWorkerOptions,
+) => TelegramIngressWorkerHandle;
+
+export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
+  const workerUrl = resolveRuntimeWorkerUrl(
+    createPluginRuntimeProcessEntrypoint("telegramIngress", import.meta.url),
+  );
+  const worker = createCpuTrackedWorker(workerUrl, {
+    execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
+    workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
+  });
+  const taskPromise = new Promise<void>((resolve, reject) => {
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`Telegram ingress worker exited with code ${code}`));
+    });
+  });
+  // Keep the constructing plugin's runtime even if another scope assigns onMessage.
+  worker.on(
+    "message",
+    AsyncLocalStorage.bind((message: TelegramIngressWorkerMessage) => {
+      handle.onMessage?.(message);
+    }),
+  );
+
+  const handle: TelegramIngressWorkerHandle = {
+    ackSpooledUpdate(requestId, result) {
+      try {
+        worker.postMessage(
+          {
+            type: "spool-ack",
+            requestId,
+            result,
+          } satisfies TelegramIngressWorkerCommand,
+          [],
+        );
+      } catch {
+        // Worker may have exited after the parent committed the queue write.
+      }
+    },
+    async stop() {
+      // Forced termination is replay-safe: the parent commits each batch before its ACK.
+      await raceWithTimeout(
+        () => {
+          worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);
+          return taskPromise.catch(() => undefined);
+        },
+        TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS,
+        () => worker.terminate().then(() => undefined),
+        { ref: false },
+      );
+    },
+    task() {
+      return taskPromise;
+    },
+  };
+  return handle;
+};

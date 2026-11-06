@@ -1,0 +1,198 @@
+import { Value } from "typebox/value";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  UiCommandParamsSchema,
+  UiCommandResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/ui-command.js";
+import * as gateway from "./in-process-gateway.js";
+import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { createScreenTool } from "./screen-tool.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+function createGatewayRecorder() {
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const callGateway: InProcessGatewayCaller = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> => {
+    calls.push([method, params]);
+    return { ok: true } as T;
+  };
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  return { calls };
+}
+
+describe("screen tool", () => {
+  it("declares the exact ui.command result contract", async () => {
+    createGatewayRecorder();
+    const tool = createScreenTool();
+    const result = await tool.execute("contract", { action: "sidebar_show" });
+
+    expect(tool.outputSchema).toBe(UiCommandResultSchema);
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, {
+        ok: true,
+        delivery: "dispatched",
+        presentation: { portalId: "app", status: "blocked", reason: "remote-ingress-required" },
+      }),
+    ).toBe(true);
+  });
+
+  it("omits unsupported actions and requires the base UI capability", () => {
+    const tool = createScreenTool();
+    expect(tool.requiredClientCaps).toEqual([GATEWAY_CLIENT_CAPS.UI_COMMANDS]);
+    expect(tool.parameters).toMatchObject({
+      properties: {
+        action: {
+          type: "string",
+          enum: expect.arrayContaining(["split_right", "terminal_show", "navigate"]),
+        },
+      },
+    });
+    expect(tool.parameters).not.toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },
+    });
+  });
+
+  it("exposes GitHub identity settings only for a capable Control UI", () => {
+    const tool = createScreenTool({ githubIdentitySettingsAvailable: true });
+    expect(
+      createScreenTool({ agentSessionKey: "other-session", githubIdentitySettingsAvailable: true })
+        .parameters,
+    ).toBe(tool.parameters);
+
+    expect(tool.parameters).toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },
+    });
+    expect(tool.description).toContain("github_identity_settings");
+  });
+
+  it.each([
+    ["split_right", { kind: "split", direction: "right", sessionKey: "agent:main:main" }],
+    ["split_down", { kind: "split", direction: "down", sessionKey: "agent:main:main" }],
+    ["close_pane", { kind: "close-pane", sessionKey: "agent:main:main" }],
+    ["focus", { kind: "focus", sessionKey: "agent:main:main" }],
+    ["sidebar_show", { kind: "sidebar", visible: true }],
+    ["sidebar_hide", { kind: "sidebar", visible: false }],
+    ["terminal_hide", { kind: "panel", panel: "terminal", open: false }],
+    ["browser_hide", { kind: "panel", panel: "browser", open: false }],
+    ["desktop_hide", { kind: "panel", panel: "desktop", open: false }],
+    ["portal_hide", { kind: "panel", panel: "portal", open: false }],
+    ["navigate", { kind: "navigate", sessionKey: "agent:main:main" }],
+  ])("maps %s to a UI command", async (action, command) => {
+    const { calls } = createGatewayRecorder();
+    const tool = createScreenTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call", { action });
+
+    expect(calls).toEqual([["ui.command", { command, sessionKey: "agent:main:main" }]]);
+    expect(Value.Check(UiCommandParamsSchema, calls[0]?.[1])).toBe(true);
+  });
+
+  it("maps GitHub identity settings for a capable Control UI", async () => {
+    const { calls } = createGatewayRecorder();
+    const tool = createScreenTool({
+      agentSessionKey: "agent:main:main",
+      githubIdentitySettingsAvailable: true,
+    });
+
+    await tool.execute("call", { action: "github_identity_settings" });
+
+    expect(calls).toEqual([
+      [
+        "ui.command",
+        {
+          command: { kind: "agent-github-settings" },
+          sessionKey: "agent:main:main",
+        },
+      ],
+    ]);
+  });
+
+  it("rejects GitHub identity settings for an older Control UI", async () => {
+    const tool = createScreenTool();
+
+    await expect(tool.execute("call", { action: "github_identity_settings" })).rejects.toThrow(
+      "unavailable in this Control UI",
+    );
+  });
+
+  it.each(["terminal_show", "browser_show"])("passes dock for %s", async (action) => {
+    const { calls } = createGatewayRecorder();
+    const tool = createScreenTool();
+
+    await tool.execute("call", { action, dock: "right" });
+
+    expect(calls).toEqual([
+      [
+        "ui.command",
+        {
+          command: {
+            kind: "panel",
+            panel: action === "terminal_show" ? "terminal" : "browser",
+            open: true,
+            dock: "right",
+          },
+        },
+      ],
+    ]);
+  });
+
+  it.each(["terminal", "browser", "desktop", "portal"])(
+    "passes expand and restore for %s through the wire contract",
+    async (panel) => {
+      const { calls } = createGatewayRecorder();
+      const tool = createScreenTool({ agentSessionKey: "agent:main:current" });
+      for (const expanded of [true, false]) {
+        const args = { action: `${panel}_show`, expanded };
+        expect(Value.Check(tool.parameters, args)).toBe(true);
+        await tool.execute("presentation", args);
+        const payload = calls.at(-1)?.[1];
+        expect(Value.Check(UiCommandParamsSchema, payload)).toBe(true);
+        expect(payload).toMatchObject({
+          command: { kind: "panel", panel, open: true, expanded },
+          sessionKey: "agent:main:current",
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["desktop_show", "environmentId", "desktop"],
+    ["portal_show", "portalId", "portal"],
+    ["portal_show", "environmentId", "portal"],
+  ] as const)(
+    "opens %s with %s in the selected conversation's right sidebar",
+    async (action, targetKey, panel) => {
+      const { calls } = createGatewayRecorder();
+      const tool = createScreenTool({ agentSessionKey: "agent:main:current" });
+
+      await tool.execute("show", {
+        action,
+        [targetKey]: "attached-app",
+        sessionKey: "agent:main:preview",
+      });
+
+      expect(calls).toEqual([
+        [
+          "ui.command",
+          {
+            command: {
+              kind: "panel",
+              panel,
+              open: true,
+              dock: "right",
+              [targetKey]: "attached-app",
+            },
+            sessionKey: "agent:main:preview",
+          },
+        ],
+      ]);
+    },
+  );
+});

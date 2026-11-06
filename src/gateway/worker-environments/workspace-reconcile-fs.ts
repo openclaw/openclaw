@@ -1,0 +1,190 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { FsSafeError, type Root } from "../../infra/fs-safe.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
+import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
+import { computeWorkspaceFileSnapshot } from "./workspace-manifest-worker.js";
+import {
+  MAX_RECONCILIATION_FILE_BYTES,
+  type WorkerWorkspaceManifestEntry,
+} from "./workspace-manifest.js";
+import {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+} from "./workspace-path-exclusions.js";
+import { readWorkspaceResultGit } from "./workspace-result-git.js";
+
+export function localPath(root: string, relative: string): string {
+  return path.join(root, ...relative.split("/"));
+}
+
+export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: string): Promise<void> {
+  let children: string[];
+  try {
+    children = await root.list(entryPath);
+  } catch (error) {
+    if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+      return;
+    }
+    throw error;
+  }
+  if (children.length > 0) {
+    // Conflicted descendants deliberately keep their containing directory
+    // even when the cloud result removed that directory.
+    return;
+  }
+  try {
+    await root.remove(entryPath);
+  } catch (error) {
+    if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+      return;
+    }
+    const racedChildren = await root.list(entryPath).catch(() => undefined);
+    if (racedChildren?.length) {
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
+  const absolute = localPath(root, entryPath);
+  const stats = await lstatIfExists(absolute);
+  if (!stats) {
+    return undefined;
+  }
+  if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    return { path: entryPath, type: "directory" };
+  }
+  if (stats.isSymbolicLink()) {
+    return { path: entryPath, type: "symlink", mode: 0o777, target: await fs.readlink(absolute) };
+  }
+  if (!stats.isFile()) {
+    return { path: entryPath, type: "unsupported" };
+  }
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+    root,
+  );
+  return { path: entryPath, ...snapshot };
+}
+
+async function fileEntryMatches(
+  absolute: string,
+  entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
+): Promise<boolean> {
+  const snapshot = await computeWorkspaceFileSnapshot(
+    absolute,
+    MAX_RECONCILIATION_FILE_BYTES,
+  ).catch((error: unknown) => {
+    if (error instanceof WorkerTaskError) {
+      throw error;
+    }
+    return undefined;
+  });
+  return (
+    snapshot?.type === "file" &&
+    snapshot.mode === entry.mode &&
+    snapshot.size === entry.size &&
+    snapshot.sha256 === entry.sha256
+  );
+}
+
+export async function absoluteEntryMatches(
+  absolute: string,
+  entry: WorkerWorkspaceManifestEntry,
+): Promise<boolean> {
+  const stats = await fs.lstat(absolute).catch(() => undefined);
+  if (!stats) {
+    return false;
+  }
+  if (entry.type === "symlink") {
+    return stats.isSymbolicLink() && (await fs.readlink(absolute)) === entry.target;
+  }
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    return false;
+  }
+  return await fileEntryMatches(absolute, entry);
+}
+
+export async function readWorkspaceTreeFile(params: {
+  repositoryRoot: string;
+  tree: string;
+  entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>;
+}): Promise<Uint8Array> {
+  const record = await readWorkspaceResultGit(
+    params.repositoryRoot,
+    ["--literal-pathspecs", "ls-tree", "-z", "--full-tree", params.tree, "--", params.entry.path],
+    {
+      maxOutputBytes: 1024 * 1024,
+    },
+    "git ls-tree failed",
+  );
+  const terminator = record.indexOf(0);
+  const separator = record.indexOf(9);
+  if (terminator !== record.byteLength - 1 || separator < 0 || separator > terminator) {
+    throw new Error(`Cloud workspace recovery snapshot is missing: ${params.entry.path}`);
+  }
+  const metadata = record.subarray(0, separator).toString("utf8");
+  const match = /^100(?:644|755) blob ([a-f0-9]{40})$/u.exec(metadata);
+  const listedPath = record.subarray(separator + 1, terminator);
+  if (!match || !listedPath.equals(Buffer.from(params.entry.path))) {
+    throw new Error(`Cloud workspace recovery snapshot is invalid: ${params.entry.path}`);
+  }
+  const blob = await readWorkspaceResultGit(
+    params.repositoryRoot,
+    ["cat-file", "blob", match[1]!],
+    {
+      maxOutputBytes: MAX_RECONCILIATION_FILE_BYTES + 1,
+    },
+  );
+  if (
+    blob.byteLength !== params.entry.size ||
+    createHash("sha256").update(blob).digest("hex") !== params.entry.sha256
+  ) {
+    throw new Error(`Cloud workspace recovery snapshot is invalid: ${params.entry.path}`);
+  }
+  return blob;
+}
+
+export async function directoryContainsOnlyWorkspaceEntries(
+  root: string,
+  directory: string,
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
+  journal?: { paths: ReadonlySet<string>; directories: ReadonlySet<string> },
+  excludeBuildCaches = false,
+): Promise<boolean> {
+  let foundEntry = false;
+  for (const name of await fs.readdir(localPath(root, directory))) {
+    const child = `${directory}/${name}`;
+    if (isRuntimeOwnedWorkspacePath(child)) {
+      return false;
+    }
+    if (!isDerivedWorkspacePath(child, await isRetainedInput(child), excludeBuildCaches)) {
+      const stats = await fs.lstat(localPath(root, child));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        if (
+          !(await directoryContainsOnlyWorkspaceEntries(
+            root,
+            child,
+            isRetainedInput,
+            journal?.directories.has(child) ? journal : undefined,
+            excludeBuildCaches,
+          ))
+        ) {
+          return false;
+        }
+      } else if (!journal?.paths.has(child)) {
+        return false;
+      }
+    }
+    foundEntry = true;
+  }
+  // Journal-owned directories may be empty; an unlisted directory must contain
+  // derived content before it can be treated as disposable residue.
+  return journal !== undefined || foundEntry;
+}

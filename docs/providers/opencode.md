@@ -1,0 +1,233 @@
+---
+summary: "Use OpenCode Zen and Go catalogs with OpenClaw"
+read_when:
+  - You want OpenCode-hosted model access
+  - You want to pick between the Zen and Go catalogs
+title: "OpenCode"
+---
+
+OpenCode exposes two hosted catalogs in OpenClaw:
+
+| Catalog | Prefix            | Runtime provider |
+| ------- | ----------------- | ---------------- |
+| **Zen** | `opencode/...`    | `opencode`       |
+| **Go**  | `opencode-go/...` | `opencode-go`    |
+
+Both catalogs use the same OpenCode API key infrastructure (`OPENCODE_API_KEY`,
+alias `OPENCODE_ZEN_API_KEY`). Go still requires its own paid subscription;
+having a Zen key does not by itself grant Go access. OpenClaw keeps the runtime
+provider ids split so upstream per-model routing stays correct.
+
+OpenClaw sends a stable `x-opencode-session` conversation header on requests to
+`https://opencode.ai` across the Anthropic, Gemini, OpenAI Chat Completions, and
+OpenAI Responses transports. This header remains enabled when prompt caching is
+disabled. Low-level SDK stream callers should supply `sessionId` in their stream
+options.
+
+Zen and Go discovery requests and model requests on the OpenAI-compatible,
+Anthropic, and Gemini transports identify the client as `openclaw/<version>` on
+their native endpoints, including the current `/inference/...` routes returned
+by upstream discovery and the retained `/zen/...` aliases. Custom proxy URLs do
+not inherit this attribution. OpenClaw does not impersonate the OpenCode client.
+
+Standalone `openclaw infer model run --local` calls and the
+[prepared completion helper](/plugins/sdk-runtime/models#prepared-completion-sdk-compatibility)
+generate a fresh routing header per invocation when no explicit routing header
+or session identifier is supplied. This generated value stays in the header and
+does not create a conversation or enable session-based caching. Explicit model
+or caller routing headers are preserved regardless of header name casing.
+
+## Getting started
+
+<Tabs>
+  <Tab title="Zen catalog">
+    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini, GLM,
+    DeepSeek, Kimi, MiniMax, Qwen).
+
+    <Steps>
+      <Step title="Run onboarding">
+        ```bash
+        openclaw onboard --auth-choice opencode-zen
+        ```
+
+        Or pass the key directly:
+
+        ```bash
+        openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+        ```
+      </Step>
+      <Step title="Set a Zen model as the default">
+        ```bash
+        openclaw config set agents.defaults.model.primary "opencode/gpt-5.6-sol"
+        ```
+      </Step>
+      <Step title="Verify models are available">
+        ```bash
+        openclaw models list --provider opencode
+        ```
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="Go catalog">
+    **Best for:** the separately subscribed Go lineup across DeepSeek, GLM, GPT,
+    Grok, Hy3, Kimi, MiMo, MiniMax, and Qwen.
+
+    <Steps>
+      <Step title="Use the bundled Go catalog">
+        OpenCode Go is included with OpenClaw, so no separate
+        plugin installation or Gateway restart is required.
+      </Step>
+      <Step title="Run onboarding">
+        ```bash
+        openclaw onboard --auth-choice opencode-go
+        ```
+
+        Or pass the key directly:
+
+        ```bash
+        openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
+        ```
+      </Step>
+      <Step title="Set a Go model as the default">
+        ```bash
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k3"
+        ```
+      </Step>
+      <Step title="Verify models are available">
+        ```bash
+        openclaw models list --provider opencode-go
+        ```
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+## Config example
+
+```json5
+{
+  env: { vars: { OPENCODE_API_KEY: "sk-..." } },
+  agents: { defaults: { model: { primary: "opencode/gpt-5.6-sol" } } },
+}
+```
+
+## Provider catalogs
+
+### Zen
+
+| Property         | Value                                                                    |
+| ---------------- | ------------------------------------------------------------------------ |
+| Runtime provider | `opencode`                                                               |
+| Example models   | `opencode/gpt-5.6-sol`, `opencode/kimi-k3`, `opencode/deepseek-v4-flash` |
+
+Run `openclaw models list --provider opencode` for the current active list.
+Model availability and promotional routes can change independently of OpenClaw.
+
+Live discovery combines the models available to your OpenCode account with
+authoritative model metadata from `https://models.opencode.ai/api.json`.
+OpenClaw fetches and caches that catalog only when OpenCode Zen or Go is
+configured or explicitly selected with OpenCode credentials; startup and
+unrelated providers never download it. New listed chat models become available
+without an OpenClaw update. Models with trusted metadata keep their upstream
+transport and capabilities; listed IDs without metadata use Zen's native
+OpenAI-compatible route with default limits. A key-scoped response can omit
+models unavailable to that workspace. Metadata and lifecycle status refresh together;
+deprecated models are excluded from active discovery and its offline fallback.
+Deprecated explicit refs remain resolvable for existing configurations but are
+not shown as current recommendations.
+
+Account-list failures produce a failed catalog outcome, not a successful seed
+list. A successful empty or fully filtered account response stays empty.
+The separate public metadata feed can still use trusted offline metadata when
+it is unavailable; that does not replace or retry the account-list request.
+
+Some Zen free-tier models only accept requests from the OpenCode client. A
+`403 FreeTierError` means that the model's free tier is restricted, not that
+your saved key has expired. Choose another model or use a paid plan that allows
+API access. Signing in again or changing the User-Agent does not grant access.
+This refusal marks only the selected model unavailable; it does not put the
+credential into cooldown for other models.
+An ID in the account listing alone does not prove that it can run in OpenClaw.
+The listing has no free-tier flag, so OpenClaw does not guess access from model
+names. A `402` insufficient-funds response means that the account needs more
+credit, not that the model ID is unknown.
+
+Price estimates also refresh through the [hosted model catalog](/concepts/models#hosted-catalog-updates),
+using the same public OpenCode pricing feed as live discovery. Hosted updates
+activate after the next Gateway restart; the bundled snapshot remains available
+offline. Explicit model prices in your configuration or agent-local `models.json`
+keep precedence. These are advertised-price estimates, not verified invoice totals.
+
+#### Kimi K3 thinking
+
+For `opencode/kimi-k3`, choose **Off**, **Low**, **High**, or **Max**. Its provider
+default is **High**. **Off** explicitly
+sends `reasoning_effort: "none"`; omitting the effort does not disable reasoning
+on Zen. These choices apply to the Zen route, not other Kimi providers. The picker
+may also show [**Ultra**](/tools/thinking), a separate harness mode.
+
+### Go
+
+| Property         | Value                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                       |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` |
+
+See [OpenCode Go](/providers/opencode-go) for discovery, routing, and access
+requirements. Go's model-list endpoint advertises its general lineup; listing
+a model does not prove your account can run it.
+
+## Advanced configuration
+
+<AccordionGroup>
+  <Accordion title="API key aliases">
+    `OPENCODE_ZEN_API_KEY` is also accepted as an alias for `OPENCODE_API_KEY`.
+  </Accordion>
+
+  <Accordion title="Shared credentials">
+    Entering one OpenCode key during setup can store credentials for both
+    runtime providers. It does not create a Go subscription or grant Go
+    entitlement; subscribe to Go in the OpenCode console before using it.
+  </Accordion>
+
+  <Accordion title="Getting an API key">
+    Create an OpenCode account and generate an API key at
+    [opencode.ai/auth](https://opencode.ai/auth). Billing and catalog
+    availability are managed from the OpenCode dashboard.
+  </Accordion>
+
+  <Accordion title="Gemini replay behavior">
+    Gemini-backed OpenCode refs stay on the proxy-Gemini path, so OpenClaw keeps
+    Gemini thought-signature sanitation there without enabling native Gemini
+    replay validation or bootstrap rewrites.
+  </Accordion>
+
+  <Accordion title="Non-Gemini replay behavior">
+    Non-Gemini OpenCode refs keep the minimal OpenAI-compatible replay policy.
+  </Accordion>
+  <Accordion title="Pricing and privacy">
+    Billing, retention, and training policies are model-specific. Check the
+    current [OpenCode Zen pricing and policy](https://opencode.ai/docs/zen/)
+    before selecting a route. Free models may be temporary feedback programs.
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="OpenCode Go" href="/providers/opencode-go" icon="server">
+    Go catalog discovery and access requirements.
+  </Card>
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
+    Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
+    Full config reference for agents, models, and providers.
+  </Card>
+  <Card title="OpenCode plugin reference" href="/plugins/reference/opencode" icon="plug">
+    Native sessions, the session catalog toggle, and plugin config keys.
+  </Card>
+</CardGroup>

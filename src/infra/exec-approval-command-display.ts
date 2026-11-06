@@ -1,0 +1,24 @@
+import { sanitizeExecApprovalDisplayText } from "./exec-approval-text-sanitize.js";
+import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
+
+/** Resolves sanitized command and preview text for exec approval prompts. */
+export function resolveExecApprovalCommandDisplay(request: ExecApprovalRequestPayload): {
+  /** Primary command text rendered in the approval prompt. */
+  commandText: string;
+  /** Optional shorter preview, omitted when it would duplicate the primary command text. */
+  commandPreview: string | null;
+} {
+  const commandTextSource =
+    request.command ||
+    (request.host === "node" && request.systemRunPlan ? request.systemRunPlan.commandText : "");
+  const commandText = sanitizeExecApprovalDisplayText(commandTextSource);
+  const previewSource =
+    request.commandPreview ??
+    (request.host === "node" ? (request.systemRunPlan?.commandPreview ?? null) : null);
+  const previewRaw = previewSource?.trim() ?? "";
+  const preview = previewRaw ? sanitizeExecApprovalDisplayText(previewRaw) : null;
+  return {
+    commandText,
+    commandPreview: preview !== commandText ? preview : null,
+  };
+}

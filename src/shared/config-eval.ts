@@ -1,0 +1,209 @@
+import fs from "node:fs";
+import path from "node:path";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
+import { getOrCreatePromise } from "./lazy-promise.js";
+import { isOsRequirementSatisfied, type RequirementsMetadata } from "./requirements.js";
+
+/** Checks a config path with fallback defaults only when the path is unresolved. */
+export function isConfigPathTruthyWithDefaults(
+  config: unknown,
+  pathStr: string,
+  defaults: Record<string, boolean>,
+): boolean {
+  const parts = pathStr.split(".").filter(Boolean);
+  let value: unknown = config;
+  for (const part of parts) {
+    if (typeof value !== "object" || value === null || isBlockedObjectKey(part)) {
+      value = undefined;
+      break;
+    }
+    value = (value as Record<string, unknown>)[part];
+  }
+  if (
+    value === undefined &&
+    !parts.some((part) => isBlockedObjectKey(part)) &&
+    Object.hasOwn(defaults, pathStr)
+  ) {
+    return defaults[pathStr] ?? false;
+  }
+  return typeof value === "string"
+    ? value.trim().length > 0
+    : value !== undefined && value !== null && value !== false && value !== 0;
+}
+
+/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
+export function evaluateRuntimeEligibility(
+  params: RequirementsMetadata & {
+    platform?: string;
+    remotePlatforms?: string[];
+    always?: boolean;
+    hasBin: (bin: string) => boolean;
+    hasAnyRemoteBin?: (bins: string[]) => boolean;
+    hasRemoteBin?: (bin: string) => boolean;
+    hasEnv: (envName: string) => boolean;
+    isConfigPathTruthy: (pathStr: string) => boolean;
+  },
+): boolean {
+  if (
+    !isOsRequirementSatisfied(params.os ?? [], [
+      params.platform ?? process.platform,
+      ...(params.remotePlatforms ?? []),
+    ])
+  ) {
+    return false;
+  }
+  const requires = params.requires;
+  if (params.always === true || !requires) {
+    return true;
+  }
+  for (const envName of requires.env ?? []) {
+    if (!params.hasEnv(envName)) {
+      return false;
+    }
+  }
+  for (const configPath of requires.config ?? []) {
+    if (!params.isConfigPathTruthy(configPath)) {
+      return false;
+    }
+  }
+  for (const bin of requires.bins ?? []) {
+    if (!params.hasBin(bin) && !params.hasRemoteBin?.(bin)) {
+      return false;
+    }
+  }
+  const requiredAnyBins = requires.anyBins ?? [];
+  return (
+    requiredAnyBins.length === 0 ||
+    requiredAnyBins.some((bin) => params.hasBin(bin)) ||
+    Boolean(params.hasAnyRemoteBin?.(requiredAnyBins))
+  );
+}
+
+function windowsPathExtensions(raw: string | undefined): string[] {
+  const list =
+    raw !== undefined ? raw.split(";").map((v) => v.trim()) : [".EXE", ".CMD", ".BAT", ".COM"];
+  return ["", ...list.filter(Boolean)];
+}
+
+// Share pending I/O only so completed misses are checked again on the next preparation.
+const pendingBinaryAccess = new Map<string, Promise<boolean>>();
+
+// Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
+let binaryCache: { path: string; pathExt: string; cwd?: string; hits: Set<string> } | undefined;
+
+function resolveBinaryCache() {
+  const pathEnv = process.env.PATH ?? "";
+  const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
+  // Only relative PATH entries depend on cwd; absolute-only hits keep their cache.
+  const cwd = pathEnv.split(path.delimiter).some((part) => part && !path.isAbsolute(part))
+    ? tryProcessCwd()
+    : undefined;
+  if (binaryCache?.path !== pathEnv || binaryCache.pathExt !== pathExt || binaryCache.cwd !== cwd) {
+    binaryCache = { path: pathEnv, pathExt, cwd, hits: new Set() };
+  }
+  return binaryCache;
+}
+
+function resolveBinarySearch(cache = resolveBinaryCache()) {
+  const isWindows = process.platform === "win32";
+  return {
+    parts: cache.path.split(path.delimiter).filter(Boolean),
+    extensions: isWindows ? windowsPathExtensions(process.env.PATHEXT) : [""],
+  };
+}
+
+function* binaryCandidates(search: ReturnType<typeof resolveBinarySearch>, bin: string) {
+  for (const part of search.parts) {
+    for (const ext of search.extensions) {
+      yield path.join(part, bin + ext);
+    }
+  }
+}
+
+export function hasBinary(bin: string): boolean {
+  const cache = resolveBinaryCache();
+  if (cache.hits.has(bin)) {
+    return true;
+  }
+  const search = resolveBinarySearch(cache);
+  for (const candidate of binaryCandidates(search, bin)) {
+    try {
+      // Follow executable symlinks, but do not treat searchable directories as binaries.
+      if (!fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+        continue;
+      }
+      fs.accessSync(candidate, fs.constants.X_OK);
+      cache.hits.add(bin);
+      return true;
+    } catch {
+      // keep scanning
+    }
+  }
+  return false;
+}
+
+/** Binary facts belong to one preparation; probe installations and removals again next time. */
+export async function prepareBinaryAvailability(
+  bins: Iterable<string>,
+  assertCurrent?: () => void,
+): Promise<{ hasBinary: (bin: string) => boolean }> {
+  const search = resolveBinarySearch();
+  const cwd = process.cwd();
+  const pending = new Set(bins).values();
+  const available = new Set<string>();
+  let failure: { error: unknown } | undefined;
+  const probe = async (bin: string) => {
+    for (const candidate of binaryCandidates(search, bin)) {
+      if (failure) {
+        return;
+      }
+      assertCurrent?.();
+      try {
+        // access uses the filesystem's case, permission, and symlink semantics.
+        const resolvedCandidate = path.resolve(cwd, candidate);
+        const isFile = await getOrCreatePromise(
+          pendingBinaryAccess,
+          resolvedCandidate,
+          async () => {
+            await fs.promises.access(resolvedCandidate, fs.constants.X_OK);
+            return (await fs.promises.stat(resolvedCandidate)).isFile();
+          },
+          { evictOnSettled: true },
+        );
+        if (!isFile) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      assertCurrent?.();
+      available.add(bin);
+      return;
+    }
+  };
+  const worker = async () => {
+    try {
+      for (;;) {
+        if (failure) {
+          return;
+        }
+        assertCurrent?.();
+        const next = pending.next();
+        if (next.done) {
+          return;
+        }
+        await probe(next.value);
+      }
+    } catch (error) {
+      failure ??= { error };
+    }
+  };
+  // Leave filesystem work bounded even when many skills require different missing tools.
+  await Promise.all(Array.from({ length: 4 }, worker));
+  if (failure) {
+    throw failure.error;
+  }
+  assertCurrent?.();
+  return { hasBinary: (bin) => available.has(bin) };
+}

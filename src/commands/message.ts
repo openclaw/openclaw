@@ -1,0 +1,168 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
+import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
+import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
+import { withProgress } from "../cli/progress.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+import {
+  resolveMessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "../infra/outbound/message-account-selection.js";
+import {
+  resolveMessageActionMessageId,
+  resolveMessageActionOutcome,
+} from "../infra/outbound/message-action-contracts.js";
+import { runMessageAction } from "../infra/outbound/message-action-runner.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { prepareTemplateInstallSchemaVersions } from "../templates/provenance-runtime-read.js";
+import { collectTemplateToolPolicyCandidates } from "../templates/tool-policy-candidates.js";
+import { prepareCapturedTemplateToolPolicyConsent } from "../templates/tool-policy-runtime.js";
+
+export async function messageCommand(
+  opts: Record<string, unknown>,
+  deps: CliDeps,
+  runtime: RuntimeEnv,
+) {
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
+  const rawAction = normalizeOptionalString(opts.action) ?? "";
+  const actionInput = rawAction || "send";
+  const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
+  const scope = resolveMessageSecretScope({
+    channel: opts.channel,
+    target: opts.target,
+    targets: opts.targets,
+    accountId: opts.accountId,
+  });
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
+    cfg: loadedRaw,
+    channel: scope.channel,
+    accountId: opts.accountId,
+    checkResolvedAccount: false,
+  });
+  if (explicitAccountId) {
+    scope.accountId = explicitAccountId;
+    opts.accountId = explicitAccountId;
+  }
+  // The message CLI wrapper preloads configured channel plugins before this
+  // command runs, so the operation-local plan sees the canonical registry.
+  const broadcastAccountPlan =
+    normalizedActionInput === "broadcast" && !scope.channel && explicitAccountId
+      ? await resolveMessageBroadcastAccountPlan({
+          cfg: loadedRaw,
+          accountId: explicitAccountId,
+        })
+      : undefined;
+  const scopedTargets = getScopedChannelsCommandSecretTargets({
+    config: loadedRaw,
+    channel: scope.channel,
+    ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
+    accountId: scope.accountId,
+  });
+  const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: loadedRaw,
+    commandName: "message",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    runtime,
+    autoEnable: true,
+  });
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "message CLI",
+    hint: `Run ${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")} with a configured agent ID.`,
+  });
+  const action = CHANNEL_MESSAGE_ACTION_NAMES.find(
+    (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
+  );
+  if (!action) {
+    throw new Error(
+      `Unknown message action "${actionInput}". Use one of ${CHANNEL_MESSAGE_ACTION_NAMES.join(
+        ", ",
+      )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
+    );
+  }
+  // The CLI pins config synchronously; media policy resolution also needs the
+  // consent facts that Gateway startup normally prepares for this config.
+  if (collectTemplateToolPolicyCandidates(cfg).length > 0) {
+    (await prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false })).publish();
+    prepareCapturedTemplateToolPolicyConsent(cfg, {});
+  }
+  const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
+
+  // Keep the gateway client identity explicit so channel plugins can distinguish
+  // CLI-originated owner actions from background gateway work.
+  const run = async () =>
+    await runMessageAction({
+      cfg,
+      action,
+      params: opts,
+      deps: outboundDeps,
+      agentId,
+      senderIsOwner: opts.senderIsOwner !== false,
+      conversationReadOrigin: "direct-operator",
+      broadcastAccountPlan,
+      gateway: {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    });
+
+  const json = opts.json === true;
+  const dryRun = opts.dryRun === true;
+  const needsSpinner = !json && !dryRun && (action === "send" || action === "poll");
+
+  const result = needsSpinner
+    ? await withProgress(
+        {
+          label: action === "poll" ? "Sending poll..." : "Sending...",
+          indeterminate: true,
+          enabled: true,
+        },
+        run,
+      )
+    : await run();
+
+  if (json) {
+    const messageId = resolveMessageActionMessageId(result.payload);
+    const sendResult = result.kind === "send" ? result.sendResult : undefined;
+    const outcome = resolveMessageActionOutcome(result);
+    writeRuntimeJson(runtime, {
+      ...(result.kind === "broadcast"
+        ? { ok: outcome.ok }
+        : !outcome.ok
+          ? {
+              ...formatCliJsonFailure(outcome.error),
+              ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
+              ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
+            }
+          : {}),
+      action: result.action,
+      channel: result.channel,
+      dryRun: result.dryRun,
+      handledBy: result.handledBy,
+      ...(messageId ? { messageId } : {}),
+      payload: result.payload,
+    });
+    return result;
+  }
+
+  const { formatMessageCliText } = await import("./message-format.js");
+  const displayLimit = parseStrictPositiveInteger(opts.limit);
+  for (const line of formatMessageCliText(result, { displayLimit })) {
+    runtime.log(line);
+  }
+  return result;
+}

@@ -1,0 +1,132 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { isCodexNotificationForTurn } from "./app-server/notification-correlation.js";
+import {
+  isJsonObject,
+  type CodexServerNotification,
+  type JsonObject,
+} from "./app-server/protocol.js";
+
+/** Identifies a timer that expired in the bound-turn collector itself. */
+export class CodexConversationTurnTimeoutError extends Error {
+  constructor() {
+    super("codex app-server bound turn timed out");
+    this.name = "CodexConversationTurnTimeoutError";
+  }
+}
+
+export function createCodexConversationTurnCollector(threadId: string) {
+  let turnId: string | undefined;
+  let completed = false;
+  let failedError: string | undefined;
+  const assistantTextByItem = new Map<string, string>();
+  let completion: ReturnType<typeof createDeferred<{ replyText: string }>> | undefined;
+
+  const collectReplyText = (): string => {
+    const texts = [...assistantTextByItem.values()].map((text) => text.trim()).filter(Boolean);
+    return texts.at(-1) ?? "";
+  };
+  const completeItem = (item: JsonObject, itemId: string) => {
+    assistantTextByItem.delete(itemId);
+    const text =
+      item.phase === "commentary" || item.delivery === "async"
+        ? undefined
+        : readNonEmptyStringPreservingWhitespace(item.text);
+    if (text?.trim()) {
+      assistantTextByItem.set(itemId, text);
+    }
+  };
+  const finish = () => {
+    if (completed) {
+      return;
+    }
+    completed = true;
+    if (failedError) {
+      completion?.reject(new Error(failedError));
+    } else {
+      completion?.resolve({ replyText: collectReplyText() });
+    }
+  };
+
+  const handleNotification = (notification: CodexServerNotification) => {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    if (!params || !turnId || !isCodexNotificationForTurn(params, threadId, turnId)) {
+      return;
+    }
+    if (notification.method === "item/agentMessage/delta") {
+      const itemId = normalizeOptionalString(params.itemId) ?? "assistant";
+      const delta = readNonEmptyStringPreservingWhitespace(params.delta);
+      if (!delta) {
+        return;
+      }
+      assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
+      return;
+    }
+    if (notification.method === "item/completed") {
+      const item = isJsonObject(params.item) ? params.item : undefined;
+      if (item?.type === "agentMessage") {
+        const itemId =
+          normalizeOptionalString(item.id) ?? normalizeOptionalString(params.itemId) ?? "assistant";
+        completeItem(item, itemId);
+      }
+      return;
+    }
+    if (notification.method === "turn/completed") {
+      const turn = isJsonObject(params.turn) ? params.turn : undefined;
+      const status = normalizeOptionalString(turn?.status);
+      if (status === "failed") {
+        failedError =
+          normalizeOptionalString(readRecord(turn?.error)?.message) ??
+          "codex app-server turn failed";
+      } else if (status === "interrupted") {
+        // Codex reports an interrupted turn as a terminal completion without a
+        // final answer; streamed partial text must not become a successful reply.
+        failedError = "codex app-server turn interrupted";
+      } else if (status !== "completed") {
+        failedError = "codex app-server turn completed without a valid terminal status";
+      }
+      if (status === "completed") {
+        const items = Array.isArray(turn?.items) ? turn.items : [];
+        for (const item of items) {
+          if (!isJsonObject(item) || item.type !== "agentMessage") {
+            continue;
+          }
+          const itemId =
+            normalizeOptionalString(item.id) ?? `assistant-${assistantTextByItem.size + 1}`;
+          completeItem(item, itemId);
+        }
+      }
+      finish();
+    }
+  };
+
+  return {
+    setTurnId(nextTurnId: string) {
+      turnId = nextTurnId;
+    },
+    handleNotification,
+    wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
+      if (completed) {
+        return failedError
+          ? Promise.reject(new Error(failedError))
+          : Promise.resolve({ replyText: collectReplyText() });
+      }
+      completion ??= createDeferred<{ replyText: string }>();
+      return raceWithTimeout(
+        completion.promise,
+        resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
+        () => {
+          completed = true;
+          throw new CodexConversationTurnTimeoutError();
+        },
+        { ref: false },
+      );
+    },
+  };
+}

@@ -1,0 +1,50 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { isVitestRuntimeEnv } from "../../infra/env.js";
+
+const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 128;
+const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
+
+export type PreauthConnectionBudget = {
+  acquire(clientIp: string | undefined): boolean;
+  release(clientIp: string | undefined): void;
+};
+
+export function createPreauthConnectionBudget(): PreauthConnectionBudget {
+  const configured =
+    process.env.OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP ||
+    (isVitestRuntimeEnv() ? process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP : undefined);
+  const maxConnectionsPerIp =
+    parseStrictPositiveInteger(configured) ?? DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
+  const counts = new Map<string, number>();
+  const normalizeBudgetKey = (clientIp: string | undefined) => {
+    const ip = clientIp?.trim();
+    // Trusted-proxy mode can intentionally leave client IP unresolved when
+    // forwarded headers are missing or invalid; keep those upgrades capped
+    // under a shared fallback bucket instead of failing open.
+    return ip || UNKNOWN_CLIENT_IP_BUDGET_KEY;
+  };
+
+  return {
+    acquire(clientIp) {
+      const ip = normalizeBudgetKey(clientIp);
+      const next = (counts.get(ip) ?? 0) + 1;
+      if (next > maxConnectionsPerIp) {
+        return false;
+      }
+      counts.set(ip, next);
+      return true;
+    },
+    release(clientIp) {
+      const ip = normalizeBudgetKey(clientIp);
+      const current = counts.get(ip);
+      if (current === undefined) {
+        return;
+      }
+      if (current <= 1) {
+        counts.delete(ip);
+        return;
+      }
+      counts.set(ip, current - 1);
+    },
+  };
+}

@@ -1,0 +1,418 @@
+---
+summary: "Tlon/Urbit support status, capabilities, and configuration"
+read_when:
+  - Working on Tlon/Urbit channel features
+title: "Tlon"
+---
+
+Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and
+responds to DMs and group chat messages. Group replies require an @ mention by default, with
+authorization rules and an owner-approval flow layered on top.
+
+Status: bundled plugin. DMs, group mentions, threads, rich text, image upload/download, and an
+owner approval system are supported. Reactions and polls are not.
+
+## Bundled plugin
+
+Tlon ships bundled in current OpenClaw releases; packaged builds do not need a separate install.
+
+On an older build or custom install that excludes it, install from npm:
+
+```bash
+openclaw plugins install @openclaw/tlon
+```
+
+Use the bare package name to track the current release tag. Pin a version (`@openclaw/tlon@x.y.z`)
+only for reproducible installs.
+
+From a local checkout:
+
+```bash
+openclaw plugins install ./path/to/local/tlon-plugin
+```
+
+Details: [Plugins](/tools/plugin)
+
+## Setup
+
+```bash
+openclaw channels add --channel tlon --ship ~sampel-palnet --url https://your-ship-host --code lidlut-tabwed-pillex-ridrup
+```
+
+Or edit config directly:
+
+```json5
+{
+  channels: {
+    tlon: {
+      enabled: true,
+      ship: "~sampel-palnet",
+      url: "https://your-ship-host",
+      code: "lidlut-tabwed-pillex-ridrup",
+      ownerShip: "~your-main-ship", // recommended: your ship, always authorized
+    },
+  },
+}
+```
+
+The login code is your ship's web login code: run `+code` in the ship's dojo to print the current
+one. It rotates, so re-read it whenever authentication starts failing.
+
+Ship URLs support IPv6 literals in brackets, such as `http://[::1]:8080`.
+Loopback and private IPv6 addresses require the private-network opt-in below.
+
+Config changes follow [hot reload](/gateway/configuration/hot-reload). Check
+`openclaw channels status --probe`, starting the Gateway if it is offline. Then
+DM the bot or @ mention it in a group channel.
+
+## Inbound durability
+
+OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
+
+If the connection stops delivering data or heartbeats for about 60 seconds, OpenClaw reconnects to the same Eyre channel so unacknowledged events can replay. Time spent handling a received event does not count toward this idle timeout.
+
+Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore avoid duplicating those effects on retries where practical.
+
+## Private/LAN ships
+
+OpenClaw blocks private/internal hostnames and IP ranges for SSRF protection by default. If your
+ship runs on a private network (localhost, LAN IP, internal hostname), opt in explicitly:
+
+```json5
+{
+  channels: {
+    tlon: {
+      url: "http://localhost:8080",
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    },
+  },
+}
+```
+
+Applies to targets like `http://localhost:8080`, `http://192.168.x.x:8080`, and
+`http://my-ship.local:8080`. Only enable this for a ship URL you trust; it disables SSRF
+protection for that account's HTTP requests.
+
+<Note>
+`channels.tlon.allowPrivateNetwork` (flat key) is retired. `openclaw doctor --fix` moves it to
+`channels.tlon.network.dangerouslyAllowPrivateNetwork` automatically.
+</Note>
+
+## Group channels
+
+Pin channels manually, or turn on auto-discovery:
+
+```json5
+{
+  channels: {
+    tlon: {
+      groupChannels: ["chat/~host-ship/general", "chat/~host-ship/support"],
+      autoDiscoverChannels: true,
+    },
+  },
+}
+```
+
+`autoDiscoverChannels` defaults to `false` when unset in config; the setup wizard defaults the
+prompt to yes and writes `true` explicitly. With it on, OpenClaw scries joined groups on startup,
+watches new channels as group invites are accepted, and rechecks every 2 minutes.
+
+## Access control
+
+DM allowlist (empty = no DMs allowed unless the sender is `ownerShip`):
+
+```json5
+{
+  channels: {
+    tlon: {
+      dmAllowlist: ["~zod", "~nec"],
+    },
+  },
+}
+```
+
+Group authorization defaults to `restricted` per channel. Set `defaultAuthorizedShips` for a
+baseline, and override per channel nest:
+
+```json5
+{
+  channels: {
+    tlon: {
+      defaultAuthorizedShips: ["~zod"],
+      authorization: {
+        channelRules: {
+          "chat/~host-ship/general": {
+            mode: "restricted",
+            allowedShips: ["~zod", "~nec"],
+          },
+          "chat/~host-ship/announcements": {
+            mode: "open",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+With auto-discovery off, Tlon expands citations only from channels currently in `groupChannels`,
+including channels added through the settings store. Other citations stay as opaque references. With
+auto-discovery on, citations can expand from any channel the bot ship can read. This includes
+Notebook and Gallery channels in joined groups, even though Tlon listens and replies only in
+auto-discovered chat channels. In a 1:1 DM from `ownerShip`, citations can expand from any channel
+the bot ship can read regardless of the auto-discovery setting.
+
+Admitted senders can cite posts from channels they cannot read themselves, and the bot adds that
+content to the agent's context. To keep citations inside the conversation they came from, set
+`crossChannelCitations: false`. A citation then expands only when it points at the channel the
+message was posted in. Citations in other DMs and group DMs stay as opaque references, while the
+owner's 1:1 DMs keep the exemption above.
+
+```json5
+{
+  channels: {
+    tlon: {
+      crossChannelCitations: false,
+    },
+  },
+}
+```
+
+Once the bot has replied inside a thread, it keeps responding to later messages in that thread
+without requiring another mention.
+
+Automatic group responses stay at the channel top level for a top-level message,
+or reply to the existing root for a thread message. They do not nest a reply under
+another reply. Explicit reply directives and direct messages keep their own targets.
+
+Set `channels.tlon.implicitMentions.threadParticipation: false` to require a new explicit mention
+for those follow-ups. Account overrides use `channels.tlon.accounts.<id>.implicitMentions`. Tlon
+does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
+
+Set `channels.tlon.requireMentionInBotThreads: false` to accept unmentioned replies whenever
+this account's ship authored the thread root, including the first reply. Setting it to `true`
+requires a fresh mention in those threads even after the bot has participated. Omit it to keep
+the existing participation policy. The root author is read from the authenticated ship API;
+an unavailable or foreign root leaves the normal mention policy in place.
+
+Named accounts can override it with `accounts.<id>.requireMentionInBotThreads`. A per-channel
+`authorization.channelRules.<nest>.requireMentionInBotThreads` overrides the account default,
+including rules supplied through the Urbit settings store. For this option, a saved channel
+rule overrides the file value only when it sets a boolean value; older access-only rules
+inherit the file value. Sender authorization still applies, and this option does not change
+top-level channel posts or DMs.
+
+## Owner and approval system
+
+```json5
+{
+  channels: {
+    tlon: {
+      ownerShip: "~your-main-ship",
+    },
+  },
+}
+```
+
+The owner ship is authorized everywhere: DM invites are always auto-accepted, group invites are
+always auto-accepted, and channel messages always pass authorization. The owner does not need to
+be in `dmAllowlist`, `defaultAuthorizedShips`, or `groupInviteAllowlist`.
+
+Group DMs are the exception. Tlon does not verify who wrote a group DM message, so group DM
+messages never carry owner authority: owner commands, approval replies, and admin commands only
+work in a 1:1 DM with the bot. A group DM message whose claimed author is on `dmAllowlist` is still
+answered, but as an ordinary unverified sender.
+
+Pending DM requests saved by versions before this behavior cannot be told apart from group DM
+claims. Approving one still adds the ship to `dmAllowlist`, but its stored message is not
+replayed. The approval confirmation tells the owner the message was not processed and that the
+sender has to send it again.
+
+When `ownerShip` is set, unauthorized requests do not just get dropped — they queue a pending
+approval and DM the owner:
+
+- DM requests from ships not on `dmAllowlist`
+- Mentions in channels where the sender fails authorization
+- Group invites from ships not on `groupInviteAllowlist` (when auto-accept is off, or on but the
+  inviter is not allowlisted)
+
+The owner replies in DM to act on a request:
+
+| Owner reply                                 | Effect                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `approve` / `deny` / `block`                | Acts only when exactly one request is pending; otherwise lists IDs |
+| `approve <id>` / `deny <id>` / `block <id>` | Acts on a specific pending approval                                |
+| `unblock ~ship`                             | Reverses a native block                                            |
+| `blocked`                                   | Lists currently blocked ships                                      |
+| `pending`                                   | Lists pending approval requests                                    |
+
+Bare decisions keep the single-request workflow concise. When multiple requests are pending, the
+owner must include an ID so a newly queued request cannot change which request receives the action.
+
+Without `ownerShip` configured, unauthorized DMs and channel mentions are just dropped and logged;
+there is no approval prompt.
+
+The monitor admits up to 100 new pending approvals. Existing approvals from an older version are
+preserved so owner replies keep targeting the same request after an upgrade. When the queue is
+full, the monitor sends the owner one saturation notice and does not admit more unique requests
+until pending items are resolved. Failed notice delivery is retried up to three times per full-queue
+episode. Admitting a new request after capacity becomes available starts a new episode, so filling
+the queue again can send another notice in the same monitor run. Rejected requesters must retry
+after capacity is available; pending DM and group invite updates remain retryable rather than
+being acknowledged.
+
+Group invite updates apply to one group at a time. Revoked, removed, or completed invitations
+clear that group's duplicate suppression so a later invitation can be handled under the current
+auto-accept and allowlist settings.
+
+## Auto-accept settings
+
+Auto-accept DM invites from ships already on `dmAllowlist` (the owner is always auto-accepted
+regardless of this flag):
+
+```json5
+{
+  channels: {
+    tlon: {
+      autoAcceptDmInvites: true,
+    },
+  },
+}
+```
+
+Auto-accept group invites from an allowlist (with `autoAcceptGroupInvites: true` and
+an empty `groupInviteAllowlist`, no non-owner invite is accepted):
+
+```json5
+{
+  channels: {
+    tlon: {
+      autoAcceptGroupInvites: true,
+      groupInviteAllowlist: ["~zod"],
+    },
+  },
+}
+```
+
+## Hot-reload via Urbit settings store
+
+Most of the settings above (`dmAllowlist`, `groupInviteAllowlist`, `groupChannels`,
+`defaultAuthorizedShips`, `autoDiscoverChannels`, `autoAcceptDmInvites`,
+`autoAcceptGroupInvites`, `ownerShip`, `showModelSignature`) are mirrored into the ship's
+`%settings` agent (desk `moltbot`, bucket `tlon`) on first run and then read live from there,
+so changes made via a Landscape client or the bundled skill's settings commands apply without a
+gateway restart. `channelRules` and pending approvals are also persisted there as JSON. File
+config stays the source of truth for values never written to the settings store.
+
+## Delivery targets (CLI/cron)
+
+Use with `openclaw message send` or cron delivery:
+
+- DM: `~sampel-palnet` or `dm/~sampel-palnet`
+- Group: `chat/~host-ship/channel` or `group:~host-ship/channel`
+
+## Bundled skill
+
+The plugin bundles [`@tloncorp/tlon-skill`](https://github.com/tloncorp/tlon-skill), a CLI for
+direct Urbit operations, available automatically once the plugin is installed:
+
+- **Activity**: mentions, replies, unreads
+- **Channels**: list, create, rename
+- **Contacts**: list/get/update profiles
+- **Groups**: create, join, invite/request flows, roles
+- **Hooks**: manage channel hooks
+- **Messages**: history, search
+- **DMs**: send, react, accept/decline
+- **Posts**: react, delete
+- **Notebook**: post to diary channels
+- **Settings**: hot-reload plugin config via the settings store above
+
+## Capabilities
+
+`channels.tlon.mediaMaxMb` limits each inbound image download and outbound image
+load in MiB. Named accounts can override it with `accounts.<id>.mediaMaxMb`;
+otherwise the channel root and then `agents.defaults.mediaMaxMb` apply. The
+existing 6 MiB ceiling applies to image downloads and uploads. With a configured cap, a failed
+size check or download fails the send instead of embedding an unchecked URL.
+Upload failures after a successful bounded download can still use the original URL.
+Without a configured cap, the existing link fallback remains available even when
+the image cannot be downloaded within that ceiling.
+
+Outbound image uploads preserve the downloaded filename, including names supplied
+by `Content-Disposition`. If no filename is available, Tlon uses the source URL
+basename or a generated name. Custom-S3 public URLs encode object-key path segments
+so filename characters such as `#` and `?` remain part of the object name.
+
+| Feature         | Status                                        |
+| --------------- | --------------------------------------------- |
+| Direct messages | Supported                                     |
+| Groups/channels | Supported (mention-gated by default)          |
+| Threads         | Supported (keeps replying once it has joined) |
+| Rich text       | Markdown converted to Tlon's native format    |
+| Images          | Downloaded inbound, uploaded outbound         |
+| Reactions       | Only via the [bundled skill](#bundled-skill)  |
+| Polls           | Not supported                                 |
+| Native commands | Owner-only by default                         |
+
+## Troubleshooting
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+```
+
+Common failures:
+
+- **DMs ignored**: sender not in `dmAllowlist` and no `ownerShip` configured for the approval flow.
+- **Group messages ignored**: channel not discovered/pinned, or sender fails authorization with no
+  `ownerShip` to queue an approval.
+- **Connection errors**: check the ship URL is reachable; set
+  `network.dangerouslyAllowPrivateNetwork` for local ships.
+- **Auth errors**: login codes rotate — copy the current code from your ship.
+
+## Configuration reference
+
+Full configuration: [Configuration](/gateway/configuration)
+
+| Key                                                    | Meaning                                                                                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `channels.tlon.enabled`                                | Enable/disable channel startup.                                                                                              |
+| `channels.tlon.ship`                                   | Bot's Urbit ship name (e.g. `~sampel-palnet`).                                                                               |
+| `channels.tlon.url`                                    | Ship URL (e.g. `https://sampel-palnet.tlon.network`).                                                                        |
+| `channels.tlon.code`                                   | Ship login code.                                                                                                             |
+| `channels.tlon.network.dangerouslyAllowPrivateNetwork` | Allow localhost/LAN ship URLs (SSRF opt-in).                                                                                 |
+| `channels.tlon.ownerShip`                              | Owner ship: always authorized, receives approval requests.                                                                   |
+| `channels.tlon.dmAllowlist`                            | Ships allowed to DM (empty = none besides owner).                                                                            |
+| `channels.tlon.autoAcceptDmInvites`                    | Auto-accept DMs from ships in `dmAllowlist`.                                                                                 |
+| `channels.tlon.autoAcceptGroupInvites`                 | Auto-accept group invites from `groupInviteAllowlist`.                                                                       |
+| `channels.tlon.groupInviteAllowlist`                   | Ships whose group invites are auto-accepted.                                                                                 |
+| `channels.tlon.autoDiscoverChannels`                   | Auto-discover joined group channels (default: `false`).                                                                      |
+| `channels.tlon.implicitMentions.threadParticipation`   | Let participated-thread follow-ups bypass mention gating.                                                                    |
+| `channels.tlon.requireMentionInBotThreads`             | Override mention gating only in threads whose root this account's ship authored; omitted preserves existing behavior.        |
+| `channels.tlon.groupChannels`                          | Manually pinned channel nests.                                                                                               |
+| `channels.tlon.defaultAuthorizedShips`                 | Ships authorized for all channels (used when no rule matches).                                                               |
+| `channels.tlon.authorization.channelRules`             | Per-channel-nest auth mode, allowlist, and optional `requireMentionInBotThreads` override.                                   |
+| `channels.tlon.showModelSignature`                     | Append `_[Generated by <model>]_` to replies.                                                                                |
+| `channels.tlon.responsePrefix`                         | Automatic reply prefix: literal, `"auto"`, or a template such as `"[{model}]"`; account overrides win, and `""` disables it. |
+| `channels.tlon.accounts.<id>`                          | Additional named accounts (multi-ship setups).                                                                               |
+
+## Notes
+
+- Group replies need an @ mention (e.g. `~your-bot-ship`) unless thread participation or a bot-owned thread policy allows them.
+- Thread replies land in-thread; the bot also gets the last 10 messages of thread context prepended
+  for the agent.
+- Rich text (bold, italic, code, headers, lists) converts to Tlon's native format.
+- Sending an inbound message that asks for a channel summary (for example "summarize this
+  channel") triggers a built-in history summarization instead of the normal reply flow.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication for channels that declare it; Tlon is not one of them and uses the `dmAllowlist` plus `ownerShip` approval flow above instead
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

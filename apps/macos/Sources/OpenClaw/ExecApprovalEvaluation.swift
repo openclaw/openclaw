@@ -1,0 +1,306 @@
+import Foundation
+import OpenClawKit
+
+struct ExecApprovalEvaluation {
+    let displayCommand: String
+    let agentId: String?
+    let security: ExecSecurity
+    let ask: ExecAsk
+    let askFallback: ExecSecurity
+    let env: [String: String]
+    let resolution: ExecCommandResolution?
+    let allowlistResolutions: [ExecCommandResolution]
+    let boundCommand: [String]?
+    let allowAlwaysPatterns: [ExecAllowAlwaysPattern]
+    let allowlistMatches: [ExecAllowlistEntry]
+    let allowlistAuthorizationSatisfied: Bool
+    let allowlistMatch: ExecAllowlistEntry?
+    let skillTrust: SkillBinsCache.Snapshot?
+    let policySnapshot: ExecApprovalPolicySnapshot
+    var unavailableReason: String?
+
+    var skillAllow: Bool {
+        self.boundCommand != nil && ExecApprovalEvaluator.isSkillAutoAllowed(
+            self.allowlistResolutions,
+            trustedBinsByName: self.skillTrust?.trustByName ?? [:])
+    }
+
+    var canPersistAllowAlways: Bool {
+        self.security == .allowlist && self.boundCommand != nil && !self.allowAlwaysPatterns.isEmpty
+    }
+
+    var authorizationBasis: ExecApprovalAuthorization.Basis? {
+        if self.allowlistAuthorizationSatisfied {
+            return .allowlistEntries
+        }
+        if self.skillAllow, let skillTrust = self.skillTrust {
+            return .autoAllowedSkill(skillTrust)
+        }
+        return nil
+    }
+}
+
+enum ExecApprovalRequestSource: Sendable, Equatable {
+    case askFallback
+    case autoReview
+}
+
+struct ExecApprovalPolicySnapshot: Sendable, Equatable {
+    struct AllowlistRule: Sendable, Hashable {
+        let match: ExecAllowlistEntryMatchKey
+        let source: String?
+    }
+
+    let security: ExecSecurity
+    let ask: ExecAsk
+    let askFallback: ExecSecurity
+    let autoAllowSkills: Bool
+    let allowlistRules: Set<AllowlistRule>
+
+    init(
+        security: ExecSecurity,
+        ask: ExecAsk,
+        askFallback: ExecSecurity,
+        autoAllowSkills: Bool,
+        allowlist: [ExecAllowlistEntry])
+    {
+        self.security = security
+        self.ask = ask
+        self.askFallback = askFallback
+        self.autoAllowSkills = autoAllowSkills
+        self.allowlistRules = Set(allowlist.map { entry in
+            AllowlistRule(
+                match: ExecApprovalsStore.allowlistEntryMatchKey(entry),
+                source: entry.source == "allow-always" ? "allow-always" : nil)
+        })
+    }
+
+    init(resolved approvals: ExecApprovalsResolved) {
+        self.init(
+            security: approvals.agent.security,
+            ask: approvals.agent.ask,
+            askFallback: approvals.agent.askFallback,
+            autoAllowSkills: approvals.agent.autoAllowSkills,
+            allowlist: approvals.allowlist)
+    }
+
+    init(portable: OpenClawSystemRunApprovalPolicySnapshot) {
+        self.init(
+            security: portable.security,
+            ask: portable.ask,
+            askFallback: portable.askFallback,
+            autoAllowSkills: portable.autoAllowSkills,
+            allowlist: portable.allowlistRules.map { rule in
+                ExecAllowlistEntry(
+                    pattern: rule.pattern,
+                    source: rule.source?.rawValue,
+                    argPattern: rule.argPattern)
+            })
+    }
+}
+
+enum ExecApprovalAuthorization: Sendable {
+    enum Basis: Sendable {
+        case allowlistEntries
+        case autoAllowedSkill(SkillBinsCache.Snapshot)
+    }
+
+    case currentPolicy(evaluatedSecurity: ExecSecurity, evaluatedAsk: ExecAsk, basis: Basis?)
+    case askFallback(evaluatedSecurity: ExecSecurity, basis: Basis?)
+    case autoReview(
+        evaluatedSecurity: ExecSecurity,
+        policySnapshot: ExecApprovalPolicySnapshot)
+    case explicitOnce(
+        evaluatedSecurity: ExecSecurity,
+        policySnapshot: ExecApprovalPolicySnapshot)
+    case explicitAlways(
+        evaluatedSecurity: ExecSecurity,
+        policySnapshot: ExecApprovalPolicySnapshot,
+        grants: [ExecAllowlistUse])
+}
+
+struct ExecApprovalExecutionCommit: Sendable {
+    let agentId: String?
+    let command: String
+    let authorization: ExecApprovalAuthorization
+    let uses: [ExecAllowlistUse]
+
+    static func build(
+        context: ExecApprovalEvaluation,
+        effectiveSecurity: ExecSecurity,
+        approvalSource: ExecApprovalRequestSource?,
+        explicitlyApproved: Bool,
+        persistAllowlist: Bool,
+        delayedPolicySnapshot: ExecApprovalPolicySnapshot? = nil) -> ExecApprovalExecutionCommit
+    {
+        let basis = effectiveSecurity == .allowlist ? context.authorizationBasis : nil
+        let uses: [ExecAllowlistUse] = if case .allowlistEntries? = basis {
+            self.allowlistUses(context: context)
+        } else {
+            []
+        }
+        let grants = persistAllowlist ? self.allowAlwaysGrants(context: context) : []
+        // Forwarded decisions were evaluated before the Mac rebuilt its context.
+        // Local prompt decisions have no override and bind to this evaluation.
+        let policySnapshot = delayedPolicySnapshot ?? context.policySnapshot
+        let authorization: ExecApprovalAuthorization = if approvalSource == .askFallback {
+            .askFallback(evaluatedSecurity: effectiveSecurity, basis: basis)
+        } else if approvalSource == .autoReview {
+            .autoReview(
+                evaluatedSecurity: effectiveSecurity,
+                policySnapshot: policySnapshot)
+        } else if explicitlyApproved {
+            if grants.isEmpty {
+                .explicitOnce(
+                    evaluatedSecurity: effectiveSecurity,
+                    policySnapshot: policySnapshot)
+            } else {
+                .explicitAlways(
+                    evaluatedSecurity: effectiveSecurity,
+                    policySnapshot: policySnapshot,
+                    grants: grants)
+            }
+        } else {
+            .currentPolicy(
+                evaluatedSecurity: effectiveSecurity,
+                evaluatedAsk: context.ask,
+                basis: basis)
+        }
+        return ExecApprovalExecutionCommit(
+            agentId: context.agentId,
+            command: context.displayCommand,
+            authorization: authorization,
+            uses: uses)
+    }
+
+    private static func allowlistUses(context: ExecApprovalEvaluation) -> [ExecAllowlistUse] {
+        var seenEntries = Set<ExecAllowlistEntryMatchKey>()
+        var uses: [ExecAllowlistUse] = []
+        for (idx, match) in context.allowlistMatches.enumerated() {
+            if !seenEntries.insert(ExecApprovalsStore.allowlistEntryMatchKey(match)).inserted {
+                continue
+            }
+            let resolvedPath = idx < context.allowlistResolutions.count
+                ? context.allowlistResolutions[idx].resolvedRealPath ??
+                context.allowlistResolutions[idx].resolvedPath
+                : nil
+            uses.append(ExecAllowlistUse(match: match, resolvedPath: resolvedPath))
+        }
+        return uses
+    }
+
+    private static func allowAlwaysGrants(context: ExecApprovalEvaluation) -> [ExecAllowlistUse] {
+        guard context.canPersistAllowAlways else { return [] }
+        let resolvedPath = context.allowlistResolutions.first?.resolvedRealPath ??
+            context.allowlistResolutions.first?.resolvedPath
+        var seenPatterns = Set<ExecAllowAlwaysPattern>()
+        return context.allowAlwaysPatterns.compactMap { candidate in
+            guard seenPatterns.insert(candidate).inserted else { return nil }
+            return ExecAllowlistUse(
+                match: ExecAllowlistEntry(
+                    pattern: candidate.pattern,
+                    source: "allow-always",
+                    argPattern: candidate.argPattern),
+                resolvedPath: resolvedPath)
+        }
+    }
+}
+
+enum ExecApprovalEvaluator {
+    /// Discover once per app lifetime; relaunch after changing tool installation folders.
+    private static let searchPaths = Task { await CommandResolver.preferredPathsAsync() }
+
+    static func evaluate(
+        command: [String],
+        rawCommand: String?,
+        displayCommand: String? = nil,
+        cwd: String?,
+        envOverrides: [String: String]?,
+        agentId: String?,
+        skillBinsCache: SkillBinsCache = .shared) async -> ExecApprovalEvaluation
+    {
+        let searchPaths = await self.searchPaths.value
+        let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
+        let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
+        let approvals = await ExecApprovalsStore.resolve(agentId: normalizedAgentId)
+        let security = approvals.agent.security
+        let ask = approvals.agent.ask
+        let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
+        let env = HostEnvSanitizer.sanitize(
+            searchPaths: searchPaths,
+            overrides: envOverrides,
+            shellWrapper: shellWrapper)
+        let effectiveDisplayCommand = displayCommand ??
+            ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
+        let allowlistRawCommand = ExecSystemRunCommandValidator.allowlistEvaluationRawCommand(
+            command: command,
+            rawCommand: rawCommand)
+        let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: allowlistRawCommand,
+            cwd: effectiveCwd,
+            env: env)
+        let allowAlwaysPatterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: command,
+            cwd: effectiveCwd,
+            env: env,
+            rawCommand: allowlistRawCommand)
+        let boundCommand = ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: allowlistRawCommand,
+            resolutions: allowlistResolutions)
+        let allowlistMatches = ExecAllowlistMatcher.matchAll(
+            entries: approvals.allowlist,
+            resolutions: allowlistResolutions)
+        // Reusable trust must be executable as the same canonical path we
+        // matched. Unbindable shell plans are misses so on-miss can still ask.
+        let allowlistAuthorizationSatisfied =
+            boundCommand != nil &&
+            !allowlistResolutions.isEmpty &&
+            allowlistMatches.count == allowlistResolutions.count
+        let allowlistSatisfied = security == .allowlist && allowlistAuthorizationSatisfied
+
+        let skillTrust: SkillBinsCache.Snapshot? = if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
+            await skillBinsCache.current()
+        } else {
+            nil
+        }
+
+        return ExecApprovalEvaluation(
+            displayCommand: effectiveDisplayCommand,
+            agentId: normalizedAgentId,
+            security: security,
+            ask: ask,
+            askFallback: approvals.agent.askFallback,
+            env: env,
+            resolution: allowlistResolutions.first,
+            allowlistResolutions: allowlistResolutions,
+            boundCommand: boundCommand,
+            allowAlwaysPatterns: allowAlwaysPatterns,
+            allowlistMatches: allowlistMatches,
+            allowlistAuthorizationSatisfied: allowlistAuthorizationSatisfied,
+            allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
+            skillTrust: skillTrust,
+            policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals),
+            unavailableReason: approvals.unavailableReason)
+    }
+
+    static func isSkillAutoAllowed(
+        _ resolutions: [ExecCommandResolution],
+        trustedBinsByName: [String: Set<String>]) -> Bool
+    {
+        guard !resolutions.isEmpty, !trustedBinsByName.isEmpty else { return false }
+        return resolutions.allSatisfy { resolution in
+            guard !ExecApprovalHelpers.patternHasPathSelector(resolution.rawExecutable) else { return false }
+            guard !ExecCommandResolution.isUnsafeReusableExecutionTarget(resolution) else { return false }
+            guard let executableName = SkillBinsCache.normalizeSkillBinName(resolution.executableName),
+                  let resolvedPath = SkillBinsCache.normalizeResolvedPath(
+                      resolution.resolvedRealPath ?? resolution.resolvedPath)
+            else {
+                return false
+            }
+            return trustedBinsByName[executableName]?.contains(resolvedPath) == true
+        }
+    }
+}

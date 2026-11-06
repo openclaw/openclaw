@@ -1,0 +1,247 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
+import {
+  resolvePackageRuntimeProcessEntrypointUrl,
+  resolveRuntimeWorkerArgv,
+} from "openclaw/plugin-sdk/process-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { splitCommandParts } from "./command-line.js";
+import { AcpxPluginConfigSchema } from "./config-schema.js";
+import type {
+  AcpxPermissionMode,
+  AcpxNonInteractivePermissionPolicy,
+  McpServerConfig,
+  ResolvedAcpxPluginConfig,
+} from "./config-schema.js";
+export { type ResolvedAcpxPluginConfig } from "./config-schema.js";
+
+const MANAGED_MCP_BRIDGES = [
+  ["pluginToolsMcpBridge", "openclaw-plugin-tools", "pluginToolsServe"],
+  ["openClawToolsMcpBridge", "openclaw-tools", "openclawToolsServe"],
+] as const;
+
+function isAcpxPluginRoot(dir: string): boolean {
+  return (
+    fs.existsSync(path.join(dir, "openclaw.plugin.json")) &&
+    fs.existsSync(path.join(dir, "package.json"))
+  );
+}
+
+function resolveNearestAcpxPluginRoot(moduleUrl: string): string {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 3; i += 1) {
+    // Bundled entries live at the plugin root while source files still live under src/.
+    if (isAcpxPluginRoot(cursor)) {
+      return cursor;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..");
+}
+
+function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
+  if (
+    path.basename(currentRoot) !== "acpx" ||
+    path.basename(path.dirname(currentRoot)) !== "extensions" ||
+    path.basename(path.dirname(path.dirname(currentRoot))) !== "dist"
+  ) {
+    return null;
+  }
+  const workspaceRoot = path.resolve(currentRoot, "..", "..", "..", "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+function resolveRepoAcpxPluginRoot(currentRoot: string): string | null {
+  const workspaceRoot = path.join(currentRoot, "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+function resolveAcpxPluginRootFromOpenClawLayout(moduleUrl: string): string | null {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 5; i += 1) {
+    const candidates = [
+      path.join(cursor, "extensions", "acpx"),
+      path.join(cursor, "dist", "extensions", "acpx"),
+      path.join(cursor, "dist-runtime", "extensions", "acpx"),
+    ];
+    for (const candidate of candidates) {
+      if (isAcpxPluginRoot(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return null;
+}
+/** Resolve the ACPX plugin root across source, dist, and dist-runtime layouts. */
+export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
+  const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
+  // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
+  // Prefer the stable source plugin root when a built extension is running beside it.
+  return (
+    resolveWorkspaceAcpxPluginRoot(resolvedRoot) ??
+    resolveRepoAcpxPluginRoot(resolvedRoot) ??
+    // Shared dist/dist-runtime chunks can load this module outside the plugin tree.
+    // Scan common OpenClaw layouts before falling back to the nearest path guess.
+    resolveAcpxPluginRootFromOpenClawLayout(moduleUrl) ??
+    resolvedRoot
+  );
+}
+
+const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
+const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
+
+export function resolveOpenClawRoot(currentRoot: string): string {
+  if (
+    path.basename(currentRoot) === "acpx" &&
+    path.basename(path.dirname(currentRoot)) === "extensions"
+  ) {
+    const parent = path.dirname(path.dirname(currentRoot));
+    if (path.basename(parent) === "dist") {
+      return path.dirname(parent);
+    }
+    return parent;
+  }
+  // An externally installed acpx package sits outside the host tree, so locate the host from its launcher.
+  return resolveHostPackageRoot(process.argv[1]) ?? path.resolve(currentRoot, "..");
+}
+
+function resolveHostPackageRoot(argv1: string | undefined): string | null {
+  if (!argv1) {
+    return null;
+  }
+  let cursor: string;
+  try {
+    cursor = path.dirname(fs.realpathSync(argv1));
+  } catch {
+    return null;
+  }
+  for (;;) {
+    try {
+      const manifest: unknown = JSON.parse(
+        fs.readFileSync(path.join(cursor, "package.json"), "utf8"),
+      );
+      if (isRecord(manifest) && manifest.name === "openclaw") {
+        return cursor;
+      }
+    } catch {
+      // Directories without a readable package.json are not the host root.
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      return null;
+    }
+    cursor = parent;
+  }
+}
+
+function resolveManagedToolsMcpServerConfig(
+  entryPoint: "pluginToolsServe" | "openclawToolsServe",
+  moduleUrl: string = import.meta.url,
+): McpServerConfig {
+  const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
+  const openClawRoot = resolveOpenClawRoot(pluginRoot);
+  const entry = resolvePackageRuntimeProcessEntrypointUrl(entryPoint, openClawRoot);
+  return {
+    command: process.execPath,
+    args: resolveRuntimeWorkerArgv(entry),
+  };
+}
+
+function resolveConfiguredMcpServers(params: {
+  mcpServers?: Record<string, McpServerConfig>;
+  pluginToolsMcpBridge: boolean;
+  openClawToolsMcpBridge: boolean;
+  moduleUrl?: string;
+}): Record<string, McpServerConfig> {
+  const resolved = { ...params.mcpServers };
+  for (const [flag, name] of MANAGED_MCP_BRIDGES) {
+    if (params[flag] && resolved[name]) {
+      throw new Error(`mcpServers.${name} is reserved when ${flag}=true`);
+    }
+  }
+  for (const [flag, name, entryPoint] of MANAGED_MCP_BRIDGES) {
+    if (params[flag]) {
+      resolved[name] = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl);
+    }
+  }
+  return resolved;
+}
+
+export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>) {
+  return Object.entries(mcpServers).map(([name, server]) => ({
+    name,
+    command: server.command,
+    args: [...(server.args ?? [])],
+    env: Object.entries(server.env ?? {}).map(([envName, value]) => ({
+      name: envName,
+      value,
+    })),
+  }));
+}
+
+export function resolveAcpxPluginConfig(params: {
+  rawConfig: unknown;
+  workspaceDir?: string;
+  stateDir?: string;
+  moduleUrl?: string;
+}): ResolvedAcpxPluginConfig {
+  const { rawConfig } = params;
+  const parsed = AcpxPluginConfigSchema.safeParse(rawConfig === undefined ? {} : rawConfig);
+  if (!parsed.success) {
+    throw new Error(formatPluginConfigIssue(parsed.error.issues[0]));
+  }
+  const normalized = parsed.data;
+  const workspaceDir = params.workspaceDir?.trim() || process.cwd();
+  const cwd = path.resolve(normalized.cwd ?? workspaceDir);
+  const stateDir = path.resolve(
+    normalized.stateDir ?? path.join(params.stateDir ?? resolveStateDir(), "acpx"),
+  );
+  const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
+  const openClawToolsMcpBridge = normalized.openClawToolsMcpBridge === true;
+  const mcpServers = resolveConfiguredMcpServers({
+    mcpServers: normalized.mcpServers,
+    pluginToolsMcpBridge,
+    openClawToolsMcpBridge,
+    moduleUrl: params.moduleUrl,
+  });
+  const agents = Object.fromEntries(
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
+      const cmd = entry.command;
+      // Only explicit absolute paths bypass parsing; workspace files must not
+      // reinterpret a configured command prefix as a different executable.
+      const command = path.isAbsolute(cmd) && fs.existsSync(cmd) ? [cmd] : splitCommandParts(cmd);
+      return [normalizeLowercaseStringOrEmpty(name), [...command, ...(entry.args ?? [])]];
+    }),
+  );
+
+  return {
+    cwd,
+    stateDir,
+    probeAgent: normalized.probeAgent,
+    permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
+    nonInteractivePermissions:
+      normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
+    pluginToolsMcpBridge,
+    openClawToolsMcpBridge,
+    timeoutSeconds: normalized.timeoutSeconds,
+    agentProcessEnvAllow: normalized.agentProcessEnvAllow,
+    agentProcessEnvBlock: normalized.agentProcessEnvBlock,
+    mcpServers,
+    agents,
+  };
+}

@@ -1,0 +1,347 @@
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { RealtimeVoiceBridge } from "./provider-types.js";
+import { createRealtimeVoiceSessionHarness } from "./realtime-session-harness.js";
+import type { RealtimeVoiceBridgeSessionParams } from "./session-runtime.js";
+import {
+  makeBridge as makeRuntimeBridge,
+  makeVoiceProvider,
+} from "./session-runtime.test-support.js";
+
+afterEach(() => vi.useRealTimers());
+
+type HarnessOptions = Parameters<typeof createRealtimeVoiceSessionHarness>[0];
+const outputEvents = ["output.audio.started", "output.audio.delta", "output.audio.done"];
+
+function createHarness(
+  overrides: Partial<HarnessOptions> = {},
+  talk: Partial<HarnessOptions["talk"]> = {},
+) {
+  const harness = createRealtimeVoiceSessionHarness({
+    talk: {
+      sessionId: "test-session",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "test",
+      ...talk,
+    },
+    talkPayloads: {
+      turnStarted: () => ({ surface: "test" }),
+      turnEnded: (reason) => ({ reason }),
+      inputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+      outputAudioStarted: () => ({ surface: "test" }),
+      outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+      outputAudioDone: (reason) => ({ reason }),
+    },
+    ...overrides,
+  });
+  return Object.assign(harness, {
+    eventTypes: () => harness.talk.recentEvents.map((event) => event.type),
+    eventsOfType: (type: string) =>
+      harness.talk.recentEvents.filter((event) => event.type === type),
+  });
+}
+
+function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
+  return makeRuntimeBridge({ triggerGreeting: undefined, ...overrides });
+}
+
+function createBridgeFixture(
+  options: Partial<RealtimeVoiceBridgeSessionParams> = {},
+  bridgeFactory: RealtimeVoiceProviderPlugin["createBridge"] = () => makeBridge(),
+) {
+  const harness = createHarness();
+  let callbacks!: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
+  const session = harness.createBridge({
+    provider: makeVoiceProvider((request) => {
+      callbacks = request;
+      return bridgeFactory(request);
+    }),
+    providerConfig: {},
+    audioSink: { sendAudio: vi.fn() },
+    ...options,
+  });
+  onTestFinished(async () => {
+    try {
+      await session.close();
+    } finally {
+      harness.close();
+    }
+  });
+  return { harness, session, callbacks };
+}
+
+function createEventlessResponseFixture(options: { autoGreeting?: boolean } = {}) {
+  const onResponseDone = vi.fn();
+  const dispatch = vi.fn();
+  const fixture = createBridgeFixture(
+    {
+      triggerGreetingOnReady: options.autoGreeting,
+      initialGreetingInstructions: "Say hello",
+      onResponseDone,
+    },
+    (request) => {
+      dispatch.mockImplementation(() => request.onResponseDone?.({ status: "completed" }));
+      return makeBridge({ sendUserMessage: dispatch, triggerGreeting: dispatch });
+    },
+  );
+  return { ...fixture, dispatch, onResponseDone };
+}
+
+describe("realtime voice session harness", () => {
+  it("preserves provider-owned interruption selected by capabilities", () => {
+    const cancel = vi.fn();
+    const flush = vi.fn();
+    const sendAudio = vi.fn();
+    const { harness, session, callbacks } = createBridgeFixture(
+      {
+        capabilities: {
+          transports: ["gateway-relay"],
+          inputAudioFormats: [],
+          outputAudioFormats: [],
+          supportsBargeIn: false,
+        },
+        audioSink: { sendAudio, clearAudio: flush },
+      },
+      () => makeBridge({ handleBargeIn: cancel, outputAudioMode: "response" }),
+    );
+    callbacks.onAudio(Buffer.from([1, 2]));
+    harness.handleBargeIn({ audioPlaybackActive: true }, flush);
+    session.handleBargeIn({ audioPlaybackActive: true });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
+    callbacks.onClearAudio();
+    expect(flush).toHaveBeenCalledOnce();
+    callbacks.onAudio(Buffer.from([3, 4]));
+    expect(sendAudio.mock.calls.map(([audio]) => audio)).toEqual([
+      Buffer.from([1, 2]),
+      Buffer.from([3, 4]),
+    ]);
+  });
+  it("settles an eventless provider's zero-audio response to ready-greeting", () => {
+    const { harness, callbacks, dispatch, onResponseDone } = createEventlessResponseFixture({
+      autoGreeting: true,
+    });
+    callbacks.onReady?.();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({ status: "completed" });
+    expect(harness.talk.activeTurnId).toBeUndefined();
+    expect(harness.eventsOfType("turn.started")).toHaveLength(1);
+    expect(harness.eventsOfType("turn.ended")).toHaveLength(1);
+  });
+
+  it.each(["local-close", "provider-close"] as const)(
+    "does not admit or dispatch %s requests",
+    (reason) => {
+      const { harness, session, callbacks, dispatch, onResponseDone } =
+        createEventlessResponseFixture();
+      if (reason === "local-close") {
+        void session.close();
+      } else if (reason === "provider-close") {
+        callbacks.onClose?.("completed");
+      }
+      session.sendUserMessage("Late answer");
+      session.triggerGreeting("Late greeting");
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(onResponseDone).not.toHaveBeenCalled();
+      expect(harness.talk.activeTurnId).toBeUndefined();
+      expect(harness.eventsOfType("turn.started")).toEqual([]);
+    },
+  );
+
+  it("settles one output span and turn for incomplete responses", () => {
+    const harness = createHarness();
+    harness.recordOutputAudio(Buffer.from([1, 2]));
+    const outcome = { status: "incomplete", responseId: "resp-1", message: "incomplete" } as const;
+
+    expect(harness.finishResponse(outcome).ok).toBe(true);
+    expect(harness.finishResponse(outcome)).toEqual({ ok: false, reason: "no_active_turn" });
+    expect(harness.eventTypes()).toEqual([
+      "turn.started",
+      ...outputEvents,
+      "session.error",
+      "turn.ended",
+    ]);
+  });
+
+  it("uses a legacy terminal event only when no typed outcome settled that response", () => {
+    const onResponseDone = vi.fn();
+    const { harness, callbacks } = createBridgeFixture({ onResponseDone });
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-1" });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-1" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-1" });
+
+    expect(onResponseDone).toHaveBeenCalledOnce();
+    expect(harness.eventsOfType("turn.ended")).toHaveLength(1);
+
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-2" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.cancelled", responseId: "resp-2" });
+    expect(onResponseDone).toHaveBeenLastCalledWith({
+      status: "cancelled",
+      responseId: "resp-2",
+    });
+  });
+
+  it("bounds settled response suppression in FIFO order without refreshing duplicates", () => {
+    const harness = createHarness();
+    onTestFinished(() => harness.close());
+    for (let index = 0; index < 64; index += 1) {
+      harness.ensureTurn();
+      expect(harness.finishResponse({ status: "completed", responseId: `resp-${index}` }).ok).toBe(
+        true,
+      );
+    }
+
+    const turnId = harness.ensureTurn();
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-0" }).ok).toBe(false);
+    expect(harness.talk.activeTurnId).toBe(turnId);
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-64" }).ok).toBe(true);
+
+    const nextTurnId = harness.ensureTurn();
+    for (const responseId of ["resp-1", "resp-63", "resp-64"]) {
+      expect(harness.finishResponse({ status: "completed", responseId }).ok).toBe(false);
+      expect(harness.talk.activeTurnId).toBe(nextTurnId);
+    }
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-0" }).ok).toBe(true);
+    expect(harness.talk.activeTurnId).toBeUndefined();
+  });
+
+  it("does not let a delayed duplicate terminal event settle a newer turn", () => {
+    const { harness, callbacks } = createBridgeFixture();
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-old" });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-old" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-new" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-old" });
+
+    expect(harness.talk.activeTurnId).toBeDefined();
+    expect(harness.eventsOfType("turn.ended")).toHaveLength(1);
+  });
+
+  it("settles rejected manual speech before a response is created and fences its terminal twin", () => {
+    const onResponseDone = vi.fn(() => session.sendUserMessage("Next answer"));
+    const { harness, session, callbacks } = createBridgeFixture({ onResponseDone }, (request) =>
+      makeBridge({
+        sendUserMessage: () => request.onEvent?.({ direction: "client", type: "response.create" }),
+      }),
+    );
+
+    session.sendUserMessage("First answer");
+    expect(harness.talk.activeTurnId).toBeDefined();
+    const failure = { status: "failed", message: "Speech request rejected" } as const;
+    callbacks?.onResponseDone?.(failure);
+    expect(onResponseDone).toHaveBeenCalledExactlyOnceWith(failure);
+
+    const nextTurnId = harness.talk.activeTurnId;
+    expect(nextTurnId).toBeDefined();
+    callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+    expect(harness.talk.activeTurnId).toBe(nextTurnId);
+    expect(onResponseDone).toHaveBeenCalledOnce();
+
+    onResponseDone.mockImplementation(() => {});
+    callbacks?.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "resp-next",
+    });
+    callbacks?.onResponseDone?.({ status: "completed", responseId: "resp-next" });
+    callbacks?.onEvent?.({ direction: "server", type: "response.done", responseId: "resp-next" });
+    expect(onResponseDone).toHaveBeenCalledTimes(2);
+    expect(harness.talk.activeTurnId).toBeUndefined();
+  });
+
+  it("keeps shared Talk events ordered across input, output, and turn completion", () => {
+    const harness = createHarness();
+
+    expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
+    harness.recordOutputAudio(Buffer.from([3, 4, 5]));
+    harness.finishOutputAudio("response.done");
+    harness.endTurn("response.done");
+
+    expect(harness.eventTypes()).toEqual([
+      "turn.started",
+      "input.audio.delta",
+      ...outputEvents,
+      "turn.ended",
+    ]);
+    expect(harness.talk.recentEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("honors a caller-specific recent Talk event limit", () => {
+    const harness = createHarness({}, { sessionId: "limited-session", maxRecentEvents: 2 });
+
+    harness.emit({ type: "session.started", payload: {} });
+    harness.emit({ type: "session.ready", payload: {} });
+    harness.emit({ type: "session.closed", payload: {}, final: true });
+
+    expect(harness.eventTypes()).toEqual(["session.ready", "session.closed"]);
+  });
+
+  it("suppresses input through queued output playback plus the echo tail", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = createHarness({
+      echoSuppression: { bytesPerMs: 48, tailMs: 3_000, transcriptLookbackMs: 45_000 },
+    });
+
+    harness.recordOutputAudio(Buffer.alloc(48_000));
+    vi.setSystemTime(1_100);
+    harness.recordOutputAudio(Buffer.alloc(48_000));
+    vi.setSystemTime(5_999);
+    expect(harness.recordInputAudio(Buffer.from([1, 2, 3, 4]))).toBe(false);
+    vi.setSystemTime(6_000);
+    expect(harness.recordInputAudio(Buffer.from([5, 6, 7]))).toBe(true);
+
+    expect(harness.getHealth({ providerConnected: true, realtimeReady: true })).toMatchObject({
+      lastInputBytes: 3,
+      lastOutputBytes: 96_000,
+      suppressedInputBytes: 4,
+    });
+  });
+
+  it("delegates debounced talkback fragments through one consult", async () => {
+    vi.useFakeTimers();
+    const consult = vi.fn(async ({ question }: { question: string }) => ({
+      text: `answer:${question}`,
+    }));
+    const deliver = vi.fn();
+    const harness = createHarness({
+      talkback: {
+        debounceMs: 100,
+        logger: { info: vi.fn(), warn: vi.fn() },
+        logPrefix: "[test]",
+        responseStyle: "brief",
+        fallbackText: "fallback",
+        consult,
+        deliver,
+      },
+    });
+
+    harness.talkback?.enqueue("first");
+    harness.talkback?.enqueue("second");
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(consult).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledWith("answer:first\nsecond");
+  });
+
+  it("detects assistant transcript echo without enabling audio suppression", () => {
+    const harness = createHarness({ transcriptLookbackMs: 12_000 });
+
+    harness.recordTranscript("assistant", "I found the shopping list");
+
+    expect(harness.isLikelyAssistantEchoTranscript("found the shopping list")).toBe(true);
+    expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
+  });
+
+  it("flushes transport output when provider barge-in does not clear it", () => {
+    const handleBargeIn = vi.fn();
+    const { harness } = createBridgeFixture({}, () => makeBridge({ handleBargeIn }));
+    const flushOutput = vi.fn();
+
+    harness.handleBargeIn({ audioPlaybackActive: true }, flushOutput);
+
+    expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    expect(flushOutput).toHaveBeenCalledOnce();
+  });
+});

@@ -1,0 +1,600 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import type {
+  AudioTranscriptionResult,
+  MediaAttachment,
+  MediaUnderstandingCapability,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
+import {
+  estimateBase64Size,
+  resolveVideoMaxBase64Bytes,
+} from "../../packages/media-understanding-common/src/video.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
+import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
+import { applyTemplate } from "../auto-reply/templating.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type {
+  MediaUnderstandingConfig,
+  MediaUnderstandingModelConfig,
+} from "../config/types.tools.js";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { logWarn } from "../logger.js";
+import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
+import { runFfmpeg } from "../media/media-services.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalProviderCatalogEntries,
+} from "../plugins/official-external-plugin-catalog.js";
+import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
+import { runExec } from "../process/exec.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
+import { resolveCliOutput } from "./cli-output.js";
+import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
+import {
+  normalizeImageDescriptionInput,
+  optimizeImageDescriptionInput,
+} from "./image-input-normalize.js";
+import { describeImageWithModel } from "./image-runtime.js";
+import {
+  recordLocalAudioBackendObservation,
+  resolveRequestedLocalAudioBackend,
+} from "./local-audio.js";
+import {
+  assertMediaExecutionCurrent,
+  executeProviderRequest,
+  resolveProviderExecutionAuth,
+  resolveProviderRequestContext,
+  type MediaExecutionContext,
+} from "./provider-execution.js";
+import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
+import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
+import { isTranscriptArtifactText } from "./transcription-text.js";
+import type { AudioTranscriptionRequest } from "./types.js";
+
+function trimOutput(text: string, maxChars?: number): string {
+  const trimmed = text.trim();
+  if (!maxChars || trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return truncateUtf16Safe(trimmed, maxChars).trim();
+}
+
+type ProviderQuery = Record<string, string | number | boolean | string[]>;
+
+function resolveProviderQuery(
+  params: Pick<Parameters<typeof runProviderEntry>[0], "config" | "entry"> & {
+    providerId: string;
+  },
+): ProviderQuery | undefined {
+  const { providerId, config, entry } = params;
+  const query: ProviderQuery = {};
+  for (const [key, value] of Object.entries({
+    ...config?.providerOptions?.[providerId],
+    ...entry.providerOptions?.[providerId],
+  })) {
+    if (value !== undefined) {
+      // Preserve assignment semantics for prototype-named query keys.
+      query[key] = value;
+    }
+  }
+  if (providerId === "deepgram") {
+    for (const [input, output] of [
+      ["detectLanguage", "detect_language"],
+      ["smartFormat", "smart_format"],
+    ] as const) {
+      const value = query[input];
+      if (value !== undefined) {
+        query[output] = value;
+        delete query[input];
+      }
+    }
+  }
+  return Object.keys(query).length > 0 ? query : undefined;
+}
+
+/** Builds the normalized decision record for one provider or CLI model attempt. */
+export function buildModelDecision(params: {
+  entry: MediaUnderstandingModelConfig;
+  entryType: "provider" | "cli";
+  outcome: MediaUnderstandingModelDecision["outcome"];
+  reason?: string;
+}): MediaUnderstandingModelDecision {
+  if (params.entryType === "cli") {
+    const command = params.entry.command?.trim();
+    const requestedBackend = command
+      ? resolveRequestedLocalAudioBackend({
+          command,
+          args: params.entry.args ?? [],
+        })
+      : undefined;
+    return {
+      type: "cli",
+      provider: command ?? "cli",
+      model: params.entry.model ?? command,
+      ...(requestedBackend ? { requestedBackend } : {}),
+      outcome: params.outcome,
+      reason: params.reason,
+    };
+  }
+  const providerIdRaw = params.entry.provider?.trim();
+  const providerId = providerIdRaw ? normalizeMediaProviderId(providerIdRaw) : undefined;
+  return {
+    type: "provider",
+    provider: providerId ?? providerIdRaw,
+    model: params.entry.model,
+    outcome: params.outcome,
+    reason: params.reason,
+  };
+}
+
+export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language">;
+
+function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
+  if (params.size >= MIN_AUDIO_FILE_BYTES) {
+    return;
+  }
+  throw new MediaUnderstandingSkipError(
+    "tooSmall",
+    `Audio attachment ${params.attachmentIndex + 1} is too small (${params.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+  );
+}
+
+function formatMissingProviderHint(providerId: string): string {
+  const trimmed = providerId.trim();
+  if (!trimmed) {
+    return "";
+  }
+  // Channel-only and non-media providers must not receive media-plugin install hints.
+  const providerEntry = listOfficialExternalProviderCatalogEntries().find((entry) => {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const mediaProviders = manifest?.contracts?.mediaUnderstandingProviders ?? [];
+    return mediaProviders.some((mediaId) => mediaId === trimmed);
+  });
+  if (!providerEntry) {
+    return "";
+  }
+  const catalogHint = resolveOfficialExternalPluginRepairHint(trimmed);
+  if (!catalogHint) {
+    return "";
+  }
+  return ` Install the official external plugin with: ${formatCliCommand(catalogHint.installCommand)}, then run ${formatCliCommand("openclaw plugins registry --refresh")} and stop and start the gateway service, or run ${formatCliCommand(catalogHint.doctorFixCommand)} to repair automatically.`;
+}
+
+export async function runProviderEntry(params: {
+  capability: MediaUnderstandingCapability;
+  entry: MediaUnderstandingModelConfig;
+  cfg: OpenClawConfig;
+  attachmentIndex: number;
+  cache: MediaAttachmentCache;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  providerRegistry: Map<string, MediaUnderstandingProvider>;
+  assertCurrent?: () => void;
+  config?: MediaUnderstandingConfig;
+  secretOwnerId?: string;
+  request?: MediaRequestOverrides;
+  execution?: MediaExecutionContext;
+}): Promise<Result<MediaUnderstandingOutput | null, unknown>> {
+  assertMediaExecutionCurrent(params.execution);
+  const { entry, capability, cfg } = params;
+  const providerIdRaw = entry.provider?.trim();
+  if (!providerIdRaw) {
+    throw new Error(`Provider entry missing provider for ${capability}`);
+  }
+  const providerId = normalizeMediaProviderId(providerIdRaw);
+  const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
+  assertRuntimeMediaRequestSecretOwnerAvailable({ capability, entry });
+  if (params.secretOwnerId) {
+    assertSecretOwnerAvailable("capability", params.secretOwnerId);
+  }
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } =
+    resolveEntryRunOptions(params);
+
+  if (capability === "image") {
+    if (!params.agentDir) {
+      throw new Error("Image understanding requires agentDir");
+    }
+    const modelId = entry.model?.trim();
+    if (!modelId) {
+      throw new Error("Image understanding requires model id");
+    }
+    const media = await params.cache.getBuffer({
+      attachmentIndex: params.attachmentIndex,
+      maxBytes,
+      timeoutMs,
+    });
+    const normalizedMedia = await normalizeImageDescriptionInput({
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      maxBytes,
+    });
+    let optimizedMedia: Awaited<ReturnType<typeof optimizeImageDescriptionInput>>;
+    try {
+      optimizedMedia = await optimizeImageDescriptionInput({
+        ...normalizedMedia,
+        fileName: media.fileName,
+        maxBytes,
+        modelPolicy: await resolveImageCompressionModelPolicy({
+          cfg,
+          provider: requestProviderId,
+          model: modelId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+        }),
+      });
+    } catch (error) {
+      if (error instanceof ImageOptimizationLimitError) {
+        throw new MediaUnderstandingSkipError(
+          "maxBytes",
+          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${error.maxBytes}`,
+        );
+      }
+      throw error;
+    }
+    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
+    const imageInput = {
+      buffer: optimizedMedia.buffer,
+      fileName: optimizedMedia.fileName ?? media.fileName,
+      mime: optimizedMedia.mime,
+      model: modelId,
+      provider: requestProviderId,
+      prompt: params.request?.prompt ?? prompt,
+      timeoutMs,
+      signal: params.execution?.signal,
+      profile: entry.profile,
+      preferredProfile: entry.preferredProfile,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+    };
+    const describeImage = provider?.describeImage ?? describeImageWithModel;
+    const result = await withGuardedFetchRequestAuthority(
+      params.execution ? () => assertMediaExecutionCurrent(params.execution) : undefined,
+      () => describeImage(imageInput),
+    );
+    return ok({
+      kind: "image.description",
+      attachmentIndex: params.attachmentIndex,
+      text: trimOutput(result.text, maxChars),
+      provider: requestProviderId,
+      model: result.model ?? modelId,
+    });
+  }
+
+  const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+  if (!provider) {
+    throw new Error(
+      `Media provider not available: ${providerId}${formatMissingProviderHint(providerId)}`,
+    );
+  }
+
+  // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
+  // so provider HTTP calls are routed through the proxy when configured.
+  const fetchFn = resolveProxyFetchFromEnv();
+
+  if (capability === "audio") {
+    if (!provider.transcribeAudio && !provider.transcribeAudioWithContext) {
+      throw new Error(`Audio transcription provider "${providerId}" not available.`);
+    }
+    const media = await params.cache.getBuffer({
+      attachmentIndex: params.attachmentIndex,
+      maxBytes,
+      timeoutMs,
+    });
+    assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+    const audioLanguage = params.request?.language ?? entry.language ?? params.config?.language;
+    // STT prompts are spelling/context hints; injected instructions can be echoed on silence.
+    const audioPrompt = params.request?.prompt ?? (hasConfiguredPrompt ? prompt : undefined);
+    const transport = resolveProviderRequestContext({
+      ...params,
+      providerId,
+    });
+    const providerQuery = resolveProviderQuery({
+      ...params,
+      providerId,
+    });
+    const model =
+      entry.model?.trim() ||
+      (await import("./defaults.js")).resolveDefaultMediaModel({
+        cfg,
+        providerId,
+        capability: "audio",
+        workspaceDir: params.workspaceDir,
+      }) ||
+      entry.model;
+    const input = {
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      ...transport,
+      model,
+      language: audioLanguage,
+      prompt: audioPrompt,
+      query: providerQuery,
+      timeoutMs,
+      fetchFn,
+      signal: params.execution?.signal,
+    };
+    let result: AudioTranscriptionResult;
+    if (provider.transcribeAudioWithContext) {
+      const attempt = await withGuardedFetchRequestAuthority(
+        () => {
+          params.assertCurrent?.();
+          assertMediaExecutionCurrent(params.execution);
+        },
+        () =>
+          provider.transcribeAudioWithContext!({
+            ...input,
+            cfg,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            profile: entry.profile,
+            preferredProfile: entry.preferredProfile,
+          }),
+      );
+      if (!attempt.ok) {
+        return attempt;
+      }
+      result = attempt.value;
+    } else {
+      const transcribeAudio = expectDefined(
+        provider.transcribeAudio,
+        "audio transcription callback",
+      );
+      const auth = await resolveProviderExecutionAuth({
+        ...params,
+        providerId,
+        provider,
+      });
+      result = await withGuardedFetchRequestAuthority(
+        () => {
+          params.assertCurrent?.();
+          assertMediaExecutionCurrent(params.execution);
+        },
+        () =>
+          executeProviderRequest(
+            providerId,
+            auth,
+            (requestAuth) => transcribeAudio({ ...input, ...requestAuth }),
+            params.execution,
+          ),
+      );
+    }
+    if (isTranscriptArtifactText(result.text)) {
+      return ok(null);
+    }
+    return ok({
+      kind: "audio.transcription",
+      attachmentIndex: params.attachmentIndex,
+      text: trimOutput(result.text, maxChars),
+      provider: providerId,
+      model: result.model ?? model,
+    });
+  }
+
+  if (!provider.describeVideo) {
+    throw new Error(`Video understanding provider "${providerId}" not available.`);
+  }
+  const describeVideo = provider.describeVideo;
+  const media = await params.cache.getBuffer({
+    attachmentIndex: params.attachmentIndex,
+    maxBytes,
+    timeoutMs,
+  });
+  const estimatedBase64Bytes = estimateBase64Size(media.size);
+  const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
+  if (estimatedBase64Bytes > maxBase64Bytes) {
+    throw new MediaUnderstandingSkipError(
+      "maxBytes",
+      `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
+    );
+  }
+  const auth = await resolveProviderExecutionAuth({
+    ...params,
+    providerId,
+    provider,
+  });
+  const { baseUrl, headers, request } = resolveProviderRequestContext({
+    ...params,
+    providerId,
+  });
+  const model =
+    entry.model?.trim() ||
+    (await import("./defaults.js")).resolveDefaultMediaModel({
+      cfg,
+      providerId,
+      capability: "video",
+      workspaceDir: params.workspaceDir,
+      providerRegistry: params.providerRegistry,
+    }) ||
+    entry.model;
+  const result = await executeProviderRequest(
+    providerId,
+    auth,
+    (requestAuth) =>
+      describeVideo({
+        buffer: media.buffer,
+        fileName: media.fileName,
+        mime: media.mime,
+        ...requestAuth,
+        baseUrl,
+        headers,
+        request,
+        model,
+        prompt,
+        timeoutMs,
+        fetchFn,
+        signal: params.execution?.signal,
+      }),
+    params.execution,
+  );
+  return ok({
+    kind: "video.description",
+    attachmentIndex: params.attachmentIndex,
+    text: trimOutput(result.text, maxChars),
+    provider: providerId,
+    model: result.model ?? model,
+  });
+}
+
+export async function runCliEntry(
+  params: Pick<
+    Parameters<typeof runProviderEntry>[0],
+    "capability" | "entry" | "cfg" | "cache" | "config" | "request" | "assertCurrent" | "execution"
+  > & { ctx: MsgContext; attachment: MediaAttachment },
+): Promise<MediaUnderstandingOutput | null> {
+  assertMediaExecutionCurrent(params.execution);
+  const { entry, capability, ctx } = params;
+  const attachmentIndex = params.attachment.index;
+  const cli = resolveCliModelEntry(entry);
+  if (!cli.ok) {
+    throw cli.error;
+  }
+  const { command, args } = cli.value;
+  const language = params.request?.language ?? entry.language ?? params.config?.language;
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions(params);
+  const attachmentPath = await params.cache.getPath({
+    attachmentIndex,
+    maxBytes,
+    timeoutMs,
+  });
+  if (capability === "audio") {
+    const stat = await fs.stat(attachmentPath);
+    assertMinAudioSize({ size: stat.size, attachmentIndex });
+  }
+  params.assertCurrent?.();
+  const outputDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
+  );
+  try {
+    let mediaPath = attachmentPath;
+    if (
+      capability === "audio" &&
+      path.parse(command).name === "whisper-cli" &&
+      normalizeLowercaseStringOrEmpty(path.extname(attachmentPath)) !== ".wav"
+    ) {
+      const wavPath = path.join(outputDir, `${path.parse(attachmentPath).name}.wav`);
+      await writeExternalFileWithinRoot({
+        rootDir: outputDir,
+        path: path.basename(wavPath),
+        write: async (outputPath) => {
+          params.assertCurrent?.();
+          assertMediaExecutionCurrent(params.execution);
+          await runFfmpeg([
+            "-y",
+            "-i",
+            attachmentPath,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            outputPath,
+          ]);
+        },
+      });
+      mediaPath = wavPath;
+    }
+    const outputBase = path.join(outputDir, path.parse(mediaPath).name);
+
+    const templCtx: TemplateContext & Record<string, unknown> = {
+      ...ctx,
+      AttachmentPath: mediaPath,
+      AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+      AttachmentContentType: params.attachment.mime,
+      AttachmentDir: path.dirname(mediaPath),
+      AttachmentIndex: params.attachment.index,
+      MediaPath: mediaPath,
+      MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+      MediaType: params.attachment.mime,
+      MediaDir: path.dirname(mediaPath),
+      OutputDir: outputDir,
+      OutputBase: outputBase,
+      Prompt: params.request?.prompt ?? prompt,
+      ...(capability === "audio" && language ? { Language: language } : {}),
+      MaxChars: maxChars,
+    };
+    for (const key of [
+      "MediaPaths",
+      "MediaUrls",
+      "MediaTypes",
+      "MediaWorkspaceDir",
+      "MediaTranscribedIndexes",
+      "MediaStaged",
+    ]) {
+      delete templCtx[key];
+    }
+    const argv = args.map((part) => applyTemplate(part, templCtx));
+    params.assertCurrent?.();
+    assertMediaExecutionCurrent(params.execution);
+    const { stdout, stderr } = await runExec(command, argv, {
+      timeoutMs,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      signal: params.execution?.signal,
+      cwd: ["agy", "antigravity"].includes(path.parse(command).name)
+        ? path.dirname(mediaPath)
+        : undefined,
+    });
+    const requestedBackend =
+      capability === "audio"
+        ? resolveRequestedLocalAudioBackend({
+            command,
+            args: argv,
+          })
+        : undefined;
+    const observedBackend =
+      capability === "audio"
+        ? recordLocalAudioBackendObservation({
+            command,
+            args: argv,
+            output: `${stderr ?? ""}\n${stdout}`,
+          })
+        : undefined;
+    const resolved = await resolveCliOutput({
+      command,
+      args: argv,
+      stdout,
+      mediaPath,
+    });
+    const text = trimOutput(resolved, maxChars);
+    if (!text || (capability === "audio" && isTranscriptArtifactText(resolved))) {
+      return null;
+    }
+    return {
+      kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
+      attachmentIndex,
+      text,
+      provider: capability === "audio" ? path.parse(command).name : "cli",
+      model: command,
+      ...(requestedBackend ? { requestedBackend } : {}),
+      ...(observedBackend ? { observedBackend } : {}),
+    };
+  } finally {
+    await fs.rm(outputDir, { recursive: true, force: true }).catch((error: unknown) => {
+      logWarn(
+        `media-understanding: failed to remove CLI temporary directory ${outputDir}: ${String(error)}; remove it manually.`,
+      );
+    });
+  }
+}

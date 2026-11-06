@@ -1,0 +1,358 @@
+// Matrix tests cover startup verification plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
+import { ensureMatrixStartupVerification } from "./startup-verification.js";
+
+function createTempStateDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "matrix-startup-verify-"));
+}
+
+function createStateFilePath(rootDir: string): string {
+  return path.join(rootDir, "startup-verification.json");
+}
+
+async function readPersistedStartupState(rootDir: string) {
+  const store = createPluginStateKeyedStoreForTests<{
+    attemptedAt?: string;
+    outcome?: string;
+  }>("matrix", {
+    namespace: "startup-verification",
+    maxEntries: 1_000,
+    env: { ...process.env, OPENCLAW_STATE_DIR: rootDir },
+  });
+  return await store.lookup("default");
+}
+
+function createAuth(accountId = "default") {
+  return {
+    accountId,
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    accessToken: "token",
+    encryption: true,
+  };
+}
+
+type VerificationSummaryLike = {
+  id: string;
+  transactionId?: string;
+  isSelfVerification: boolean;
+  completed: boolean;
+  pending: boolean;
+};
+
+function createHarness(params?: {
+  verified?: boolean;
+  localVerified?: boolean;
+  crossSigningVerified?: boolean;
+  signedByOwner?: boolean;
+  requestVerification?: () => Promise<{ id: string; transactionId?: string }>;
+  listVerifications?: () => Promise<VerificationSummaryLike[]>;
+}) {
+  const requestVerification =
+    params?.requestVerification ??
+    (async () => ({
+      id: "verification-1",
+      transactionId: "txn-1",
+    }));
+  const listVerifications = params?.listVerifications ?? (async () => []);
+  const getOwnDeviceVerificationStatus = vi.fn(async () => ({
+    encryptionEnabled: true,
+    userId: "@bot:example.org",
+    deviceId: "DEVICE123",
+    verified: params?.verified === true,
+    localVerified: params?.localVerified ?? params?.verified === true,
+    crossSigningVerified: params?.crossSigningVerified ?? params?.verified === true,
+    signedByOwner: params?.signedByOwner ?? params?.verified === true,
+    recoveryKeyStored: false,
+    recoveryKeyCreatedAt: null,
+    recoveryKeyId: null,
+    backupVersion: null,
+    backup: {
+      serverVersion: null,
+      activeVersion: null,
+      trusted: null,
+      matchesDecryptionKey: null,
+      decryptionKeyCached: null,
+      keyLoadAttempted: false,
+      keyLoadError: null,
+    },
+  }));
+  return {
+    client: {
+      getOwnDeviceVerificationStatus,
+      crypto: {
+        listVerifications: vi.fn(listVerifications),
+        requestVerification: vi.fn(requestVerification),
+      },
+    },
+    getOwnDeviceVerificationStatus,
+  };
+}
+
+function verificationParams(client: ReturnType<typeof createHarness>["client"], rootDir: string) {
+  return {
+    client: client as never,
+    auth: createAuth(),
+    accountConfig: {},
+    stateFilePath: createStateFilePath(rootDir),
+  };
+}
+
+describe("ensureMatrixStartupVerification", () => {
+  beforeEach(() => {
+    setMatrixRuntime({
+      state: {
+        openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests("matrix", options),
+      },
+    } as unknown as PluginRuntime);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
+  });
+
+  it("skips automatic requests when the device is already verified", async () => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness({ verified: true });
+
+    const result = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+    });
+
+    expect(result.kind).toBe("verified");
+    expect(harness.client.crypto.requestVerification).not.toHaveBeenCalled();
+  });
+
+  it("still requests startup verification when trust is only local", async () => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness({
+      verified: false,
+      localVerified: true,
+      crossSigningVerified: false,
+      signedByOwner: false,
+    });
+
+    const result = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+    });
+
+    expect(result.kind).toBe("requested");
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledWith({ ownUser: true });
+  });
+
+  it("skips automatic requests when a self verification is already pending", async () => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness({
+      listVerifications: async () => [
+        {
+          id: "verification-1",
+          transactionId: "txn-1",
+          isSelfVerification: true,
+          completed: false,
+          pending: true,
+        },
+      ],
+    });
+
+    const result = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+    });
+
+    expect(result.kind).toBe("pending");
+    expect(harness.client.crypto.requestVerification).not.toHaveBeenCalled();
+  });
+
+  it("respects the startup verification cooldown", async () => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness();
+    const initialNowMs = Date.parse("2026-03-08T12:00:00.000Z");
+    await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+      nowMs: initialNowMs,
+    });
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
+
+    const second = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+      nowMs: initialNowMs + 60_000,
+    });
+
+    expect(second.kind).toBe("cooldown");
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { mode: "if-unverified" as const, expected: "cooldown" },
+    { mode: "off" as const, expected: "disabled" },
+  ])("honors July SQLite startup state in $mode mode", async ({ mode, expected }) => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness();
+    const stateFilePath = createStateFilePath(tempHome);
+    const store = createPluginStateKeyedStoreForTests("matrix", {
+      namespace: "startup-verification",
+      maxEntries: 1_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempHome },
+    });
+    const state = {
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      attemptedAt: "2026-07-13T12:00:00.000Z",
+      outcome: "requested",
+      requestId: "verification-1",
+      transactionId: "txn-1",
+    };
+    await store.register("default", state);
+
+    const result = await ensureMatrixStartupVerification({
+      client: harness.client as never,
+      auth: createAuth(),
+      accountConfig: { startupVerification: mode },
+      stateFilePath,
+      nowMs: Date.parse("2026-07-13T12:01:00.000Z"),
+    });
+
+    expect(result.kind).toBe(expected);
+    expect(harness.client.crypto.requestVerification).not.toHaveBeenCalled();
+    await expect(store.lookup("default")).resolves.toEqual(mode === "off" ? undefined : state);
+    expect(fs.existsSync(stateFilePath)).toBe(false);
+  });
+
+  it.each(["if-unverified", "off"] as const)(
+    "refuses retired startup JSON in %s mode without changing it",
+    async (startupVerification) => {
+      const tempHome = createTempStateDir();
+      const stateFilePath = createStateFilePath(tempHome);
+      const source = JSON.stringify({ attemptedAt: "2026-05-28T12:00:00.000Z" });
+      fs.writeFileSync(stateFilePath, source);
+      const harness = createHarness();
+
+      await expect(
+        ensureMatrixStartupVerification({
+          client: harness.client as never,
+          auth: createAuth(),
+          accountConfig: { startupVerification },
+          stateFilePath,
+        }),
+      ).rejects.toThrow(/2026\.9\.5/);
+
+      expect(fs.readFileSync(stateFilePath, "utf8")).toBe(source);
+      expect(fs.existsSync(path.join(tempHome, "state"))).toBe(false);
+      expect(harness.client.crypto.requestVerification).not.toHaveBeenCalled();
+    },
+  );
+
+  it("persists a successful startup verification request", async () => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness();
+
+    const result = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+      nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
+    });
+
+    expect(result.kind).toBe("requested");
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledWith({ ownUser: true });
+
+    await expect(readPersistedStartupState(tempHome)).resolves.toMatchObject({
+      attemptedAt: "2026-03-08T12:00:00.000Z",
+      outcome: "requested",
+    });
+    expect(fs.existsSync(createStateFilePath(tempHome))).toBe(false);
+  });
+
+  it("keeps startup verification failures non-fatal", async () => {
+    const tempHome = createTempStateDir();
+    const harness = createHarness({
+      requestVerification: async () => {
+        throw new Error("no other verified session");
+      },
+    });
+
+    const result = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+    });
+
+    expect(result.kind).toBe("request-failed");
+    if (result.kind !== "request-failed") {
+      throw new Error(`Unexpected startup verification result: ${result.kind}`);
+    }
+    expect(result.error).toContain("no other verified session");
+
+    const cooledDown = await ensureMatrixStartupVerification({
+      ...verificationParams(harness.client, tempHome),
+      nowMs: Date.now() + 60_000,
+    });
+
+    expect(cooledDown.kind).toBe("cooldown");
+  });
+
+  it("retries failed startup verification requests sooner than successful ones", async () => {
+    const tempHome = createTempStateDir();
+    const stateFilePath = createStateFilePath(tempHome);
+    const failingHarness = createHarness({
+      requestVerification: async () => {
+        throw new Error("no other verified session");
+      },
+    });
+
+    await ensureMatrixStartupVerification({
+      client: failingHarness.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+      nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
+    });
+
+    const retryingHarness = createHarness();
+    const result = await ensureMatrixStartupVerification({
+      client: retryingHarness.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+      nowMs: Date.parse("2026-03-08T13:30:00.000Z"),
+    });
+
+    expect(result.kind).toBe("requested");
+    expect(retryingHarness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the persisted startup state after verification succeeds", async () => {
+    const tempHome = createTempStateDir();
+    const stateFilePath = createStateFilePath(tempHome);
+    const unverified = createHarness();
+
+    await ensureMatrixStartupVerification({
+      client: unverified.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+      nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
+    });
+
+    await expect(readPersistedStartupState(tempHome)).resolves.toBeDefined();
+
+    const verified = createHarness({ verified: true });
+    const result = await ensureMatrixStartupVerification({
+      client: verified.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+    });
+
+    expect(result.kind).toBe("verified");
+    expect(fs.existsSync(stateFilePath)).toBe(false);
+    await expect(readPersistedStartupState(tempHome)).resolves.toBeUndefined();
+  });
+});

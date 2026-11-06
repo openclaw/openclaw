@@ -1,0 +1,411 @@
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
+import {
+  identifierAuthenticationFrom,
+  weakestIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "./identifier-authentication.js";
+import { allReferencedAccessGroupNames } from "./runtime-access-groups.js";
+import type {
+  NormalizedIngressState,
+  ChannelIngressStateInput,
+  InternalChannelIngressAdapter,
+  InternalChannelIngressSubject,
+  NormalizedIngressSubject,
+  NormalizedIngressEntry,
+  RedactedIngressEntryDiagnostic,
+  RedactedIngressMatch,
+  NormalizedIngressAllowlist,
+} from "./types.js";
+
+type NormalizedStateInput = Omit<ChannelIngressStateInput, "subject" | "event"> & {
+  subject: NormalizedIngressSubject;
+  event: Omit<ChannelIngressStateInput["event"], "originSubject"> & {
+    originSubject?: NormalizedIngressSubject;
+  };
+};
+
+function normalizeSubjectAuthentication(
+  subject: InternalChannelIngressSubject,
+): NormalizedIngressSubject {
+  return {
+    identifiers: subject.identifiers.map((identifier) => ({
+      ...identifier,
+      authentication: identifierAuthenticationFrom(identifier),
+    })),
+  };
+}
+
+function redactedEntries(entries: readonly NormalizedIngressEntry[]) {
+  return entries.map(({ value: _value, identityFieldKey: _identityFieldKey, ...entry }) => entry);
+}
+
+function emptyMatch(): RedactedIngressMatch {
+  return { matched: false, matchedEntryIds: [] };
+}
+
+function mergeMatches(matches: readonly RedactedIngressMatch[]): RedactedIngressMatch {
+  const matchedEntryIds = uniqueStrings(matches.flatMap((match) => match.matchedEntryIds));
+  const matchedPairs = matches.flatMap((match) => match.matchedPairs ?? []);
+  const uniquePairs = dedupeByKey(matchedPairs, (pair) =>
+    JSON.stringify([pair.opaqueEntryId, pair.opaqueSubjectId, pair.subjectAuthentication]),
+  );
+  return {
+    matched: matches.some((match) => match.matched) || matchedEntryIds.length > 0,
+    matchedEntryIds,
+    ...(uniquePairs.length > 0 ? { matchedPairs: uniquePairs } : {}),
+  };
+}
+
+async function normalizeAndMatch(params: {
+  adapter: InternalChannelIngressAdapter;
+  subject: NormalizedIngressSubject;
+  accountId: string;
+  entries: readonly string[];
+  context: "dm" | "group" | "route" | "command";
+}): Promise<{
+  normalizedEntries: ReturnType<typeof redactedEntries>;
+  invalidEntries: RedactedIngressEntryDiagnostic[];
+  disabledEntries: RedactedIngressEntryDiagnostic[];
+  match: RedactedIngressMatch;
+}> {
+  if (params.entries.length === 0) {
+    return {
+      normalizedEntries: [],
+      invalidEntries: [],
+      disabledEntries: [],
+      match: emptyMatch(),
+    };
+  }
+  const normalized = await params.adapter.normalizeEntries({
+    entries: params.entries,
+    context: params.context,
+    accountId: params.accountId,
+  });
+  const matchable = normalized.matchable.map((entry) => ({
+    ...entry,
+    authentication: identifierAuthenticationFrom(entry),
+  }));
+  const match =
+    matchable.length > 0
+      ? await params.adapter.matchSubject({
+          subject: params.subject,
+          entries: matchable,
+          context: params.context,
+        })
+      : emptyMatch();
+  return {
+    normalizedEntries: redactedEntries(matchable),
+    invalidEntries: normalized.invalid,
+    disabledEntries: normalized.disabled,
+    match,
+  };
+}
+
+function strongerAuthentication(
+  left: IdentifierAuthentication | undefined,
+  right: IdentifierAuthentication,
+): IdentifierAuthentication {
+  if (!left) {
+    return right;
+  }
+  return weakestIdentifierAuthentication(left, right) === left ? right : left;
+}
+
+function matchedAuthentication(params: {
+  entries: readonly NormalizedIngressEntry[];
+  match: RedactedIngressMatch;
+}): IdentifierAuthentication | undefined {
+  const entries = new Map(params.entries.map((entry) => [entry.opaqueEntryId, entry] as const));
+  let strongest: IdentifierAuthentication | undefined;
+  for (const pair of params.match.matchedPairs ?? []) {
+    const entry = entries.get(pair.opaqueEntryId);
+    if (!entry) {
+      continue;
+    }
+    const strength = weakestIdentifierAuthentication(
+      entry.authentication,
+      pair.subjectAuthentication,
+    );
+    strongest = strongerAuthentication(strongest, strength);
+  }
+  if (!strongest) {
+    // Legacy adapters return only matched entry ids. Preserve their asserted/static behavior,
+    // but do not assign a per-message claim without an exact subject edge.
+    for (const entryId of params.match.matchedEntryIds) {
+      const entry = entries.get(entryId);
+      if (entry) {
+        strongest = strongerAuthentication(strongest, entry.authentication);
+      }
+    }
+  }
+  return strongest;
+}
+
+async function originSubjectAuthentication(
+  input: NormalizedStateInput,
+): Promise<IdentifierAuthentication | undefined> {
+  const origin = input.event.originSubject;
+  if (!origin) {
+    return undefined;
+  }
+  let strongest: IdentifierAuthentication | undefined;
+  for (const originIdentifier of origin.identifiers) {
+    for (const current of input.subject.identifiers) {
+      if (
+        current.opaqueId !== originIdentifier.opaqueId ||
+        current.kind !== originIdentifier.kind ||
+        current.value !== originIdentifier.value
+      ) {
+        continue;
+      }
+      strongest = strongerAuthentication(
+        strongest,
+        weakestIdentifierAuthentication(originIdentifier.authentication, current.authentication),
+      );
+    }
+  }
+
+  const context = input.conversation.kind === "direct" ? "dm" : "group";
+  for (const [subject, against, opaquePrefix, requireMatched] of [
+    [origin, input.subject, "origin", true],
+    [input.subject, origin, "current", false],
+  ] as const) {
+    const normalized = await Promise.all(
+      subject.identifiers.map(async (identifier, identifierIndex) => {
+        const normalizedIdentifierEntries = await input.adapter.normalizeEntries({
+          entries: [identifier.value],
+          context,
+          accountId: input.accountId,
+        });
+        return (
+          normalizedIdentifierEntries.matchable
+            // Origin subjects are identity material, not configured allowlists.
+            // Do not let a subject value normalize into adapter wildcard semantics.
+            .filter(
+              (entry) =>
+                entry.kind === identifier.kind &&
+                (entry.identityFieldKey === undefined ||
+                  entry.identityFieldKey === identifier.opaqueId) &&
+                entry.value !== "*",
+            )
+            .map((entry, entryIndex) => ({
+              opaqueEntryId: `${opaquePrefix}-${identifierIndex + 1}:${entryIndex + 1}`,
+              kind: entry.kind,
+              value: entry.value,
+              identityFieldKey: entry.identityFieldKey,
+              authentication: identifier.authentication,
+              dangerous: entry.dangerous,
+              sensitivity: entry.sensitivity,
+            }))
+        );
+      }),
+    );
+    const entries = normalized.flat();
+    if (entries.length === 0) {
+      continue;
+    }
+    const match = await input.adapter.matchSubject({
+      subject: against,
+      entries,
+      context,
+    });
+    if (requireMatched && !match.matched) {
+      continue;
+    }
+    const authentication = matchedAuthentication({ entries, match });
+    if (authentication) {
+      strongest = strongerAuthentication(strongest, authentication);
+    }
+  }
+  return strongest;
+}
+
+async function resolveIngressAllowlist(params: {
+  input: NormalizedStateInput;
+  rawEntries: Array<string | number> | undefined;
+  context: "dm" | "group" | "route" | "command";
+}): Promise<NormalizedIngressAllowlist> {
+  const entries = normalizeStringEntries(params.rawEntries ?? []);
+  const referenced = allReferencedAccessGroupNames([entries]);
+  const directEntries = entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
+  const direct = await normalizeAndMatch({
+    adapter: params.input.adapter,
+    subject: params.input.subject,
+    accountId: params.input.accountId,
+    entries: directEntries,
+    context: params.context,
+  });
+  const factByName = new Map(
+    (params.input.accessGroupMembership ?? []).map((fact) => [fact.groupName, fact]),
+  );
+  const accessGroups: NormalizedIngressAllowlist["accessGroups"] = {
+    referenced: [...referenced],
+    matched: [],
+    missing: [],
+    unsupported: [],
+    failed: [],
+  };
+  const normalizedEntries: ReturnType<typeof redactedEntries> = [];
+  const invalidEntries: RedactedIngressEntryDiagnostic[] = [];
+  const disabledEntries: RedactedIngressEntryDiagnostic[] = [];
+  const matches: RedactedIngressMatch[] = [];
+
+  for (const groupName of referenced) {
+    const fact = factByName.get(groupName);
+    if (fact?.kind === "matched") {
+      accessGroups.matched.push(groupName);
+      for (const opaqueEntryId of fact.matchedEntryIds) {
+        // Dynamic membership proves the group predicate, not a stronger sender identifier.
+        // Model it as asserted so raised authentication thresholds fail closed.
+        normalizedEntries.push({
+          opaqueEntryId,
+          kind: "plugin:access-group-membership",
+          authentication: "asserted",
+        });
+      }
+      matches.push({ matched: true, matchedEntryIds: fact.matchedEntryIds });
+      continue;
+    }
+    if (fact?.kind === "missing" || fact?.kind === "unsupported" || fact?.kind === "failed") {
+      accessGroups[fact.kind].push(groupName);
+      continue;
+    }
+    if (fact?.kind === "not-matched") {
+      continue;
+    }
+
+    const group = params.input.accessGroups?.[groupName];
+    if (!group) {
+      accessGroups.missing.push(groupName);
+      continue;
+    }
+    if (group.type !== "message.senders") {
+      accessGroups.unsupported.push(groupName);
+      continue;
+    }
+
+    const groupEntries = normalizeStringEntries([
+      ...(group.members["*"] ?? []),
+      ...(group.members[params.input.channelId] ?? []),
+    ]);
+    const resolved = await normalizeAndMatch({
+      adapter: params.input.adapter,
+      subject: params.input.subject,
+      accountId: params.input.accountId,
+      entries: groupEntries,
+      context: params.context,
+    });
+    normalizedEntries.push(...resolved.normalizedEntries);
+    invalidEntries.push(...resolved.invalidEntries);
+    disabledEntries.push(...resolved.disabledEntries);
+    if (resolved.match.matched) {
+      accessGroups.matched.push(groupName);
+      matches.push(resolved.match);
+    }
+  }
+  const match = mergeMatches([direct.match, ...matches]);
+  return {
+    rawEntryCount: entries.length,
+    normalizedEntries: [...direct.normalizedEntries, ...normalizedEntries],
+    invalidEntries: [...direct.invalidEntries, ...invalidEntries],
+    disabledEntries: [...direct.disabledEntries, ...disabledEntries],
+    matchedEntryIds: match.matchedEntryIds,
+    hasConfiguredEntries: entries.length > 0,
+    hasMatchableEntries: direct.normalizedEntries.length > 0 || normalizedEntries.length > 0,
+    hasWildcard: directEntries.includes("*"),
+    accessGroups,
+    match,
+  };
+}
+
+async function resolveRouteFacts(
+  input: NormalizedStateInput,
+): Promise<NormalizedIngressState["routeFacts"]> {
+  const routeFacts = [...(input.routeFacts ?? [])].toSorted(
+    (left, right) => left.precedence - right.precedence || left.id.localeCompare(right.id),
+  );
+  const resolved: NormalizedIngressState["routeFacts"] = [];
+  for (const route of routeFacts) {
+    const senderAllowFrom =
+      route.senderAllowFrom ??
+      (route.senderAllowFromSource === "effective-dm"
+        ? input.allowlists.dm
+        : route.senderAllowFromSource === "effective-group"
+          ? input.allowlists.group
+          : undefined);
+    resolved.push({
+      id: route.id,
+      kind: route.kind,
+      gate: route.gate,
+      effect: route.effect,
+      precedence: route.precedence,
+      senderPolicy: route.senderPolicy,
+      match: route.match,
+      senderAllowlist:
+        senderAllowFrom != null
+          ? await resolveIngressAllowlist({
+              input,
+              rawEntries: senderAllowFrom,
+              context: "route",
+            })
+          : undefined,
+    });
+  }
+  return resolved;
+}
+
+export async function resolveChannelIngressState(
+  rawInput: ChannelIngressStateInput,
+): Promise<NormalizedIngressState> {
+  const input: NormalizedStateInput = {
+    ...rawInput,
+    subject: normalizeSubjectAuthentication(rawInput.subject),
+    event: {
+      ...rawInput.event,
+      originSubject: rawInput.event.originSubject
+        ? normalizeSubjectAuthentication(rawInput.event.originSubject)
+        : undefined,
+    },
+  };
+  const resolveAllowlist = (
+    key: keyof NormalizedStateInput["allowlists"],
+    context: "dm" | "group" | "command",
+  ) => resolveIngressAllowlist({ input, rawEntries: input.allowlists[key], context });
+  const [dm, pairingStore, group, commandOwner, commandGroup, routeFacts, eventOriginMatched] =
+    await Promise.all([
+      resolveAllowlist("dm", "dm"),
+      resolveAllowlist("pairingStore", "dm"),
+      resolveAllowlist("group", "group"),
+      resolveAllowlist("commandOwner", "command"),
+      resolveAllowlist("commandGroup", "command"),
+      resolveRouteFacts(input),
+      originSubjectAuthentication(input),
+    ]);
+  return {
+    channelId: input.channelId,
+    accountId: input.accountId,
+    conversationKind: input.conversation.kind,
+    event: {
+      kind: input.event.kind,
+      authMode: input.event.authMode,
+      mayPair: input.event.mayPair,
+      hasOriginSubject: input.event.originSubject != null,
+      originSubjectMatched: eventOriginMatched !== undefined,
+      ...(eventOriginMatched ? { originSubjectAuthentication: eventOriginMatched } : {}),
+    },
+    mentionFacts: input.mentionFacts,
+    routeFacts,
+    allowlists: {
+      dm,
+      pairingStore,
+      group,
+      commandOwner,
+      commandGroup,
+    },
+  };
+}

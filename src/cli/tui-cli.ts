@@ -1,0 +1,104 @@
+// Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
+import type { Command } from "commander";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { defaultRuntime } from "../runtime.js";
+import type { TuiOptions } from "../tui/tui-types.js";
+import { formatDocsHelp } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
+import { parseTimeoutMs } from "./parse-timeout.js";
+import { resolveSessionTarget } from "./session-target.js";
+import { addTuiOptions } from "./tui-cli-options.js";
+
+type TuiCliOptions = Omit<TuiOptions, "timeoutMs" | "historyLimit" | "initialMessageTimeoutMs"> & {
+  timeoutMs?: string;
+  historyLimit?: string;
+};
+
+export async function runTuiCliAction(
+  target: string | undefined,
+  opts: TuiCliOptions,
+  invokedSubcommand = "tui",
+): Promise<void> {
+  const invokedAsLocalAlias = invokedSubcommand === "terminal" || invokedSubcommand === "chat";
+  const isLocal = Boolean(opts.local) || invokedAsLocalAlias;
+  if (target && isLocal) {
+    throw new Error(
+      "a session target cannot be combined with --local, openclaw chat, or openclaw terminal",
+    );
+  }
+  if (isLocal && (opts.url || opts.token || opts.password || opts.tlsFingerprint)) {
+    throw new Error(
+      "--local cannot be combined with --url, --token, --password, or --tls-fingerprint",
+    );
+  }
+  if (target && opts.session) {
+    throw new Error("pass one session target: use either the positional target or --session");
+  }
+  const timeoutMs = parseTimeoutMs(opts.timeoutMs);
+  if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
+    defaultRuntime.error(`warning: invalid --timeout-ms "${opts.timeoutMs}"; ignoring`);
+  }
+  const historyLimit =
+    parseOptionalPositiveInteger(opts.historyLimit ?? undefined, "--history-limit", ".") ?? 200;
+  if (!isLocal && historyLimit > CHAT_HISTORY_MAX_ENTRIES) {
+    throw new Error(`--history-limit must be at most ${CHAT_HISTORY_MAX_ENTRIES}.`);
+  }
+
+  const gateway = {
+    url: opts.url,
+    token: opts.token,
+    password: opts.password,
+    tlsFingerprint: opts.tlsFingerprint,
+  };
+  const resolved = target
+    ? await resolveSessionTarget({
+        raw: target,
+        requiredScope: "operator.admin",
+        gateway,
+      })
+    : undefined;
+  const { runTui } = await import("../tui/tui.js");
+  const { url, token, password, tlsFingerprint } = resolved?.gateway ?? {};
+  await runTui({
+    local: isLocal,
+    ...(url ? { boundGateway: { url, token, password, tlsFingerprint } } : gateway),
+    session: resolved?.sessionKey ?? opts.session,
+    ...(resolved ? { agentId: resolved.agentId } : {}),
+    deliver: Boolean(opts.deliver),
+    thinking: opts.thinking,
+    message: opts.message,
+    timeoutMs,
+    historyLimit,
+  });
+}
+
+/** Attach the `tui` command plus its `terminal`/`chat` aliases to the root CLI. */
+export function registerTuiCli(program: Command) {
+  const command = program
+    .command("tui")
+    .alias("terminal")
+    .alias("chat")
+    .description("Open a terminal UI connected to the Gateway")
+    .argument("[target]", "Control UI URL, host/agent/ref, short ref, or agent:... key")
+    .option("--local", "Run against the local embedded agent runtime", false);
+  addTuiOptions(command)
+    .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
+    .option("--deliver", "Deliver assistant replies", false)
+    .option("--thinking <level>", "Thinking level override")
+    .option("--message <text>", "Send an initial message after connecting")
+    .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
+    .option("--history-limit <n>", "History entries to load", "200")
+    .addHelpText("after", () => formatDocsHelp("/cli/tui"))
+    .action(async (target: string | undefined, opts: TuiCliOptions, cmd: Command) => {
+      try {
+        // `cmd.name()` always returns the canonical subcommand name (`tui`).
+        // Use the parsed parent args to see which alias the user actually typed.
+        const invokedSubcommand = cmd.parent?.args[0];
+        await runTuiCliAction(target, opts, invokedSubcommand);
+      } catch (err) {
+        defaultRuntime.error(formatErrorMessage(err));
+        defaultRuntime.exit(1);
+      }
+    });
+}

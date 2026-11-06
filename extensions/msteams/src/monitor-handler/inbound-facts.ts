@@ -1,0 +1,158 @@
+import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
+import {
+  resolveMSTeamsAdvertisedMedia,
+  summarizeMSTeamsHtmlAttachments,
+} from "../attachments/html.js";
+import {
+  extractHtmlFromAttachment,
+  replaceTeamsEmojiSpriteImagesWithAltText,
+} from "../attachments/shared.js";
+import type { MSTeamsAttachmentLike } from "../attachments/types.js";
+import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
+import type { StoredConversationReference } from "../conversation-store.js";
+import {
+  extractMSTeamsConversationMessageId,
+  extractMSTeamsQuoteInfo,
+  htmlToPlainText,
+  normalizeMSTeamsConversationId,
+  normalizeMSTeamsMentionTags,
+  stripMSTeamsMentionTags,
+  wasMSTeamsBotMentioned,
+} from "../inbound.js";
+import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
+import type { MSTeamsTurnContext } from "../sdk-types.js";
+import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
+
+function extractTextFromHtmlAttachments(
+  attachments: MSTeamsAttachmentLike[],
+  activity: MSTeamsTurnContext["activity"],
+): string {
+  for (const attachment of attachments) {
+    const raw = extractHtmlFromAttachment(attachment);
+    if (!raw) {
+      continue;
+    }
+    const text = htmlToPlainText(
+      // Teams emoji sprites are message text: keep their alt text when the
+      // media reference is discarded so emoji-only messages stay deliverable.
+      normalizeMSTeamsMentionTags(replaceTeamsEmojiSpriteImagesWithAltText(raw), activity, {
+        preserveHtml: true,
+      }).replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
+    );
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+export type MSTeamsDebounceEntry = Awaited<ReturnType<typeof prepareMSTeamsDebounceEntry>>;
+
+export async function prepareMSTeamsDebounceEntry(params: {
+  context: MSTeamsTurnContext;
+  accountId: string;
+  turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
+}) {
+  const activity = params.context.activity;
+  const attachments: MSTeamsAttachmentLike[] = Array.isArray(activity.attachments)
+    ? activity.attachments
+    : [];
+  const rawText = activity.text?.trim() ?? "";
+  // Normalize mention markup before decoding so literally typed <at> tags survive.
+  const text = rawText
+    ? normalizeMSTeamsMentionTags(rawText, activity)
+    : extractTextFromHtmlAttachments(attachments, activity) ||
+      stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
+  const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+  const replyToId = activity.replyToId;
+  const implicitMentionKinds: Array<"reply_to_bot"> =
+    conversationId &&
+    replyToId &&
+    (await wasMSTeamsMessageSentWithPersistence({
+      conversationId,
+      messageId: replyToId,
+      accountId: params.accountId,
+    }))
+      ? ["reply_to_bot"]
+      : [];
+
+  return {
+    context: params.context,
+    rawText,
+    text,
+    attachments,
+    wasMentioned: wasMSTeamsBotMentioned(activity),
+    implicitMentionKinds,
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+  };
+}
+
+/** Proactive sends replay this reference, so every inbound owner stores the same shape. */
+export function buildMSTeamsConversationReference(
+  activity: MSTeamsTurnContext["activity"],
+  threadId?: string,
+): StoredConversationReference {
+  const conversation = activity.conversation;
+  const from = activity.from;
+  const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
+    | { timezone?: string }
+    | undefined;
+  // Proactive sends require the tenant and normalized regional service URL
+  // captured from the original Bot Framework activity.
+  const tenantId = activity.channelData?.tenant?.id ?? conversation?.tenantId;
+  const aadObjectId = from?.aadObjectId;
+  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
+  return {
+    activityId: activity.id,
+    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
+    agent: activity.recipient,
+    conversation: {
+      id: normalizeMSTeamsConversationId(conversation?.id ?? ""),
+      conversationType: conversation?.conversationType ?? "personal",
+      tenantId,
+    },
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
+    teamId: activity.channelData?.team?.id,
+    channelId: activity.channelId,
+    ...(serviceUrl ? { serviceUrl } : {}),
+    locale: activity.locale,
+    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
+export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
+  const activity = entry.context.activity;
+  const conversation = activity.conversation;
+  const rawConversationId = conversation?.id ?? "";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+  const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
+  const conversationType = conversation?.conversationType ?? "personal";
+  const isChannel = conversationType === "channel";
+  const teamId = activity.channelData?.team?.id;
+  const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
+  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
+  const conversationRef = buildMSTeamsConversationReference(activity, threadId);
+
+  return {
+    ...entry,
+    activity,
+    from: activity.from,
+    conversation,
+    rawBody: entry.text,
+    advertisedMedia,
+    quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
+    htmlSummary: summarizeMSTeamsHtmlAttachments(entry.attachments),
+    conversationId,
+    conversationMessageId,
+    conversationType,
+    isChannel,
+    teamId,
+    graphChannelId: activity.channelData?.channel?.id?.trim() || conversationId,
+    threadId,
+    // Pending history must follow the channel thread through recording, reads, and cleanup.
+    historyKey: threadId ? `${conversationId}:thread:${threadId}` : conversationId,
+    conversationRef,
+  };
+}

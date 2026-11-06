@@ -1,0 +1,57 @@
+import type { RouteLocation } from "@openclaw/uirouter";
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import {
+  INTERNAL_WORKBOARD_PATH_PARAM,
+  pathForRoute,
+  pathForWorkboardBoard,
+  restoreBridgedRouteLocation,
+  workboardBoardIdFromPath,
+} from "../../app-route-paths.ts";
+// Existing Workboard URLs persist this value for the all-boards route.
+const WORKBOARD_ALL_BOARDS_FILTER = "__all__";
+
+export type WorkboardRouteData = {
+  boardFilter: string;
+  canonicalLocation?: RouteLocation;
+  search: string;
+};
+
+export function workboardRouteLocation(location: RouteLocation): RouteLocation {
+  // The router's private bridge must not masquerade as the public legacy
+  // `board` query, or its canonical redirect survives after the real path wins.
+  return restoreBridgedRouteLocation(location, INTERNAL_WORKBOARD_PATH_PARAM);
+}
+
+export function resolveWorkboardRouteLocation(
+  sourceLocation: RouteLocation,
+  basePath = "",
+): WorkboardRouteData {
+  const location = workboardRouteLocation(sourceLocation);
+  const pathBoardId = workboardBoardIdFromPath(location.pathname, basePath);
+  const params = new URLSearchParams(location.search);
+  const hadLegacyBoard = params.has("board");
+  if (!pathBoardId && !hadLegacyBoard) {
+    return { boardFilter: WORKBOARD_ALL_BOARDS_FILTER, search: location.search };
+  }
+  const legacyBoardValue = params.get("board")?.trim() ?? "";
+  params.delete("board");
+  const search = params.toString();
+  const boardFilter =
+    pathBoardId ??
+    (isValidWorkboardBoardId(legacyBoardValue) ? legacyBoardValue : WORKBOARD_ALL_BOARDS_FILTER);
+  const route: WorkboardRouteData = {
+    boardFilter,
+    search: search ? `?${search}` : "",
+  };
+  if (hadLegacyBoard) {
+    route.canonicalLocation = {
+      pathname:
+        boardFilter === WORKBOARD_ALL_BOARDS_FILTER
+          ? pathForRoute("workboard", basePath)
+          : pathForWorkboardBoard(boardFilter, basePath),
+      search: route.search,
+      hash: location.hash,
+    };
+  }
+  return route;
+}

@@ -1,0 +1,115 @@
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
+import type {
+  DynamicAgentCreationSchema,
+  FeishuAccountConfigSchema,
+  FeishuConfigSchema,
+  FeishuDomainSchema,
+  FeishuToolsConfigSchema,
+  z,
+} from "./config-schema.js";
+import type { MentionTarget } from "./mention-target.types.js";
+
+type LegacyFeishuWebhookConfig = {
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.host. */
+  webhookHost?: string;
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
+  webhookPort?: number;
+};
+
+export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema> &
+  LegacyFeishuWebhookConfig;
+export type FeishuConfig = Omit<z.infer<typeof FeishuConfigSchema>, "accounts"> &
+  LegacyFeishuWebhookConfig & {
+    accounts?: Record<string, FeishuAccountConfig | undefined>;
+  };
+
+export type FeishuDomain = "feishu" | "lark" | (z.infer<typeof FeishuDomainSchema> & {});
+
+export type ResolvedFeishuAccount = {
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+  name?: string;
+  appId?: string;
+  appSecret?: string;
+  encryptKey?: string;
+  verificationToken?: string;
+  domain: FeishuDomain;
+  /** Merged config (top-level defaults + account-specific overrides) */
+  config: FeishuConfig;
+};
+
+export type FeishuIdType = "open_id" | "user_id" | "union_id" | "chat_id";
+
+export type FeishuMessageContext = {
+  chatId: string;
+  messageId: string;
+  replyTargetMessageId?: string;
+  typingTargetMessageId?: string;
+  suppressReplyTarget?: boolean;
+  senderId: string;
+  senderOpenId: string;
+  senderName?: string;
+  senderType: "user" | "bot";
+  chatType: FeishuChatType;
+  mentionedBot: boolean;
+  hasAnyMention?: boolean;
+  rootId?: string;
+  parentId?: string;
+  threadId?: string;
+  content: string;
+  contentType: string;
+  /** Mention forward targets (excluding the bot itself) */
+  mentionTargets?: MentionTarget[];
+};
+
+export type FeishuSendResult = {
+  messageId: string;
+  chatId: string;
+  receipt: MessageReceipt;
+};
+
+export type FeishuChatType = "p2p" | "group" | "topic_group" | "private";
+
+export function normalizeFeishuEventChatType(value: unknown): FeishuChatType | undefined {
+  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
+    ? value
+    : undefined;
+}
+
+export function isFeishuGroupChatType(chatType: FeishuChatType | undefined): boolean {
+  return chatType === "group" || chatType === "topic_group";
+}
+
+export type FeishuMessageInfo = {
+  messageId: string;
+  chatId: string;
+  chatType?: FeishuChatType;
+  senderId?: string;
+  senderOpenId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+  /** Root message ID for replies inside Feishu topics. */
+  rootId?: string;
+  /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
+  threadId?: string;
+};
+
+export interface FeishuProbeResult extends BaseProbeResult {
+  appId?: string;
+  botName?: string;
+  botOpenId?: string;
+}
+
+export type FeishuMediaInfo = {
+  path?: string;
+  contentType?: string;
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
+};
+
+export type FeishuToolsConfig = NonNullable<z.infer<typeof FeishuToolsConfigSchema>>;
+
+export type DynamicAgentCreationConfig = NonNullable<z.infer<typeof DynamicAgentCreationSchema>>;

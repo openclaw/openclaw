@@ -1,0 +1,67 @@
+/**
+ * Integration tests for browser plugin bootstrap through the gateway server.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
+import { createSilentPluginLogger as createTestLog } from "../../test/helpers/mock-logger.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
+import {
+  disposePluginRegistryInstances,
+  resetPluginRuntimeStateForTest,
+} from "../plugins/runtime.js";
+import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
+
+function resetPluginState() {
+  clearPluginLoaderCache();
+  resetPluginRuntimeStateForTest();
+}
+
+describe("prepareGatewayPluginLoad browser plugin integration", () => {
+  let candidate: Awaited<ReturnType<typeof prepareGatewayPluginLoad>> | undefined;
+  let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
+
+  beforeEach(() => {
+    bundledFixture = createBundledBrowserPluginFixture();
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledFixture.rootDir);
+    resetPluginState();
+  });
+
+  afterEach(async () => {
+    try {
+      candidate?.retireGatewayRuntimeBindings();
+      if (candidate) {
+        await disposePluginRegistryInstances(candidate.pluginRegistry);
+      }
+    } finally {
+      candidate = undefined;
+      resetPluginState();
+      vi.unstubAllEnvs();
+      bundledFixture?.cleanup();
+      bundledFixture = null;
+    }
+  });
+
+  it("adds browser.request and the browser control service from the bundled plugin", async () => {
+    const loaded = (candidate = await prepareGatewayPluginLoad({
+      loadIntent: "startup",
+      cfg: {
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+      workspaceDir: process.cwd(),
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      pluginIds: ["browser"],
+    }));
+
+    expect(loaded.gatewayMethods).toContain("browser.request");
+    expect(
+      loaded.pluginRegistry.services.some(
+        (entry) => entry.pluginId === "browser" && entry.service.id === "browser-control",
+      ),
+    ).toBe(true);
+  });
+});

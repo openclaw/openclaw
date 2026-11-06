@@ -1,0 +1,420 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-cache.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { finalizeCaptureStore } from "./store-lifecycle.js";
+import {
+  DEBUG_PROXY_CAPTURE_DIR_MODE,
+  DEBUG_PROXY_CAPTURE_FILE_MODE,
+  DebugProxyCaptureKernel,
+} from "./store.kernel.js";
+import type { CaptureBlobRecord, SharedCaptureBlobRecord } from "./types.js";
+
+export { persistEventPayload } from "./store.kernel.js";
+
+// Capture rows and compressed payload BLOBs live in the shared global state DB.
+type DebugProxyCaptureStoreOptions = {
+  env?: NodeJS.ProcessEnv;
+};
+
+type PathBasedDebugProxyCaptureStore = {
+  blobDir: string;
+  walMaintenance: SqliteWalMaintenance;
+};
+
+const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION = 1;
+const legacySchemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "openclaw.proxyCapture.legacySchema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
+const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS capture_sessions (
+    id TEXT PRIMARY KEY,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    mode TEXT NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_process TEXT NOT NULL,
+    proxy_url TEXT,
+    db_path TEXT NOT NULL,
+    blob_dir TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS capture_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_process TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    method TEXT,
+    host TEXT,
+    path TEXT,
+    status INTEGER,
+    close_code INTEGER,
+    content_type TEXT,
+    headers_json TEXT,
+    data_text TEXT,
+    data_blob_id TEXT,
+    data_sha256 TEXT,
+    error_text TEXT,
+    meta_json TEXT
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
+  CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
+`;
+
+function isInMemoryDatabasePath(dbPath: string): boolean {
+  if (dbPath === ":memory:") {
+    return true;
+  }
+  if (!dbPath.startsWith("file:")) {
+    return false;
+  }
+  const fragmentIndex = dbPath.indexOf("#");
+  const uriWithoutFragment = fragmentIndex === -1 ? dbPath : dbPath.slice(0, fragmentIndex);
+  const queryIndex = uriWithoutFragment.indexOf("?");
+  const uriPath = queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
+  try {
+    if (decodeURIComponent(uriPath.slice("file:".length)) === ":memory:") {
+      return true;
+    }
+  } catch {
+    // Malformed escapes cannot identify a memory URI; retain file-backed handling.
+  }
+  return (
+    queryIndex !== -1 &&
+    new URLSearchParams(uriWithoutFragment.slice(queryIndex + 1)).get("mode") === "memory"
+  );
+}
+
+function hardenLegacyDatabaseFiles(dbPath: string): void {
+  for (const candidate of resolveSqliteDatabaseFilePaths(dbPath)) {
+    if (fs.existsSync(candidate)) {
+      applyPrivateModeSync(candidate, DEBUG_PROXY_CAPTURE_FILE_MODE);
+    }
+  }
+}
+
+function openPathBasedDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): { db: DatabaseSync; pathBased: PathBasedDebugProxyCaptureStore } {
+  const fileBackedPath = isInMemoryDatabasePath(dbPath) ? undefined : dbPath;
+  if (fileBackedPath) {
+    fs.mkdirSync(path.dirname(fileBackedPath), {
+      recursive: true,
+      mode: DEBUG_PROXY_CAPTURE_DIR_MODE,
+    });
+    if (!fs.existsSync(fileBackedPath)) {
+      fs.closeSync(fs.openSync(fileBackedPath, "a", DEBUG_PROXY_CAPTURE_FILE_MODE));
+    }
+  }
+  const db = openNodeSqliteDatabase(dbPath);
+  let walMaintenance: SqliteWalMaintenance | undefined;
+  try {
+    if (fileBackedPath) {
+      applyPrivateModeSync(fileBackedPath, DEBUG_PROXY_CAPTURE_FILE_MODE);
+    }
+    walMaintenance = configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: 5000,
+      databaseLabel: "debug-proxy-capture-sdk",
+      ...(fileBackedPath ? { databasePath: fileBackedPath } : {}),
+      foreignKeys: true,
+    });
+    if (!getSqliteDatabaseAdmission(db, legacySchemaAdmission)) {
+      const versionRow = db.prepare("PRAGMA user_version").get() as
+        | { user_version?: unknown }
+        | undefined;
+      const schemaVersion = Number(versionRow?.user_version ?? 0);
+      if (schemaVersion > DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+        throw new Error(
+          `Legacy debug proxy capture database uses newer schema version ${schemaVersion}; this build supports ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION}`,
+        );
+      }
+      db.exec(DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL);
+      if (schemaVersion < DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+        migrateSqliteSchemaToStrict(db, DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL, {
+          databaseLabel: fileBackedPath ?? dbPath,
+        });
+        db.exec(`PRAGMA user_version = ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION};`);
+      }
+      publishSqliteDatabaseAdmission(db, legacySchemaAdmission, true);
+    }
+    if (fileBackedPath) {
+      hardenLegacyDatabaseFiles(fileBackedPath);
+    }
+    return {
+      db,
+      pathBased: {
+        blobDir,
+        walMaintenance,
+      },
+    };
+  } catch (err) {
+    walMaintenance?.close();
+    db.close();
+    throw err;
+  }
+}
+
+class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
+  private readonly pathBased?: PathBasedDebugProxyCaptureStore;
+  private readonly releaseIdleReference?: () => void;
+  private closed: boolean;
+  private closing: boolean;
+
+  constructor(
+    optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
+    legacyBlobDir?: string,
+  ) {
+    warnPluginSdkDeprecation({
+      family: "proxy-capture-store",
+      method: "DebugProxyCaptureStore",
+      replacement: "await acquireDebugProxyCaptureStoreAsync()",
+    });
+    if (typeof optionsOrDbPath === "string") {
+      if (!legacyBlobDir) {
+        throw new TypeError("legacy debug proxy capture store requires a blob directory");
+      }
+      const opened = openPathBasedDebugProxyCaptureStore(optionsOrDbPath, legacyBlobDir);
+      super({
+        db: opened.db,
+        dbPath: optionsOrDbPath,
+        blobDir: legacyBlobDir,
+        pathBased: opened.pathBased,
+        runWrite: () => {
+          throw new Error("shared debug proxy capture state is unavailable");
+        },
+      });
+      this.pathBased = opened.pathBased;
+      this.closed = false;
+      this.closing = false;
+      return;
+    }
+    const env = optionsOrDbPath.env;
+    const database = openOpenClawStateDatabase({ env });
+    super({
+      db: database.db,
+      dbPath: database.path,
+      // Retain the shipped public property while shared-state blobs live in this DB.
+      blobDir: database.path,
+      runWrite: (operation) =>
+        runOpenClawStateWriteTransaction(operation, { database, env: env ?? process.env }),
+    });
+    this.closed = false;
+    this.closing = false;
+    this.releaseIdleReference = retainOpenClawStateDatabaseForIdle(database);
+  }
+
+  close(): void {
+    if (this.closed || this.closing) {
+      return;
+    }
+    this.closing = true;
+    const errors = collectSynchronousErrors(
+      [
+        () => finalizeCaptureStore(this),
+        () => this.releaseIdleReference?.(),
+        () => this.pathBased?.walMaintenance.close(),
+        () => {
+          if (this.pathBased && this.db.isOpen) {
+            this.db.close();
+          }
+        },
+      ],
+      (close) => close(),
+    );
+    this.closed = true;
+    this.closing = false;
+    if (errors.length) {
+      throw new AggregateError(errors, "Capture store close failed.");
+    }
+  }
+
+  get isClosed(): boolean {
+    // A store dies with the DatabaseSync it wraps: the shared-path handle can
+    // be closed underneath us (exit-time cache close), and the cache must then
+    // rebind a fresh store instead of handing out a dead connection.
+    return this.closed || !this.db.isOpen;
+  }
+}
+
+/** @deprecated Use AsyncDebugProxyCaptureStore for worker-backed shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
+};
+
+type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord;
+};
+
+type SharedDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+  persistPayload(data: Buffer, contentType?: string): SharedCaptureBlobRecord;
+};
+
+type DebugProxyCaptureStoreConstructor = {
+  new (dbPath: string, blobDir: string): LegacyDebugProxyCaptureStore;
+  new (options?: DebugProxyCaptureStoreOptions): SharedDebugProxyCaptureStore;
+};
+
+// The runtime implementation branches on constructor arguments; expose the
+// corresponding result type so both shipped constructor contracts stay exact.
+/** @deprecated Acquire shared-state storage with acquireDebugProxyCaptureStoreAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export const DebugProxyCaptureStore =
+  DebugProxyCaptureStoreImpl as unknown as DebugProxyCaptureStoreConstructor;
+
+type CachedStoreEntry = {
+  store: DebugProxyCaptureStoreImpl;
+  leases: number;
+};
+
+const cachedStores = new Map<string, CachedStoreEntry>();
+let unregisterExitClose: (() => void) | null = null;
+
+function resolveDebugProxyCaptureStoreKey(
+  optionsOrDbPath: DebugProxyCaptureStoreOptions | string,
+  legacyBlobDir?: string,
+): string {
+  return typeof optionsOrDbPath === "string"
+    ? `legacy:${optionsOrDbPath}:${legacyBlobDir ?? ""}`
+    : `shared:${resolveOpenClawStateSqlitePath(optionsOrDbPath.env ?? process.env)}`;
+}
+
+function getDebugProxyCaptureStoreImpl(
+  optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
+  legacyBlobDir?: string,
+): DebugProxyCaptureStoreImpl {
+  const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
+  const cached = cachedStores.get(key);
+  if (cached && !cached.store.isClosed) {
+    return cached.store;
+  }
+  const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
+  cachedStores.set(key, { store, leases: 0 });
+  // Safety net for legacy path-based stores that own their DatabaseSync;
+  // shared-path stores only flip their closed flag here, never the shared DB.
+  unregisterExitClose ??= registerProcessExitCleanup(closeDebugProxyCaptureStore);
+  return store;
+}
+
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function getDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): LegacyDebugProxyCaptureStore;
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function getDebugProxyCaptureStore(
+  options?: DebugProxyCaptureStoreOptions,
+): SharedDebugProxyCaptureStore;
+export function getDebugProxyCaptureStore(
+  optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
+  legacyBlobDir?: string,
+): DebugProxyCaptureStore {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "getDebugProxyCaptureStore",
+    replacement: "await acquireDebugProxyCaptureStoreAsync() and await lease.release() in finally",
+  });
+  return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
+}
+
+/** @deprecated Await each async capture lease's release instead. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function closeDebugProxyCaptureStore(): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "closeDebugProxyCaptureStore",
+    replacement: "await each async capture lease.release() in finally",
+  });
+  unregisterExitClose?.();
+  unregisterExitClose = null;
+  const stores = [...cachedStores.values()];
+  cachedStores.clear();
+  const errors = collectSynchronousErrors(stores, (cached) => cached.store.close());
+  if (errors.length) {
+    throw new AggregateError(errors, "Capture stores failed to close.");
+  }
+}
+
+// Lease API keeps one cached capture-store wrapper alive across related
+// operations, then releases it without closing the shared state database.
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): {
+  store: LegacyDebugProxyCaptureStore;
+  release: () => void;
+};
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
+  store: SharedDebugProxyCaptureStore;
+  release: () => void;
+};
+export function acquireDebugProxyCaptureStore(
+  optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
+  legacyBlobDir?: string,
+): {
+  store: DebugProxyCaptureStore;
+  release: () => void;
+} {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "acquireDebugProxyCaptureStore",
+    replacement: "await acquireDebugProxyCaptureStoreAsync() and await lease.release() in finally",
+  });
+  const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
+  const store = getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
+  const cached = cachedStores.get(key);
+  if (!cached || cached.store !== store) {
+    throw new Error("debug proxy capture store cache changed while acquiring a lease");
+  }
+  cached.leases += 1;
+  let released = false;
+  return {
+    store,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const current = cachedStores.get(key);
+      if (!current || current.store !== store) {
+        return;
+      }
+      current.leases = Math.max(0, current.leases - 1);
+      if (current.leases === 0) {
+        cachedStores.delete(key);
+        current.store.close();
+      }
+    },
+  };
+}
+
+export function safeJsonString(value: unknown): string | undefined {
+  return value == null ? undefined : JSON.stringify(value);
+}

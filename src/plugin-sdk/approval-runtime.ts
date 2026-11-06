@@ -1,0 +1,91 @@
+export type { ApprovalScope } from "../infra/approval-scope.js";
+export {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+  type ExecApprovalRequestPayload,
+  type ExecApprovalResolved,
+  type ExecHost,
+} from "../infra/exec-approvals.js";
+export {
+  buildExecApprovalPendingReplyPayload,
+  getExecApprovalApproverDmNoticeText,
+  getExecApprovalReplyMetadata,
+  type ExecApprovalPendingReplyParams,
+  type ExecApprovalReplyDecision,
+  type ExecApprovalReplyMetadata,
+} from "../infra/exec-approval-reply.js";
+export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
+export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+export {
+  createChannelApproverDmTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolver,
+  createChannelNativeOriginTargetResolverAsync,
+} from "./approval-native-helpers.js";
+export {
+  resolveApprovalRequestOriginTarget,
+  resolveApprovalRequestOriginTargetAsync,
+  resolveApprovalRequestSessionTarget,
+  resolveApprovalRequestSessionTargetAsync,
+  resolveExecApprovalSessionTarget,
+  resolveExecApprovalSessionTargetAsync,
+  type ExecApprovalSessionTarget,
+} from "../infra/exec-approval-session-target.js";
+export {
+  doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestMatchChannelAccountAsync,
+} from "../infra/approval-request-account-binding.js";
+export {
+  buildPluginApprovalExpiredMessage,
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+  type PluginApprovalRequest,
+  type PluginApprovalRequestPayload,
+  type PluginApprovalResolved,
+} from "../infra/plugin-approvals.js";
+export type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../infra/system-agent-approvals.js";
+export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
+export {
+  createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
+  isChannelExecApprovalClientEnabledFromConfig,
+  isChannelExecApprovalTargetRecipient,
+} from "./approval-client-helpers.js";
+export { createChannelNativeApprovalRuntime } from "../infra/approval-native-runtime.js";
+export {
+  createApproverRestrictedNativeApprovalAdapter,
+  createApproverRestrictedNativeApprovalCapability,
+  createChannelApprovalCapability,
+  splitChannelApprovalCapability,
+} from "./approval-delivery-helpers.js";
+export { resolveApprovalApprovers } from "./approval-approvers.js";
+export {
+  matchesApprovalRequestFilters,
+  type ApprovalRequestFilterInput,
+} from "../infra/approval-request-filters.js";
+export {
+  buildApprovalPendingReplyPayload,
+  buildApprovalResolvedReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+  buildPluginApprovalResolvedReplyPayload,
+} from "./approval-renderers.js";
+export {
+  buildSystemAgentApprovalResolvedText,
+  formatApprovalDecisionLabel,
+  formatChannelApprovalResolvedLabel,
+} from "./approval-terminal.js";
+export { createNativeApprovalControlRegistry } from "./approval-native-controls.js";
+
+export {
+  resolveApprovalRequestSessionDeliveryAsync,
+  type ApprovalRequestSessionDelivery,
+} from "../infra/approval-request-account-binding.js";

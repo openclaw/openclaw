@@ -1,0 +1,712 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  resolveMattermostReplyToMode,
+  type ResolvedMattermostAccount,
+} from "../mattermost/accounts.js";
+import { getMattermostRuntime } from "../runtime.js";
+import {
+  createMattermostClient,
+  fetchMattermostChannel,
+  parseMattermostApiStatus,
+  sendMattermostTyping,
+  type MattermostChannel,
+} from "./client.js";
+import {
+  renderMattermostModelSummaryView,
+  renderMattermostModelsPickerView,
+  renderMattermostProviderPickerView,
+  resolveMattermostModelPickerCurrentModel,
+  resolveMattermostModelPickerEntry,
+} from "./model-picker.js";
+import {
+  authorizeMattermostCommandInvocation,
+  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
+  normalizeMattermostAllowList,
+} from "./monitor-auth.js";
+import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  buildPreparedModelsProviderData,
+  isRequestBodyLimitError,
+  logTypingFailure,
+  readRequestBodyWithLimit,
+  sendHttpRequestRejection,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
+import { sendMessageMattermost } from "./send.js";
+import {
+  MATTERMOST_SLASH_POST_METHOD,
+  getMattermostCommand,
+  listMattermostCommands,
+  normalizeSlashCommandTrigger,
+  parseSlashCommandPayload,
+  resolveCommandText,
+  type MattermostRegisteredCommand,
+  type MattermostCommandResponse,
+  type MattermostSlashCommandPayload,
+} from "./slash-commands.js";
+
+type SlashHttpHandlerParams = {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  /** Commands registered or reconciled during monitor startup. */
+  registeredCommands: readonly MattermostRegisteredCommand[];
+  /** Map from trigger to original command name (for skill commands that start with oc_). */
+  triggerMap?: ReadonlyMap<string, string>;
+  log?: (msg: string) => void;
+};
+
+const MAX_BODY_BYTES = 64 * 1024;
+const BODY_READ_TIMEOUT_MS = 5_000;
+const COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
+const COMMAND_VALIDATION_FAILURE_CACHE_MS = 5_000;
+const COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS = 2_000;
+const COMMAND_VALIDATION_LOOKUP_BURST = 20;
+const COMMAND_VALIDATION_LOOKUP_REFILL_MS = 500;
+const COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS = 5_000;
+const COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS = 2_000;
+type CommandLookupInflightEntry = {
+  accountId: string;
+  promise: Promise<MattermostCommandResponse | null>;
+};
+type CommandValidationRateLimitEntry = {
+  accountId: string;
+  tokens: number;
+  updatedAt: number;
+  lastLimitedLogAt: number;
+};
+const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
+const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
+const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
+
+export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
+  sendJson(res, status, { response_type: "ephemeral", text });
+}
+
+export async function readSlashCommandBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<string | undefined> {
+  try {
+    return await readRequestBodyWithLimit(req, {
+      maxBytes: MAX_BODY_BYTES,
+      timeoutMs: BODY_READ_TIMEOUT_MS,
+      // Let rejection reach Mattermost before closing the connection.
+      destroyOnLimit: false,
+    });
+  } catch (error) {
+    if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      await sendHttpRequestRejection(req, res, 408, "Request body timeout");
+    } else {
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+    }
+    return undefined;
+  }
+}
+
+function findRegisteredCommandForPayload(params: {
+  registeredCommands: readonly MattermostRegisteredCommand[];
+  payload: MattermostSlashCommandPayload;
+}): MattermostRegisteredCommand | undefined {
+  const trigger = normalizeSlashCommandTrigger(params.payload.command);
+  return params.registeredCommands.find(
+    (cmd) => cmd.teamId === params.payload.team_id && cmd.trigger === trigger,
+  );
+}
+
+function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
+  return typeof command.delete_at === "number" && command.delete_at > 0;
+}
+
+async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COMMAND_LOOKUP_TIMEOUT_MS);
+  try {
+    return await task(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function commandLookupKey(
+  client: ReturnType<typeof createMattermostClient>,
+  registered: MattermostRegisteredCommand,
+  accountId: string,
+): string {
+  return `${client.apiBaseUrl}:${accountId}:${registered.teamId}:${registered.id}`;
+}
+
+export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
+  for (const cache of [
+    commandValidationFailureCache,
+    commandLookupInflight,
+    commandValidationLookupRateLimit,
+  ]) {
+    for (const [key, entry] of cache) {
+      if (entry.accountId === accountId) {
+        cache.delete(key);
+      }
+    }
+  }
+}
+
+function sweepCommandValidationFailureCache(now = Date.now()): void {
+  for (const [key, entry] of commandValidationFailureCache) {
+    if (entry.expiresAt <= now) {
+      commandValidationFailureCache.delete(key);
+    }
+  }
+  pruneMapToMaxSize(commandValidationFailureCache, COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS);
+}
+
+function hasCachedCommandValidationFailure(key: string, now = Date.now()): boolean {
+  sweepCommandValidationFailureCache(now);
+  return commandValidationFailureCache.has(key);
+}
+
+function cacheCommandValidationFailure(key: string, accountId: string): void {
+  const now = Date.now();
+  sweepCommandValidationFailureCache(now);
+  commandValidationFailureCache.set(key, {
+    accountId,
+    expiresAt: now + COMMAND_VALIDATION_FAILURE_CACHE_MS,
+  });
+}
+
+function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
+  const staleAfterMs = COMMAND_VALIDATION_LOOKUP_REFILL_MS * COMMAND_VALIDATION_LOOKUP_BURST * 2;
+  for (const [key, entry] of commandValidationLookupRateLimit) {
+    if (now - entry.updatedAt > staleAfterMs) {
+      commandValidationLookupRateLimit.delete(key);
+    }
+  }
+  pruneMapToMaxSize(
+    commandValidationLookupRateLimit,
+    COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS,
+  );
+}
+
+function reserveCommandValidationLookup(params: {
+  key: string;
+  accountId: string;
+}): { allowed: true } | { allowed: false; shouldLog: boolean } {
+  const now = Date.now();
+  sweepCommandValidationLookupRateLimit(now);
+  const existing = commandValidationLookupRateLimit.get(params.key);
+  if (!existing) {
+    commandValidationLookupRateLimit.set(params.key, {
+      accountId: params.accountId,
+      tokens: COMMAND_VALIDATION_LOOKUP_BURST - 1,
+      updatedAt: now,
+      lastLimitedLogAt: 0,
+    });
+    return { allowed: true };
+  }
+
+  const refill = Math.floor((now - existing.updatedAt) / COMMAND_VALIDATION_LOOKUP_REFILL_MS);
+  if (refill > 0) {
+    existing.tokens = Math.min(COMMAND_VALIDATION_LOOKUP_BURST, existing.tokens + refill);
+    existing.updatedAt += refill * COMMAND_VALIDATION_LOOKUP_REFILL_MS;
+  }
+  if (existing.tokens <= 0) {
+    const shouldLog = now - existing.lastLimitedLogAt >= COMMAND_VALIDATION_LOOKUP_LIMIT_LOG_MS;
+    if (shouldLog) {
+      existing.lastLimitedLogAt = now;
+    }
+    return { allowed: false, shouldLog };
+  }
+  existing.tokens -= 1;
+  return { allowed: true };
+}
+
+async function fetchCurrentMattermostCommandUncached(params: {
+  client: ReturnType<typeof createMattermostClient>;
+  registered: MattermostRegisteredCommand;
+  log?: (msg: string) => void;
+}): Promise<MattermostCommandResponse | null> {
+  let commandLookupResult: MattermostCommandResponse | null = null;
+  let commandLookupError: unknown;
+  let commandLookupFallbackDetail: string | undefined;
+  try {
+    commandLookupResult = await withCommandLookupTimeout((signal) =>
+      getMattermostCommand(params.client, params.registered.id, { signal }),
+    );
+    if (!isDeletedMattermostCommand(commandLookupResult)) {
+      return commandLookupResult;
+    }
+    commandLookupFallbackDetail = "command lookup by id returned deleted command";
+  } catch (err) {
+    commandLookupError = err;
+    // Older Mattermost servers may not expose GET /commands/{id}; fall back to
+    // the team command list, which registration already requires.
+  }
+
+  try {
+    const currentCommands = await withCommandLookupTimeout((signal) =>
+      listMattermostCommands(params.client, params.registered.teamId, { signal }),
+    );
+    if (commandLookupError) {
+      params.log?.(
+        `mattermost: slash command lookup by id failed for /${params.registered.trigger}; using team list fallback (status=${parseMattermostApiStatus(commandLookupError) ?? "unknown"})`,
+      );
+    } else if (commandLookupFallbackDetail) {
+      params.log?.(
+        `mattermost: slash ${commandLookupFallbackDetail} for /${params.registered.trigger}; using team list fallback`,
+      );
+    }
+    return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
+  } catch (err) {
+    const primaryDetail = commandLookupError
+      ? `; command lookup status=${parseMattermostApiStatus(commandLookupError) ?? "unknown"}`
+      : commandLookupFallbackDetail
+        ? `; command lookup: ${commandLookupFallbackDetail}`
+        : "";
+    params.log?.(
+      `mattermost: slash command registration check failed for /${params.registered.trigger} (status=${parseMattermostApiStatus(err) ?? "unknown"})${primaryDetail}`,
+    );
+    return null;
+  }
+}
+
+type SlashInvocationAuth =
+  | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
+  | { ok: false; denyText: string };
+
+export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
+  const { account, cfg, runtime, registeredCommands, triggerMap, log } = params;
+
+  return async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    bufferedBody?: string,
+    onRequestAuthenticated?: () => void,
+  ): Promise<void> => {
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("Allow", "POST");
+      res.end("Method Not Allowed");
+      return;
+    }
+
+    const body = bufferedBody ?? (await readSlashCommandBody(req, res));
+    if (body === undefined) {
+      return;
+    }
+
+    const contentType = req.headers["content-type"] ?? "";
+    const payload = parseSlashCommandPayload(body, contentType);
+    if (!payload) {
+      sendSlashCommandResponse(res, 400, "Invalid slash command payload.");
+      return;
+    }
+
+    const registeredCommand = findRegisteredCommandForPayload({ registeredCommands, payload });
+
+    // Fail closed when no commands are registered, the payload doesn't map to
+    // a registered (team, trigger), or the payload token doesn't equal the
+    // resolved command's startup token. Comparing against the resolved
+    // command's token (rather than any token in the account) prevents a token
+    // valid for command A from advancing to upstream validation for command B,
+    // which would otherwise let an attacker poison the per-command failure
+    // cache and DoS legitimate invocations of command B.
+    if (!registeredCommand || !safeEqualSecret(payload.token, registeredCommand.token)) {
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
+      return;
+    }
+
+    const client = createMattermostClient({
+      baseUrl: account.baseUrl ?? "",
+      botToken: account.botToken ?? "",
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
+    });
+
+    const validationAccountId = account.accountId;
+    const admittedCommand = registeredCommand;
+    const token = payload.token;
+    async function validateMattermostSlashCommandToken(): Promise<boolean> {
+      const lookupKey = commandLookupKey(client, admittedCommand, validationAccountId);
+      if (hasCachedCommandValidationFailure(lookupKey)) {
+        return false;
+      }
+      if (!commandLookupInflight.has(lookupKey)) {
+        const reservation = reserveCommandValidationLookup({
+          key: lookupKey,
+          accountId: validationAccountId,
+        });
+        if (!reservation.allowed) {
+          if (reservation.shouldLog) {
+            log?.(
+              `mattermost: slash command validation lookup rate-limited for /${admittedCommand.trigger}`,
+            );
+          }
+          return false;
+        }
+      }
+      let current: MattermostCommandResponse | null;
+      const existing = commandLookupInflight.get(lookupKey);
+      if (existing) {
+        current = await existing.promise;
+      } else {
+        const lookup = fetchCurrentMattermostCommandUncached({
+          client,
+          registered: admittedCommand,
+          log,
+        }).finally(() => {
+          commandLookupInflight.delete(lookupKey);
+        });
+        commandLookupInflight.set(lookupKey, { accountId: validationAccountId, promise: lookup });
+        current = await lookup;
+      }
+      if (!current || isDeletedMattermostCommand(current)) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      if (
+        current.id !== admittedCommand.id ||
+        current.team_id !== admittedCommand.teamId ||
+        current.trigger !== admittedCommand.trigger ||
+        current.method !== MATTERMOST_SLASH_POST_METHOD ||
+        current.url !== admittedCommand.url
+      ) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      if (!current.token || !safeEqualSecret(token, current.token)) {
+        cacheCommandValidationFailure(lookupKey, validationAccountId);
+        return false;
+      }
+      commandValidationFailureCache.delete(lookupKey);
+      return true;
+    }
+    const tokenIsCurrent = await validateMattermostSlashCommandToken();
+    if (!tokenIsCurrent) {
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
+      return;
+    }
+
+    // Release the route's pre-auth slot before user authorization or command work.
+    onRequestAuthenticated?.();
+    const trigger = normalizeSlashCommandTrigger(payload.command);
+    const commandText = resolveCommandText(trigger, payload.text, triggerMap);
+    const channelId = payload.channel_id;
+    const senderId = payload.user_id;
+    const senderName = payload.user_name ?? senderId;
+
+    async function authorizeSlashInvocation(): Promise<SlashInvocationAuth> {
+      const core = getMattermostRuntime();
+
+      let channelInfo: MattermostChannel | null = null;
+      try {
+        channelInfo = await fetchMattermostChannel(client, channelId);
+      } catch (err) {
+        log?.(
+          `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+        );
+      }
+
+      if (!channelInfo) {
+        return {
+          ok: false,
+          denyText: "Temporary error: unable to determine channel type. Please try again.",
+        };
+      }
+
+      const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
+        cfg,
+        surface: "mattermost",
+      });
+      const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
+      const storeAllowFrom = normalizeMattermostAllowList(
+        await core.channel.pairing
+          .readAllowFromStore({
+            channel: "mattermost",
+            accountId: account.accountId,
+          })
+          .catch(() => []),
+      );
+      const decision = await authorizeMattermostCommandInvocation({
+        account,
+        cfg,
+        senderId,
+        senderName,
+        channelId,
+        channelInfo,
+        storeAllowFrom,
+        allowTextCommands,
+        hasControlCommand,
+      });
+
+      if (!decision.ok) {
+        if (decision.denyReason === "dm-pairing") {
+          const { code } = await core.channel.pairing.upsertPairingRequest({
+            channel: "mattermost",
+            accountId: account.accountId,
+            id: senderId,
+            meta: { name: senderName },
+          });
+          return {
+            ok: false,
+            denyText: code
+              ? core.channel.pairing.buildPairingReply({
+                  channel: "mattermost",
+                  idLine: `Your Mattermost user id: ${senderId}`,
+                  code,
+                })
+              : MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
+          };
+        }
+
+        const denyText =
+          decision.denyReason === "unknown-channel"
+            ? "Temporary error: unable to determine channel type. Please try again."
+            : decision.denyReason === "dm-disabled"
+              ? "This bot is not accepting direct messages."
+              : decision.denyReason === "channels-disabled"
+                ? "Slash commands are disabled in channels."
+                : decision.denyReason === "channel-no-allowlist"
+                  ? "Slash commands are not configured for this channel (no allowlist)."
+                  : "Unauthorized.";
+        return { ok: false, denyText };
+      }
+
+      return decision;
+    }
+    const auth = await authorizeSlashInvocation();
+
+    if (!auth.ok) {
+      sendSlashCommandResponse(res, 200, auth.denyText);
+      return;
+    }
+
+    // Acknowledge immediately — we'll send the actual reply asynchronously
+    sendSlashCommandResponse(res, 200, "Processing...");
+
+    let replyRootId: string | undefined;
+
+    try {
+      const { kind, chatType, channelDisplay, roomLabel, commandAuthorized } = auth;
+      const teamId = payload.team_id;
+      const triggerId = payload.trigger_id;
+      const core = getMattermostRuntime();
+
+      const channelRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+        teamId,
+        peer: {
+          kind,
+          id: kind === "direct" ? senderId : channelId,
+        },
+      });
+      const thread = resolveMattermostThreadSessionContext({
+        baseSessionKey: channelRoute.sessionKey,
+        kind,
+        replyToMode: resolveMattermostReplyToMode(account, kind),
+        threadRootId: payload.root_id,
+      });
+      const route = { ...channelRoute, sessionKey: thread.sessionKey };
+      replyRootId = thread.effectiveReplyToId;
+
+      const fromLabel =
+        kind === "direct"
+          ? `Mattermost DM from ${senderName}`
+          : `Mattermost message in ${roomLabel} from ${senderName}`;
+
+      const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
+      const messageSid = triggerId ?? `slash-${Date.now()}`;
+      const pickerEntry = resolveMattermostModelPickerEntry(commandText);
+      if (pickerEntry) {
+        const accountId = account.accountId;
+        const sessionEntry = await getSessionEntryAsync({
+          agentId: route.agentId,
+          storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+          sessionKey: route.sessionKey,
+          readConsistency: "latest",
+        });
+        const recordModelPickerExchange = (replyText: string) =>
+          recordDeliveredCommandExchange({
+            config: cfg,
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            expectedSessionId: sessionEntry?.sessionId,
+            commandText,
+            commandId: `mattermost:${accountId}:${channelId}:${messageSid}`,
+            replyId: "model-picker",
+            replyText,
+          });
+        const data = await buildPreparedModelsProviderData(cfg, route.agentId, { sessionEntry });
+        if (data.providers.length === 0) {
+          const delivered = await sendMessageMattermost(
+            `channel:${channelId}`,
+            [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
+            { cfg, accountId, replyToId: replyRootId },
+          );
+          await recordModelPickerExchange(delivered.content);
+          return;
+        }
+
+        const currentModel = await resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route,
+          data,
+          sessionEntry,
+        });
+        const viewParams = { ownerUserId: senderId, data, currentModel };
+        const view =
+          pickerEntry.kind === "summary"
+            ? renderMattermostModelSummaryView(viewParams)
+            : pickerEntry.kind === "providers"
+              ? renderMattermostProviderPickerView(viewParams)
+              : renderMattermostModelsPickerView({
+                  ...viewParams,
+                  provider: pickerEntry.provider,
+                  page: 1,
+                });
+        const delivered = await sendMessageMattermost(
+          `channel:${channelId}`,
+          [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
+          { cfg, accountId, buttons: view.buttons, replyToId: replyRootId },
+        );
+        await recordModelPickerExchange(
+          [
+            delivered.content,
+            ...view.buttons.map((row) => row.map((button) => button.text).join(", ")),
+          ].join("\n"),
+        );
+        runtime.log?.(`delivered model picker to ${to}`);
+        return;
+      }
+
+      const ctxPayload = finalizeInboundContext({
+        Body: commandText,
+        BodyForAgent: commandText,
+        RawBody: commandText,
+        CommandBody: commandText,
+        From:
+          kind === "direct"
+            ? `mattermost:${senderId}`
+            : kind === "group"
+              ? `mattermost:group:${channelId}`
+              : `mattermost:channel:${channelId}`,
+        To: to,
+        SessionKey: route.sessionKey,
+        ParentSessionKey: thread.parentSessionKey,
+        AccountId: route.accountId,
+        ChatType: chatType,
+        ConversationRouteContextObserved: true,
+        ConversationRoutePeerId: kind === "direct" ? senderId : channelId,
+        ConversationLabel: fromLabel,
+        GroupSpace: teamId,
+        GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
+        SenderName: senderName,
+        SenderId: senderId,
+        Provider: "mattermost" as const,
+        Surface: "mattermost" as const,
+        MessageSid: messageSid,
+        Timestamp: Date.now(),
+        WasMentioned: true,
+        CommandAuthorized: commandAuthorized,
+        InboundAccessAuthorized: true,
+        CommandSource: "native" as const,
+        OriginatingChannel: "mattermost" as const,
+        OriginatingTo: to,
+        ReplyToId: replyRootId,
+        MessageThreadId: replyRootId,
+      });
+
+      const textLimit = core.channel.text.resolveTextChunkLimit(
+        cfg,
+        "mattermost",
+        account.accountId,
+        {
+          fallbackLimit: account.textChunkLimit ?? 4000,
+        },
+      );
+      const tableMode = core.channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+      });
+
+      await core.channel.inbound.dispatch({
+        cfg,
+        channel: "mattermost",
+        accountId: account.accountId,
+        route: {
+          agentId: route.agentId,
+          dmScope: route.dmScope,
+          sessionKey: route.sessionKey,
+        },
+        ctxPayload,
+        delivery: {
+          observeMessageSent: true,
+          deliver: async (replyPayload) => {
+            const result = await deliverMattermostReplyPayload({
+              core,
+              cfg,
+              payload: replyPayload,
+              channelId,
+              accountId: account.accountId,
+              agentId: route.agentId,
+              replyToId: replyRootId,
+              textLimit,
+              tableMode,
+              sendMessage: sendMessageMattermost,
+            });
+            if (result.visibleReplySent) {
+              runtime.log?.(`delivered slash reply to ${to}`);
+            }
+            return result;
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              `mattermost slash ${info.kind} reply failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+            );
+          },
+        },
+        replyPipeline: {
+          typing: {
+            start: () => sendMattermostTyping(client, { channelId, parentId: replyRootId }),
+            onStartError: (err) => {
+              logTypingFailure({
+                log: (message) => log?.(message),
+                channel: "mattermost",
+                target: channelId,
+                error: err,
+              });
+            },
+          },
+        },
+        dispatcherOptions: { humanDelay: resolveHumanDelayConfig(cfg, route.agentId) },
+        replyOptions: {
+          disableBlockStreaming:
+            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+        },
+      });
+    } catch (err) {
+      log?.(
+        `mattermost: slash command handler error (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+      );
+      try {
+        const to = `channel:${channelId}`;
+        await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
+          cfg,
+          accountId: account.accountId,
+          replyToId: replyRootId,
+        });
+      } catch {
+        // best-effort error reply
+      }
+    }
+  };
+}

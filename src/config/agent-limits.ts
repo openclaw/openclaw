@@ -1,0 +1,46 @@
+import os from "node:os";
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "./types.js";
+
+const MIN_AGENT_MAX_CONCURRENT = 8;
+const AGENT_RUNS_PER_CPU = 4;
+let defaultAgentMaxConcurrent: number | undefined;
+
+function resolveDefaultAgentMaxConcurrent(): number {
+  if (defaultAgentMaxConcurrent === undefined) {
+    defaultAgentMaxConcurrent = Math.max(
+      MIN_AGENT_MAX_CONCURRENT,
+      os.availableParallelism() * AGENT_RUNS_PER_CPU,
+    );
+  }
+  return defaultAgentMaxConcurrent;
+}
+
+/** Default maximum concurrent child-agent runs per immediate spawning/controller session. */
+export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
+export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
+export const DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES = 60;
+// Allow recursive delegation by default while bounding each spawn lineage.
+export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 5;
+export function isSubagentSpawnDepthAllowed(
+  depth: number,
+  maxSpawnDepth = DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+): boolean {
+  return depth < maxSpawnDepth;
+}
+
+/** Resolves top-level agent concurrency, flooring finite values and clamping to at least one. */
+export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
+  return (
+    resolveOptionalIntegerOption(cfg?.agents?.defaults?.maxConcurrent, { min: 1 }) ??
+    resolveDefaultAgentMaxConcurrent()
+  );
+}
+
+/** Resolves per-session subagent concurrency, flooring finite values and clamping to at least one. */
+export function resolveSubagentMaxConcurrent(cfg?: OpenClawConfig): number {
+  return (
+    resolveOptionalIntegerOption(cfg?.agents?.defaults?.subagents?.maxConcurrent, { min: 1 }) ??
+    DEFAULT_SUBAGENT_MAX_CONCURRENT
+  );
+}

@@ -1,0 +1,181 @@
+// Resolves trusted directories for safe-bin allowlist policy.
+import fs from "node:fs";
+import path from "node:path";
+import {
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { sameFsObject, swapAsciiCase } from "./path-case.js";
+
+// Keep defaults to OS-managed immutable bins only.
+// User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
+const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
+
+type TrustedSafeBinPathParams = {
+  resolvedPath: string;
+  trustedDirs?: ReadonlySet<string>;
+};
+
+export type WritableTrustedSafeBinDir = {
+  dir: string;
+  worldWritable: boolean;
+};
+
+function pathCaseInsensitive(value: string): boolean {
+  let candidate = value;
+  for (;;) {
+    const swapped = swapAsciiCase(candidate);
+    if (swapped !== candidate) {
+      try {
+        const original = fs.statSync(candidate);
+        try {
+          const alternate = fs.statSync(swapped);
+          return sameFsObject(original, alternate);
+        } catch {
+          return false;
+        }
+      } catch {
+        // The compared path may not exist yet; probe the closest existing parent.
+      }
+    }
+
+    const parent = path.dirname(candidate);
+    if (parent === candidate) {
+      return process.platform === "win32";
+    }
+    candidate = parent;
+  }
+}
+
+function normalizeTrustComparisonPath(value: string): string {
+  const resolved = path.resolve(value);
+  return pathCaseInsensitive(resolved) ? resolved.toLowerCase() : resolved;
+}
+
+function normalizeTrustedDir(value: string, forComparison = true): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return forComparison ? normalizeTrustComparisonPath(trimmed) : path.resolve(trimmed);
+}
+
+export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return uniqueStrings(normalized);
+}
+
+function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = true): string[] {
+  const resolved = entries
+    .map((entry) => normalizeTrustedDir(entry, forComparison))
+    .filter((entry): entry is string => Boolean(entry));
+  return sortUniqueStrings(resolved);
+}
+
+function hasPathSelector(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
+}
+
+function isExecutableSafeBinFile(value: string): boolean {
+  try {
+    const stats = fs.statSync(value);
+    if (!stats.isFile()) {
+      return false;
+    }
+    if (process.platform === "win32") {
+      return true;
+    }
+    fs.accessSync(value, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveTrustedSafeBinTargetDirs(
+  entries: readonly string[],
+  safeBins: readonly string[],
+): string[] {
+  const dirs: string[] = [];
+  const bins = Array.from(
+    new Set(
+      safeBins.map((entry) => entry.trim()).filter((entry) => entry && !hasPathSelector(entry)),
+    ),
+  ).toSorted();
+  if (bins.length === 0) {
+    return dirs;
+  }
+  for (const entry of normalizeTrustedSafeBinDirs(entries)) {
+    const dir = path.resolve(entry);
+    for (const bin of bins) {
+      const candidate = path.join(dir, bin);
+      if (!isExecutableSafeBinFile(candidate)) {
+        continue;
+      }
+      try {
+        const targetDir = path.dirname(fs.realpathSync(candidate));
+        const normalized = normalizeTrustedDir(targetDir);
+        if (normalized) {
+          dirs.push(normalized);
+        }
+      } catch {
+        // Missing binaries are resolved normally at command time.
+      }
+    }
+  }
+  return sortUniqueStrings(dirs);
+}
+
+export function getTrustedSafeBinDirs(
+  params: {
+    extraDirs?: readonly string[];
+    safeBins?: readonly string[];
+  } = {},
+): Set<string> {
+  const extraDirs = params.extraDirs ?? [];
+  const safeBins = params.safeBins ?? [];
+  const entries = [
+    ...normalizeTrustedSafeBinDirs(DEFAULT_SAFE_BIN_TRUSTED_DIRS),
+    ...normalizeTrustedSafeBinDirs(extraDirs),
+  ];
+  const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
+  return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
+}
+
+export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
+  const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
+  const resolvedDir = normalizeTrustComparisonPath(path.dirname(path.resolve(params.resolvedPath)));
+  return trustedDirs.has(resolvedDir);
+}
+
+export function listWritableExplicitTrustedSafeBinDirs(
+  entries?: readonly string[] | null,
+): WritableTrustedSafeBinDir[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+  const resolved = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries), false);
+  const hits: WritableTrustedSafeBinDir[] = [];
+  for (const dir of resolved) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(dir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+    const mode = stat.mode & 0o777;
+    const groupWritable = (mode & 0o020) !== 0;
+    const worldWritable = (mode & 0o002) !== 0;
+    if (!groupWritable && !worldWritable) {
+      continue;
+    }
+    hits.push({ dir, worldWritable });
+  }
+  return hits;
+}

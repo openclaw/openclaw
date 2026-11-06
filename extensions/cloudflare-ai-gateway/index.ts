@@ -1,0 +1,195 @@
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  applyAuthProfileConfig,
+  buildApiKeyCredential,
+  ensureAuthProfileStoreAsync,
+  listProfilesForProvider,
+  normalizeOptionalSecretInput,
+  type ProviderAuthContext,
+} from "openclaw/plugin-sdk/provider-auth";
+import {
+  captureProviderApiKey,
+  persistProviderApiKey,
+} from "openclaw/plugin-sdk/provider-auth-api-key";
+import { createAnthropicThinkingPrefillPayloadWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
+import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
+import {
+  applyCloudflareAiGatewayConnectionConfig,
+  applyCloudflareAiGatewayProviderConnectionConfig,
+} from "./onboard.js";
+
+const log = createSubsystemLogger("cloudflare-ai-gateway-stream");
+
+const PROVIDER_ID = "cloudflare-ai-gateway";
+const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
+const PROFILE_ID = "cloudflare-ai-gateway:default";
+
+async function resolveCloudflareGatewayMetadataInteractive(
+  ctx: Pick<ProviderAuthContext, "prompter"> & { accountId?: string; gatewayId?: string },
+) {
+  let accountId = normalizeOptionalString(ctx.accountId) ?? "";
+  let gatewayId = normalizeOptionalString(ctx.gatewayId) ?? "";
+  if (!accountId) {
+    const value = await ctx.prompter.text({
+      message: "Enter Cloudflare Account ID",
+      validate: (val) => (normalizeOptionalString(val) ? undefined : "Account ID is required"),
+    });
+    accountId = normalizeOptionalString(value) ?? "";
+  }
+  if (!gatewayId) {
+    const value = await ctx.prompter.text({
+      message: "Enter Cloudflare AI Gateway ID",
+      validate: (val) => (normalizeOptionalString(val) ? undefined : "Gateway ID is required"),
+    });
+    gatewayId = normalizeOptionalString(value) ?? "";
+  }
+  return { accountId, gatewayId };
+}
+
+export default definePluginEntry({
+  id: PROVIDER_ID,
+  name: "Cloudflare AI Gateway Provider",
+  description: "Bundled Cloudflare AI Gateway provider plugin",
+  register(api) {
+    api.registerProvider({
+      id: PROVIDER_ID,
+      label: "Cloudflare AI Gateway",
+      docsPath: "/providers/cloudflare-ai-gateway",
+      envVars: ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+      auth: [
+        {
+          id: "api-key",
+          label: "Cloudflare AI Gateway",
+          hint: "Account ID + Gateway ID + API key",
+          kind: "api_key",
+          wizard: {
+            choiceId: "cloudflare-ai-gateway-api-key",
+            choiceLabel: "Cloudflare AI Gateway",
+            choiceHint: "Account ID + Gateway ID + API key",
+            groupId: "cloudflare-ai-gateway",
+            groupLabel: "Cloudflare AI Gateway",
+            groupHint: "Account ID + Gateway ID + API key",
+          },
+          run: async (ctx) => {
+            const metadata = await resolveCloudflareGatewayMetadataInteractive({
+              accountId: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayAccountId),
+              gatewayId: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayGatewayId),
+              prompter: ctx.prompter,
+            });
+            const { input, mode } = await captureProviderApiKey(ctx, {
+              token: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayApiKey),
+              tokenProvider: "cloudflare-ai-gateway",
+              expectedProviders: [PROVIDER_ID],
+              provider: PROVIDER_ID,
+              envLabel: PROVIDER_ENV_VAR,
+              promptMessage: "Enter Cloudflare AI Gateway API key",
+              missingInputMessage: "Missing Cloudflare AI Gateway API key.",
+            });
+            return {
+              profiles: [
+                {
+                  profileId: PROFILE_ID,
+                  credential: buildApiKeyCredential(
+                    PROVIDER_ID,
+                    input,
+                    metadata,
+                    mode ? { secretInputMode: mode } : undefined,
+                  ),
+                },
+              ],
+              configPatch: applyCloudflareAiGatewayProviderConnectionConfig(ctx.config, metadata),
+              defaultModel: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+            };
+          },
+          runNonInteractive: async (ctx) => {
+            const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
+              allowKeychainPrompt: false,
+            });
+            const credential = authStore.profiles[PROFILE_ID];
+            const storedMetadata =
+              credential?.type === "api_key"
+                ? {
+                    accountId: normalizeOptionalString(credential.metadata?.accountId),
+                    gatewayId: normalizeOptionalString(credential.metadata?.gatewayId),
+                  }
+                : {};
+            const accountId =
+              normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayAccountId) ??
+              storedMetadata.accountId;
+            const gatewayId =
+              normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayGatewayId) ??
+              storedMetadata.gatewayId;
+            if (!accountId || !gatewayId) {
+              throw new Error(
+                "Cloudflare AI Gateway setup requires --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
+              );
+            }
+            const resolved = await ctx.resolveApiKey({
+              provider: PROVIDER_ID,
+              flagValue: normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayApiKey),
+              flagName: "--cloudflare-ai-gateway-api-key",
+              envVar: PROVIDER_ENV_VAR,
+            });
+            if (!resolved) {
+              return null;
+            }
+            if (
+              !(await persistProviderApiKey(ctx, PROFILE_ID, {
+                provider: PROVIDER_ID,
+                resolved,
+                metadata: { accountId, gatewayId },
+              }))
+            ) {
+              return null;
+            }
+            const next = applyAuthProfileConfig(ctx.config, {
+              profileId: PROFILE_ID,
+              provider: PROVIDER_ID,
+              mode: "api_key",
+            });
+            return applyCloudflareAiGatewayConnectionConfig(next, { accountId, gatewayId });
+          },
+        },
+      ],
+      catalog: {
+        order: "late",
+        run: async (ctx) => {
+          const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
+            allowKeychainPrompt: false,
+          });
+          const envManagedApiKey = normalizeOptionalString(ctx.env[PROVIDER_ENV_VAR])
+            ? PROVIDER_ENV_VAR
+            : undefined;
+          for (const profileId of listProfilesForProvider(authStore, PROVIDER_ID)) {
+            const provider = buildCloudflareAiGatewayCatalogProvider({
+              credential: authStore.profiles[profileId],
+              envApiKey: envManagedApiKey,
+            });
+            if (!provider) {
+              continue;
+            }
+            return {
+              provider,
+            };
+          }
+          return null;
+        },
+      },
+      classifyFailoverReason: ({ errorMessage }) =>
+        /\bworkers?_ai\b.*\b(?:rate|limit|quota)\b/i.test(errorMessage) ? "rate_limit" : undefined,
+      wrapStreamFn: (ctx) => {
+        if (ctx.model?.api !== undefined && ctx.model.api !== "anthropic-messages") {
+          return ctx.streamFn;
+        }
+        return createAnthropicThinkingPrefillPayloadWrapper(ctx.streamFn, (stripped) => {
+          log.warn(
+            `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+          );
+        });
+      },
+    });
+  },
+});

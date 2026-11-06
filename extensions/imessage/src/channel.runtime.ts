@@ -1,0 +1,135 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
+import {
+  createAccountStatusSink,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import {
+  listEnabledIMessageAccounts,
+  resolveIMessageAccount,
+  resolveIMessageDuplicateSourceOwner,
+  type ResolvedIMessageAccount,
+} from "./accounts.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
+import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
+import { probeIMessage } from "./probe.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { sendMessageIMessage } from "./send.js";
+
+type IMessageSendFn = typeof sendMessageIMessage;
+
+export async function sendIMessageOutbound(params: {
+  cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl?: string;
+  mediaAccess?: Parameters<IMessageSendFn>[2]["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: Parameters<IMessageSendFn>[2]["mediaReadFile"];
+  audioAsVoice?: boolean;
+  accountId?: string;
+  deps?: { [channelId: string]: unknown };
+  replyToId?: string;
+  conversationReadOrigin?: "delegated" | "direct-operator";
+  onDeliveryResult?: NonNullable<Parameters<IMessageSendFn>[2]["onDeliveryResult"]>;
+  assertDirectAdapterHandoff?: () => void;
+  onPlatformSendDispatch?: () => Promise<void>;
+}) {
+  const send =
+    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
+      legacyKeys: IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+    }) ?? sendMessageIMessage;
+  const maxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: () => resolveIMessageAccount(params).config.mediaMaxMb,
+  });
+  const result = await send(params.to, params.text, {
+    config: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
+    maxBytes,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    conversationReadOrigin: params.conversationReadOrigin,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
+  });
+  const meta = {
+    ...(result as typeof result & { meta?: Record<string, unknown> }).meta,
+    ...(result.guid ? { imessageMessageGuid: result.guid } : {}),
+    ...(result.sentText ? { imessageVisibleText: result.sentText } : {}),
+  };
+  return Object.keys(meta).length > 0 ? { ...result, meta } : result;
+}
+
+export async function probeIMessageAccount(params?: {
+  timeoutMs?: number;
+  cliPath?: string;
+  dbPath?: string;
+  remoteHost?: string;
+}) {
+  return await probeIMessage(params?.timeoutMs, {
+    cliPath: params?.cliPath,
+    dbPath: params?.dbPath,
+    remoteHost: params?.remoteHost,
+    forceRefresh: true,
+  });
+}
+
+export async function startIMessageGatewayAccount(
+  ctx: ChannelGatewayContextV2<ResolvedIMessageAccount>,
+) {
+  const account = ctx.account;
+  const cliPath = account.config.cliPath?.trim() || "imsg";
+  const dbPath = account.config.dbPath?.trim();
+  ctx.setStatus({
+    accountId: account.accountId,
+    cliPath,
+    dbPath: dbPath ?? null,
+  });
+  // Seed the shared process-stable locality cache before comparing account
+  // sources so legacy SSH wrappers and explicit remoteHost configs dedupe alike.
+  await Promise.all(
+    listEnabledIMessageAccounts(ctx.cfg).map(async (candidate) => {
+      await resolveIMessageRemoteHost({
+        cliPath: candidate.config.cliPath?.trim() || "imsg",
+        remoteHost: candidate.config.remoteHost,
+      });
+    }),
+  );
+  const ownerAccountId = resolveIMessageDuplicateSourceOwner({ cfg: ctx.cfg, account });
+  if (ownerAccountId) {
+    // openclaw/openclaw#65141: this account shares a local Messages source with
+    // an already-owning account, so spawning a second `imsg rpc` would deliver
+    // every inbound twice. Keep the account enabled for outbound sends, status,
+    // and capability surfaces; just park the watcher slot until shutdown. Lifecycle stays silent:
+    // ready would lie about admission and stopped would invite restart; parked semantics are deferred.
+    ctx.log?.info?.(
+      `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
+    );
+    await waitForAbortSignal(ctx.abortSignal);
+    return;
+  }
+  const statusSink = createAccountStatusSink({
+    accountId: account.accountId,
+    setStatus: ctx.setStatus,
+  });
+  statusSink({ lifecycle: "starting" });
+  ctx.log?.info?.(
+    `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
+  );
+  return await monitorIMessageProvider({
+    scheduler: ctx.scheduler,
+    accountId: account.accountId,
+    config: ctx.cfg,
+    runtime: ctx.runtime,
+    abortSignal: ctx.abortSignal,
+    channelRuntime: ctx.channelRuntime,
+    statusSink,
+  });
+}

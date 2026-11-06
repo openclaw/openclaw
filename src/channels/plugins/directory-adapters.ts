@@ -1,0 +1,27 @@
+import type { ChannelDirectoryAdapter } from "./types.adapters.js";
+
+export const nullChannelDirectorySelf: NonNullable<ChannelDirectoryAdapter["self"]> = async () =>
+  null;
+
+export const emptyChannelDirectoryList: NonNullable<
+  ChannelDirectoryAdapter["listPeers"]
+> = async () => [];
+
+/** Build a channel directory adapter with a null self resolver by default. */
+export function createChannelDirectoryAdapter(
+  params: Omit<ChannelDirectoryAdapter, "self"> & {
+    self?: ChannelDirectoryAdapter["self"];
+  } = {},
+): ChannelDirectoryAdapter {
+  return {
+    ...params,
+    self: params.self ?? nullChannelDirectorySelf,
+  };
+}
+
+export function createEmptyChannelDirectoryAdapter(): ChannelDirectoryAdapter {
+  return createChannelDirectoryAdapter({
+    listPeers: emptyChannelDirectoryList,
+    listGroups: emptyChannelDirectoryList,
+  });
+}

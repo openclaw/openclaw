@@ -1,0 +1,80 @@
+import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
+import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getSenderIdentity } from "../../identity.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
+import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
+import type { sendReactionWhatsApp } from "../../send.js";
+import { resolveGroupActivationFor } from "./group-activation.js";
+
+const DISABLED_REACTION = { status: "disabled" } as const;
+
+export async function resolveWhatsAppReactionEligibility(params: {
+  cfg: OpenClawConfig;
+  msg: AdmittedWebInboundMessage;
+  agentId: string;
+  sessionKey: string;
+  verbose: boolean;
+}) {
+  const messageId = params.msg.event.id;
+  if (!messageId) {
+    return DISABLED_REACTION;
+  }
+
+  const admission = params.msg.admission;
+  const accountId = admission.accountId;
+  // ackReaction owns emoji/scope, while reactionLevel can suppress every automatic reaction.
+  if (resolveWhatsAppReactionLevel({ cfg: params.cfg, accountId }).level === "off") {
+    return DISABLED_REACTION;
+  }
+
+  const scope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
+  if (scope === "off" || scope === "none") {
+    return DISABLED_REACTION;
+  }
+  const ackReaction = params.cfg.messages?.ackReaction;
+  const emoji = ackReaction
+    ? ackReaction.trim() || resolveAgentIdentity(params.cfg, params.agentId)?.emoji?.trim() || "👀"
+    : "";
+  const isGroup = admission.conversation.kind === "group";
+  const activation = isGroup
+    ? await resolveGroupActivationFor({
+        cfg: params.cfg,
+        accountId,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        conversationId: admission.conversation.id,
+      })
+    : null;
+  if (
+    !emoji ||
+    !shouldAckReaction({
+      scope,
+      isDirect: admission.conversation.kind === "direct",
+      isGroup,
+      isMentionableGroup: isGroup,
+      canDetectMention: isGroup,
+      effectiveWasMentioned:
+        (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
+      shouldBypassMention: activation === "always",
+    })
+  ) {
+    return DISABLED_REACTION;
+  }
+
+  const sender = getSenderIdentity(params.msg);
+  const participant = sender.jid ?? sender.lid ?? undefined;
+  return {
+    status: "prepared" as const,
+    chatId: params.msg.platform.chatJid,
+    messageId,
+    emoji,
+    reactionOptions: {
+      verbose: params.verbose,
+      fromMe: params.msg.platform.fromMe === true,
+      ...(participant ? { participant } : {}),
+      accountId,
+      cfg: params.cfg,
+    } satisfies Parameters<typeof sendReactionWhatsApp>[3],
+  };
+}

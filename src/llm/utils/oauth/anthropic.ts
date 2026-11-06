@@ -1,0 +1,367 @@
+import { readResponseWithLimit } from "../../../infra/http-body.js";
+import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-callback.js";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+  generateOAuthState,
+  generatePKCE,
+  parseOAuthAuthorizationInput,
+  resolveOAuthTokenExpiresAt,
+} from "../../../plugin-sdk/provider-oauth-runtime.js";
+import {
+  buildOAuthRequestSignal,
+  createOAuthLoginCancelledError,
+  throwIfOAuthLoginAborted,
+  withOAuthLoginAbort,
+} from "./abort.js";
+import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
+
+const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
+const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const DEFAULT_CALLBACK_HOST = "127.0.0.1";
+const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const CALLBACK_PORT = 53692;
+const CALLBACK_PATH = "/callback";
+const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
+const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+
+function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
+  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
+  if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
+    throw new Error("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
+  }
+  return host;
+}
+
+const SCOPES =
+  "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+
+/** Max response body bytes for Anthropic OAuth token endpoint (16 MiB). */
+const OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
+function formatErrorDetails(error: unknown): string {
+  if (error instanceof Error) {
+    const details: string[] = [`${error.name}: ${error.message}`];
+    const errorWithCode = error as Error & {
+      code?: string;
+      errno?: number | string;
+      cause?: unknown;
+    };
+    if (errorWithCode.code) {
+      details.push(`code=${errorWithCode.code}`);
+    }
+    if (errorWithCode.errno !== undefined) {
+      details.push(`errno=${String(errorWithCode.errno)}`);
+    }
+    if (error.cause !== undefined) {
+      details.push(`cause=${formatErrorDetails(error.cause)}`);
+    }
+    if (error.stack) {
+      details.push(`stack=${error.stack}`);
+    }
+    return details.join("; ");
+  }
+  return String(error);
+}
+
+// Only locally constructed, body-free diagnostics may reach refresh messages.
+class TokenResponseError extends Error {}
+
+function formatTokenResponseParseContext(responseBody: string): string {
+  return `bodyBytes=${Buffer.byteLength(responseBody, "utf8")}`;
+}
+
+function parseTokenCredentials(
+  responseBody: string,
+  options: {
+    invalidJsonMessage: string;
+    invalidFieldsMessage: string;
+  },
+): OAuthCredentials {
+  let data: unknown;
+  try {
+    data = JSON.parse(responseBody);
+  } catch {
+    throw new TokenResponseError(
+      `${options.invalidJsonMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new TokenResponseError(
+      `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  const record = data as Record<string, unknown>;
+  const expires = resolveOAuthTokenExpiresAt(record.expires_in, { refreshSkewMs: 5 * 60 * 1000 });
+  if (
+    typeof record.access_token !== "string" ||
+    !record.access_token ||
+    typeof record.refresh_token !== "string" ||
+    !record.refresh_token ||
+    expires === undefined
+  ) {
+    throw new TokenResponseError(
+      `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  return {
+    refresh: record.refresh_token,
+    access: record.access_token,
+    expires,
+  };
+}
+
+async function startCallbackServer(expectedState: string) {
+  if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
+    throw new Error("Anthropic OAuth is only available in Node.js environments");
+  }
+  const callback = await startOAuthLoopbackCallbackServer({
+    redirectUrl: REDIRECT_URI,
+    expectedState,
+    timeoutMs: CALLBACK_TIMEOUT_MS,
+    bindHostname: resolveCallbackHost(),
+  });
+  return {
+    cancelWait: () => void callback.close(),
+    waitForCode: async () => {
+      try {
+        const result = await callback.waitForCallback();
+        if (result.type === "oauth_error") {
+          throw new Error(`Anthropic OAuth error: ${result.error}`);
+        }
+        return { code: result.code, state: result.state };
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message === "OAuth callback timeout" ||
+            error.message === "OAuth callback cancelled")
+        ) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    close: callback.close,
+  };
+}
+
+async function postJson(
+  body: Record<string, string | number>,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfOAuthLoginAborted(signal);
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: buildOAuthRequestSignal({ signal, timeoutMs: 30_000 }),
+  });
+
+  const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size }) =>
+      new TokenResponseError(`Anthropic OAuth response too large: ${size} bytes`),
+  });
+  const responseBody = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+
+  if (body.grant_type === "refresh_token") {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(responseBody);
+    } catch {
+      /* Invalid success is handled below. */
+    }
+    if (!response.ok || (payload && typeof payload === "object" && "error" in payload)) {
+      throw createOAuthRefreshResponseError("Anthropic token refresh", response.status, payload);
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `HTTP request failed. status=${response.status}; url=${TOKEN_URL}; body=${responseBody}`,
+    );
+  }
+
+  return responseBody;
+}
+
+async function exchangeAuthorizationCode(
+  code: string,
+  state: string,
+  verifier: string,
+  redirectUri: string,
+  signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+  let responseBody: string;
+  try {
+    responseBody = await postJson(
+      {
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        code,
+        state,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+      },
+      signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) {
+      throw createOAuthLoginCancelledError();
+    }
+    throw new Error(
+      `Token exchange request failed. url=${TOKEN_URL}; redirect_uri=${redirectUri}; response_type=authorization_code; details=${formatErrorDetails(error)}`,
+      { cause: error },
+    );
+  }
+
+  return parseTokenCredentials(responseBody, {
+    invalidJsonMessage: "Token exchange returned invalid JSON.",
+    invalidFieldsMessage: "Token exchange returned invalid token fields.",
+  });
+}
+
+async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+  throwIfOAuthLoginAborted(options.signal);
+  const { verifier, challenge } = await generatePKCE();
+  const expectedState = generateOAuthState();
+  const server = await startCallbackServer(expectedState);
+
+  const parseAuthorizationInput = (input: string) => {
+    const parsed = parseOAuthAuthorizationInput(input);
+    if (parsed.state && parsed.state !== expectedState) {
+      throw new Error("OAuth state mismatch");
+    }
+    return { code: parsed.code, state: parsed.state ?? expectedState };
+  };
+
+  try {
+    throwIfOAuthLoginAborted(options.signal);
+    const authParams = new URLSearchParams({
+      code: "true",
+      client_id: CLIENT_ID,
+      response_type: "code",
+      redirect_uri: REDIRECT_URI,
+      scope: SCOPES,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      state: expectedState,
+    });
+
+    options.onAuth({
+      url: `${AUTHORIZE_URL}?${authParams.toString()}`,
+      instructions:
+        "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
+    });
+    throwIfOAuthLoginAborted(options.signal);
+
+    const manualPromise = options.onManualCodeInput?.().then(
+      (input) => {
+        server.cancelWait();
+        return parseAuthorizationInput(input);
+      },
+      (err: unknown) => {
+        server.cancelWait();
+        throw err instanceof Error ? err : new Error(String(err));
+      },
+    );
+    const callbackPromise = server.waitForCode();
+    let result = await withOAuthLoginAbort(
+      manualPromise
+        ? Promise.race([
+            manualPromise,
+            callbackPromise.then((callback) => callback ?? manualPromise),
+          ])
+        : callbackPromise,
+      options.signal,
+      server.cancelWait,
+    );
+
+    if (!result?.code) {
+      const input = await withOAuthLoginAbort(
+        options.onPrompt({
+          message: "Paste the authorization code or full redirect URL:",
+          placeholder: REDIRECT_URI,
+        }),
+        options.signal,
+        server.cancelWait,
+      );
+      result = parseAuthorizationInput(input);
+    }
+
+    if (!result.code) {
+      throw new Error("Missing authorization code");
+    }
+
+    if (!result.state) {
+      throw new Error("Missing OAuth state");
+    }
+
+    options.onProgress?.("Exchanging authorization code for tokens...");
+    return exchangeAuthorizationCode(
+      result.code,
+      result.state,
+      verifier,
+      REDIRECT_URI,
+      options.signal,
+    );
+  } finally {
+    await server.close();
+  }
+}
+
+async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+  let responseBody: string;
+  try {
+    responseBody = await postJson({
+      grant_type: "refresh_token",
+      client_id: CLIENT_ID,
+      refresh_token: refreshToken,
+    });
+  } catch (error) {
+    throw createOAuthRefreshError(
+      error instanceof TokenResponseError
+        ? `${error.message} Sign in again.`
+        : "Anthropic token refresh request failed. Sign in again.",
+      { version: 1, phase: "token-response", outcome: "unknown" },
+      { cause: error },
+    );
+  }
+
+  try {
+    return parseTokenCredentials(responseBody, {
+      invalidJsonMessage: "Anthropic token refresh returned invalid JSON.",
+      invalidFieldsMessage: "Anthropic token refresh returned invalid token fields.",
+    });
+  } catch (cause) {
+    throw createOAuthRefreshError(
+      cause instanceof TokenResponseError
+        ? `${cause.message} Sign in again.`
+        : "Anthropic token refresh returned invalid credentials. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+      { cause },
+    );
+  }
+}
+
+export const anthropicOAuthProvider: OAuthProviderInterface = {
+  id: "anthropic",
+  name: "Anthropic (Claude Pro/Max)",
+  usesCallbackServer: true,
+
+  login: loginAnthropic,
+
+  async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+    return refreshAnthropicToken(credentials.refresh);
+  },
+
+  getApiKey(credentials: OAuthCredentials): string {
+    return credentials.access;
+  },
+};

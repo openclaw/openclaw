@@ -1,0 +1,287 @@
+export const MODEL_FIELD_HELP: Record<string, string> = {
+  models:
+    "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
+  "models.usage": "Provider-reported plan usage cache settings.",
+  "models.usage.cacheTtlMs":
+    "Reuse provider usage snapshots for this many milliseconds (default: 60000). Applies to ordinary and post-run reads; 0 disables reuse. Does not enable idle polling.",
+  "models.mode":
+    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
+  "models.providers":
+    "Model endpoint configurations keyed by provider ID. Choose a new ID, such as gpu-a or my-lab, for an independent custom endpoint. Built-in and extension-owned IDs and aliases retain their integration semantics; configuring one overlays that integration. The ID does not select the wire protocol: api does. Multiple custom IDs may use the same adapter with different base URLs, credentials, and models. Use a distinct ID for an independent server rather than repurposing openai merely because it is OpenAI-compatible. Custom entries must include baseUrl and models.",
+  "models.catalogRefresh":
+    "Controls background updates to the bundled model catalog. Remote rows can update model metadata but cannot change provider endpoints or headers.",
+  "models.catalogRefresh.enabled":
+    "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
+  "models.catalogRefresh.url":
+    "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
+  "models.providers.*":
+    "One named provider configuration. Replace * with your chosen ID, or an existing integration ID you intentionally want to override. Schema lookup works before a custom ID is configured.",
+  "models.providers.*.name":
+    "Optional display name shown in provider settings and model pickers. Does not change the provider ID, model references, credentials, or routing.",
+  "models.providers.*.icon":
+    "Optional provider artwork: a local file, public HTTPS image URL, or bundled icon. PNG, JPEG, WebP, and GIF sources are limited to 2 MiB and 4096 pixels per side and served as a sanitized static PNG. Relative file paths resolve from the active configuration file directory. Invalid artwork falls back to the provider brand or display-name initial.",
+  "models.providers.*.icon.source":
+    "Artwork source: file for a Gateway-local image, url for a public HTTPS image, or builtin for an icon bundled with the Control UI.",
+  "models.providers.*.icon.path":
+    "Gateway-local PNG, JPEG, WebP, or GIF path. Relative paths resolve from the directory containing the active configuration file; ~/ expands to the Gateway user's home directory. Only this configured image is exposed through the scoped provider asset route.",
+  "models.providers.*.icon.url":
+    "Public HTTPS PNG, JPEG, WebP, or GIF URL without embedded credentials or a fragment. The Gateway fetches and sanitizes the image with private-network and redirect protections; the browser never contacts this URL directly.",
+  "models.providers.*.icon.name":
+    "Bundled Control UI icon name, such as server. An unknown name falls back to the provider's built-in brand or display-name initial.",
+  "models.providers.*.baseUrl":
+    "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
+  "models.providers.*.apiKey":
+    "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
+  "models.providers.*.auth":
+    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected. "native-command" delegates credentials to an explicitly configured Codex runtime for a custom HTTPS Responses provider; it cannot be combined with API keys, profiles, or request overrides.',
+  "models.providers.*.api":
+    "Wire protocol adapter, independent of the provider ID. Chat Completions: openai-completions; Responses: openai-responses; Messages: anthropic-messages. Choose other adapters from the allowed values to match your upstream protocol.",
+  "models.providers.*.maxTokens":
+    "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+  "models.providers.*.timeoutSeconds":
+    "Optional per-provider model request timeout in seconds. Provider-level request settings affect explicit provider-owned model rows; they do not create implicit models. For custom providers, set it alongside the provider baseUrl and models. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling, and also raises the LLM idle/stream watchdog ceiling for this provider above the implicit ~120s default. Use this for slow local or self-hosted model servers, or for cloud providers that buffer reasoning tokens silently on the wire (Gemini preview, large-tool-payload Claude/Opus), instead of changing global agent timeouts.",
+  "models.providers.*.region":
+    "Optional provider deployment/API region interpreted by providers that expose regional endpoints. Use provider docs for supported values; baseUrl overrides usually take precedence when both are set.",
+  "models.providers.*.injectNumCtxForOpenAICompat":
+    "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+  "models.providers.*.params":
+    "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
+  "models.providers.*.headers":
+    "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
+  "models.providers.*.authHeader":
+    "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
+  "models.providers.*.agentRuntime":
+    "Optional low-level agent runtime policy for this provider. Use provider/model runtime policy instead of agent-wide runtime pins; omitted/default lets OpenClaw choose the runtime for the selected provider.",
+  "models.providers.*.agentRuntime.id":
+    'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
+  "models.providers.*.localService":
+    "Optional on-demand local model server process for this provider. OpenClaw checks healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+  "models.providers.*.remote":
+    "Watchdog-only hosted timing override for local relays in front of hosted APIs. When true, the LLM idle and first-event watchdogs use hosted timing even with a local baseUrl, provider ID, localService, or local auth marker. Absent or false preserves locality detection. Explicit timeoutSeconds and run or agent budgets keep their precedence.",
+  "models.providers.*.localService.command":
+    "Absolute executable path for the local model server process. Keep this path explicit so provider startup is predictable and does not depend on shell PATH lookup.",
+  "models.providers.*.localService.args":
+    "Argument list passed to the local model server command without shell expansion.",
+  "models.providers.*.localService.cwd": "Working directory for the local model server process.",
+  "models.providers.*.localService.env":
+    "Additional environment variables for the local model server process. Values that look secret are redacted from config snapshots.",
+  "models.providers.*.localService.healthUrl":
+    "Readiness URL checked before model requests. If omitted, OpenClaw uses the provider baseUrl with /models appended.",
+  "models.providers.*.localService.readyTimeoutMs":
+    "Maximum milliseconds to wait for the local model server readiness check after starting the process.",
+  "models.providers.*.localService.idleStopMs":
+    "Milliseconds to keep an OpenClaw-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenClaw exits.",
+  "models.providers.*.request":
+    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
+  "models.providers.*.request.headers":
+    "Extra headers merged into provider requests after default attribution and auth resolution.",
+  "models.providers.*.request.auth":
+    "Override provider request authentication behavior for this provider.",
+  "models.providers.*.request.auth.mode":
+    'Auth override mode: "provider-default", "authorization-bearer", or "header".',
+  "models.providers.*.request.auth.token":
+    "Bearer token used when auth mode is authorization-bearer.",
+  "models.providers.*.request.auth.headerName":
+    "Custom auth header name used when auth mode is header.",
+  "models.providers.*.request.auth.value":
+    "Custom auth header value used when auth mode is header.",
+  "models.providers.*.request.auth.prefix":
+    "Optional prefix prepended to request.auth.value when auth mode is header.",
+  "models.providers.*.request.proxy":
+    'Optional proxy override for model-provider requests. Use "env-proxy" to honor environment proxy settings or "explicit-proxy" to route through a specific proxy URL.',
+  "models.providers.*.request.proxy.mode":
+    'Proxy override mode for model-provider requests: "env-proxy" or "explicit-proxy".',
+  "models.providers.*.request.proxy.url":
+    "Explicit proxy URL used when request.proxy.mode is explicit-proxy. Credentials embedded in the URL are treated as sensitive and redacted from snapshots.",
+  "models.providers.*.request.proxy.tls":
+    "Optional TLS settings used when connecting to the configured proxy.",
+  "models.providers.*.request.proxy.tls.ca":
+    "Custom CA bundle used to verify the proxy TLS certificate chain.",
+  "models.providers.*.request.proxy.tls.cert":
+    "Client TLS certificate presented to the proxy when mutual TLS is required.",
+  "models.providers.*.request.proxy.tls.key":
+    "Private key paired with request.proxy.tls.cert for proxy mutual TLS.",
+  "models.providers.*.request.proxy.tls.passphrase":
+    "Optional passphrase used to decrypt request.proxy.tls.key.",
+  "models.providers.*.request.proxy.tls.serverName":
+    "Optional SNI/server-name override used when establishing TLS to the proxy.",
+  "models.providers.*.request.proxy.tls.insecureSkipVerify":
+    "Skips proxy TLS certificate verification. Use only for controlled development environments.",
+  proxy:
+    "Operator-managed forward proxy routing for OpenClaw runtime HTTP, HTTPS, WebSocket, and supported raw-egress paths. Use this when central egress control is part of the deployment boundary.",
+  "proxy.enabled":
+    "Explicit managed-proxy override. URL presence enables routing by default; set false to ignore configured or environment proxy URLs without deleting them.",
+  "proxy.proxyUrl":
+    "Managed forward proxy URL. Use http:// for a plain CONNECT proxy or https:// when the connection to the proxy endpoint itself must use TLS.",
+  "proxy.tls":
+    "TLS settings used when connecting to the managed proxy endpoint. These settings apply to proxy TLS, not destination TLS after CONNECT.",
+  "proxy.tls.caFile":
+    "Filesystem path to a custom CA bundle used to verify an HTTPS managed proxy endpoint certificate.",
+  "proxy.loopbackMode":
+    'Controls Gateway loopback control-plane routing while managed proxy mode is active: "gateway-only", "proxy", or "block".',
+  "models.providers.*.request.tls":
+    "Optional TLS settings used when connecting directly to the upstream model endpoint.",
+  "models.providers.*.request.tls.ca":
+    "Custom CA bundle used to verify the upstream TLS certificate chain.",
+  "models.providers.*.request.tls.cert":
+    "Client TLS certificate presented to the upstream endpoint when mutual TLS is required.",
+  "models.providers.*.request.tls.key":
+    "Private key paired with request.tls.cert for upstream mutual TLS.",
+  "models.providers.*.request.tls.passphrase":
+    "Optional passphrase used to decrypt request.tls.key.",
+  "models.providers.*.request.tls.serverName":
+    "Optional SNI/server-name override used when establishing upstream TLS.",
+  "models.providers.*.request.tls.insecureSkipVerify":
+    "Skips upstream TLS certificate verification. Use only for controlled development environments.",
+  "models.providers.*.request.allowPrivateNetwork":
+    "When true, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard (fetchWithSsrFGuard). Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (64:ff9b:1::/48) origins; set this to false to opt out of that trust. OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use true only for operator-controlled self-hosted endpoints that must reach private origins outside the configured baseUrl origin.",
+  "models.providers.*.models":
+    "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+  "models.providers.*.models[].agentRuntime":
+    "Optional low-level agent runtime policy for this specific model. Model runtime policy overrides the provider runtime policy.",
+  "models.providers.*.models[].agentRuntime.id":
+    'Model agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "models.providers.*.models[].mediaInput":
+    "Optional model media capability metadata used by tools to choose conservative image compression defaults.",
+  "models.providers.*.models[].mediaInput.image":
+    "Optional image input limits for this model, such as maximum side length, maximum pixels, and preferred compression side.",
+  "models.providers.*.models[].mediaInput.image.maxBytes":
+    "Maximum encoded image payload size accepted by the provider for this model.",
+  "models.providers.*.models[].mediaInput.image.maxPixels":
+    "Maximum image pixel count accepted by the provider for this model.",
+  "models.providers.*.models[].mediaInput.image.maxSidePx":
+    "Maximum image width or height accepted by the provider for this model.",
+  "models.providers.*.models[].mediaInput.image.preferredSidePx":
+    "Preferred image resize side for balanced compression. Leave unset to use OpenClaw's conservative default.",
+  "models.providers.*.models[].mediaInput.image.tokenMode":
+    'Provider image token accounting style: "tile", "detail", or "provider".',
+  "models.providers.*.models[].responseModelEquivalent":
+    "Set true on a user-authored custom-provider row when a router or broker resolves this model id itself. Any endpoint-reported response id is then equivalent, including endpoint-internal substitutions. The served id and usage remain recorded; OpenClaw fallback and override notices remain. Bundled/official policy cannot be overridden. Plugin/catalog rows, agent models.json rows, and models-add rows cannot grant equivalence. Omitted or false preserves normal route detection.",
+  auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
+  "auth.profiles": "Named auth profiles (provider + mode + optional email).",
+  "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
+  "agents.defaults.workspace":
+    "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays consistent.",
+  "agents.defaults.workspaceFileMode":
+    'New memory-core DREAMS.md, MEMORY.md, and memory/dreaming report permissions: "0600", "0620", "0640", or "0660". Unset keeps exact 0600; configured modes respect the writing host\'s umask. Existing files, daily memory, session corpus, and private state are unchanged. Directory traversal and default ACLs must be provisioned separately.',
+  "agents.entries.*.workspaceFileMode":
+    "Overrides agents.defaults.workspaceFileMode for this agent's newly created human-readable memory outputs. Existing file permissions are preserved; the writing host applies its own umask.",
+  "agents.defaults.cwd":
+    "Working directory for agent reply runs, separate from workspace bootstrap and memory files. Agent-specific cwd and session-spawned cwd take precedence. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
+  "agents.defaults.skipBootstrap":
+    'Skips automatic creation of workspace bootstrap files, not injection of existing files. For the embedded runtime, set agents.defaults.contextInjection to "never" to disable injection unless overridden per agent.',
+  "agents.defaults.skipOptionalBootstrapFiles":
+    "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
+  "agents.defaults.contextInjection":
+    'Controls workspace bootstrap-file injection in the embedded runtime: "always" uses normal injection (default), "continuation-skip" skips eligible continuation turns after a recorded full-bootstrap turn, and "never" disables injection. Does not control CLI-backed prompt preparation.',
+  "agents.defaults.bootstrapMaxChars":
+    "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+  "agents.defaults.bootstrapTotalMaxChars":
+    "Max total characters across all injected workspace bootstrap files (default: 60000).",
+  "agents.defaults.experimental":
+    "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
+  "agents.defaults.experimental.decisionAssistance":
+    "Global opt-in for experimental assistance from the owning agent’s configured Decision model (default: false; requires explicit true). The effective decisionModel can be inherited from global defaults or selected per agent; an empty per-agent value disables assistance. Supported uses may send selected data to that provider and incur provider charges. See the Decision assistance documentation for supported uses, setup, and data handling. This setting does not gate explicit decision_evaluate calls, select providers, or grant actions.",
+  "agents.defaults.experimental.localModelLean":
+    "Advanced troubleshooting override that restricts optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
+  "agents.defaults.startupContext":
+    'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+  "agents.defaults.startupContext.enabled":
+    "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+  "agents.defaults.startupContext.applyOn":
+    'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+  "agents.defaults.startupContext.dailyMemoryDays":
+    "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+  "agents.defaults.startupContext.maxFileBytes":
+    "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+  "agents.defaults.startupContext.maxFileChars":
+    "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 1200).",
+  "agents.defaults.startupContext.maxTotalChars":
+    "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 2800). Additional files are truncated from the prelude once this cap is reached.",
+  "agents.defaults.repoRoot":
+    "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
+  "agents.defaults.models":
+    "Configured model catalog and per-model settings. Entries provide aliases, params, runtime metadata, and Code Mode overrides; they do not restrict model overrides.",
+  "agents.defaults.modelSelectionScope":
+    'Scope for chat commands and Gateway session model updates without an explicit scope: "session" (default) changes only the current session, "agent" also updates that agent\'s primary, and "global" also updates the shared agents.defaults.model fallback. Explicit scope flags take precedence; configured-default writes require owner/admin authority. Telegram callback pickers and the embedded local TUI stay session-only.',
+  "agents.defaults.modelPolicy":
+    "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
+  "agents.defaults.modelPolicy.allow":
+    'Allowed model override refs. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "openai/*", "clawrouter/anthropic/*" or "openai/gpt-*". Empty permits any model.',
+  "agents.defaults.models.*.agentRuntime":
+    "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
+  "agents.defaults.models.*.agentRuntime.id":
+    'Default-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "agents.defaults.models.*.codeMode":
+    "OpenClaw Code Mode for this exact provider/model: On forces it on, Off disables it, and Default inherits tools.codeMode.enabled. Agent-specific activation settings take precedence. This does not change the selected runtime or Codex native Code Mode.",
+  "memory.search": "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+  "memory.search.enabled":
+    "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
+  "memory.search.rememberAcrossConversations":
+    'Use relevant context from this agent\'s other private conversations through protected transcript recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
+  "memory.search.sources":
+    'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
+  "memory.search.extraPaths":
+    "Adds extra directories or .md files to the memory index beyond default memory files. Entries may be path strings or objects with a root-relative glob pattern. When multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "memory.search.extraPaths.*.path":
+    "Sets the extra memory directory or file. Relative paths resolve from the agent workspace; direct file entries are indexed exactly.",
+  "memory.search.extraPaths.*.pattern":
+    'Limits a directory entry to supported files matching this root-relative glob, for example "runbooks/**/*.md". Omit it to scan all supported files recursively.',
+  "memory.search.extraPaths.*.evergreen":
+    "Keeps matching extra-path reference files out of filesystem-mtime temporal decay. This changes recency ranking only; it does not make the content trusted, promote it, or change source provenance.",
+  "memory.search.multimodal":
+    'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
+  "memory.search.multimodal.enabled":
+    "Enables image/audio memory indexing from extraPaths. This currently requires Gemini embedding-2, keeps the default memory roots Markdown-only, disables memory-search fallback providers, and uploads matching binary content to the configured remote embedding provider.",
+  "memory.search.multimodal.modalities":
+    'Selects which multimodal file types are indexed from extraPaths: "image", "audio", or "all". Keep this narrow to avoid indexing large binary corpora unintentionally.',
+  "memory.search.multimodal.maxFileBytes":
+    "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
+  "memory.search.experimental.sessionMemory":
+    "Indexes session transcripts into memory search. Keep this advanced override when root and per-agent recall inheritance differ.",
+  "memory.search.provider":
+    'Selects the embedding backend used to build/query memory vectors. Defaults to "openai"; set "openai-compatible", "gemini", "voyage", "mistral", "bedrock", "deepinfra", "github-copilot", "lmstudio", "ollama", or "local" when you want a different backend.',
+  "memory.search.model":
+    "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+  "memory.search.inputFormat":
+    'Optional paired literal text prefixes for embedding queries and documents, such as { query: "query: ", document: "passage: " }. Replaces automatic model formatting, including for model aliases. Both strings are required; spaces and newlines are preserved, and empty strings select raw text. A non-empty queryInstruction takes precedence for queries. Changing the document prefix requires a reindex.',
+  "memory.search.inputFormat.query":
+    "Literal prefix for query embeddings. Used unless a non-empty queryInstruction is set; an empty string disables automatic query formatting.",
+  "memory.search.inputFormat.document":
+    "Literal prefix for document embeddings. An empty string selects raw document text. Changing this prefix changes index and embedding-cache identity and requires a reindex.",
+  "memory.search.inputType":
+    "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+  "memory.search.queryInputType":
+    "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+  "memory.search.queryInstruction":
+    'Optional literal prefix for query embeddings, such as "search_query: ". Include required spaces or newlines. Non-empty values replace inputFormat.query and automatic query formatting; unset or empty values use inputFormat.query when set, otherwise provider defaults. Documents and index identity are unchanged, so no reindex is needed. An empty per-agent override clears the inherited instruction.',
+  "memory.search.documentInputType":
+    "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+  "memory.search.outputDimensionality":
+    "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. OpenAI-compatible endpoints receive it as `dimensions` and must return vectors of exactly that size. Managed local GGUF embeddings truncate and normalize locally. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+  "memory.search.remote.baseUrl":
+    "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
+  "memory.search.remote.apiKey":
+    "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
+  "memory.search.remote.headers":
+    "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
+  "memory.search.remote.batch.enabled":
+    "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
+  "memory.search.local.modelPath":
+    "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
+  "memory.search.store.vector.enabled":
+    "Controls the sqlite-vec semantic index. Keep this advanced override when root and per-agent vector policies differ.",
+  "memory.search.fallback":
+    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+  "memory.search.store.vector.extensionPath":
+    "Overrides the auto-discovered sqlite-vec extension library path (`.dylib`, `.so`, or `.dll`). Use this when your runtime cannot find sqlite-vec automatically or you pin a known-good build.",
+  "memory.search.query.maxResults":
+    "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
+  "memory.search.query.minScore":
+    "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
+  "memory.search.cache.enabled":
+    "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
+  memory: "Built-in memory configuration (global).",
+  "memory.citations":
+    'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
+};

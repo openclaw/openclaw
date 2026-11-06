@@ -1,0 +1,68 @@
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  advertiserModuleLoaded: vi.fn(),
+  startGatewayBonjourAdvertiser: vi.fn(async () => ({ stop: vi.fn() })),
+}));
+
+vi.mock("./src/advertiser.js", () => {
+  mocks.advertiserModuleLoaded();
+  return {
+    startGatewayBonjourAdvertiser: mocks.startGatewayBonjourAdvertiser,
+  };
+});
+
+const { default: bonjourPlugin } = await import("./index.js");
+
+afterAll(() => {
+  vi.doUnmock("./src/advertiser.js");
+  vi.resetModules();
+});
+
+describe("bonjour plugin entry", () => {
+  it("lazy-loads advertiser runtime when gateway discovery advertises", async () => {
+    let discoveryService:
+      | Parameters<ReturnType<typeof createTestPluginApi>["registerGatewayDiscoveryService"]>[0]
+      | undefined;
+    const api = createTestPluginApi({
+      registerGatewayDiscoveryService(service) {
+        discoveryService = service;
+      },
+    });
+
+    expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
+
+    bonjourPlugin.register(api);
+
+    expect(discoveryService?.id).toBe("bonjour");
+    expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
+
+    if (!discoveryService) {
+      throw new Error("expected bonjour plugin to register a discovery service");
+    }
+
+    const stop = vi.fn();
+    mocks.startGatewayBonjourAdvertiser.mockResolvedValueOnce({ stop });
+
+    const advertisedOptions = {
+      gatewayPort: 3210,
+      gatewayTlsEnabled: true,
+      gatewayTlsFingerprintSha256: "abc123",
+      gatewayDirectReachable: true,
+      sshPort: 22,
+      tailnetDns: "dev.tailnet.ts.net",
+      cliPath: "/usr/local/bin/openclaw",
+      minimal: false,
+    };
+    await expect(
+      discoveryService.advertise({ ...advertisedOptions, machineDisplayName: "Dev Box" }),
+    ).resolves.toEqual({ stop });
+
+    expect(mocks.advertiserModuleLoaded).toHaveBeenCalledTimes(1);
+    expect(mocks.startGatewayBonjourAdvertiser).toHaveBeenCalledWith(
+      { ...advertisedOptions, instanceName: "Dev Box (OpenClaw)" },
+      api.logger,
+    );
+  });
+});

@@ -1,0 +1,120 @@
+// Lingering keeps user services alive after logout on Linux hosts.
+
+import { note } from "../../packages/terminal-core/src/note.js";
+import {
+  enableSystemdUserLinger,
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+  resolveSystemdUserServiceAccount,
+} from "../daemon/systemd.js";
+import type { RuntimeEnv } from "../runtime.js";
+
+type LingerPrompter = {
+  confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  note: (message: string, title?: string) => Promise<void> | void;
+};
+
+async function readGatewayServiceLingerStatus(env: NodeJS.ProcessEnv) {
+  // Keep loginctl on the same account as systemctl; under sudo-to-root,
+  // falling back to USER would inspect or repair root instead of the service owner.
+  const user = resolveSystemdUserServiceAccount(env);
+  if (!user) {
+    return null;
+  }
+  return await readSystemdUserLingerStatus({ env, user });
+}
+
+export async function ensureSystemdUserLingerInteractive(params: {
+  runtime: RuntimeEnv;
+  prompter?: LingerPrompter;
+  reason?: string;
+  requireConfirm?: boolean;
+}): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
+  }
+  const env = process.env;
+  const prompter: LingerPrompter = params.prompter ?? { note };
+  const title = "Systemd";
+  if (!(await isSystemdUserServiceAvailable())) {
+    await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);
+    return;
+  }
+  const status = await readGatewayServiceLingerStatus(env);
+  if (!status) {
+    await prompter.note(
+      "Unable to read loginctl linger status. Check that systemd + loginctl are available.",
+      title,
+    );
+    return;
+  }
+  if (status.linger === "yes") {
+    return;
+  }
+
+  const reason =
+    params.reason ??
+    "Systemd user services stop when you log out or go idle, which kills the Gateway.";
+  const actionNote = params.requireConfirm
+    ? "We can enable lingering now (may require sudo; writes /var/lib/systemd/linger)."
+    : "Enabling lingering now (may require sudo; writes /var/lib/systemd/linger).";
+  await prompter.note(`${reason}\n${actionNote}`, title);
+
+  if (params.requireConfirm && prompter.confirm) {
+    const ok = await prompter.confirm({
+      message: `Enable systemd lingering for ${status.user}?`,
+      initialValue: true,
+    });
+    if (!ok) {
+      await prompter.note("Without lingering, the Gateway will stop when you log out.", title);
+      return;
+    }
+  }
+
+  const resultNoSudo = await enableSystemdUserLinger({
+    env,
+    user: status.user,
+  });
+  const result = resultNoSudo.ok
+    ? resultNoSudo
+    : await enableSystemdUserLinger({ env, user: status.user, sudoMode: "prompt" });
+  if (result.ok) {
+    await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
+    return;
+  }
+
+  params.runtime.error(
+    `Failed to enable lingering: ${result.stderr || result.stdout || "unknown error"}`,
+  );
+  await prompter.note(`Run manually: sudo loginctl enable-linger ${status.user}`, title);
+}
+
+export async function ensureSystemdUserLingerNonInteractive(params: {
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
+  }
+  const env = process.env;
+  if (!(await isSystemdUserServiceAvailable())) {
+    return;
+  }
+  const status = await readGatewayServiceLingerStatus(env);
+  if (!status || status.linger === "yes") {
+    return;
+  }
+
+  const result = await enableSystemdUserLinger({
+    env,
+    user: status.user,
+    sudoMode: "non-interactive",
+  });
+  if (result.ok) {
+    params.runtime.log(`Enabled systemd lingering for ${status.user}.`);
+    return;
+  }
+
+  params.runtime.log(
+    `Systemd lingering is disabled for ${status.user}. Run: sudo loginctl enable-linger ${status.user}`,
+  );
+}

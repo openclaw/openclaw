@@ -1,0 +1,66 @@
+/** Tests media-note behavior as it appears through reply prompt assembly. */
+import { describe, expect, it } from "vitest";
+import { prepareReadyReply } from "./reply/get-reply-run-context.test-support.js";
+import { finalizeInboundContext } from "./reply/inbound-context.js";
+
+describe("getReplyFromConfig media note plumbing", () => {
+  it("includes all MediaPaths in the agent prompt", async () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "hello",
+      BodyForAgent: "hello",
+      From: "+1001",
+      To: "+2000",
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
+    });
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
+    const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
+    const prompt = envelope.prefixedCommandBody;
+
+    const mediaNote = [
+      "[media attached: 2 files]",
+      "[media attached 1/2: /tmp/a.png (application/octet-stream)]",
+      "[media attached 2/2: /tmp/b.png (application/octet-stream)]",
+    ].join("\n");
+    expect(prompt).toBe(`${mediaNote}\nhello`);
+    expect(envelope.queuedBody).toBe(`${mediaNote}\nhello`);
+    expect(envelope.transcriptCommandBody).toBe(`${mediaNote}\nhello`);
+    expect(envelope.media?.map(({ path }) => path)).toEqual(["/tmp/a.png", "/tmp/b.png"]);
+  });
+
+  it("keeps the real image attachment note after image understanding rewrites the body", async () => {
+    const describedBody = [
+      "[Image]",
+      "User text:",
+      "make this widescreen",
+      "Description:",
+      "a red barn at sunset",
+    ].join("\n");
+    const sessionCtx = finalizeInboundContext({
+      Body: describedBody,
+      BodyForAgent: describedBody,
+      From: "+1001",
+      To: "+2000",
+      MediaPaths: ["/tmp/media-store/real-image.png"],
+      MediaUrls: ["https://example.com/real-image.png"],
+      MediaTypes: ["image/png"],
+      MediaUnderstanding: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          text: "a red barn at sunset",
+          provider: "openai",
+        },
+      ],
+    });
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
+    const prompt = prepared.buildPromptBodies({
+      prefixedBody: prepared.prefixedBodyBase,
+    }).prefixedCommandBody;
+
+    expect(prompt).toContain(
+      "[media attached: /tmp/media-store/real-image.png (image/png) | https://example.com/real-image.png]",
+    );
+    expect(prompt).toContain(describedBody);
+  });
+});

@@ -1,0 +1,257 @@
+/**
+ * Public model-selection facade for persisted, configured, and allowed refs.
+ */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import {
+  type ModelManifestNormalizationContext,
+  type ModelRef,
+  modelKey,
+} from "./model-ref-shared.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
+import { parseModelRef } from "./model-selection-normalize.js";
+import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
+import {
+  buildModelAliasIndex,
+  normalizeModelSelection,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+  type ModelAliasIndex,
+} from "./model-selection-shared.js";
+export {
+  resolveAllowedModelRefCore as resolveAllowedModelRef,
+  resolveModelAliasFromPair,
+} from "./model-selection-resolve.js";
+export { buildAllowedModelSet } from "./model-selection-shared.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
+} from "./model-thinking-default.js";
+
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
+
+export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
+
+export {
+  normalizeStoredOverrideModel,
+  resolvePersistedOverrideModelRef,
+} from "./model-selection-persisted.js";
+
+export {
+  findNormalizedProviderKey,
+  legacyModelKey,
+  modelKey,
+  normalizeModelRef,
+  normalizeProviderId,
+  normalizeProviderIdForAuth,
+} from "./model-ref-shared.js";
+export { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+export {
+  buildConfiguredModelCatalog,
+  buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
+  normalizeModelSelection,
+  resolveBareModelDefaultProvider,
+  resolveConfiguredModelRef,
+  resolveConfiguredRouteModelLabel,
+  resolveHooksGmailModel,
+  resolveModelRefFromString,
+} from "./model-selection-shared.js";
+export {
+  isCliProvider,
+  prepareCliProviderClassifier,
+  type CliProviderClassifier,
+} from "./model-selection-cli.js";
+// Cron imports this narrow owner directly; the public facade must not fork its policy.
+export { getModelRefStatus } from "./model-selection-resolve.js";
+
+/** Explicit session selections win over the last executed model on control/status surfaces. */
+export function resolvePersistedSelectedModelRef(
+  params: {
+    defaultProvider?: unknown;
+    runtimeProvider?: unknown;
+    runtimeModel?: unknown;
+    overrideProvider?: unknown;
+    overrideModel?: unknown;
+    overrideRouteResolution?: ModelFallbackRouteResolution;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef | null {
+  const override = resolvePersistedOverrideModelRef({
+    ...params,
+    routeResolution: params.overrideRouteResolution,
+  });
+  if (override) {
+    return override;
+  }
+  const defaultProvider = normalizeOptionalString(params.defaultProvider) ?? DEFAULT_PROVIDER;
+  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
+  const runtimeModel = normalizeOptionalString(params.runtimeModel);
+  if (runtimeModel) {
+    if (runtimeProvider) {
+      return isTranscriptArtifactProvider(runtimeProvider)
+        ? null
+        : { provider: runtimeProvider, model: runtimeModel };
+    }
+    const ref = parseModelRef(runtimeModel, defaultProvider, params) ?? {
+      provider: defaultProvider,
+      model: runtimeModel,
+    };
+    return isTranscriptArtifactProvider(ref.provider) ? null : ref;
+  }
+  return null;
+}
+
+export async function canonicalizeCaseOnlyCatalogModelRef(params: {
+  raw: string | undefined;
+  cfg?: OpenClawConfig;
+  defaultProvider: string;
+  loadCatalog: () => Promise<ModelCatalogEntry[]>;
+  preserveAuthProfile?: boolean;
+}): Promise<string | undefined> {
+  const rawModel = normalizeOptionalString(params.raw);
+  if (!rawModel) {
+    return undefined;
+  }
+  const split = splitTrailingAuthProfile(rawModel);
+  if (split.profile && params.preserveAuthProfile === false) {
+    return rawModel;
+  }
+  const slash = split.model.indexOf("/");
+  if (slash <= 0 || slash === split.model.length - 1 || split.model === split.model.toLowerCase()) {
+    return rawModel;
+  }
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw: split.model,
+    defaultProvider: params.defaultProvider,
+  });
+  if (!resolved) {
+    return rawModel;
+  }
+  const entry = findModelInCatalog(
+    await params.loadCatalog(),
+    resolved.ref.provider,
+    resolved.ref.model,
+  );
+  return entry ? appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, split.profile) : rawModel;
+}
+
+function appendAuthProfileSuffix(modelRef: string, profile: string | undefined): string {
+  return profile ? `${modelRef}@${profile}` : modelRef;
+}
+
+/**
+ * Resolve a normalized model string through a pre-built alias index, returning
+ * a fully qualified `provider/model` string.  If the value is already qualified
+ * or not a known alias, returns it unchanged.
+ */
+function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  const { model, profile } = splitTrailingAuthProfile(value);
+  const aliasMatch = model.includes("/")
+    ? undefined
+    : aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(model));
+  return appendAuthProfileSuffix(
+    aliasMatch ? `${aliasMatch.ref.provider}/${aliasMatch.ref.model}` : model,
+    profile,
+  );
+}
+
+export function resolveSubagentSpawnModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  modelOverride?: unknown;
+  inheritedModel?: ModelRef;
+}): { model: string; resolvedModel?: ModelRef } {
+  const runtimeDefault = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const configured = resolveConfiguredSubagentSpawnModelSelection({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelOverride: params.modelOverride,
+    defaultProvider: runtimeDefault.provider,
+    includeAgentPrimary: !params.inheritedModel,
+  });
+  if (configured) {
+    return { model: configured };
+  }
+  if (params.inheritedModel) {
+    return {
+      model: `${params.inheritedModel.provider}/${params.inheritedModel.model}`,
+      resolvedModel: { ...params.inheritedModel },
+    };
+  }
+  const raw =
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
+    `${runtimeDefault.provider}/${runtimeDefault.model}`;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider: runtimeDefault.provider,
+  });
+  return { model: resolveModelThroughAliases(raw, aliasIndex) };
+}
+
+export function resolveConfiguredSubagentSpawnModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  modelOverride?: unknown;
+  defaultProvider?: string;
+  includeAgentPrimary?: boolean;
+  modelRuntime?: "native" | "acp";
+}): string | undefined {
+  const raw =
+    normalizeModelSelection(params.modelOverride) ??
+    resolveSubagentConfiguredModelSelection(params);
+  if (!raw) {
+    return undefined;
+  }
+  const defaultProvider =
+    normalizeOptionalString(params.defaultProvider) ??
+    resolveConfiguredModelRef(
+      {
+        cfg: params.cfg,
+        agentId: params.agentId,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      },
+      params.modelRuntime,
+    ).provider;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider,
+  });
+  return resolveModelThroughAliases(raw, aliasIndex);
+}
+
+/** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
+export function resolveReasoningDefault(params: {
+  provider: string;
+  model: string;
+  catalog?: ModelCatalogEntry[];
+}): "on" | "off" {
+  const key = modelKey(params.provider, params.model);
+  const candidate = params.catalog?.find(
+    (entry) =>
+      (entry.provider === params.provider && entry.id === params.model) ||
+      (entry.provider === key && entry.id === params.model),
+  );
+  return candidate?.reasoning === true ? "on" : "off";
+}

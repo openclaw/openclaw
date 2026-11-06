@@ -1,0 +1,44 @@
+---
+summary: "Help hub: common fixes, install sanity, and where to look when something breaks"
+read_when:
+  - You are new and want a "what do I click/run" guide
+  - Something broke and you want the fastest path to a fix
+title: "Help"
+---
+
+Fastest path to unstuck, by symptom:
+
+- [Troubleshooting](/help/troubleshooting) - symptom-first decision tree
+- [Debugging](/help/debugging) - watch mode, raw streams, dev profile
+- [Install sanity](/install/node#troubleshooting) - Node / npm / PATH checks
+- [Gateway troubleshooting](/gateway/troubleshooting) - gateway-specific issues
+- [Doctor](/gateway/doctor) - `openclaw doctor`: health checks, config migrations, repair steps
+
+## Support
+
+For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). Start with the self-service guides above, or see [Get support](/help/support) for what to include and where to report bugs or security issues.
+
+## FAQ
+
+- [FAQ](/help/faq) - day-to-day concepts and operational questions
+- [First-run FAQ](/help/faq-first-run) - install, onboard, auth, subscriptions, early failures
+- [Models FAQ](/help/faq-models) - model selection, failover, auth profiles
+
+## Diagnostics
+
+- [Environment variables](/help/environment) - where OpenClaw loads env vars and precedence
+- [Diagnostics flags](/diagnostics/flags) - runtime diagnostics and verbose modes
+- [Node and tsx startup errors](/help/debugging#node-and-tsx-startup-errors) - capture runtime versions and the stack trace for startup failures
+
+## Testing
+
+- [Testing](/help/testing) - test suites and Docker runners
+- [Update and plugin tests](/help/testing-updates-plugins) - package update, migration, and plugin install validation
+- [Live tests](/help/testing-live) - network-touching provider and CLI smokes
+- [Scripts](/help/scripts) - helper scripts under `scripts/` and when to prefer the CLI
+
+## Community and meta
+
+- [OpenClaw lore](/start/lore) - the story
+- [Docs hubs](/start/hubs) - how this documentation is organized
+- [Docs directory](/start/docs-directory) - full file map

@@ -1,0 +1,574 @@
+import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-outbound";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  ensureUrbitChannelOpen,
+  pokeUrbitChannel,
+  putUrbitChannel,
+  scryUrbitPath,
+} from "./channel-ops.js";
+import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
+import { UrbitHttpError } from "./errors.js";
+import { urbitFetch } from "./fetch.js";
+import { redactUrbitErrorText } from "./redact.js";
+
+type UrbitSseLogger = {
+  log?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+type UrbitSseOptions = {
+  ship?: string;
+  ssrfPolicy?: SsrFPolicy;
+  onReconnect?: (client: UrbitSSEClient) => Promise<void> | void;
+  logger?: UrbitSseLogger;
+};
+
+const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const MAX_RECONNECT_ATTEMPTS = 10;
+// Eyre sends a heartbeat every 20 s; treat three missed heartbeats as a stalled stream.
+const SSE_STALL_TIMEOUT_MS = 60_000;
+
+function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
+  if (Buffer.byteLength(data, "utf8") > MAX_SSE_PAYLOAD_BYTES) {
+    throw new Error("Tlon Urbit SSE payload exceeds 16 MiB limit");
+  }
+  try {
+    return JSON.parse(data) as { id?: number; json?: unknown; response?: string };
+  } catch (cause) {
+    throw new Error("Tlon Urbit SSE event was malformed JSON", { cause });
+  }
+}
+
+function parseUrbitSseEventId(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export class UrbitSSEClient {
+  url: string;
+  cookie: string;
+  ship: string;
+  channelId: string;
+  subscriptions: Array<{
+    id: number;
+    action: "subscribe";
+    ship: string;
+    app: string;
+    path: string;
+  }> = [];
+  eventHandlers = new Map<
+    number,
+    Omit<Parameters<UrbitSSEClient["subscribe"]>[0], "app" | "path">
+  >();
+  aborted = false;
+  streamController: AbortController | null = null;
+  onReconnect: UrbitSseOptions["onReconnect"] | null;
+  reconnectAttempts = 0;
+  isConnected = false;
+  logger: UrbitSseLogger;
+  ssrfPolicy?: SsrFPolicy;
+  streamRelease: (() => Promise<void>) | null = null;
+
+  // Event ack tracking keeps each HTTP channel's delivered window bounded.
+  private lastHeardEventId = -1;
+  private lastAcknowledgedEventId = -1;
+  private readonly ackThreshold = 20;
+  // The monitor stops ingress before it closes the channel; cancel both retry
+  // delays at that first shutdown edge so stale work cannot outlive its owner.
+  private readonly reconnectAbortController = new AbortController();
+
+  constructor(url: string, cookie: string, options: UrbitSseOptions = {}) {
+    const ctx = getUrbitContext(url, options.ship);
+    this.url = ctx.baseUrl;
+    this.cookie = normalizeUrbitCookie(cookie);
+    this.ship = ctx.ship;
+    this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
+    this.onReconnect = options.onReconnect ?? null;
+    this.logger = options.logger ?? {};
+    this.ssrfPolicy = options.ssrfPolicy;
+  }
+
+  private channelRequestContext() {
+    return {
+      baseUrl: this.url,
+      cookie: this.cookie,
+      ship: this.ship,
+      channelId: this.channelId,
+      ssrfPolicy: this.ssrfPolicy,
+    };
+  }
+
+  private resetChannelIdentity(): void {
+    this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
+    this.lastHeardEventId = -1;
+    this.lastAcknowledgedEventId = -1;
+  }
+
+  private async createCurrentChannel(): Promise<void> {
+    await ensureUrbitChannelOpen(this.channelRequestContext(), {
+      createBody: this.subscriptions,
+      createAuditContext: "tlon-urbit-channel-create",
+      beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
+    });
+  }
+
+  async subscribe(params: {
+    app: string;
+    path: string;
+    event?: (data: unknown) => Promise<void> | void;
+    err?: (error: unknown) => void;
+    quit?: () => void;
+  }) {
+    const subId = this.subscriptions.length + 1;
+    const subscription = {
+      id: subId,
+      action: "subscribe",
+      ship: this.ship,
+      app: params.app,
+      path: params.path,
+    } as const;
+
+    this.subscriptions.push(subscription);
+    this.eventHandlers.set(subId, { event: params.event, err: params.err, quit: params.quit });
+
+    if (this.isConnected) {
+      try {
+        await this.sendSubscription(subscription);
+      } catch (error) {
+        const handler = this.eventHandlers.get(subId);
+        handler?.err?.(error);
+      }
+    }
+    return subId;
+  }
+
+  private async sendSubscription(subscription: UrbitSSEClient["subscriptions"][number]) {
+    const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+      body: [subscription],
+      timeoutMs: 30_000,
+      auditContext: "tlon-urbit-subscribe",
+    });
+
+    try {
+      if (!response.ok && response.status !== 204) {
+        const errorText = await readResponseTextLimited(response, 16 * 1024).catch(() => "");
+        // Ship/proxy error bodies can reflect the session cookie; mask before throwing.
+        const detail = errorText ? redactUrbitErrorText(errorText) : "";
+        throw new Error(`Subscribe failed: ${response.status}${detail ? ` - ${detail}` : ""}`);
+      }
+    } finally {
+      await release();
+    }
+  }
+
+  async connect() {
+    // A fresh HTTP channel owns an independent event-id and ack sequence.
+    this.lastHeardEventId = -1;
+    this.lastAcknowledgedEventId = -1;
+    await this.createCurrentChannel();
+
+    await this.openStream();
+    this.isConnected = true;
+    this.reconnectAttempts = 0;
+  }
+
+  async openStream() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60_000);
+
+    this.streamController = controller;
+
+    let stream: Awaited<ReturnType<typeof urbitFetch>>;
+    try {
+      stream = await urbitFetch({
+        baseUrl: this.url,
+        path: `/~/channel/${this.channelId}`,
+        init: {
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+            Cookie: this.cookie,
+          },
+        },
+        ssrfPolicy: this.ssrfPolicy,
+        signal: AbortSignal.any([controller.signal, this.reconnectAbortController.signal]),
+        beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
+        auditContext: "tlon-urbit-sse-stream",
+      });
+    } finally {
+      // The deadline only covers waiting for response headers. Always disarm it
+      // before response handling so failed connects cannot retain the process.
+      clearTimeout(timeoutId);
+    }
+
+    const { response, release } = stream;
+    if (this.reconnectAbortController.signal.aborted) {
+      await release();
+      this.reconnectAbortController.signal.throwIfAborted();
+    }
+    this.streamRelease = release;
+
+    if (!response.ok || !response.body) {
+      this.streamRelease = null;
+      await release();
+      if (!response.ok) {
+        throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      }
+      return;
+    }
+
+    this.processStream(response.body).catch((error: unknown) => {
+      if (!this.aborted) {
+        this.logger.error?.(`Stream error: ${String(error)}`);
+        for (const { err } of this.eventHandlers.values()) {
+          err?.(error);
+        }
+      }
+    });
+  }
+
+  async processStream(body: unknown) {
+    if (!body) {
+      return;
+    }
+    // Bridge DOM fetch stream types to Node's stream/web declaration on newer TS/node combos.
+    const stream =
+      body instanceof ReadableStream
+        ? Readable.fromWeb(body as never)
+        : (body as NodeJS.ReadableStream);
+    const streamController = this.streamController;
+    // End a stalled stream so the reconnect below reopens the same channel.
+    const watchdog = createArmableStallWatchdog({
+      label: "tlon-sse",
+      timeoutMs: SSE_STALL_TIMEOUT_MS,
+      onTimeout: ({ idleMs }) => {
+        const error = new Error(
+          `Tlon Urbit SSE stream stalled: no data for ${Math.round(idleMs / 1000)}s`,
+        );
+        streamController?.abort(error);
+        if (stream instanceof Readable) {
+          stream.destroy(error);
+        }
+      },
+    });
+    watchdog.arm();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let bufferBytes = 0;
+    let pendingDelimiterNewline = false;
+    let pendingCarriageReturn = false;
+
+    const appendPending = (text: string) => {
+      const previousCodeUnit = buffer.charCodeAt(buffer.length - 1);
+      const firstCodeUnit = text.charCodeAt(0);
+      const joinsSurrogatePair =
+        previousCodeUnit >= 0xd800 &&
+        previousCodeUnit <= 0xdbff &&
+        firstCodeUnit >= 0xdc00 &&
+        firstCodeUnit <= 0xdfff;
+      // Buffer.byteLength counts either lone surrogate as three bytes. When
+      // chunks join a pair, correct the retained total to the combined four bytes.
+      const nextBytes =
+        bufferBytes + Buffer.byteLength(text, "utf8") - (joinsSurrogatePair ? 2 : 0);
+      if (nextBytes > MAX_SSE_PAYLOAD_BYTES) {
+        throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
+      }
+      buffer += text;
+      bufferBytes = nextBytes;
+    };
+    const consumeText = async (rawText: string) => {
+      if (rawText.length === 0) {
+        return;
+      }
+      // Normalize SSE line endings without treating a split CRLF as two lines.
+      const startsWithPendingLineFeed = pendingCarriageReturn && rawText.startsWith("\n");
+      pendingCarriageReturn = rawText.endsWith("\r");
+      const text = (startsWithPendingLineFeed ? rawText.slice(1) : rawText).replace(/\r\n?/g, "\n");
+      let offset = 0;
+      if (pendingDelimiterNewline && text.length > 0) {
+        pendingDelimiterNewline = false;
+        if (text.startsWith("\n")) {
+          await this.processEvent(buffer);
+          buffer = "";
+          bufferBytes = 0;
+          offset = 1;
+        } else {
+          // A trailing newline stays outside the budget until the next byte
+          // distinguishes an event delimiter from retained event data.
+          appendPending("\n");
+        }
+      }
+      while (offset < text.length) {
+        const eventEnd = text.indexOf("\n\n", offset);
+        if (eventEnd === -1) {
+          const endsWithNewline = text.endsWith("\n");
+          appendPending(text.slice(offset, endsWithNewline ? -1 : undefined));
+          pendingDelimiterNewline = endsWithNewline;
+          return;
+        }
+        appendPending(text.slice(offset, eventEnd));
+        await this.processEvent(buffer);
+        buffer = "";
+        bufferBytes = 0;
+        offset = eventEnd + 2;
+      }
+    };
+
+    try {
+      for await (const chunk of stream) {
+        if (this.aborted) {
+          break;
+        }
+        // Only waiting on the network counts; slow event handling is not a stall.
+        watchdog.disarm();
+        if (typeof chunk === "string") {
+          await consumeText(decoder.decode());
+          await consumeText(chunk);
+        } else {
+          await consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
+        }
+        watchdog.arm();
+      }
+      await consumeText(decoder.decode());
+    } finally {
+      watchdog.stop();
+      if (this.streamRelease) {
+        const release = this.streamRelease;
+        this.streamRelease = null;
+        await release();
+      }
+      this.streamController = null;
+      if (!this.aborted) {
+        this.isConnected = false;
+        this.logger.log?.("[SSE] Stream ended, attempting reconnection...");
+        await this.attemptReconnect();
+      }
+    }
+  }
+
+  async processEvent(eventData: string): Promise<void> {
+    const lines = eventData.split(/\r\n|\r|\n/);
+    const dataLines: string[] = [];
+    let eventId: number | null = null;
+
+    for (const line of lines) {
+      // SSE permits both `field:value` and `field: value`; parse them identically.
+      if (line.startsWith("id:")) {
+        eventId = parseUrbitSseEventId(line.slice("id:".length).trim());
+      }
+      if (line.startsWith("data:")) {
+        const value = line.slice("data:".length);
+        dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
+      }
+    }
+
+    const data = dataLines.join("\n");
+    if (!data) {
+      return;
+    }
+
+    let parsed: ReturnType<typeof parseUrbitSsePayload>;
+    try {
+      parsed = parseUrbitSsePayload(data);
+    } catch (error) {
+      // Malformed transport payloads are permanent. Count them handled so one
+      // poison event cannot pin the Urbit channel forever.
+      this.logger.error?.(`Error parsing SSE event: ${String(error)}`);
+      await this.acknowledgeHandledEventIfNeeded(eventId);
+      return;
+    }
+
+    if (parsed.response === "quit") {
+      if (parsed.id) {
+        const handlers = this.eventHandlers.get(parsed.id);
+        if (handlers?.quit) {
+          handlers.quit();
+        }
+      }
+    } else if (parsed.id && this.eventHandlers.has(parsed.id)) {
+      const { event } = this.eventHandlers.get(parsed.id) ?? {};
+      if (event && parsed.json) {
+        await event(parsed.json);
+      }
+    } else if (parsed.json) {
+      for (const { event } of this.eventHandlers.values()) {
+        if (event) {
+          await event(parsed.json);
+        }
+      }
+    }
+    // Handler failures propagate without ack. Durable callbacks resolve only after append.
+    await this.acknowledgeHandledEventIfNeeded(eventId);
+  }
+
+  private async acknowledgeHandledEventIfNeeded(eventId: number | null): Promise<void> {
+    if (eventId === null || eventId <= this.lastAcknowledgedEventId) {
+      return;
+    }
+    this.lastHeardEventId = Math.max(this.lastHeardEventId, eventId);
+    if (this.lastHeardEventId - this.lastAcknowledgedEventId <= this.ackThreshold) {
+      return;
+    }
+    // The acknowledged watermark advances only after PUT succeeds. A replay
+    // therefore retries a failed ack instead of leaving the subscription clogged.
+    await this.ack(this.lastHeardEventId);
+  }
+
+  async poke(params: { app: string; mark: string; json: unknown }) {
+    return await pokeUrbitChannel(this.channelRequestContext(), {
+      ...params,
+      auditContext: "tlon-urbit-poke",
+      timeoutMs: 30_000,
+    });
+  }
+
+  async scry(path: string, beforeRequest?: () => void) {
+    return await scryUrbitPath(
+      { ...this.channelRequestContext(), beforeRequest },
+      {
+        path,
+        auditContext: "tlon-urbit-scry",
+      },
+    );
+  }
+
+  updateCookie(newCookie: string): void {
+    this.cookie = normalizeUrbitCookie(newCookie);
+  }
+
+  private async ack(eventId: number): Promise<void> {
+    const ackData = {
+      id: Date.now(),
+      action: "ack",
+      "event-id": eventId,
+    };
+
+    const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+      body: [ackData],
+      timeoutMs: 10_000,
+      auditContext: "tlon-urbit-ack",
+    });
+
+    try {
+      if (!response.ok) {
+        throw new Error(`Ack failed with status ${response.status}`);
+      }
+      this.lastAcknowledgedEventId = eventId;
+    } finally {
+      await release();
+    }
+  }
+
+  async attemptReconnect() {
+    if (this.aborted) {
+      this.logger.log?.("[SSE] Reconnection aborted or disabled");
+      return;
+    }
+
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.logger.log?.(
+        `[SSE] Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Waiting 10s before resetting...`,
+      );
+      if (!(await this.waitForReconnectDelay(10_000)) || this.aborted) {
+        return;
+      }
+      this.reconnectAttempts = 0;
+      this.logger.log?.("[SSE] Reconnection attempts reset, resuming reconnection...");
+    }
+
+    this.reconnectAttempts += 1;
+    const delay = Math.min(1_000 * 2 ** (this.reconnectAttempts - 1), 30_000);
+
+    this.logger.log?.(
+      `[SSE] Reconnection attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`,
+    );
+
+    if (!(await this.waitForReconnectDelay(delay)) || this.aborted) {
+      return;
+    }
+
+    try {
+      if (this.onReconnect) {
+        await this.onReconnect(this);
+      }
+
+      try {
+        // Reopen the same Eyre channel. Its queue retains every unacked event;
+        // switching ids here would discard the cursor and strand failed admission.
+        await this.openStream();
+      } catch (error) {
+        if (!(error instanceof UrbitHttpError) || error.status !== 404) {
+          throw error;
+        }
+        // Eyre deletes idle channels. Only a definitive missing-channel response
+        // permits losing the old cursor and rebuilding every subscription.
+        this.resetChannelIdentity();
+        await this.createCurrentChannel();
+        await this.openStream();
+      }
+      this.isConnected = true;
+      this.reconnectAttempts = 0;
+      this.logger.log?.("[SSE] Reconnection successful!");
+    } catch (error) {
+      if (this.aborted) {
+        return;
+      }
+      this.logger.error?.(`[SSE] Reconnection failed: ${String(error)}`);
+      await this.attemptReconnect();
+    }
+  }
+
+  stopReceiving(): void {
+    this.aborted = true;
+    this.isConnected = false;
+    this.reconnectAbortController.abort();
+    this.streamController?.abort();
+  }
+
+  async close() {
+    this.stopReceiving();
+
+    try {
+      const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+        body: [{ action: "delete" }],
+        timeoutMs: 30_000,
+        auditContext: "tlon-urbit-channel-close",
+      });
+      try {
+        if (!response.ok) {
+          throw new UrbitHttpError({ operation: "Channel close", status: response.status });
+        }
+      } finally {
+        await release();
+      }
+    } catch (error) {
+      this.logger.error?.(`Error closing channel: ${String(error)}`);
+    }
+
+    if (this.streamRelease) {
+      const release = this.streamRelease;
+      this.streamRelease = null;
+      await release();
+    }
+  }
+
+  private async waitForReconnectDelay(delayMs: number): Promise<boolean> {
+    try {
+      await sleepWithAbort(delayMs, this.reconnectAbortController.signal);
+      return true;
+    } catch (error) {
+      if (this.reconnectAbortController.signal.aborted) {
+        return false;
+      }
+      throw error;
+    }
+  }
+}

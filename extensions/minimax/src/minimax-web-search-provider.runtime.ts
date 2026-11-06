@@ -1,0 +1,208 @@
+import {
+  createProviderHttpError,
+  formatProviderHttpErrorMessage,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  externalContentStamp,
+  DEFAULT_SEARCH_COUNT,
+  buildSearchCacheKey,
+  formatCliCommand,
+  mergeScopedSearchConfig,
+  readCachedSearchPayload,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
+  resolveProviderWebSearchPluginConfig,
+  resolveSearchCacheTtlMs,
+  resolveSearchCount,
+  resolveSearchTimeoutSeconds,
+  resolveSiteName,
+  withTrustedWebSearchEndpoint,
+  wrapWebContent,
+  writeCachedSearchPayload,
+  type SearchConfigRecord,
+} from "openclaw/plugin-sdk/provider-web-search";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const MINIMAX_SEARCH_ENDPOINT_GLOBAL = "https://api.minimax.io/v1/coding_plan/search";
+const MINIMAX_SEARCH_ENDPOINT_CN = "https://api.minimaxi.com/v1/coding_plan/search";
+const MINIMAX_TOKEN_PLAN_ENV_VARS = [
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+] as const;
+
+type MiniMaxRelatedSearch = {
+  query?: string;
+};
+
+function isMiniMaxCnHost(value: string | undefined): boolean {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return false;
+  }
+  return URL.parse(trimmed)?.hostname.endsWith("minimaxi.com") ?? trimmed.includes("minimaxi.com");
+}
+
+function resolveMiniMaxRegion(
+  searchConfig?: SearchConfigRecord,
+  config?: Record<string, unknown>,
+): "cn" | "global" {
+  const minimax = asOptionalRecord(searchConfig?.minimax);
+  const configuredRegion = normalizeOptionalString(minimax?.region);
+  if (configuredRegion) {
+    return configuredRegion === "cn" ? "cn" : "global";
+  }
+
+  if (isMiniMaxCnHost(process.env.MINIMAX_API_HOST)) {
+    return "cn";
+  }
+
+  const models = config?.models as Record<string, unknown> | undefined;
+  const providers = models?.providers as Record<string, unknown> | undefined;
+  const minimaxProvider = providers?.minimax as Record<string, unknown> | undefined;
+  const portalProvider = providers?.["minimax-portal"] as Record<string, unknown> | undefined;
+  const baseUrl = typeof minimaxProvider?.baseUrl === "string" ? minimaxProvider.baseUrl : "";
+  const portalBaseUrl = typeof portalProvider?.baseUrl === "string" ? portalProvider.baseUrl : "";
+  if (isMiniMaxCnHost(baseUrl) || isMiniMaxCnHost(portalBaseUrl)) {
+    return "cn";
+  }
+
+  return "global";
+}
+
+function missingMiniMaxKeyPayload() {
+  return {
+    error: "missing_minimax_api_key",
+    message: `web_search (minimax) needs a MiniMax Token Plan key or OAuth token. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, MINIMAX_OAUTH_TOKEN, or MINIMAX_API_KEY in the Gateway environment.`,
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
+}
+
+export async function executeMiniMaxWebSearchProviderTool(
+  ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const searchConfig = mergeScopedSearchConfig(
+    ctx.searchConfig,
+    "minimax",
+    resolveProviderWebSearchPluginConfig(ctx.config, "minimax"),
+    { mirrorApiKeyToTopLevel: true },
+  );
+  const apiKey = readWebSearchApiKey(
+    searchConfig?.apiKey,
+    "plugins.entries.minimax.config.webSearch.apiKey",
+    [...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"],
+  );
+  if (!apiKey) {
+    return missingMiniMaxKeyPayload();
+  }
+
+  const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
+
+  const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
+  const endpoint =
+    resolveMiniMaxRegion(searchConfig, ctx.config) === "cn"
+      ? MINIMAX_SEARCH_ENDPOINT_CN
+      : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
+
+  const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
+  if (cached) {
+    return cached;
+  }
+
+  const start = Date.now();
+  const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
+
+  const { results, relatedSearches } = await withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds,
+      signal,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ q: query }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        throw await createProviderHttpError(res, "MiniMax Search API error");
+      }
+
+      const data = await readProviderJsonResponse<{
+        organic?: {
+          title?: string;
+          link?: string;
+          snippet?: string;
+          date?: string;
+        }[];
+        related_searches?: MiniMaxRelatedSearch[];
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>(res, "MiniMax Search API error");
+
+      if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
+        throw new Error(
+          formatProviderHttpErrorMessage({
+            label: "MiniMax Search API error",
+            status: data.base_resp.status_code,
+            detail: data.base_resp.status_msg || "unknown error",
+          }),
+        );
+      }
+
+      const organic = Array.isArray(data.organic) ? data.organic : [];
+      const searchResults = organic.slice(0, resolvedCount).map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.link ?? "";
+        const snippet = entry.snippet ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          published: entry.date || undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
+
+      const relatedQueries = Array.isArray(data.related_searches)
+        ? data.related_searches
+            .map((r) => r.query)
+            .filter((q): q is string => typeof q === "string" && q.length > 0)
+            .map((q) => wrapWebContent(q, "web_search"))
+        : undefined;
+
+      return { results: searchResults, relatedSearches: relatedQueries };
+    },
+  );
+
+  signal?.throwIfAborted();
+  const payload: Record<string, unknown> = {
+    query,
+    provider: "minimax",
+    count: results.length,
+    tookMs: Date.now() - start,
+    externalContent: externalContentStamp("minimax"),
+    results,
+  };
+
+  if (relatedSearches && relatedSearches.length > 0) {
+    payload.relatedSearches = relatedSearches;
+  }
+
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
+  return payload;
+}

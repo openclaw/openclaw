@@ -1,0 +1,308 @@
+import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  assertSqliteSchemaContains,
+  getCanonicalSqliteNamedIndexNames,
+  getCanonicalSqliteTableNames,
+} from "../infra/sqlite-schema-contract.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import {
+  ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+} from "./openclaw-state-db-additive-columns.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
+import {
+  backfillAcpReplayEstimatedBytes,
+  backfillCronJobsFromJobJson,
+  backfillCronRunLogEntryJson,
+  backfillDeliveryQueueEntriesFromEntryJson,
+  ensureOperatorApprovalResolutionRefs,
+  repairLegacySubagentExecutionPayloads,
+  repairLegacySubagentRetainedResults,
+} from "./openclaw-state-db-legacy-backfills.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const tableEnsurers = new Map<string, ReturnType<typeof createSqliteSchemaEnsurer>>();
+
+function ensureTable(
+  database: EngineConnection,
+  table: string,
+  options?: Parameters<typeof extractSqliteTableSchema>[2],
+): void {
+  if (isPostgresSqlConnection(database)) {
+    return ensureStatePostgresFragment(database, table);
+  }
+  let ensure = tableEnsurers.get(table);
+  if (!ensure) {
+    const schema = getOpenClawStateFeatureSchemaSql(table, options);
+    ensure = createSqliteSchemaEnsurer(() => schema, {
+      tables: getCanonicalSqliteTableNames(schema),
+      indexes: getCanonicalSqliteNamedIndexNames(schema),
+    });
+    tableEnsurers.set(table, ensure);
+  }
+  ensure(database);
+}
+
+export function ensureRepositoryWorkspacePendingResultSchema(database: EngineConnection): void {
+  const table = "worker_workspace_pending_results";
+  if (tableHasColumn(database, table, "repository_workspace_id")) {
+    return;
+  }
+  ensureColumn(database, table, "repository_workspace_id TEXT");
+}
+
+export function ensureSessionRepositoryWorkspaceSchema(database: EngineConnection): void {
+  ensureTable(database, "session_repository_workspaces", {
+    errorMessage: "Repository workspace schema marker is missing.",
+  });
+}
+
+export function ensureRepositoryGitHubPublicationSchema(database: EngineConnection): void {
+  ensureTable(database, "github_repository_publication_requests", {
+    endMarker:
+      "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;",
+    errorMessage: "Repository GitHub publication schema marker is missing.",
+  });
+}
+
+export function ensureGitHubPublicationSessionLifecycleSchema(database: EngineConnection): void {
+  ensureTable(database, "github_publication_session_lifecycles", {
+    errorMessage: "GitHub publication lifecycle schema marker is missing.",
+  });
+}
+
+/** Lazily install the additive secret store table and index on first write. */
+export function ensureSecretStoreSchema(database: EngineConnection): void {
+  ensureTable(database, "secret_store_entries", {
+    endMarker: "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;",
+    errorMessage: "OpenClaw secret store schema marker is missing.",
+  });
+  ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
+}
+
+/** Lazily install durable MCP OAuth callback correlation on first feature use. */
+export function ensureMcpOAuthPendingSchema(database: EngineConnection): void {
+  ensureTable(database, "mcp_oauth_pending_authorizations", {
+    errorMessage: "OpenClaw MCP OAuth pending schema marker is missing.",
+  });
+}
+
+/** Lazily install the additive device join-code table on first mint or redemption. */
+export function ensureDevicePairingJoinCodeSchema(database: EngineConnection): void {
+  ensureTable(database, "device_pairing_join_codes", {
+    errorMessage: "OpenClaw device pairing join-code schema marker is missing.",
+  });
+}
+
+/** Lazily installs the Gateway's installation-local config revision key owner. */
+export function ensureConfigRevisionKeySchema(database: EngineConnection): void {
+  ensureTable(database, "config_revision_keys", {
+    errorMessage: "OpenClaw config revision key schema marker is missing.",
+  });
+}
+
+export function assertAgentDeletionJournalAvailable(database: EngineConnection): void {
+  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+    throw new Error(
+      "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
+    );
+  }
+}
+
+/** Doctor calls this inside the transaction that records its recovery receipt. */
+export function reconstructAgentDeletionJournalSchema(
+  database: DatabaseSync,
+  databasePath: string,
+): boolean {
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal");
+  const existed = tableExists(database, "agent_deletion_journal");
+  if (!existed) {
+    database.exec(schema);
+  }
+  ensureAgentDeletionJournalPhaseSchema(database);
+  assertSqliteSchemaContains(database, databasePath, schema);
+  return !existed;
+}
+
+export function ensureAgentDeletionJournalPhaseSchema(database: EngineConnection): void {
+  assertAgentDeletionJournalAvailable(database);
+  if (tableHasColumn(database, "agent_deletion_journal", "phase")) {
+    return;
+  }
+  ensureColumn(database, "agent_deletion_journal", "phase TEXT");
+}
+
+export function ensureAgentDatabaseLeaseSchema(database: EngineConnection): void {
+  if (tableHasColumn(database, "agent_database_leases", "provenance")) {
+    return;
+  }
+  ensureTable(database, "agent_database_leases");
+  ensureColumn(database, "agent_database_leases", "provenance TEXT");
+}
+
+/**
+ * Same-version additive table, registered in LAZY_ADDITIVE_STATE_TABLES so
+ * existing v6 databases stay valid without it. Uses the canonical schema;
+ * a downgraded reader simply loses setup-completion reconciliation.
+ */
+export function ensureDevicePairSetupCompletionSchema(database: EngineConnection): void {
+  ensureTable(database, "device_pair_setup_completions");
+}
+
+/** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
+export function ensureDevicePairSetupBootstrapSchema(database: EngineConnection): void {
+  ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
+}
+
+/** Installs environment-owned node binding columns at first cloud enrollment use. */
+export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: EngineConnection): void {
+  ensureDevicePairSetupCompletionSchema(database);
+  ensureColumn(database, "worker_environments", "node_setup_id TEXT");
+  ensureColumn(database, "worker_environments", "node_device_id TEXT");
+}
+
+/** Register fixed build ownership on the dedicated node's current transaction. */
+export function ensureNodeWorkerPreparedWorkspaceSchema(database: EngineConnection): void {
+  // Prepared DDL is reusable; admitted presence still follows transaction rollback.
+  ensureTable(database, "node_worker_prepared_workspaces", {
+    errorMessage: "Node prepared workspace schema marker is missing.",
+  });
+}
+
+function ensureWorkerSessionToolStateSchema(db: EngineConnection): void {
+  ensureTable(db, "worker_turn_tool_authorities");
+  ensureTable(db, "worker_session_tool_operations");
+}
+
+export function ensureGitHubPublicationSchema(db: EngineConnection): void {
+  ensureTable(db, "github_publication_requests", {
+    endMarker: "ON github_publication_requests(status, updated_at_ms, request_id);",
+  });
+}
+
+/** First personal publication write only; status and old readers leave this surface dormant. */
+export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): void {
+  ensureTable(db, "github_personal_publication_requests", {
+    endMarker: "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
+    errorMessage: "Personal GitHub publication schema marker is missing.",
+  });
+}
+
+/**
+ * Complete first-use columns before a STRICT rebuild or in a private port copy.
+ * Both require canonical layouts; ordinary admission leaves these columns lazy.
+ */
+export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
+}
+
+function ensureColumns(
+  db: DatabaseSync,
+  definitions: readonly (readonly [string, string])[],
+): Array<{ tableName: string; columnName: string }> {
+  const added: Array<{ tableName: string; columnName: string }> = [];
+  for (const [tableName, definition] of definitions) {
+    const columnName = definition.trim().split(/\s+/, 1)[0];
+    if (columnName && ensureColumn(db, tableName, definition)) {
+      added.push({ tableName, columnName });
+    }
+  }
+  return added;
+}
+
+/** Runtime pairs new columns with their transforms; full historical repair stays explicit. */
+export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | "repair"): void {
+  const repairHistoricalRows = scope === "repair";
+  ensureWorkerSessionToolStateSchema(db);
+  for (const {
+    columnName,
+    dataType,
+    tableName,
+  } of CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
+  if (ensureColumn(db, ...columns.packageUpdatedAt[0])) {
+    db.exec("UPDATE template_package_refs SET updated_at_ms = installed_at_ms;");
+  }
+  ensureColumns(db, columns.packageIntegrity);
+  const addedDiagnosticEventSequence = ensureColumn(db, ...columns.diagnosticSequence[0]);
+  if (addedDiagnosticEventSequence) {
+    // Preserve the legacy (created_at, rowid) order before the new sequence
+    // index becomes authoritative, including stable ties within each scope.
+    db.exec(`
+      WITH ranked AS (
+        SELECT
+          rowid AS event_rowid,
+          ROW_NUMBER() OVER (
+            PARTITION BY scope
+            ORDER BY created_at ASC, rowid ASC
+          ) AS sequence
+        FROM diagnostic_events
+      )
+      UPDATE diagnostic_events
+      SET sequence = (
+        SELECT ranked.sequence
+        FROM ranked
+        WHERE ranked.event_rowid = diagnostic_events.rowid
+      );
+    `);
+  }
+  if (addedDiagnosticEventSequence || repairHistoricalRows) {
+    db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
+  }
+  const addedCronLogColumns = ensureColumns(db, columns.cronRunLogs);
+  if (
+    repairHistoricalRows ||
+    addedCronLogColumns.some(({ tableName }) => tableName === "cron_run_logs")
+  ) {
+    backfillCronRunLogEntryJson(db);
+  }
+  const addedAcpReplayColumns = ensureColumns(db, columns.acpReplay).length > 0;
+  if (addedAcpReplayColumns || repairHistoricalRows) {
+    backfillAcpReplayEstimatedBytes(db, addedAcpReplayColumns);
+  }
+  const addedCronJobColumns = ensureColumns(db, columns.cronJobs);
+  if (
+    repairHistoricalRows ||
+    addedCronJobColumns.some(({ columnName }) =>
+      ["name", "enabled", "agent_id", "payload_kind", "runtime_updated_at_ms"].includes(columnName),
+    )
+  ) {
+    backfillCronJobsFromJobJson(db);
+  }
+  const addedDeliveryColumns = ensureColumns(db, columns.deliveryQueue);
+  if (
+    repairHistoricalRows ||
+    addedDeliveryColumns.some(({ tableName }) => tableName === "delivery_queue_entries")
+  ) {
+    backfillDeliveryQueueEntriesFromEntryJson(db);
+  }
+  // The shipped JSON runtime predeclared this table but never populated it.
+  // The transitional default makes ADD COLUMN portable; schema-v2 tables are
+  // rebuilt from canonical STRICT SQL immediately afterward, removing it.
+  ensureColumn(db, ...columns.originalMediaRoot[0]);
+  ensureColumns(db, columns.beforeTaskAttribution);
+  // Keep the released physical layout without repairing retired Task attribution or bindings.
+  ensureColumns(db, columns.taskRequester);
+  ensureColumns(db, columns.taskRunDetails);
+  if (repairHistoricalRows) {
+    repairLegacySubagentExecutionPayloads(db);
+    repairLegacySubagentRetainedResults(db);
+  }
+  ensureColumns(db, columns.workerEnvironments);
+  if (repairHistoricalRows || !tableHasColumn(db, "operator_approvals", "resolution_ref")) {
+    ensureOperatorApprovalResolutionRefs(db);
+  }
+}

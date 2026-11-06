@@ -1,0 +1,312 @@
+import os from "node:os";
+import path from "node:path";
+import { createInterface } from "node:readline";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
+import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  ensurePortAvailable,
+  extractErrorCode,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/security-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
+import { signalCheck } from "./client-adapter.js";
+import {
+  buildSignalDaemonEnv,
+  formatSignalDaemonDroppedEnvNotice,
+  listSignalDaemonDroppedEnvHints,
+} from "./daemon-env.js";
+import { prepareSignalSocketPath } from "./socket-path.js";
+
+export type SignalDaemonHandle = {
+  stop: () => Promise<void>;
+  exited: Promise<SignalDaemonExitEvent>;
+};
+
+const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1_500;
+
+// The Gateway environment is process-wide, so the dropped-variable notice is too: once per
+// process, not once per account or daemon restart.
+let droppedEnvNoticeEmitted = false;
+
+function warnSignalDaemonDroppedEnvOnce(): void {
+  if (droppedEnvNoticeEmitted) {
+    return;
+  }
+  const names = listSignalDaemonDroppedEnvHints();
+  if (names.length === 0) {
+    return;
+  }
+  droppedEnvNoticeEmitted = true;
+  createSubsystemLogger("signal/daemon").warn(formatSignalDaemonDroppedEnvNotice(names));
+}
+
+type SignalDaemonExitEvent = {
+  source: "process" | "spawn-error";
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
+  return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
+}
+
+function formatSignalDaemonEndpoint(httpHost: string, httpPort: number): string {
+  return `${httpHost.includes(":") ? `[${httpHost}]` : httpHost}:${httpPort}`;
+}
+
+export async function assertSignalDaemonEndpointAvailable(params: {
+  httpHost: string;
+  httpPort: number;
+  socketPath?: string;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  if (params.socketPath) {
+    params.abortSignal?.throwIfAborted();
+    await prepareSignalSocketPath(params.socketPath, params.abortSignal);
+    params.abortSignal?.throwIfAborted();
+    return;
+  }
+  try {
+    await ensurePortAvailable(params.httpPort, params.httpHost, params.abortSignal);
+  } catch (error) {
+    if (params.abortSignal?.aborted) {
+      throw params.abortSignal.reason;
+    }
+    const isPortCollision =
+      extractErrorCode(error) === "EADDRINUSE" ||
+      (error instanceof Error && error.name === "PortInUseError");
+    if (!isPortCollision) {
+      // The operator-selected signal-cli may have stronger bind permissions than OpenClaw.
+      // Only a confirmed collision is authoritative from this parent-process probe.
+      return;
+    }
+    const endpoint = formatSignalDaemonEndpoint(params.httpHost, params.httpPort);
+    throw new Error(
+      `Signal managed native endpoint ${endpoint} is unavailable: ${formatErrorMessage(error)} Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
+      {
+        cause: error,
+      },
+    );
+  }
+}
+
+export async function waitForSignalDaemonReady(params: {
+  baseUrl: string;
+  abortSignal?: AbortSignal;
+  startupDeadlineMs: number;
+  runtime: RuntimeEnv;
+  waitForTransportReadyFn?: typeof waitForTransportReady;
+}): Promise<void> {
+  const waitForTransportReadyFn = params.waitForTransportReadyFn ?? waitForTransportReady;
+  const timeoutMs = Math.max(0, params.startupDeadlineMs - Date.now());
+  await waitForTransportReadyFn({
+    label: "signal daemon",
+    timeoutMs,
+    logAfterMs: 10_000,
+    logIntervalMs: 10_000,
+    pollIntervalMs: 150,
+    abortSignal: params.abortSignal,
+    runtime: params.runtime,
+    check: async () => {
+      const remainingMs = params.startupDeadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        return { ok: false, error: "startup deadline exceeded" };
+      }
+      const res = await signalCheck(params.baseUrl, Math.min(1_000, remainingMs));
+      if (Date.now() >= params.startupDeadlineMs) {
+        return { ok: false, error: "startup deadline exceeded" };
+      }
+      if (res.ok) {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error: res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable"),
+      };
+    },
+  });
+}
+
+function classifySignalCliLogLine(line: string): "log" | "error" | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  // signal-cli commonly writes routine logs and warnings to stderr; only error-like lines should
+  // update channel failure state. Recoverable receive decrypt failures are noisy but non-fatal.
+  if (/\bERROR\b/.test(trimmed)) {
+    return "error";
+  }
+  if (/\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(trimmed)) {
+    return "log";
+  }
+  // Some signal-cli failures are not tagged with ERROR but should still be surfaced loudly.
+  if (/\b(FAILED|SEVERE|EXCEPTION)\b/i.test(trimmed)) {
+    return "error";
+  }
+  return "log";
+}
+
+function bindSignalCliOutput(params: {
+  stream: NodeJS.ReadableStream | null | undefined;
+  log: (message: string) => void;
+  error: (message: string) => void;
+}): void {
+  if (!params.stream) {
+    return;
+  }
+  // Process pipe chunks can split both log lines and UTF-8 code points. Readline owns that
+  // framing so classification sees complete text, including the final unterminated line.
+  const lines = createInterface({ input: params.stream });
+  lines.on("line", (line) => {
+    const kind = classifySignalCliLogLine(line);
+    if (kind === "log") {
+      params.log(`signal-cli: ${line.trim()}`);
+    } else if (kind === "error") {
+      params.error(`signal-cli: ${line.trim()}`);
+    }
+  });
+}
+
+function resolveSignalCliConfigPath(raw: string): string {
+  const value = raw.trim();
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
+export function spawnSignalDaemon(opts: {
+  cliPath: string;
+  configPath?: string;
+  account?: string;
+  httpHost: string;
+  httpPort: number;
+  socketPath?: string;
+  receiveMode?: "on-start" | "manual";
+  ignoreAttachments?: boolean;
+  ignoreStories?: boolean;
+  sendReadReceipts?: boolean;
+  runtime?: RuntimeEnv;
+}): SignalDaemonHandle {
+  const args: string[] = [];
+  if (opts.configPath?.trim()) {
+    args.push("--config", resolveSignalCliConfigPath(opts.configPath));
+  }
+  if (opts.account) {
+    args.push("-a", opts.account);
+  }
+  args.push("daemon");
+  if (opts.socketPath) {
+    args.push("--socket", opts.socketPath);
+  } else {
+    args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  }
+  args.push("--no-receive-stdout");
+
+  if (opts.socketPath) {
+    // The socket client explicitly subscribes; automatic subscriptions would duplicate events.
+    args.push("--receive-mode", "manual");
+  } else if (opts.receiveMode) {
+    args.push("--receive-mode", opts.receiveMode);
+  }
+  if (opts.ignoreAttachments) {
+    args.push("--ignore-attachments");
+  }
+  if (opts.ignoreStories) {
+    args.push("--ignore-stories");
+  }
+  if (opts.sendReadReceipts) {
+    args.push("--send-read-receipts");
+  }
+
+  warnSignalDaemonDroppedEnvOnce();
+  // The executable is operator-selected or setup-discovered signal-cli.
+  // Runtime message content only flows through the daemon HTTP API, not argv.
+  const child = spawn(opts.cliPath, args, {
+    env: buildSignalDaemonEnv(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const log = opts.runtime?.log ?? (() => {});
+  const error = opts.runtime?.error ?? (() => {});
+  let exited = false;
+  let stopPromise: Promise<void> | undefined;
+  let resolveExit!: (value: SignalDaemonExitEvent) => void;
+  const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
+    resolveExit = resolve;
+  });
+  const settleExit = (value: SignalDaemonExitEvent) => {
+    if (exited) {
+      return;
+    }
+    exited = true;
+    resolveExit(value);
+  };
+
+  bindSignalCliOutput({ stream: child.stdout, log, error });
+  bindSignalCliOutput({ stream: child.stderr, log, error });
+  child.once("exit", (code, signal) => {
+    settleExit({
+      source: "process",
+      code: typeof code === "number" ? code : null,
+      signal: signal ?? null,
+    });
+    error(
+      formatSignalDaemonExit({ source: "process", code: code ?? null, signal: signal ?? null }),
+    );
+  });
+  child.once("close", (code, signal) => {
+    settleExit({
+      source: "process",
+      code: typeof code === "number" ? code : null,
+      signal: signal ?? null,
+    });
+  });
+  child.on("error", (err) => {
+    // ChildProcess also emits "error" when signaling an already-spawned process fails.
+    // Only a missing pid proves there was no daemon whose exit still needs to be observed.
+    if (child.pid === undefined) {
+      error(`signal-cli spawn error: ${String(err)}`);
+      settleExit({ source: "spawn-error", code: null, signal: null });
+    } else {
+      error(`signal-cli process error: ${String(err)}`);
+    }
+  });
+
+  return {
+    exited: exitedPromise,
+    stop: () => {
+      if (exited) {
+        return Promise.resolve();
+      }
+      if (stopPromise) {
+        return stopPromise;
+      }
+      if (!child.killed) {
+        try {
+          child.kill("SIGTERM");
+        } catch (err) {
+          error(`signal-cli stop error: ${String(err)}`);
+        }
+      }
+      const timeout = setTimeout(() => {
+        if (!exited) {
+          try {
+            child.kill("SIGKILL");
+          } catch (err) {
+            error(`signal-cli force-stop error: ${String(err)}`);
+          }
+        }
+      }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
+      timeout.unref?.();
+      // Wait for actual exit before a replacement can use the port and config lock.
+      stopPromise = exitedPromise.then(() => {
+        clearTimeout(timeout);
+      });
+      return stopPromise;
+    },
+  };
+}

@@ -1,0 +1,274 @@
+import { log, spinner, symbol } from "@clack/prompts";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import {
+  formatOscProgress,
+  supportsOscProgress,
+} from "../../packages/terminal-core/src/osc-progress.js";
+import {
+  clearActiveProgressLine,
+  registerActiveProgressLine,
+  unregisterActiveProgressLine,
+} from "../../packages/terminal-core/src/progress-line.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+
+/** Keep animated labels inside Clack's captured erase width. */
+export function createProgressSpinner(
+  options: Parameters<typeof spinner>[0] & { output: NodeJS.WriteStream },
+  decorationColumns: number,
+) {
+  const { output } = options;
+  const readColumns = () =>
+    Number.isFinite(output.columns) && output.columns > 0 ? Math.floor(output.columns) : undefined;
+  let columns = readColumns();
+  let label = "";
+  let finished = false;
+  const spin = spinner(options);
+  const render = (message: string) => {
+    label = message;
+    const width = columns === undefined ? undefined : columns - decorationColumns;
+    return theme.accent(
+      width === undefined || visibleWidth(label) <= width
+        ? label
+        : width <= 0
+          ? ""
+          : `${truncateToVisibleWidth(label, width - 1)}…`,
+    );
+  };
+  const resize = () => {
+    const next = readColumns();
+    if (columns === undefined || next === undefined || next >= columns) {
+      return;
+    }
+    columns = next;
+    if (columns <= decorationColumns) {
+      spin.clear();
+    } else {
+      spin.message(render(label));
+    }
+  };
+  return {
+    start: (message: string) => {
+      resize();
+      if (columns === undefined || columns > decorationColumns) {
+        if (columns !== undefined) {
+          output.on("resize", resize);
+        }
+        spin.start(render(message));
+      }
+    },
+    message: (message: string) => spin.message(render(message)),
+    stop: (message?: string) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      output.off("resize", resize);
+      spin.clear();
+      if (message !== undefined) {
+        log.message([`${symbol("submit")}  ${message}`], { output, spacing: 0, withGuide: false });
+      }
+    },
+  };
+}
+
+// Only one active progress renderer may own the terminal line at a time.
+let activeProgress = 0;
+
+type ProgressOptions = {
+  label: string;
+  indeterminate?: boolean;
+  total?: number;
+  enabled?: boolean;
+  delayMs?: number;
+  stream?: NodeJS.WriteStream;
+  fallback?: "spinner" | "line" | "log" | "none";
+};
+
+export type ProgressReporter = {
+  setLabel: (label: string) => void;
+  setPercent: (percent: number) => void;
+  tick: (delta?: number) => void;
+  done: () => void;
+};
+
+export type ProgressTotalsUpdate = {
+  completed: number;
+  total: number;
+  label?: string;
+};
+
+const noopReporter: ProgressReporter = {
+  setLabel: () => {},
+  setPercent: () => {},
+  tick: () => {},
+  done: () => {},
+};
+
+export function createCliProgress(options: ProgressOptions): ProgressReporter {
+  if (options.enabled === false || activeProgress > 0) {
+    return noopReporter;
+  }
+
+  const stream = options.stream ?? process.stderr;
+  const isTty = stream.isTTY;
+  const fallback = options.fallback;
+  const allowLog = !isTty && fallback === "log";
+  if (!isTty && !allowLog) {
+    return noopReporter;
+  }
+
+  const delayMs = resolveTimerTimeoutMs(options.delayMs, 0, 0);
+  const canOsc = isTty && supportsOscProgress(process.env);
+  const stdinIsRaw = process.stdin.isRaw;
+  const wantsSpinner = fallback === undefined || fallback === "spinner";
+  const allowSpinner = wantsSpinner && isTty && !stdinIsRaw;
+  const allowLine = isTty && fallback === "line";
+  if (isTty && stdinIsRaw && wantsSpinner) {
+    // Raw stdin usually means an interactive prompt owns cursor movement.
+    return noopReporter;
+  }
+
+  let started = false;
+  let finished = false;
+  let label = options.label;
+  const total = options.total ?? null;
+  let completed = 0;
+  let percent = 0;
+  let indeterminate =
+    options.indeterminate ?? (options.total === undefined || options.total === null);
+
+  activeProgress += 1;
+  if (isTty) {
+    registerActiveProgressLine(stream);
+  }
+
+  const spin = allowSpinner ? createProgressSpinner({ output: stream }, 7) : null;
+  const renderLine = allowLine
+    ? () => {
+        const suffix = indeterminate ? "" : ` ${percent}%`;
+        clearActiveProgressLine();
+        stream.write(`${theme.accent(label)}${suffix}`);
+      }
+    : null;
+  const renderLog = allowLog
+    ? (() => {
+        let lastLine = "";
+        let lastAt = 0;
+        const throttleMs = 250;
+        return () => {
+          const suffix = indeterminate ? "" : ` ${percent}%`;
+          const nextLine = `${label}${suffix}`;
+          const now = Date.now();
+          if (nextLine === lastLine && now - lastAt < throttleMs) {
+            return;
+          }
+          lastLine = nextLine;
+          lastAt = now;
+          stream.write(`${nextLine}\n`);
+        };
+      })()
+    : null;
+  let timer: NodeJS.Timeout | null = null;
+
+  const applyState = () => {
+    if (!started || finished) {
+      return;
+    }
+    if (canOsc) {
+      stream.write(formatOscProgress(indeterminate ? 3 : 1, indeterminate ? 0 : percent));
+    }
+    spin?.message(label);
+    renderLine?.();
+    renderLog?.();
+  };
+
+  const start = () => {
+    started = true;
+    spin?.start(label);
+    applyState();
+  };
+
+  if (delayMs === 0) {
+    start();
+  } else {
+    timer = setTimeout(start, delayMs);
+  }
+
+  const setLabel = (next: string) => {
+    label = next;
+    applyState();
+  };
+
+  const setPercent = (nextPercent: number) => {
+    percent = Math.max(0, Math.min(100, Math.round(nextPercent)));
+    indeterminate = false;
+    applyState();
+  };
+
+  const tick = (delta = 1) => {
+    if (!total) {
+      return;
+    }
+    completed = Math.min(total, completed + delta);
+    const nextPercent = total > 0 ? Math.round((completed / total) * 100) : 0;
+    setPercent(nextPercent);
+  };
+
+  const done = () => {
+    // A finally block may finish an already-stopped reporter; never clear a newer owner's line.
+    if (finished) {
+      return;
+    }
+    finished = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (started) {
+      if (canOsc) {
+        stream.write(formatOscProgress(0, 0));
+      }
+      spin?.stop("");
+      clearActiveProgressLine();
+    }
+    if (isTty) {
+      unregisterActiveProgressLine(stream);
+    }
+    activeProgress = Math.max(0, activeProgress - 1);
+  };
+
+  return { setLabel, setPercent, tick, done };
+}
+
+/** Run async work with a progress reporter that is always stopped in finally. */
+export async function withProgress<T>(
+  options: ProgressOptions,
+  work: (progress: ProgressReporter) => Promise<T>,
+): Promise<T> {
+  const progress = createCliProgress(options);
+  try {
+    return await work(progress);
+  } finally {
+    progress.done();
+  }
+}
+
+/** Run async work with a progress reporter plus a completed/total update adapter. */
+export async function withProgressTotals<T>(
+  options: ProgressOptions,
+  work: (update: (update: ProgressTotalsUpdate) => void, progress: ProgressReporter) => Promise<T>,
+): Promise<T> {
+  return await withProgress(options, async (progress) => {
+    const update = ({ completed, total, label }: ProgressTotalsUpdate) => {
+      if (label) {
+        progress.setLabel(label);
+      }
+      if (!Number.isFinite(total) || total <= 0) {
+        return;
+      }
+      progress.setPercent((completed / total) * 100);
+    };
+    return await work(update, progress);
+  });
+}

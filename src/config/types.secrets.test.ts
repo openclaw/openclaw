@@ -1,0 +1,40 @@
+// Verifies secret config type guards and normalization helpers.
+import { describe, expect, it } from "vitest";
+import { collectEnvSecretRefIds } from "./resolution-facts.js";
+import { coerceSecretRef, parseEnvTemplateSecretRef } from "./types.secrets.js";
+
+describe("parseEnvTemplateSecretRef", () => {
+  it("uses the provided provider alias", () => {
+    expect(parseEnvTemplateSecretRef("$MY_KEY", "custom")).toEqual({
+      source: "env",
+      provider: "custom",
+      id: "MY_KEY",
+    });
+  });
+});
+
+describe("collectEnvSecretRefIds", () => {
+  it("finds structured and shorthand refs throughout config values", () => {
+    expect(
+      collectEnvSecretRefIds({
+        structured: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        providerless: { source: "env", id: "LEGACY_API_KEY" },
+        nested: [{ token: "$DISCORD_BOT_TOKEN" }],
+        ignored: { source: "file", provider: "default", id: "/run/secret" },
+      }),
+    ).toEqual(new Set(["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"]));
+  });
+});
+
+describe("store SecretRef coercion", () => {
+  it("applies the store-specific default provider to providerless refs", () => {
+    const input = { source: "store", id: "STORED_API_KEY", opaque: { keep: true } };
+    expect(coerceSecretRef(input, { store: "teamstore" })).toEqual({
+      source: "store",
+      provider: "teamstore",
+      id: "STORED_API_KEY",
+    });
+    expect(coerceSecretRef({ ...input, provider: "teamstore" })).toBeNull();
+    expect(input).toEqual({ source: "store", id: "STORED_API_KEY", opaque: { keep: true } });
+  });
+});

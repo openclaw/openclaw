@@ -1,0 +1,785 @@
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  createAgentToolResultMiddlewareRunner,
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  finalizeToolTerminalPresentation,
+  formatToolExecutionErrorMessage,
+  getBeforeToolCallFailureDisposition,
+  embeddedAgentLog,
+  getChannelAgentToolMeta,
+  getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+  isDeliveredMessagingToolSendToCurrentSource,
+  isReplaySafeToolCall,
+  isToolResultError,
+  isMessagingTool,
+  projectPluginMessageDeliveryFact,
+  readToolOperatorHint,
+  resolveToolExecutionErrorKind,
+  readEmbeddedMessageDeliveryFact,
+  resolveMessageToolSourceReplyFinal,
+  runAgentHarnessAfterToolCallHook,
+  sanitizeToolResult,
+  type AnyAgentTool,
+  type MessagingToolSend,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  collectAgentHarnessMessagingMediaUrls,
+  copyInternalToolResultState,
+  createAgentHarnessToolExecutionBoundaryRegistry,
+  createGatewayToolPolicyAssertion,
+  extractMessagingToolSourceReplyPayload,
+  getCoreTtsToolResultMediaUrls,
+  normalizeAcceptedSessionSpawnResult,
+  recordAgentHarnessToolResultTelemetry,
+  runAgentHarnessToolInvocation,
+  type AgentHarnessToolResultTelemetry,
+  type AcceptedSessionSpawn,
+  type AgentHarnessToolExecutionSnapshot,
+} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  asNonArrayRecord,
+  asOptionalRecord,
+  isRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  resolveLiveToolResultMaxChars,
+} from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  computerFrameImageIdentity,
+  invalidateCodexComputerFrame,
+  type CodexComputerContextEpoch,
+} from "./computer-context.js";
+import type { CodexDynamicToolsLoading } from "./config.js";
+import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
+import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
+import {
+  assertCodexDynamicToolInputMatchesSchema,
+  createCodexDynamicToolSpecs,
+  projectCodexDynamicTools,
+  type CodexDynamicToolSchemaQuarantine,
+  type CodexToolDescriptor,
+} from "./dynamic-tool-catalog.js";
+import { convertToolContents, enforceWholeSkillResult } from "./dynamic-tool-content.js";
+import {
+  type CodexDynamicToolHookContextBase,
+  projectCodexExecutableDynamicToolSurface,
+} from "./dynamic-tool-executable-projection.js";
+import {
+  createFailedDynamicToolResponse,
+  failedToolResult,
+  type CodexDynamicToolRuntimeResponse,
+} from "./dynamic-tool-response-state.js";
+import {
+  applyCurrentMessageProvider,
+  resolveCodexToolResultSourceReply,
+} from "./dynamic-tool-source-reply.js";
+import type {
+  CodexDynamicToolCallParams,
+  CodexDynamicToolFunctionSpec,
+  CodexDynamicToolSpec,
+} from "./protocol.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import {
+  prepareCodexRemoteWorkspaceMessageMedia,
+  resolveCodexMediaSourceUrls,
+} from "./remote-workspace-media.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
+
+type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
+  remoteWorkspaceRoot?: string;
+  remoteWorkspaceRequestTimeoutMs?: number;
+  currentChannelProvider?: string;
+  contextWindowTokens?: number;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+  currentMessageId?: string | number;
+  currentThreadId?: string;
+  replyToMode?: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
+  messageToolFinalByDefault?: boolean;
+};
+
+type CodexToolResultHookContext = Pick<
+  CodexDynamicToolHookContext,
+  "agentId" | "sessionId" | "sessionKey" | "runId" | "channelId"
+>;
+
+export type CodexDynamicToolBridge = {
+  /** Final executable tools after schema projection and hook-wrapper quarantine. */
+  availableTools: AnyAgentTool[];
+  availableSpecs: CodexDynamicToolSpec[];
+  specs: CodexDynamicToolSpec[];
+  resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
+  sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
+  hideFromChannelProgressForTool: (toolName: string) => boolean | undefined;
+  handleToolCall: (
+    params: CodexDynamicToolCallParams,
+    options?: {
+      signal?: AbortSignal;
+      onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
+      toolCallOrdinal?: number;
+      retainExecutionSnapshot?: boolean;
+    },
+  ) => Promise<CodexDynamicToolRuntimeResponse>;
+  /** Consume exact boundary evidence retained while post-execution processing is incomplete. */
+  consumeToolExecutionSnapshot?: (
+    toolCallId: string,
+  ) => AgentHarnessToolExecutionSnapshot | undefined;
+  /** Bind the authenticated app-server client once remote thread startup completes. */
+  setRemoteWorkspaceFileReader?: (reader: RemoteWorkspaceFileReader) => void;
+  telemetry: AgentHarnessToolResultTelemetry & {
+    didDeliverSourceReplyViaMessageTool: boolean;
+    sourceReplyDelivered?: true;
+    finalSourceReplyDelivered?: true;
+    acceptedSessionSpawns: AcceptedSessionSpawn[];
+    quarantinedTools: CodexDynamicToolSchemaQuarantine[];
+  };
+};
+
+export function createCodexDynamicToolBridge(params: {
+  tools: AnyAgentTool[];
+  registeredTools?: readonly CodexToolDescriptor[];
+  registeredSpecs?: readonly CodexDynamicToolSpec[];
+  requireExactRegisteredDefinitions?: boolean;
+  signal: AbortSignal;
+  assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
+  computerContextEpoch?: CodexComputerContextEpoch;
+  hookContext?: CodexDynamicToolHookContext;
+  loading?: CodexDynamicToolsLoading;
+  functionToolsOnly?: boolean;
+  directToolNames?: Iterable<string>;
+}): CodexDynamicToolBridge {
+  const toolResultHookContext = toToolResultHookContext(params.hookContext);
+  const contextWindowTokens = params.hookContext?.contextWindowTokens;
+  const toolResultMaxChars =
+    contextWindowTokens !== undefined && contextWindowTokens > 0
+      ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
+      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  const availableProjection = projectCodexExecutableDynamicToolSurface(
+    params.tools,
+    params.hookContext,
+  );
+  const registeredProjection = params.registeredTools
+    ? projectCodexDynamicTools(params.registeredTools, { config: params.hookContext?.config })
+    : availableProjection;
+  // Supervised thread declarations are native-owned and fingerprinted. Narrow
+  // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
+  const inheritedSpecs = params.registeredSpecs ? [...params.registeredSpecs] : undefined;
+  const inheritedNames = inheritedSpecs
+    ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
+    : undefined;
+  const registrationNames =
+    inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
+  const finalized = finalizeCodexToolAvailability(
+    availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
+    params.requireExactRegisteredDefinitions ? inheritedSpecs : undefined,
+  );
+  const availableTools = finalized.tools;
+  const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
+  for (const { name, tool } of availableTools) {
+    const pluginMeta = getPluginToolMeta(tool);
+    if (pluginMeta) {
+      // Bind path trust to the concrete plugin tool so core-name collisions fail closed.
+      pluginLocalMediaTrustByToolName.set(
+        name,
+        new Set(pluginMeta.trustedLocalMedia === true ? [name] : []),
+      );
+    }
+  }
+  availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
+  const toolMap = new Map(
+    availableTools.map((entry) => [
+      entry.name,
+      {
+        ...entry,
+        assertGatewayToolPolicy: createGatewayToolPolicyAssertion(
+          entry.tool,
+          params.hookContext?.config,
+        ),
+      },
+    ]),
+  );
+  const quarantinedAvailableToolNames = new Set(
+    availableProjection.quarantinedTools.map((tool) => tool.tool),
+  );
+  const registeredSpecTools = (params.registeredTools ? registeredProjection.tools : availableTools)
+    .filter((entry) => !quarantinedAvailableToolNames.has(entry.name))
+    .map((entry) =>
+      finalized.preparedNames.has(entry.name) ? (toolMap.get(entry.name) ?? entry) : entry,
+    );
+  const registeredToolNames =
+    inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
+  const quarantinedTools = dedupeQuarantinedDynamicTools([
+    ...availableProjection.quarantinedTools,
+    ...registeredProjection.quarantinedTools,
+  ]);
+  reportQuarantinedDynamicTools({
+    tools: quarantinedTools,
+    availableToolCount: availableTools.length,
+    registeredToolCount: registeredSpecTools.length,
+    hookContext: params.hookContext,
+  });
+  const telemetry: CodexDynamicToolBridge["telemetry"] = {
+    didSendViaMessagingTool: false,
+    didDeliverSourceReplyViaMessageTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    messagingToolSourceReplyPayloads: [],
+    confirmedMediaDeliveries: [],
+    toolMediaUrls: [],
+    toolAutoDeliveryMediaUrls: [],
+    coreTtsToolResults: [],
+    toolAudioAsVoice: false,
+    acceptedSessionSpawns: [],
+    quarantinedTools,
+  };
+  const middlewareRunner = createAgentToolResultMiddlewareRunner({
+    runtime: "codex",
+    ...toolResultHookContext,
+  });
+  const isReplaySafeToolInstance = (tool: AnyAgentTool): boolean => {
+    const pluginMeta = getPluginToolMeta(tool);
+    if (pluginMeta) {
+      return pluginMeta.replaySafe === true;
+    }
+    return getChannelAgentToolMeta(tool as never) === undefined;
+  };
+  const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
+  const directToolNames = params.directToolNames;
+  const specs =
+    inheritedSpecs ??
+    createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+      functionToolsOnly: params.functionToolsOnly,
+    });
+  // Keep saved declarations fingerprinted, and preserve their schemas when no
+  // Gateway policy applies. The managed view uses already-filtered concrete
+  // tools so genuine discovery controls retain their private identity.
+  const hasGatewayToolPolicy = Boolean(
+    params.hookContext?.config?.tools?.gatewayPolicy ||
+    getRuntimeConfigSnapshot()?.tools?.gatewayPolicy,
+  );
+  const availableInheritedFunction = (spec: CodexDynamicToolFunctionSpec) => {
+    const entry = toolMap.get(spec.name);
+    return entry ? [hasGatewayToolPolicy ? { ...spec, inputSchema: entry.inputSchema } : spec] : [];
+  };
+  const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
+  let readRemoteWorkspaceFile: RemoteWorkspaceFileReader | undefined;
+  return {
+    availableTools: availableTools.map((entry) => entry.tool),
+    availableSpecs: inheritedSpecs
+      ? inheritedSpecs.flatMap<CodexDynamicToolSpec>((spec) => {
+          if (spec.type === "function") {
+            return availableInheritedFunction(spec);
+          }
+          const tools = spec.tools.flatMap(availableInheritedFunction);
+          return tools.length ? [{ ...spec, tools }] : [];
+        })
+      : createCodexDynamicToolSpecs({
+          entries: availableTools,
+          loading: params.loading ?? "searchable",
+          directToolNames,
+          functionToolsOnly: params.functionToolsOnly,
+        }),
+    specs,
+    resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
+    sideEffectOwnerKeyForTool: (toolName) => {
+      const tool = toolMap.get(toolName)?.tool;
+      return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
+    },
+    hideFromChannelProgressForTool: (toolName) =>
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
+    telemetry,
+    setRemoteWorkspaceFileReader: (reader) => {
+      readRemoteWorkspaceFile = reader;
+    },
+    consumeToolExecutionSnapshot: executionBoundaries.consume,
+    handleToolCall: async (call, options) => {
+      const presentTerminal = (
+        toolName: string,
+        result: AgentToolResult<unknown>,
+        isError: boolean,
+      ) =>
+        finalizeToolTerminalPresentation({
+          toolCallId: call.callId,
+          runId: toolResultHookContext.runId,
+          result,
+          isError,
+          observer: params.hookContext?.onToolOutcome,
+          toolName,
+          toolCallOrdinal: options?.toolCallOrdinal,
+        });
+      const toolEntry = toolMap.get(call.tool);
+      if (!toolEntry) {
+        const executedArguments = asNonArrayRecord(call.arguments);
+        const message = registeredToolNames.has(call.tool)
+          ? `OpenClaw tool is not available for this turn: ${call.tool}`
+          : `Unknown OpenClaw tool: ${call.tool}`;
+        const result = failedToolResult(message);
+        presentTerminal(call.tool, result, true);
+        notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true);
+        return createFailedDynamicToolResponse(message, {
+          executedArguments,
+          executionStarted: false,
+        });
+      }
+      const { tool, name: toolName } = toolEntry;
+      const rawArguments =
+        toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
+      const args = asNonArrayRecord(rawArguments);
+      const invocationStartedAt = Date.now();
+      const signal = options?.signal
+        ? AbortSignal.any([params.signal, options.signal])
+        : params.signal;
+      let preparedMessageMedia:
+        | Awaited<ReturnType<typeof prepareCodexRemoteWorkspaceMessageMedia>>
+        | undefined;
+      let messagingContext: Parameters<typeof extractMessagingToolSend>[2];
+      let messagingFacts: {
+        messagingDelivered: boolean;
+        mediaDeliveryConfirmed: boolean;
+        confirmedMessagingTarget: MessagingToolSend | undefined;
+        deliveredSourceReply: boolean;
+      };
+      let rawIsErrorForPresentation = false;
+      let finalSourceReplyDelivered = false;
+      let telemetryRawResultForPresentation: unknown;
+      let presentationIsError = false;
+      return runAgentHarnessToolInvocation({
+        tool,
+        call: {
+          toolCallId: call.callId,
+          toolName,
+          arguments: rawArguments,
+          threadId: call.threadId,
+          turnId: call.turnId,
+        },
+        runId: toolResultHookContext.runId,
+        startedAt: invocationStartedAt,
+        signal,
+        assertCurrent: params.assertCurrent,
+        boundaries: executionBoundaries,
+        retainExecutionSnapshot: options?.retainExecutionSnapshot,
+        initialArguments: args,
+        prepareArguments: (toolArgs, nativeArgumentsPrepared) => {
+          const toolArgsRecord = nativeArgumentsPrepared ? toolArgs : args;
+          if (toolName === "message" && isRecord(toolArgsRecord)) {
+            return prepareCodexRemoteWorkspaceMessageMedia({
+              args: toolArgsRecord,
+              localWorkspaceRoot: params.hookContext?.workspaceDir,
+              remoteWorkspaceRoot: params.hookContext?.remoteWorkspaceRoot,
+              readRemoteFile: readRemoteWorkspaceFile,
+              timeoutMs: params.hookContext?.remoteWorkspaceRequestTimeoutMs,
+              signal,
+            }).then((prepared) => {
+              preparedMessageMedia = prepared;
+              return prepared.args;
+            });
+          }
+          return toolArgsRecord;
+        },
+        beforeExecute: async () => {
+          await params.assertCurrentAsync?.();
+          messagingContext = {
+            config: params.hookContext?.config,
+            currentChannelId: params.hookContext?.currentChannelId,
+            currentMessagingTarget: params.hookContext?.currentMessagingTarget,
+            currentThreadId: params.hookContext?.currentThreadId,
+            replyToMode: params.hookContext?.replyToMode,
+            hasRepliedRef: params.hookContext?.hasRepliedRef
+              ? { value: params.hookContext.hasRepliedRef.value }
+              : undefined,
+          };
+        },
+        validateArguments: (value) => {
+          toolEntry.assertGatewayToolPolicy(value);
+          if (getPluginToolMeta(tool)?.mcp?.operation === "tool") {
+            return;
+          }
+          assertCodexDynamicToolInputMatchesSchema({
+            toolName,
+            schema: toolEntry.inputSchema,
+            value,
+          });
+        },
+        beforeSnapshotResult: ({ rawResult, rawIsError, executedArguments: executedArgs }) => {
+          rawIsErrorForPresentation = rawIsError;
+          const messageDelivery = readEmbeddedMessageDeliveryFact(
+            asOptionalRecord(asOptionalRecord(rawResult)?.details)?.messageDelivery,
+          );
+          const messagingDelivered =
+            isMessagingTool(toolName) &&
+            (messageDelivery
+              ? messageDelivery.status === "settled" &&
+                (!rawIsError || messageDelivery.partialDelivery)
+              : isDeliveredMessagingToolResult({
+                  toolName,
+                  args: executedArgs,
+                  result: rawResult,
+                  isError: rawIsError,
+                }));
+          const mediaDelivery = messagingDelivered
+            ? (messageDelivery ?? projectPluginMessageDeliveryFact(rawResult))
+            : undefined;
+          const mediaDeliveryConfirmed =
+            messagingDelivered &&
+            !rawIsError &&
+            executedArgs.dryRun !== true &&
+            mediaDelivery?.status === "settled" &&
+            !mediaDelivery.partialDelivery;
+          const messagingTelemetryArgs = applyCurrentMessageProvider(
+            toolName,
+            executedArgs,
+            params.hookContext?.currentChannelProvider,
+          );
+          const messagingTarget = isMessagingTool(toolName)
+            ? extractMessagingToolSend(toolName, messagingTelemetryArgs, messagingContext)
+            : undefined;
+          const confirmedMessagingTarget =
+            messagingDelivered && messagingTarget
+              ? extractMessagingToolSendResult(messagingTarget, rawResult)
+              : messagingTarget;
+          const deliveredSourceReply =
+            messagingDelivered &&
+            isDeliveredMessageToolOnlySourceReplyResult({
+              sourceReplyDeliveryMode: params.hookContext?.sourceReplyDeliveryMode,
+              toolName,
+              args: executedArgs,
+              result: rawResult,
+              isError: rawIsError,
+              deliveryConfirmed: true,
+              allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+                send: confirmedMessagingTarget,
+                config: params.hookContext?.config,
+                currentProvider: params.hookContext?.currentChannelProvider,
+                currentAccountId: params.hookContext?.turnSourceAccountId,
+                currentChannelId: params.hookContext?.currentChannelId,
+                currentMessagingTarget: params.hookContext?.currentMessagingTarget,
+                currentThreadId: params.hookContext?.currentThreadId,
+                sessionKey: params.hookContext?.sessionKey,
+                deliveredPayload: rawResult,
+              }),
+            });
+          finalSourceReplyDelivered =
+            deliveredSourceReply &&
+            resolveMessageToolSourceReplyFinal(
+              executedArgs,
+              params.hookContext?.messageToolFinalByDefault,
+            );
+          telemetry.finalSourceReplyDelivered ||= finalSourceReplyDelivered || undefined;
+          // Delivery is committed before result middleware; presentation changes
+          // cannot erase the source owner's confirmation or infer a new one.
+          if (toolName === "message" && messageDelivery?.sourceReplyDelivered) {
+            telemetry.sourceReplyDelivered = true;
+          }
+          messagingFacts = {
+            messagingDelivered,
+            mediaDeliveryConfirmed,
+            confirmedMessagingTarget,
+            deliveredSourceReply,
+          };
+        },
+        snapshotResult: (rawResult) => {
+          telemetryRawResultForPresentation = sanitizeToolResult(rawResult);
+          return telemetryRawResultForPresentation;
+        },
+        applyMiddleware: async (event) => {
+          const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            toolName,
+            args: event.args,
+            isError: rawIsErrorForPresentation,
+            result: event.result,
+          });
+          const result = enforceWholeSkillResult(toolName, middlewareResult, toolResultMaxChars);
+          presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
+          // A successful spawn is durable before presentation middleware can rewrite details.
+          const acceptedSessionSpawn =
+            toolName === "sessions_spawn" && !rawIsErrorForPresentation
+              ? normalizeAcceptedSessionSpawnResult(telemetryRawResultForPresentation)
+              : null;
+          if (acceptedSessionSpawn) {
+            telemetry.acceptedSessionSpawns.push(acceptedSessionSpawn);
+          }
+          return result;
+        },
+        onResult: ({
+          boundary: executionBoundary,
+          startedAt,
+          executedArguments: executedArgs,
+          rawResult,
+          rawResultSnapshot: telemetryRawResult,
+          result,
+          observerResult,
+          failureKind: resultFailureKind,
+        }) => {
+          const resultIsError = presentationIsError;
+          const {
+            messagingDelivered,
+            mediaDeliveryConfirmed,
+            confirmedMessagingTarget,
+            deliveredSourceReply,
+          } = messagingFacts;
+          notifyAgentToolResult(
+            options?.onAgentToolResult,
+            toolName,
+            observerResult,
+            resultIsError,
+          );
+          void runAgentHarnessAfterToolCallHook({
+            toolName,
+            toolCallId: call.callId,
+            ...toolResultHookContext,
+            startArgs: executedArgs,
+            result,
+            startedAt,
+          });
+          presentTerminal(toolName, result, resultIsError);
+          const terminalType =
+            resultFailureKind === "blocked"
+              ? "blocked"
+              : resultIsError || resultFailureKind
+                ? "error"
+                : "completed";
+          const contentItems = convertToolContents(result.content, toolResultMaxChars);
+          const deliveredFrameImages = contentItems.filter((item) => item.type === "inputImage");
+          const finalFrameImageIdentity = computerFrameImageIdentity(result.content);
+          if (
+            toolName === "computer" &&
+            params.computerContextEpoch?.frameToolCallId === call.callId &&
+            (deliveredFrameImages.length !== 1 ||
+              finalFrameImageIdentity === undefined ||
+              finalFrameImageIdentity !== params.computerContextEpoch.frameImageIdentity)
+          ) {
+            // Middleware may replace screenshots; retain coordinates only for exact frame bytes.
+            invalidateCodexComputerFrame(params.computerContextEpoch);
+          }
+          const response: CodexDynamicToolRuntimeResponse = {
+            contentItems,
+            success: !resultIsError,
+            diagnosticTerminalType: terminalType,
+            diagnosticTerminalReason:
+              resultFailureKind === "blocked" ? undefined : resultFailureKind,
+            transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
+          };
+          const sourceReply = resolveCodexToolResultSourceReply({
+            canDeliverSourceReply: toolEntry.tool.canDeliverSourceReply,
+            toolName,
+            call,
+            resultIsError,
+            rawResult,
+            result,
+            deliveredSourceReply,
+            executedArgs,
+            finalByDefault: params.hookContext?.messageToolFinalByDefault,
+            runId: toolResultHookContext.runId,
+            response,
+          });
+          const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
+          recordAgentHarnessToolResultTelemetry({
+            extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
+            collectMessagingMediaUrls: collectAgentHarnessMessagingMediaUrls,
+            resolveMessagingMediaSourceUrls: (mediaUrls) =>
+              resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia?.sourcePathsByStagedPath),
+            toolName,
+            args: executedArgs,
+            result,
+            mediaTrustResult: telemetryRawResult,
+            telemetry,
+            signal,
+            isError: resultIsError,
+            messagingDelivered,
+            mediaDeliveryConfirmed,
+            autoDeliveryTtsMediaUrls,
+            coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
+            messagingTarget: confirmedMessagingTarget,
+            sourceReplyFinal: sourceReply.final,
+            trustedLocalMediaToolNames: pluginLocalMediaTrustByToolName.get(toolName),
+          });
+          if (deliveredSourceReply || sourceReply.toolConfirmed) {
+            telemetry.didDeliverSourceReplyViaMessageTool = true;
+          }
+          const asyncStarted =
+            isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
+          response.asyncStarted = asyncStarted || undefined;
+          const replaySafe =
+            executionBoundary.executionPrevented ||
+            (!asyncStarted &&
+              isReplaySafeToolInstance(toolEntry.tool) &&
+              isReplaySafeToolCall(toolName, executedArgs));
+          copyInternalToolResultState(rawResult, response);
+          response.executedArguments = executedArgs;
+          response.executionStarted = executionBoundary.executionStarted;
+          response.replaySafe = replaySafe;
+          response.sideEffectEvidence = !replaySafe || undefined;
+          return response;
+        },
+        onError: ({
+          error,
+          boundary: executionBoundary,
+          executedArguments: executedArgs,
+          startedAt,
+        }) => {
+          if (
+            toolName === "computer" &&
+            params.computerContextEpoch?.frameToolCallId === call.callId
+          ) {
+            // Post-processing can fail after arming; retain only frames Codex received.
+            invalidateCodexComputerFrame(params.computerContextEpoch);
+          }
+          const beforeToolCallDisposition = getBeforeToolCallFailureDisposition(error);
+          const executionDisposition =
+            beforeToolCallDisposition ??
+            (signal.aborted
+              ? resolveCodexToolAbortTerminalReason(signal)
+              : resolveToolExecutionErrorKind(error));
+          const errorMessage = formatToolExecutionErrorMessage(
+            error,
+            "OpenClaw dynamic tool call failed.",
+          );
+          const operatorHint = readToolOperatorHint(error);
+          if (operatorHint) {
+            embeddedAgentLog.error(`[tools] ${toolName} failed: ${operatorHint}`);
+          }
+          executionBoundary.consumeBlocked();
+          const failedResult = failedToolResult(errorMessage, executionDisposition);
+          presentTerminal(toolName, failedResult, true);
+          notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
+          void runAgentHarnessAfterToolCallHook({
+            toolName,
+            toolCallId: call.callId,
+            ...toolResultHookContext,
+            startArgs: executedArgs,
+            error: errorMessage,
+            startedAt,
+          });
+          const replaySafe =
+            !executionBoundary.didStartExecution ||
+            executionBoundary.executionPrevented ||
+            (isReplaySafeToolInstance(toolEntry.tool) &&
+              isReplaySafeToolCall(toolName, executedArgs));
+          return {
+            contentItems: [{ type: "inputText", text: errorMessage }],
+            success: false,
+            diagnosticTerminalType: executionDisposition === "blocked" ? "blocked" : "error",
+            diagnosticTerminalReason:
+              executionDisposition === "blocked" ? undefined : executionDisposition,
+            executedArguments: executedArgs,
+            executionStarted: executionBoundary.executionStarted,
+            replaySafe,
+            sideEffectEvidence: (executionBoundary.didStartExecution && !replaySafe) || undefined,
+            terminate: finalSourceReplyDelivered || undefined,
+            finalSourceReplyDelivered: finalSourceReplyDelivered || undefined,
+          };
+        },
+      });
+    },
+  };
+}
+
+/** Applies the exact schema and hook-wrapper projection used by the executable Codex bridge. */
+export function projectCodexExecutableDynamicTools(params: {
+  tools: readonly AnyAgentTool[];
+  hookContext?: CodexDynamicToolHookContext;
+}): {
+  availableTools: AnyAgentTool[];
+} {
+  const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
+  const finalized = finalizeCodexToolAvailability(projected.tools);
+  return {
+    availableTools: finalized.tools.map((entry) => entry.tool),
+  };
+}
+
+function notifyAgentToolResult(
+  observer: EmbeddedRunAttemptParams["onAgentToolResult"] | undefined,
+  toolName: string,
+  result: unknown,
+  isError: boolean,
+) {
+  try {
+    observer?.({
+      toolName,
+      result: sanitizeToolResult(result),
+      isError,
+    });
+  } catch (error) {
+    const message = formatToolExecutionErrorMessage(error, "Unknown error");
+    embeddedAgentLog.warn(`onAgentToolResult handler failed: tool=${toolName} error=${message}`);
+  }
+}
+
+function reportQuarantinedDynamicTools(params: {
+  tools: readonly CodexDynamicToolSchemaQuarantine[];
+  availableToolCount: number;
+  registeredToolCount: number;
+  hookContext?: CodexDynamicToolHookContext;
+}): void {
+  if (params.tools.length === 0) {
+    return;
+  }
+  embeddedAgentLog.warn(
+    `codex app-server quarantined ${params.tools.length} unsupported dynamic tool ${params.tools.length === 1 ? "definition" : "definitions"}: ${params.tools.map((tool) => tool.tool).join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
+    {
+      tools: params.tools.map(({ tool, violations }) => ({ tool, violations })),
+      availableToolCount: params.availableToolCount,
+      registeredToolCount: params.registeredToolCount,
+    },
+  );
+  for (const tool of params.tools) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.blocked",
+      agentId: params.hookContext?.agentId,
+      runId: params.hookContext?.runId,
+      sessionId: params.hookContext?.sessionId,
+      sessionKey: params.hookContext?.sessionKey,
+      toolName: tool.tool,
+      deniedReason: "unsupported_tool_schema",
+      reason: tool.violations.join(", "),
+    });
+  }
+}
+
+function dedupeQuarantinedDynamicTools(
+  tools: readonly CodexDynamicToolSchemaQuarantine[],
+): CodexDynamicToolSchemaQuarantine[] {
+  const byName = new Map<string, CodexDynamicToolSchemaQuarantine>();
+  for (const { tool, violations } of tools) {
+    byName.set(tool, { tool, violations });
+  }
+  return [...byName.values()];
+}
+function toToolResultHookContext(
+  ctx: CodexDynamicToolHookContext | undefined,
+): CodexToolResultHookContext {
+  const { agentId, sessionId, sessionKey, runId, channelId } = ctx ?? {};
+  return {
+    ...(agentId && { agentId }),
+    ...(sessionId && { sessionId }),
+    ...(sessionKey && { sessionKey }),
+    ...(runId && { runId }),
+    ...(channelId && { channelId }),
+  };
+}
+
+function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  return isRecord(details) && details.async === true && details.status === "started";
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

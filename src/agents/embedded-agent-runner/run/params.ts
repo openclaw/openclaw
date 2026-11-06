@@ -1,0 +1,310 @@
+import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
+import type { SessionDeliveryState } from "../../../config/sessions/types.js";
+import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
+import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
+import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import type { ExplicitSkillSelection } from "../../../skills/types.js";
+import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
+import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
+import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
+import type {
+  AgentRunExecutionContext,
+  AgentRunMessageContext,
+  AgentRunChannelContext,
+} from "../../command/execution-context.types.js";
+import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { ConversationRecallContext } from "../../conversation-recall.types.js";
+import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
+import type {
+  BlockReplyChunking,
+  EmbeddedAgentEvent,
+  ToolProgressDetailMode,
+  ToolResultFormat,
+} from "../../embedded-agent-subscribe.shared-types.js";
+import type { ExecSessionDefaults } from "../../exec-defaults.js";
+import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
+import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
+import type { ModelFallbackAvailability } from "../../model-fallback.types.js";
+import type { ReplyDeliveryObserver } from "../../reply-completion.js";
+import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
+import type { PromptMode } from "../../system-prompt.types.js";
+import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
+import type { BlockReplyFlushContext } from "../types.js";
+import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
+export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
+
+export type RunEmbeddedAgentParams = Pick<
+  QueuedAgentRunParams,
+  | "toolBindings"
+  | "conversationRoutePeerId"
+  | "conversationToolPolicy"
+  | "memberRoleIds"
+  | "permissionMode"
+  | "sessionRoot"
+  | "blindPrompt"
+  | "modelSelectionLocked"
+  | "authProfileIdSource"
+  | "verboseLevel"
+  | "reasoningLevel"
+  | "trustedInternalHandoff"
+  | "runtimePluginToolGrant"
+  | "silentReplyPromptMode"
+  | "enforceFinalTag"
+  | "silentExpected"
+  | "terminalReplyExpectation"
+  | "suppressTranscriptOnlyAssistantPersistence"
+  | "skillLibraryAuthoring"
+> & {
+  /** Settles the session's initial workspace attribution before tools can act. */
+  awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Host-minted parent audience inherited by a trusted internal child run. */
+  memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
+  /** Detached runs may read session identity but never write its durable transcript or metadata. */
+  sessionPersistence?: "durable" | "detached";
+  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
+  sessionTarget?: AgentRunSessionTarget;
+  /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
+  promptCacheKey?: string;
+  /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
+  sandboxSessionKey?: string;
+  /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
+  sandboxAgentId?: string;
+  /** The user, event, automation, or maintenance owner that initiated this run. */
+  trigger?: EmbeddedRunTrigger;
+  /** Store-private runtime authority forwarded only by the cron execution owner. */
+  scheduledRuntimeAuthority?: CronRuntimeAuthority;
+  /** A known runtime-specific authority envelope was explicitly cleared. */
+  scheduledRuntimeAuthorityRecoveryRequired?: boolean;
+  /** Relative workspace path that memory-triggered writes are allowed to append to. */
+  memoryFlushWritePath?: string;
+  /** Provider-owned persistence surface for a tools-arm memory flush. */
+  memoryFlushTools?: MemoryFlushToolRunContext;
+  /** Sticky source-turn taint inherited by an internal maintenance run. */
+  initialTurnTainted?: boolean;
+  /** Delivery target for topic/thread routing. */
+  messageTo?: string;
+  /** Thread/topic identifier for routing replies to the originating thread. */
+  messageThreadId?: string | number;
+  /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
+  isCanonicalWorkspace?: boolean;
+  /** Transport-native chat/conversation ID for hook identity context. */
+  chatId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
+  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  hasRepliedRef?: { value: boolean };
+  /** If true, omit the message tool from the tool list. */
+  disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
+  /** Invocation-owned Code Mode activation; limits still come from config. */
+  codeModeOverride?: boolean | "auto";
+  /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
+  modelRun?: boolean;
+  /** Setup can reject unavailable endpoints without spending the session retry budget. */
+  retryConnectionErrors?: boolean;
+  /** Auxiliary callers can defer transient provider failures to their own scheduler. */
+  retryTransientErrors?: boolean;
+  /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
+  disableTrajectory?: boolean;
+  /** Explicit system prompt mode override for trusted callers. */
+  promptMode?: PromptMode;
+  /** Keep the message tool available even when a narrow profile would omit it. */
+  forceMessageTool?: boolean;
+  /** Allow runtime plugins for this run to late-bind the gateway subagent. */
+  allowGatewaySubagentBinding?: boolean;
+  /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
+  sessionFile?: string;
+  /** Require file tools to stay within the task workspace without changing exec policy. */
+  requireWorkspaceOnly?: true;
+  /** Context supplied by internal producers, separate from inbound prompt text. */
+  runtimeContextFragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
+  /** Finalizes caller-owned guidance after the submitted tool surface is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
+  currentInboundContext?: CurrentInboundPromptContext;
+  explicitSkillSelections?: ExplicitSkillSelection[];
+  /** Optional client-provided tools (OpenResponses hosted tools). */
+  clientTools?: ClientToolDefinition[];
+  provider?: string;
+  /** Caller-owned upper bound for this run's effective context budget. */
+  contextTokenBudget?: number;
+  /** Route-bound thinking capability resolved from the selected prepared catalog row. */
+  modelThinkingCapability?: PreparedModelThinkingCapability;
+  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
+  modelFallbacksOverride?: string[];
+  /** Prepared fallback availability fact shared by selection and failure reporting. */
+  modelFallbackAvailability?: ModelFallbackAvailability;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
+  /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
+  agentHarnessRuntimeOverride?: string;
+  /** Verified setup continuation: pin both the harness and its local implementation. */
+  expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
+  /** Caller-owned credential lifetime; independent of interactive pin provenance. */
+  authProfileBinding?: {
+    profileId: string;
+    authRequirement: import("../../../plugin-sdk/provider-model-types.js").ProviderModelRouteAuthRequirement;
+    assertCurrent(): void;
+    revalidate(): Promise<void>;
+  };
+  /** Disable fallback from the user-selected auth profile for a verification run. */
+  allowAuthProfileFallback?: boolean;
+  toolResultFormat?: ToolResultFormat;
+  toolProgressDetail?: ToolProgressDetailMode;
+  /** Bootstrap context mode for workspace file injection. */
+  bootstrapContextMode?: "full" | "lightweight";
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
+  /** Preserve the visible tool schemas while allowing execution only for these names. */
+  toolExecutionAllow?: readonly string[];
+  /** Host-stamped exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
+  /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */
+  cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
+  /** Canonical persisted exec policy for this session. */
+  execSession?: ExecSessionDefaults;
+  /** Session-owned presentation facts; never current-turn delivery or tool authority. */
+  sessionPromptDelivery?: SessionDeliveryState;
+  execOverrides?: Pick<
+    ExecToolDefaults,
+    | "host"
+    | "mode"
+    | "security"
+    | "ask"
+    | "node"
+    | "nodeCwd"
+    | "notifyOnExit"
+    | "notifyOnExitEmptySuccess"
+  >;
+  bashElevated?: ExecElevatedDefaults;
+  /** Trusted approved-exec runtime prompt span awaiting the resolved attempt cap. */
+  execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Corresponding span in the undecorated transcript prompt. */
+  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
+  onExecutionPhase?: (info: EmbeddedAgentExecutionPhaseInfo) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
+  onRunProgress?: (info: {
+    reason: string;
+    provider?: string;
+    model?: string;
+    backend?: string;
+  }) => void;
+  onSessionIdChanged?: (sessionId: string) => void;
+  shouldEmitToolResult?: () => boolean;
+  shouldEmitToolOutput?: () => boolean;
+  onAssistantMessageStart?: () => void | Promise<void>;
+  onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
+  /** Source-owned final receipt/custody for this input, never mere callback or preview acceptance. */
+  resolveReplyDelivery?: ReplyDeliveryObserver;
+  blockReplyBreak?: "text_end" | "message_end";
+  blockReplyChunking?: BlockReplyChunking;
+  onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
+  streamReasoningInNonStreamModes?: boolean;
+  onReasoningEnd?: () => void | Promise<void>;
+  onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /** Synchronous private observer for the sanitized per-tool result. */
+  onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
+  /** Reports a committed generic recovery compaction before its retry starts. */
+  onAutoCompactionSucceeded?: (count: number) => void;
+  onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
+  onToolStreamBoundary?: () => void | Promise<void>;
+  /**
+   * Emit lifecycle "finishing" when the attempt ends; the caller owns the
+   * final lifecycle "end" or "error" after fallback and post-turn work settle.
+   */
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
+  deferTerminalLifecycleEnd?: boolean;
+  enqueue?: CommandQueueEnqueueFn;
+  gitCoauthorPrompt?: string;
+  internalEvents?: AgentInternalEvent[];
+  streamParams?: AgentStreamParams;
+  /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
+  suppressLiveStreamOutput?: boolean;
+  /**
+   * Legacy default for callers without terminalReplyExpectation.
+   * An explicit required reply cannot be waived by this flag or model output.
+   */
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  /**
+   * Use the provider's subscription CLI for one-shot helpers within plan limits.
+   * Direct Anthropic OAuth passthrough uses metered extra usage and fails without balance.
+   * `toolsAllow` bounds both backend-visible tools and server-side loopback MCP grants;
+   * native and non-allowlisted tools, including a disabled message tool, stay unavailable.
+   * Unset retains direct-API passthrough.
+   */
+  cliBackendDispatch?: "subscription-auth";
+  /**
+   * Probe one transiently cooled profile when sibling models may still be available.
+   */
+  allowTransientCooldownProbe?: boolean;
+  assistantErrorTranscript?: AssistantErrorTranscript;
+  /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
+  skipPreparedUserTurnMessage?: boolean;
+  onUserMessagePersistenceInvalidated?: () => void;
+} & AgentRunExecutionContext;
+
+export type EmbeddedForegroundPromptContext = Pick<
+  RunEmbeddedAgentParams,
+  | "agentDir"
+  | "sandboxAgentId"
+  | "promptCacheKey"
+  | "reasoningLevel"
+  | "clientCaps"
+  | "gatewayUiCommandTarget"
+  | "toolBindings"
+  | "trigger"
+  | "messageTo"
+  | "messageThreadId"
+  | "conversationToolPolicy"
+  | "memberRoleIds"
+  | "isCanonicalWorkspace"
+  | "chatId"
+  | "currentMessagingTarget"
+  | "disableMessageTool"
+  | "conversationRecall"
+  | "toolOverrides"
+  | "permissionMode"
+  | "execOverrides"
+  | "skillsSnapshot"
+  | "currentInboundEventKind"
+  | "clientTools"
+  | "disableTools"
+  | "contextWindow"
+  | "promptMode"
+  | "forceMessageTool"
+  | "allowGatewaySubagentBinding"
+  | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
+  | "sessionPromptDelivery"
+  | "gitCoauthorPrompt"
+  | "silentReplyPromptMode"
+  | "ownerNumbers"
+  | "toolsAllow"
+  | "runtimePluginToolGrant"
+  | "inputProvenance"
+  | "scheduledToolPolicy"
+  | "modelThinkingCapability"
+  | "modelFallbacksOverride"
+> &
+  AgentRunMessageContext &
+  AgentRunChannelContext & {
+    /** SDK observation of the completed attempt; new runs recheck publication availability. */
+    githubPublicationAvailable?: boolean;
+    agentId: string;
+    workspaceDir: string;
+    cwd?: string;
+    sandboxSessionKey: string;
+    cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
+  };

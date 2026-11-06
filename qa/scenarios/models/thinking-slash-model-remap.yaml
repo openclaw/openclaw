@@ -1,0 +1,234 @@
+title: Thinking slash model preference preservation
+
+scenario:
+  id: thinking-slash-model-remap
+  surface: models
+  coverage:
+    primary:
+      - agent-runtime.thinking
+    secondary:
+      - agent-runtime.runtime-override-switching
+      - agent-runtime.thinking-session-continuity
+  objective: Verify /think lists provider-owned levels, model switches preserve the saved thinking preference, and only the effective level is clamped until switching back.
+  plugins:
+    - anthropic
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        modelPolicy:
+          allow:
+            - openai/gpt-5.5
+            - anthropic/claude-sonnet-4-6
+        models:
+          anthropic/claude-sonnet-4-6:
+            params: {}
+  successCriteria:
+    - Anthropic Claude Sonnet 4.6 advertises adaptive and native max, but not OpenAI-only xhigh.
+    - A stored adaptive preference survives switching to OpenAI GPT-5.5 while the effective level clamps to medium, then returns to adaptive when switching back.
+    - OpenAI GPT-5.5 advertises xhigh but not adaptive or max.
+    - A stored xhigh preference survives switching to an Anthropic model without xhigh support while the effective level clamps to high, then returns to xhigh when switching back.
+  docsRefs:
+    - docs/tools/thinking.md
+    - docs/help/testing.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/auto-reply/thinking.ts
+    - src/auto-reply/thinking.shared.ts
+    - src/auto-reply/reply/directive-handling.impl.ts
+    - src/gateway/sessions-patch.ts
+    - extensions/anthropic/register.runtime.ts
+    - extensions/openai/openai-provider.ts
+  execution:
+    kind: flow
+    summary: Set adaptive on Anthropic and xhigh on OpenAI, verify each saved preference survives a switch to an unsupported model with an effective clamp, and switch back to restore each requested level.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: openai
+      requiredModel: gpt-5.5
+      anthropicModelRef: anthropic/claude-sonnet-4-6
+      openAiXhighModelRef: openai/gpt-5.5
+      noXhighModelRef: anthropic/claude-sonnet-4-6
+      conversationId: thinking-slash-remap
+      sessionKey: agent:qa:main
+
+flow:
+  steps:
+    - name: selects Anthropic and verifies adaptive options
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`thinking preference scenario requires ${config.requiredProviderMode}; got ${env.providerMode}`"
+        - set: anthropicModelAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.anthropicModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - set: cursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
+        - call: waitForCondition
+          saveAs: anthropicThinkStatus
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Current thinking level:/i.test(candidate.text)).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 20000)
+        - assert:
+            expr: "/Options: .*adaptive/i.test(anthropicThinkStatus.text)"
+            message:
+              expr: "`expected Anthropic /think options to include adaptive, got ${anthropicThinkStatus.text}`"
+        - assert:
+            expr: "!/Options: .*\\bxhigh\\b/i.test(anthropicThinkStatus.text) && /Options: .*\\bmax\\b/i.test(anthropicThinkStatus.text)"
+            message:
+              expr: "`expected Sonnet /think options to include max and omit xhigh, got ${anthropicThinkStatus.text}`"
+      detailsExpr: "`model=${JSON.stringify(anthropicModelAck.resolved)}; think=${anthropicThinkStatus.text}`"
+    - name: preserves adaptive while clamping to medium on OpenAI
+      actions:
+        - set: cursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think adaptive
+        - call: waitForCondition
+          saveAs: adaptiveAck
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to adaptive/i.test(candidate.text)).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 20000)
+        - set: openAiModelAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.openAiXhighModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - assert:
+            expr: "openAiModelAck.entry?.thinkingLevel === 'adaptive'"
+            message:
+              expr: "`expected saved adaptive preference, got ${JSON.stringify(openAiModelAck.entry)}`"
+        - assert:
+            expr: "openAiModelAck.resolved?.thinkingLevel === 'medium'"
+            message:
+              expr: "`expected effective medium clamp, got ${JSON.stringify(openAiModelAck.resolved)}`"
+        - set: cursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
+        - call: waitForCondition
+          saveAs: openAiThinkStatus
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Current thinking level: medium/i.test(candidate.text)).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 20000)
+        - assert:
+            expr: "/Options: .*\\bxhigh\\b/i.test(openAiThinkStatus.text) && !/Options: .*\\badaptive\\b/i.test(openAiThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(openAiThinkStatus.text)"
+            message:
+              expr: "`expected OpenAI GPT-5.5 /think options to include xhigh only, got ${openAiThinkStatus.text}`"
+      detailsExpr: "`adaptive=${adaptiveAck.text}; switch=${JSON.stringify(openAiModelAck.resolved)}; think=${openAiThinkStatus.text}`"
+    - name: restores effective adaptive when switching back to Anthropic
+      actions:
+        - set: adaptiveRestoreAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.anthropicModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - assert:
+            expr: "adaptiveRestoreAck.entry?.thinkingLevel === 'adaptive'"
+            message:
+              expr: "`expected saved adaptive preference after switching back, got ${JSON.stringify(adaptiveRestoreAck.entry)}`"
+        - assert:
+            expr: "adaptiveRestoreAck.resolved?.thinkingLevel === 'adaptive'"
+            message:
+              expr: "`expected effective adaptive after switching back, got ${JSON.stringify(adaptiveRestoreAck.resolved)}`"
+      detailsExpr: "`restored=${JSON.stringify(adaptiveRestoreAck.resolved)}`"
+    - name: preserves xhigh while clamping to high on a model without xhigh
+      actions:
+        - set: xhighModelAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.openAiXhighModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - set: cursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think xhigh
+        - call: waitForCondition
+          saveAs: xhighAck
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to xhigh/i.test(candidate.text)).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 20000)
+        - set: noXhighModelAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.noXhighModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - assert:
+            expr: "noXhighModelAck.entry?.thinkingLevel === 'xhigh'"
+            message:
+              expr: "`expected saved xhigh preference, got ${JSON.stringify(noXhighModelAck.entry)}`"
+        - assert:
+            expr: "noXhighModelAck.resolved?.thinkingLevel === 'high'"
+            message:
+              expr: "`expected effective high clamp, got ${JSON.stringify(noXhighModelAck.resolved)}`"
+        - set: cursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
+        - call: waitForCondition
+          saveAs: noXhighThinkStatus
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Current thinking level: high/i.test(candidate.text)).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 20000)
+        - assert:
+            expr: "/Options: .*\\badaptive\\b/i.test(noXhighThinkStatus.text) && /Options: .*\\bmax\\b/i.test(noXhighThinkStatus.text) && !/Options: .*\\bxhigh\\b/i.test(noXhighThinkStatus.text)"
+            message:
+              expr: "`expected non-xhigh model /think options to include adaptive/max and omit xhigh, got ${noXhighThinkStatus.text}`"
+      detailsExpr: "`xhigh=${xhighAck.text}; switch=${JSON.stringify(noXhighModelAck.resolved)}; think=${noXhighThinkStatus.text}`"
+    - name: restores effective xhigh when switching back to OpenAI
+      actions:
+        - set: xhighRestoreAck
+          value:
+            expr: "await env.gateway.call('sessions.patch', { key: config.sessionKey, model: config.openAiXhighModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
+        - assert:
+            expr: "xhighRestoreAck.entry?.thinkingLevel === 'xhigh'"
+            message:
+              expr: "`expected saved xhigh preference after switching back, got ${JSON.stringify(xhighRestoreAck.entry)}`"
+        - assert:
+            expr: "xhighRestoreAck.resolved?.thinkingLevel === 'xhigh'"
+            message:
+              expr: "`expected effective xhigh after switching back, got ${JSON.stringify(xhighRestoreAck.resolved)}`"
+      detailsExpr: "`restored=${JSON.stringify(xhighRestoreAck.resolved)}`"

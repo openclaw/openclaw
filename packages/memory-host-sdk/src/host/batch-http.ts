@@ -1,0 +1,36 @@
+import { retryAsync } from "@openclaw/retry";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import { postJson } from "./post-json.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
+
+/** POST JSON and retry provider 429/5xx failures with bounded backoff. */
+export async function postJsonWithRetry<T>(params: {
+  url: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+  retryImpl?: typeof retryAsync;
+  body: unknown;
+  errorPrefix: string;
+}): Promise<T> {
+  const retry = params.retryImpl ?? retryAsync;
+  return await retry(
+    async () => {
+      return await postJson<T>({
+        ...params,
+        parse: async (payload) => payload as T,
+      });
+    },
+    {
+      attempts: 3,
+      minDelayMs: 300,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const status = (err as { status?: number }).status;
+        return status === 429 || (typeof status === "number" && status >= 500);
+      },
+    },
+  );
+}

@@ -1,0 +1,144 @@
+import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import { expect, it, onTestFinished } from "vitest";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
+import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+
+type CapturedChatRequest = {
+  model?: string;
+  messages?: Array<{ role?: string; content?: unknown }>;
+  stream?: boolean;
+};
+
+const HF_LOCAL_APP_CASES = [
+  ["GGUF llama.cpp", "llama-cpp", "ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M"],
+  ["MLX LM", "mlx-lm", "mlx-community/Qwen3-0.6B-4bit"],
+] as const;
+
+it.each(HF_LOCAL_APP_CASES)(
+  "Hugging Face OpenClaw local-app CLI contract: onboard and agent for %s",
+  async (_name, providerId, modelId) => {
+    const fakeServer = await startFakeOpenAiServer({ modelId });
+    onTestFinished(() => fakeServer.close());
+    const instance = await createOpenClawTestInstance({
+      name: `hf-local-app-${providerId}`,
+      env: {
+        CUSTOM_API_KEY: undefined,
+        OPENCLAW_TEST_FAST: "1",
+      },
+    });
+    onTestFinished(() => instance.cleanup());
+
+    const onboard = await instance.cli(
+      [
+        "onboard",
+        "--non-interactive",
+        ...Object.entries({
+          mode: "local",
+          "auth-choice": "custom-api-key",
+          "custom-base-url": fakeServer.baseUrl,
+          "custom-model-id": modelId,
+          "custom-provider-id": providerId,
+          "custom-compatibility": "openai",
+        }).flatMap(([flag, value]) => [`--${flag}`, value]),
+        "--custom-text-input",
+        "--accept-risk",
+        "--skip-health",
+      ],
+      { timeoutMs: 120_000 },
+    );
+
+    expect(onboard.code, onboard.stderr).toBe(0);
+    expect(onboard.stdout).toContain("Updated config");
+    const config: OpenClawConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+    expect(config).toMatchObject({
+      models: {
+        providers: {
+          [providerId]: {
+            api: "openai-completions",
+            baseUrl: fakeServer.baseUrl,
+            models: expect.arrayContaining([expect.objectContaining({ id: modelId })]),
+          },
+        },
+      },
+      agents: { defaults: { model: { primary: `${providerId}/${modelId}` } } },
+    });
+
+    const agent = await instance.cli(
+      ["agent", "--local", "--agent", "main", "--message", "Hello from Hugging Face"],
+      { timeoutMs: 120_000 },
+    );
+
+    expect(agent.code, agent.stderr).toBe(0);
+    expect(agent.stdout).toContain(`hf local app ok: ${providerId}`);
+    expect(fakeServer.requests).toMatchObject([{ model: modelId, stream: true }]);
+    expect(fakeServer.requests[0]?.messages?.some(messageContainsHello)).toBe(true);
+  },
+  180_000,
+);
+
+function messageContainsHello(message: { content?: unknown }): boolean {
+  const containsHello = (text: string) => text.includes("Hello from Hugging Face");
+  const content = message.content;
+  if (typeof content === "string") {
+    return containsHello(content);
+  }
+  return (
+    Array.isArray(content) &&
+    content.some((part) =>
+      typeof part === "string"
+        ? containsHello(part)
+        : part && typeof part === "object" && "text" in part && containsHello(String(part.text)),
+    )
+  );
+}
+
+async function startFakeOpenAiServer(params: { modelId: string }) {
+  const requests: CapturedChatRequest[] = [];
+  const server = createServer((req, res) => {
+    void (async () => {
+      if (req.method === "GET" && req.url === "/v1/models") {
+        respondJson(res, { object: "list", data: [{ id: params.modelId, object: "model" }] });
+        return;
+      }
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        respondJson(res, { error: { message: `unexpected ${req.method} ${req.url}` } }, 404);
+        return;
+      }
+      const { messages, model, stream }: CapturedChatRequest = JSON.parse(
+        await readRequestText(req),
+      );
+      requests.push({ messages, model, stream });
+      res.writeHead(200, {
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        "content-type": "text/event-stream; charset=utf-8",
+      });
+      const providerId = params.modelId.startsWith("mlx-community/") ? "mlx-lm" : "llama-cpp";
+      const chunk = {
+        id: "chatcmpl-hf-openclaw-contract",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: params.modelId,
+      };
+      const send = (delta: object, finish_reason: null | "stop", usage?: object) =>
+        res.write(
+          `data: ${JSON.stringify({ ...chunk, choices: [{ index: 0, delta, finish_reason }], usage })}\n\n`,
+        );
+      send({ role: "assistant", content: `hf local app ok: ${providerId}` }, null);
+      send({}, "stop", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
+      res.end("data: [DONE]\n\n");
+    })();
+  });
+  return {
+    baseUrl: `${await listenLoopback(server)}/v1`,
+    requests,
+    close: () => closeHttpServer(server),
+  };
+}

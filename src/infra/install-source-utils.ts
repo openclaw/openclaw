@@ -1,0 +1,449 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import {
+  asNullableObjectRecord,
+  asRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  gt as gtSemver,
+  satisfies as satisfiesSemver,
+  validRange as validSemverRange,
+} from "semver";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { resolveUserPath, tryParseJson } from "../utils.js";
+import { resolveArchiveKind } from "./archive.js";
+import { pathExists } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
+import { resolveNpmCommand } from "./npm-command.js";
+import { parseNpmErrorCode } from "./npm-error.js";
+import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  resolveNpmJsonEntries,
+} from "./npm-registry-spec.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  // Timeouts normalize to exit code 124; retain the owner-recorded cause.
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return `termination ${result.termination} (no output from npm)`;
+  }
+  if (result.termination === "exit" && result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
+}
+
+export type NpmSpecResolution = {
+  name?: string;
+  version?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+  packageOpenClaw?: Record<string, unknown>;
+};
+
+type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+type NpmResolutionFields = {
+  resolvedName?: string;
+  resolvedVersion?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+};
+
+export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
+  return {
+    resolvedName: resolution?.name,
+    resolvedVersion: resolution?.version,
+    resolvedSpec: resolution?.resolvedSpec,
+    integrity: resolution?.integrity,
+    shasum: resolution?.shasum,
+    resolvedAt: resolution?.resolvedAt,
+  };
+}
+
+/** Creates a script-free npm environment for metadata and pack commands. */
+function createNpmMetadataEnv(
+  scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    NPM_CONFIG_IGNORE_SCRIPTS: "true",
+  };
+  applyNpmFreshnessBypassEnv(env, new Date(), scope);
+  return resolveRuntimeScriptEnv(env);
+}
+
+export async function loadNpmPackageVersions({
+  packageName,
+  timeoutMs,
+  ...commandOptions
+}: {
+  packageName: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  killProcessTree?: boolean;
+}): Promise<string[] | null> {
+  const versions = await runCommandWithTimeout(
+    resolveNpmCommand(["view", packageName, "versions", "--json"]),
+    {
+      ...commandOptions,
+      timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
+      env: createNpmMetadataEnv(),
+    },
+  );
+  if (versions.code !== 0) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(versions.stdout.trim());
+  } catch {
+    return null;
+  }
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
+    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
+  );
+}
+
+function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const entries = value.filter(isRecord);
+  if (entries.length === 1 && parseRegistryNpmSpec(spec)?.selectorKind === "tag") {
+    // npm resolves literal tags before ranges; npm 12 wraps that single result.
+    // Rechecking a semver-like tag against its spelling would reject a valid tag target.
+    return entries[0];
+  }
+  const separator = spec.lastIndexOf("@");
+  const selector = separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
+  const range = selector ? validSemverRange(selector) : null;
+  if (range) {
+    // npm view output order tracks publication, not SemVer (a backport can be
+    // published after a higher release), so pick the max satisfying version.
+    let best: { entry: unknown; version: string } | undefined;
+    for (const entry of entries) {
+      const version = normalizeOptionalString(entry.version);
+      if (!version || !satisfiesSemver(version, range)) {
+        continue;
+      }
+      if (!best || gtSemver(version, best.version)) {
+        best = { entry, version };
+      }
+    }
+    // A recognized range with no satisfying entry must fail the metadata read
+    // rather than silently resolve outside the requested constraint.
+    return best?.entry;
+  }
+  return entries.at(-1);
+}
+
+export function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
+  // npm output varies by version, selector, and field projection. Multi-version
+  // arrays follow publication order; selection above handles ranges and literal tags.
+  const entry = selectNpmViewMetadataEntry(value, spec);
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const name = normalizeOptionalString(entry.name);
+  const version = normalizeOptionalString(entry.version);
+  const resolvedSpec = name && version ? `${name}@${version}` : undefined;
+  const dist = asRecord(entry.dist);
+  return {
+    name,
+    version,
+    resolvedSpec,
+    integrity:
+      normalizeOptionalString(entry["dist.integrity"]) ?? normalizeOptionalString(dist.integrity),
+    shasum: normalizeOptionalString(entry["dist.shasum"]) ?? normalizeOptionalString(dist.shasum),
+    ...(isRecord(entry.openclaw) ? { packageOpenClaw: entry.openclaw } : {}),
+  };
+}
+
+/** Reads npm registry metadata for a package spec without running package scripts. */
+export async function resolveNpmSpecMetadata(params: {
+  spec: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<
+  | {
+      ok: true;
+      metadata: NpmSpecResolution;
+    }
+  | {
+      ok: false;
+      error: string;
+      category?: "metadata-env";
+    }
+> {
+  const res = await runCommandWithTimeout(
+    resolveNpmCommand([
+      "view",
+      params.spec,
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ]),
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      signal: params.signal,
+      killProcessTree: true,
+      env: createNpmMetadataEnv(),
+    },
+  );
+  if (res.code !== 0) {
+    const raw = formatNpmCommandFailureOutput(res);
+    if (parseNpmErrorCode(raw) === "E404") {
+      return {
+        ok: false,
+        error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
+      };
+    }
+    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
+  }
+
+  try {
+    const parsed = JSON.parse(res.stdout.trim()) as unknown;
+    const metadata = normalizeNpmViewMetadata(parsed, params.spec);
+    if (!metadata?.name || !metadata.version) {
+      const missingFields = [!metadata?.name ? "name" : null, !metadata?.version ? "version" : null]
+        .filter((field): field is string => field !== null)
+        .join(", ");
+      return {
+        ok: false,
+        error: `npm view produced incomplete package metadata (missing: ${missingFields})`,
+        category: "metadata-env",
+      };
+    }
+    return { ok: true, metadata };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `npm view produced invalid JSON: ${String(err)}`,
+      category: "metadata-env",
+    };
+  }
+}
+
+/** Runs a callback in a private temp directory and removes it afterward. */
+export async function withInstallWorkspace<T>(
+  prefix: string,
+  fn: (tmpDir: string) => Promise<T>,
+): Promise<T> {
+  const rootDir = resolvePreferredOpenClawTmpDir();
+  return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
+}
+
+export async function resolveArchiveSourcePath(
+  archivePath: string,
+): Promise<InstallSourceResult<{ path: string }>> {
+  const resolved = resolveUserPath(archivePath);
+  if (!(await pathExists(resolved))) {
+    return { ok: false, error: `archive not found: ${resolved}` };
+  }
+
+  if (!resolveArchiveKind(resolved)) {
+    return { ok: false, error: `unsupported archive: ${resolved}` };
+  }
+
+  return { ok: true, path: resolved };
+}
+
+function parseResolvedSpecFromId(id: string): string | undefined {
+  const at = id.lastIndexOf("@");
+  if (at <= 0 || at >= id.length - 1) {
+    return undefined;
+  }
+  const name = id.slice(0, at).trim();
+  const version = id.slice(at + 1).trim();
+  if (!name || !version) {
+    return undefined;
+  }
+  return `${name}@${version}`;
+}
+
+function parseNpmPackJsonOutput(
+  raw: string,
+): { filename?: string; metadata: NpmSpecResolution } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const candidates = [trimmed];
+  const arrayStart = trimmed.indexOf("[");
+  if (arrayStart > 0) {
+    candidates.push(trimmed.slice(arrayStart));
+  }
+
+  for (const candidate of candidates) {
+    const entries = resolveNpmJsonEntries(tryParseJson(candidate));
+    let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const rec = asNullableObjectRecord(entries[i]);
+      if (!rec) {
+        continue;
+      }
+      const name = normalizeOptionalString(rec.name);
+      const version = normalizeOptionalString(rec.version);
+      const id = normalizeOptionalString(rec.id);
+      const resolvedSpec =
+        (name && version ? `${name}@${version}` : undefined) ??
+        (id ? parseResolvedSpecFromId(id) : undefined);
+
+      const normalized = {
+        filename: normalizeOptionalString(rec.filename),
+        metadata: {
+          name,
+          version,
+          resolvedSpec,
+          integrity: normalizeOptionalString(rec.integrity),
+          shasum: normalizeOptionalString(rec.shasum),
+        },
+      };
+      if (!fallback) {
+        fallback = normalized;
+      }
+      if (normalized.filename) {
+        return normalized;
+      }
+    }
+    if (fallback) {
+      return fallback;
+    }
+  }
+
+  return null;
+}
+
+async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> {
+  const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
+  const archives = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"));
+  // Callers give one spec a fresh workspace; empty npm stdout still leaves one owned artifact.
+  return archives.length === 1 ? archives[0]?.name : undefined;
+}
+
+export async function packNpmSpecToArchive(params: {
+  spec: string;
+  timeoutMs: number;
+  workTimeoutMs?: number | null;
+  cwd: string;
+  signal?: AbortSignal;
+}): Promise<InstallSourceResult<{ archivePath: string; metadata: NpmSpecResolution }>> {
+  const res = await runCommandWithTimeout(
+    resolveNpmCommand([
+      "pack",
+      params.spec,
+      "--ignore-scripts",
+      "--json",
+      "--dry-run=false",
+      `--pack-destination=${params.cwd}`,
+    ]),
+    {
+      timeoutMs: resolveInstallWorkTimeoutMs(
+        params.workTimeoutMs,
+        Math.max(params.timeoutMs, 300_000),
+      ),
+      signal: params.signal,
+      killProcessTree: true,
+      cwd: params.cwd,
+      env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
+    },
+  );
+  if (res.code !== 0) {
+    const raw = formatNpmCommandFailureOutput(res);
+    if (parseNpmErrorCode(raw) === "E404") {
+      return {
+        ok: false,
+        error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
+      };
+    }
+    return { ok: false, error: `npm pack failed: ${raw}` };
+  }
+
+  const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
+
+  const packed = parsedJson?.filename ?? (await findPackedArchiveInDir(params.cwd));
+  if (!packed) {
+    return { ok: false, error: "npm pack produced no archive" };
+  }
+
+  const archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
+  if (!(await pathExists(archivePath))) {
+    return { ok: false, error: "npm pack produced no archive" };
+  }
+
+  return {
+    ok: true,
+    archivePath,
+    metadata: parsedJson?.metadata ?? {},
+  };
+}
+
+/**
+ * Reads package metadata from an existing npm archive using `npm pack --dry-run`.
+ * The archive path is validated first so callers get path errors before npm errors.
+ */
+export async function resolveNpmPackArchiveMetadata(params: {
+  archivePath: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<
+  InstallSourceResult<{ archivePath: string; tarballName: string; metadata: NpmSpecResolution }>
+> {
+  const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
+  if (!archivePathResult.ok) {
+    return archivePathResult;
+  }
+  const archivePath = archivePathResult.path;
+  const archiveStat = await fs.stat(archivePath).catch(() => null);
+  const archiveMetadataTimeoutMs =
+    archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
+  const res = await runCommandWithTimeout(
+    resolveNpmCommand(["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"]),
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      signal: params.signal,
+      killProcessTree: true,
+      env: createNpmMetadataEnv(),
+    },
+  );
+  if (res.code !== 0) {
+    return {
+      ok: false,
+      error: `npm pack metadata read failed: ${formatNpmCommandFailureOutput(res)}`,
+    };
+  }
+
+  const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
+  if (!parsedJson?.metadata.name || !parsedJson.metadata.version) {
+    return { ok: false, error: "npm pack metadata read produced incomplete package metadata" };
+  }
+  return {
+    ok: true,
+    archivePath,
+    tarballName: parsedJson.filename ?? path.basename(archivePath),
+    metadata: parsedJson.metadata,
+  };
+}

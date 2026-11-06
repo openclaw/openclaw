@@ -1,0 +1,39 @@
+set -euo pipefail
+verify_release_tooling_identity() {
+  node trusted-workflow/scripts/release-tooling-identity.mjs verify \
+    --repository "$GITHUB_REPOSITORY" \
+    --workflow-ref "$WORKFLOW_REF" \
+    --workflow-full-ref "$WORKFLOW_FULL_REF" \
+    --workflow-sha "$WORKFLOW_SHA" \
+    --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
+    --release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT" \
+    --release-publish-ref "$RELEASE_PUBLISH_REF" \
+    --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
+    --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY" \
+    --allow-prevalidated-ref
+}
+publish_target="${PUBLISH_TARBALL_PATH}"
+if [[ -n "${publish_target}" ]]; then
+  publish_target="./${publish_target}"
+fi
+publish_if_missing() {
+  local package_name="$1"
+  local tarball_path="$2"
+  local package_version
+  if [[ -z "$tarball_path" || ! -f "$tarball_path" ]]; then
+    echo "Prepared tarball for ${package_name} was not found." >&2
+    exit 1
+  fi
+  package_version="$(node -p "require('./package.json').version")"
+  if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+    echo "${package_name}@${package_version} is already published; reusing it."
+    return 0
+  fi
+  verify_release_tooling_identity
+  bash scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
+}
+while IFS=$'\t' read -r package_name tarball_name; do
+  publish_if_missing "$package_name" "preflight-tarball/$tarball_name"
+done < <(jq -r '(.corePackageTarballs // [])[] | [.packageName, .tarballName] | @tsv' preflight-tarball/preflight-manifest.json)
+verify_release_tooling_identity
+bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"

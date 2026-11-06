@@ -1,0 +1,194 @@
+// Cron service regression fixtures build reusable scheduled job states.
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
+import { stop } from "../../../src/cron/service/ops-lifecycle.js";
+import {
+  createCronServiceState,
+  type CronServiceDeps,
+  type CronServiceState,
+} from "../../../src/cron/service/state.js";
+import type { CronJob, CronJobState } from "../../../src/cron/types.js";
+import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
+import { getTotalQueueSize } from "../../../src/process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../../src/process/command-queue.test-support.js";
+import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
+import { createDeferred } from "../promise.js";
+
+const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+const fixtureStates = new Map<string, Set<CronServiceState>>();
+
+async function waitForCommandQueueIdle(timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (getTotalQueueSize() > 0 && Date.now() < deadlineAt) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+}
+
+export const noopLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+  trace: () => {},
+};
+
+type CronRegressionDefaults = "scheduler" | "cronEnabled" | "log" | "enqueueSystemEvent";
+
+export function createCronRegressionState(
+  deps: Omit<CronServiceDeps, CronRegressionDefaults> &
+    Partial<Pick<CronServiceDeps, CronRegressionDefaults>>,
+) {
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
+    ...deps,
+  });
+  fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);
+  return state;
+}
+
+export function setupCronRegressionFixtures(options?: { prefix?: string; baseTimeIso?: string }) {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+  const states = new Set<CronServiceState>();
+  const drainStates = async () => {
+    for (const state of states) {
+      stop(state);
+    }
+    await Promise.all([...states].map((state) => state.schedulerDrain));
+    states.clear();
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "cron-issues-"));
+    fixtureStates.set(path.resolve(fixtureRoot), states);
+  });
+
+  beforeEach(() => {
+    resetCommandQueueStateForTest();
+    useFrozenTime(options?.baseTimeIso ?? "2026-02-06T10:05:00.000Z");
+  });
+
+  afterEach(async () => {
+    await drainStates();
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    useRealTime();
+    await waitForCommandQueueIdle(250);
+    resetCommandQueueStateForTest();
+    clearSessionStoreCacheForTest();
+    resetAgentEventsForTest();
+  });
+
+  afterAll(async () => {
+    await drainStates();
+    fixtureStates.delete(path.resolve(fixtureRoot));
+    useRealTime();
+    await waitForCommandQueueIdle(250);
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  return {
+    makeStorePath() {
+      return {
+        storePath: path.join(fixtureRoot, `case-${fixtureCount++}.jobs.json`),
+      };
+    },
+  };
+}
+
+export function topOfHourOffsetMs(jobId: string) {
+  const digest = crypto.createHash("sha256").update(jobId).digest();
+  return digest.readUInt32BE(0) % TOP_OF_HOUR_STAGGER_MS;
+}
+
+export function createDueIsolatedJob(params: {
+  id: string;
+  nowMs: number;
+  nextRunAtMs: number;
+  deleteAfterRun?: boolean;
+}): CronJob {
+  return {
+    id: params.id,
+    name: params.id,
+    enabled: true,
+    deleteAfterRun: params.deleteAfterRun ?? false,
+    createdAtMs: params.nowMs,
+    updatedAtMs: params.nowMs,
+    schedule: { kind: "at", at: new Date(params.nextRunAtMs).toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: params.id },
+    delivery: { mode: "none" },
+    state: { nextRunAtMs: params.nextRunAtMs },
+  };
+}
+
+export function createDefaultIsolatedRunner(): CronServiceDeps["runIsolatedAgentJob"] {
+  return vi.fn().mockResolvedValue({
+    status: "ok",
+    summary: "ok",
+  }) as CronServiceDeps["runIsolatedAgentJob"];
+}
+
+export function createAbortAwareIsolatedRunner(summary = "late") {
+  let observedAbortSignal: AbortSignal | undefined;
+  const started = createDeferred();
+  const runIsolatedAgentJob = vi.fn(async ({ abortSignal, onExecutionStarted }) => {
+    observedAbortSignal = abortSignal;
+    started.resolve();
+    onExecutionStarted?.();
+    await new Promise<void>((resolve) => {
+      if (!abortSignal) {
+        return;
+      }
+      if (abortSignal.aborted) {
+        resolve();
+        return;
+      }
+      abortSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    return { status: "ok" as const, summary };
+  }) as CronServiceDeps["runIsolatedAgentJob"];
+
+  return {
+    runIsolatedAgentJob,
+    getObservedAbortSignal: () => observedAbortSignal,
+    waitForStart: () => started.promise,
+  };
+}
+
+export function createIsolatedRegressionJob(params: {
+  id: string;
+  name: string;
+  scheduledAt: number;
+  schedule: CronJob["schedule"];
+  payload: CronJob["payload"];
+  state?: CronJobState;
+}): CronJob {
+  return {
+    id: params.id,
+    name: params.name,
+    enabled: true,
+    createdAtMs: params.scheduledAt - 86_400_000,
+    updatedAtMs: params.scheduledAt - 86_400_000,
+    schedule: params.schedule,
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: params.payload,
+    delivery: { mode: "announce" },
+    state: params.state ?? {},
+  };
+}

@@ -1,0 +1,69 @@
+import { asDateTimestampMs, parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildUsageErrorSnapshot,
+  fetchUsageJson,
+  parseUsageResetAt,
+} from "./provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+
+const WINDOW_UNITS: Partial<Record<number, string>> = { 1: "d", 3: "h", 5: "mo", 6: "w" };
+
+export async function fetchZaiUsage(
+  apiKey: string,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<ProviderUsageSnapshot> {
+  const parsed = await fetchUsageJson({
+    provider: "zai",
+    url: "https://api.z.ai/api/monitor/usage/quota/limit",
+    init: {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+    },
+    timeoutMs,
+    fetchFn,
+  });
+  if (!parsed.ok) {
+    return parsed.snapshot;
+  }
+  const usage = isRecord(parsed.data) ? parsed.data : undefined;
+  if (usage?.success !== true || parseFiniteNumber(usage.code) !== 200) {
+    return buildUsageErrorSnapshot("zai", normalizeOptionalString(usage?.msg) || "API error");
+  }
+
+  const data = isRecord(usage.data) ? usage.data : {};
+  const limits = Array.isArray(data.limits) ? data.limits : [];
+  const windows: UsageWindow[] = [];
+  for (const limit of limits) {
+    if (!isRecord(limit)) {
+      continue;
+    }
+    const type = normalizeOptionalString(limit.type);
+    const number = parseFiniteNumber(limit.number);
+    const suffix = WINDOW_UNITS[parseFiniteNumber(limit.unit) ?? 0];
+    const windowLabel = suffix && number !== undefined ? `${number}${suffix}` : "Limit";
+
+    if (type === "TOKENS_LIMIT" || type === "TIME_LIMIT") {
+      windows.push({
+        label: type === "TOKENS_LIMIT" ? `Tokens (${windowLabel})` : "Monthly",
+        usedPercent: clampPercent(parseFiniteNumber(limit.percentage) ?? 0),
+        resetAt:
+          asDateTimestampMs(limit.nextResetTime) ??
+          parseUsageResetAt(normalizeOptionalString(limit.nextResetTime)),
+      });
+    }
+  }
+
+  return {
+    provider: "zai",
+    displayName: PROVIDER_LABELS.zai,
+    windows,
+    plan: normalizeOptionalString(data.planName) ?? normalizeOptionalString(data.plan),
+  };
+}

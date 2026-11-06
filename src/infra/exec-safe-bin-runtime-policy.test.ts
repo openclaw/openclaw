@@ -1,0 +1,220 @@
+// Covers runtime safe-bin policy resolution.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  isInterpreterLikeSafeBin,
+  listInterpreterLikeSafeBins,
+  resolveExecSafeBinRuntimePolicy,
+  resolveMergedSafeBinProfileFixtures,
+} from "./exec-safe-bin-runtime-policy.js";
+import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+
+function trustPolicy(dir: string, safeBins = ["jq"]) {
+  return resolveExecSafeBinRuntimePolicy({ local: { safeBins, safeBinTrustedDirs: [dir] } });
+}
+
+function trusted(policy: ReturnType<typeof trustPolicy>, resolvedPath: string) {
+  return isTrustedSafeBinPath({ resolvedPath, trustedDirs: policy.trustedSafeBinDirs });
+}
+
+async function makeFile(file: string, mode = 0o755) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, "#!/bin/sh\n", "utf8");
+  await fs.chmod(file, mode);
+}
+
+describe("exec safe-bin runtime policy", () => {
+  const interpreterCases: Array<{ bin: string; expected: boolean }> = [
+    { bin: "python3.12", expected: true },
+    { bin: "node20", expected: true },
+    { bin: "ruby3.2", expected: true },
+    { bin: "sed", expected: true },
+    { bin: "myfilter", expected: false },
+  ];
+
+  for (const testCase of interpreterCases) {
+    it(`classifies interpreter-like safe bin '${testCase.bin}'`, () => {
+      expect(isInterpreterLikeSafeBin(testCase.bin)).toBe(testCase.expected);
+    });
+  }
+
+  it("lists interpreter-like bins from a mixed set", () => {
+    expect(
+      listInterpreterLikeSafeBins([
+        "jq",
+        " C:\\Tools\\Python3.EXE ",
+        "myfilter",
+        "busybox",
+        "toybox",
+        "/usr/bin/node",
+        "/opt/homebrew/bin/gawk",
+      ]),
+    ).toEqual(["busybox", "gawk", "node", "python3", "toybox"]);
+  });
+
+  it("merges and normalizes safe-bin profile fixtures", () => {
+    const merged = resolveMergedSafeBinProfileFixtures({
+      global: {
+        safeBinProfiles: {
+          " MyFilter ": {
+            deniedFlags: ["--file", " --file ", ""],
+          },
+        },
+      },
+      local: {
+        safeBinProfiles: {
+          myfilter: {
+            maxPositional: 0,
+          },
+        },
+      },
+    });
+    expect(merged).toEqual({
+      myfilter: {
+        maxPositional: 0,
+      },
+    });
+  });
+
+  it("computes unprofiled interpreter entries separately from custom profiled bins", () => {
+    const policy = resolveExecSafeBinRuntimePolicy({
+      local: {
+        safeBins: ["python3", "myfilter"],
+        safeBinProfiles: {
+          myfilter: { maxPositional: 0 },
+        },
+      },
+    });
+
+    expect(policy.safeBins.has("python3")).toBe(true);
+    expect(policy.safeBins.has("myfilter")).toBe(true);
+    expect(policy.unprofiledSafeBins).toEqual(["python3"]);
+    expect(policy.unprofiledInterpreterSafeBins).toEqual(["python3"]);
+  });
+
+  it("prefers local safe bins over global ones when both are configured", () => {
+    const policy = resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBins: ["python3", "jq"],
+      },
+      local: {
+        safeBins: ["sort"],
+      },
+    });
+
+    expect([...policy.safeBins]).toEqual(["sort"]);
+  });
+
+  it("merges explicit safe-bin trusted dirs from global and local config", () => {
+    const customDir = path.join(path.sep, "custom", "bin");
+    const agentDir = path.join(path.sep, "agent", "bin");
+    const policy = resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBinTrustedDirs: [` ${customDir} `, customDir],
+      },
+      local: {
+        safeBinTrustedDirs: [agentDir],
+      },
+    });
+
+    expect(policy.trustedSafeBinDirs.has(path.resolve(customDir))).toBe(true);
+    expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
+  });
+
+  it("does not trust package-manager bin dirs unless explicitly configured", () => {
+    const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
+    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
+    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
+
+    const optedIn = resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBinTrustedDirs: ["/opt/homebrew/bin", "/usr/local/bin"],
+      },
+    });
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "refreshes trusted package-manager target dirs when safe-bin symlinks retarget",
+    async () => {
+      await withTestDir({ prefix: "openclaw-safe-bin-trusted-retarget-" }, async (root) => {
+        const trustedDir = path.join(root, "bin");
+        const targetDir1 = path.join(root, "cellar", "jq", "1.7.1", "bin");
+        const targetDir2 = path.join(root, "cellar", "jq", "1.8.0", "bin");
+        const target1 = path.join(targetDir1, "jq");
+        const target2 = path.join(targetDir2, "jq");
+        const link = path.join(trustedDir, "jq");
+        await fs.mkdir(trustedDir, { recursive: true });
+        await makeFile(target1);
+        await makeFile(target2);
+        await fs.symlink(target1, link);
+
+        const first = trustPolicy(trustedDir);
+        const realTarget1 = await fs.realpath(target1);
+        expect(trusted(first, realTarget1)).toBe(true);
+
+        await fs.unlink(link);
+        await fs.symlink(target2, link);
+
+        const second = trustPolicy(trustedDir);
+        const realTarget2 = await fs.realpath(target2);
+        expect(trusted(second, realTarget1)).toBe(false);
+        expect(trusted(second, realTarget2)).toBe(true);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not derive target-dir trust from non-executable safe-bin links",
+    async () => {
+      await withTestDir({ prefix: "openclaw-safe-bin-trusted-nonexec-" }, async (root) => {
+        const trustedDir = path.join(root, "bin");
+        const nonExecutableDir = path.join(root, "targets", "nonexec");
+        const directoryTarget = path.join(root, "targets", "directory");
+        const executableDir = path.join(root, "targets", "executable");
+        const nonExecutable = path.join(nonExecutableDir, "placeholder");
+        const executableInNonExecutableDir = path.join(nonExecutableDir, "jq");
+        const executableInDirectoryParent = path.join(root, "targets", "curl");
+        const executable = path.join(executableDir, "jq");
+        const nonExecutableLink = path.join(trustedDir, "jq");
+        const directoryLink = path.join(trustedDir, "curl");
+
+        await fs.mkdir(trustedDir, { recursive: true });
+        await fs.mkdir(directoryTarget, { recursive: true });
+        await makeFile(nonExecutable, 0o644);
+        await makeFile(executableInNonExecutableDir);
+        await makeFile(executableInDirectoryParent);
+        await makeFile(executable);
+        await fs.symlink(nonExecutable, nonExecutableLink);
+        await fs.symlink(directoryTarget, directoryLink);
+
+        const policy = trustPolicy(trustedDir, ["jq", "curl"]);
+
+        expect(trusted(policy, await fs.realpath(executable))).toBe(false);
+        expect(trusted(policy, await fs.realpath(executableInNonExecutableDir))).toBe(false);
+        expect(trusted(policy, await fs.realpath(executableInDirectoryParent))).toBe(false);
+      });
+    },
+  );
+
+  it("emits runtime warning when explicitly trusted dir is writable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTestDir({ prefix: "openclaw-safe-bin-runtime-" }, async (dir) => {
+      await fs.chmod(dir, 0o777);
+      const onWarning = vi.fn();
+      resolveExecSafeBinRuntimePolicy({
+        global: { safeBinTrustedDirs: [dir] },
+        onWarning,
+      });
+
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+        `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
+      );
+    });
+  });
+});

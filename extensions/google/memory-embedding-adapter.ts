@@ -1,0 +1,72 @@
+import {
+  hasNonTextEmbeddingParts,
+  mapBatchEmbeddingsByIndex,
+  sanitizeEmbeddingCacheHeaders,
+  type MemoryEmbeddingProviderAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
+import {
+  buildGeminiEmbeddingRequest,
+  createGeminiEmbeddingProvider,
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  isGeminiEmbedding2Model,
+} from "./embedding-provider.js";
+
+export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "gemini",
+  aliases: ["google"],
+  defaultModel: DEFAULT_GEMINI_EMBEDDING_MODEL,
+  transport: "remote",
+  authProviderId: "google",
+  autoSelectPriority: 30,
+  supportsMultimodalEmbeddings: ({ model }) => isGeminiEmbedding2Model(model),
+  create: async (options) => {
+    const { provider, client } = await createGeminiEmbeddingProvider({
+      ...options,
+      provider: "gemini",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "gemini",
+        cacheKeyData: {
+          provider: "gemini",
+          baseUrl: client.baseUrl,
+          model: client.model,
+          outputDimensionality: client.outputDimensionality,
+          // x-goog-api-client is generated partner attribution (openclaw/<version>).
+          // Keep it on outbound requests, but exclude it from durable memory identity so
+          // OpenClaw version bumps do not pause otherwise-compatible Gemini indexes.
+          headers: sanitizeEmbeddingCacheHeaders(client.headers, [
+            "authorization",
+            "x-goog-api-key",
+            "x-goog-api-client",
+          ]),
+        },
+        batchEmbed: async (batch) => {
+          if (batch.chunks.some((chunk) => hasNonTextEmbeddingParts(chunk.embeddingInput))) {
+            return null;
+          }
+          const byCustomId = await runGeminiEmbeddingBatches({
+            ...batch,
+            gemini: client,
+            requests: batch.chunks.map((chunk, index) => ({
+              custom_id: String(index),
+              request: buildGeminiEmbeddingRequest({
+                input: chunk.embeddingInput ?? { text: chunk.text },
+                model: client.model,
+                role: "document",
+                documentFormatApplied: batch.documentFormatApplied,
+                taskType: "RETRIEVAL_DOCUMENT",
+                modelPath: client.modelPath,
+                outputDimensionality: client.outputDimensionality,
+              }),
+            })),
+          });
+          return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
+        },
+      },
+    };
+  },
+};

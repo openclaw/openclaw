@@ -1,0 +1,127 @@
+// Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { createCompactionNoticePayload } from "../auto-reply/reply/compaction-notice.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
+import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+
+type SessionsCompactResult = {
+  ok?: boolean;
+  key?: string;
+  compacted?: boolean;
+  reason?: string;
+  kept?: number;
+  result?: {
+    tokensBefore?: number;
+    tokensAfter?: number;
+    sessionId?: string;
+    sessionFile?: string;
+    // A backend can explicitly report an accepted asynchronous operation.
+    details?: {
+      backend?: string;
+      threadId?: string;
+      signal?: string;
+      pending?: boolean;
+      completed?: boolean;
+      qualityDegraded?: true;
+    };
+  };
+};
+
+function describeCompaction(result: SessionsCompactResult, fallbackKey: string): string {
+  const sessionKey = sanitizeTerminalText(result.key ?? fallbackKey);
+  if (!result.compacted) {
+    const details = result.result?.details;
+    if (details?.pending === true) {
+      return `Compaction started for session ${sessionKey} (pending; completion is reported asynchronously by the backend).`;
+    }
+    const reason = result.reason ? ` (${sanitizeTerminalText(result.reason)})` : "";
+    return `No compaction needed for session ${sessionKey}${reason}.`;
+  }
+  const before = result.result?.tokensBefore;
+  const after = result.result?.tokensAfter;
+  let detail = "";
+  if (typeof before === "number" && typeof after === "number") {
+    detail = ` (${before} → ${after} tokens)`;
+  } else if (typeof result.kept === "number") {
+    detail = ` (kept ${result.kept} lines)`;
+  }
+  const notice =
+    result.result?.details?.qualityDegraded === true
+      ? `\n${createCompactionNoticePayload({ phase: "degraded" }).text}`
+      : "";
+  return `Compacted session ${sessionKey}${detail}.${notice}`;
+}
+
+export async function sessionsCompactCommand(
+  opts: {
+    key: string;
+    agent?: string;
+    maxLines?: number;
+    timeout?: string;
+    url?: string;
+    token?: string;
+    password?: string;
+    json?: boolean;
+  },
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const agent = opts.agent?.trim();
+  if (opts.agent !== undefined && !agent) {
+    throw new Error("--agent must not be blank");
+  }
+  const rpcOpts: Parameters<typeof callGatewayFromCliWithTransport>[1] = {
+    url: opts.url,
+    token: opts.token,
+    password: opts.password,
+    // Compaction owns a configurable multi-stage server deadline. Keep an
+    // explicit CLI override, but otherwise avoid an ambiguous client timeout.
+    timeout: opts.timeout ?? null,
+    json: opts.json,
+  };
+  const params = {
+    key: opts.key,
+    ...(agent ? { agentId: agent } : {}),
+    ...(opts.maxLines !== undefined ? { maxLines: opts.maxLines } : {}),
+  };
+
+  let result: SessionsCompactResult;
+  try {
+    result = (await callGatewayFromCliWithTransport("sessions.compact", rpcOpts, params, {
+      defaultTimeoutMs: 10_000,
+    })) as SessionsCompactResult;
+  } catch (err) {
+    rethrowExpectedCliError(err);
+    const message = formatErrorMessage(err);
+    if (opts.json) {
+      writeRuntimeJson(runtime, { ...formatCliJsonFailure(message), key: opts.key });
+    } else {
+      runtime.error(`Compaction failed: ${sanitizeTerminalText(message)}`);
+    }
+    runtime.exit(1);
+    return;
+  }
+
+  // Success is explicit. A malformed or version-skewed payload must not turn
+  // into the same exit-0 message as a genuine no-op compaction.
+  const failed = result?.ok !== true;
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, result);
+    if (failed) {
+      runtime.exit(1);
+    }
+    return;
+  }
+
+  if (failed) {
+    const sessionKey = sanitizeTerminalText(result?.key ?? opts.key);
+    const reason = result?.reason ? `: ${sanitizeTerminalText(result.reason)}` : "";
+    runtime.error(`Compaction failed for session ${sessionKey}${reason}.`);
+    runtime.exit(1);
+    return;
+  }
+
+  runtime.log(describeCompaction(result ?? {}, opts.key));
+}

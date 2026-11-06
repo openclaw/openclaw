@@ -1,0 +1,577 @@
+import { isDeepStrictEqual } from "node:util";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import {
+  buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilderAsync,
+  formatInboundMediaUnavailableText,
+  toInboundMediaFactsWithMetadata,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
+import {
+  sanitizeQaBusToolCallArguments,
+  type QaBusToolCall,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import {
+  buildQaTarget,
+  deleteQaBusMessage,
+  editQaBusMessage,
+  sendQaBusMessage,
+  type QaBusMessage,
+} from "./bus-client.js";
+import { collectQaMediaUrls, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
+import { getQaChannelRuntime } from "./runtime.js";
+import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
+
+function isHttpMediaUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/[=]+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
+function decodeAttachmentBase64(value: string): Buffer | null {
+  const buffer = Buffer.from(value, "base64");
+  if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    return null;
+  }
+  return buffer;
+}
+
+async function resolveQaInboundMediaFacts(
+  attachments: QaBusMessage["attachments"],
+  maxBytes?: number,
+) {
+  let unavailableCount = 0;
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return { media: [], unavailableCount };
+  }
+  const mediaList: Array<{ path?: string; url?: string; contentType?: string | null }> = [];
+  for (const attachment of attachments) {
+    try {
+      if (!attachment?.mimeType) {
+        throw new Error("attachment MIME type is missing");
+      }
+      if (typeof attachment.contentBase64 === "string" && attachment.contentBase64.trim()) {
+        const buffer = decodeAttachmentBase64(attachment.contentBase64);
+        if (!buffer) {
+          throw new Error("invalid base64");
+        }
+        const saved = await saveMediaBuffer(
+          buffer,
+          attachment.mimeType,
+          "inbound",
+          maxBytes,
+          attachment.fileName,
+        );
+        mediaList.push(
+          attachment.mediaFactCarrier === "media-store-url"
+            ? {
+                url: `media://inbound/${saved.id}`,
+                contentType: saved.contentType,
+              }
+            : {
+                path: saved.path,
+                contentType: saved.contentType,
+              },
+        );
+        continue;
+      }
+      if (typeof attachment.url === "string" && attachment.url.trim()) {
+        if (!isHttpMediaUrl(attachment.url)) {
+          throw new Error("attachment URL has a non-http scheme");
+        }
+        const saved = await saveMediaSource(attachment.url, undefined, "inbound", maxBytes);
+        mediaList.push({
+          path: saved.path,
+          contentType: saved.contentType,
+        });
+        continue;
+      }
+      throw new Error("attachment has no content");
+    } catch (error) {
+      unavailableCount++;
+      console.warn(`[qa-channel] inbound attachment unavailable: ${formatQaErrorForLog(error)}`);
+    }
+  }
+  return { media: await toInboundMediaFactsWithMetadata(mediaList), unavailableCount };
+}
+
+function formatQaErrorForLog(error: unknown): string {
+  let escaped = "";
+  const message = formatErrorMessage(error) || Object.prototype.toString.call(error);
+  for (const character of message) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    const isLineSeparator = codePoint === 0x2028 || codePoint === 0x2029;
+    escaped +=
+      isControl || isLineSeparator ? `\\u${codePoint.toString(16).padStart(4, "0")}` : character;
+  }
+  return escaped;
+}
+
+export async function handleQaInbound(params: {
+  channelId: string;
+  channelLabel: string;
+  account: ResolvedQaChannelAccount;
+  config: CoreConfig;
+  message: QaBusMessage;
+  buildContext?: typeof buildChannelInboundEventContext;
+  channelRuntime?: PluginRuntime["channel"];
+  turnAdoptionLifecycle?: ChannelInboundTurnPlan["turnAdoptionLifecycle"];
+  onFollowupQueued?: () => void;
+}) {
+  const channelRuntime = params.channelRuntime ?? getQaChannelRuntime().channel;
+  const inbound = params.message;
+  const target = buildQaTarget({
+    chatType: inbound.conversation.kind,
+    conversationId: inbound.conversation.id,
+  });
+  const toolCalls: QaBusToolCall[] = [];
+  const route = resolveAgentRoute({
+    cfg: params.config,
+    channel: params.channelId,
+    accountId: params.account.accountId,
+    peer: {
+      kind: inbound.conversation.kind,
+      id: target,
+    },
+  });
+  const config = params.config;
+  const account = params.account;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(config, route.agentId);
+  let messageId: string | null = null;
+  let currentText = "";
+  let previewStopped = false;
+  let lastDurableText = "";
+  let lastDurableToolCalls: QaBusToolCall[] = [];
+  // Partials run concurrently with delivery callbacks. Keep edits, deletion,
+  // and durable delivery in one queue without poisoning it after an error.
+  const withPreviewLock = createAsyncLock();
+
+  const write = async (text: string) => {
+    if (!text.trim() || text === currentText) {
+      return;
+    }
+    if (messageId) {
+      await editQaBusMessage({
+        baseUrl: account.baseUrl,
+        accountId: account.accountId,
+        messageId,
+        text,
+      });
+    } else {
+      const response = await sendQaBusMessage({
+        baseUrl: account.baseUrl,
+        accountId: account.accountId,
+        to: target,
+        text,
+        senderId: account.botUserId,
+        senderName: account.botDisplayName,
+        threadId: inbound.threadId,
+        replyToId: inbound.id,
+        toolCalls,
+      });
+      messageId = response.message.id;
+    }
+    currentText = text;
+  };
+
+  const clear = async () => {
+    if (!messageId) {
+      return;
+    }
+    await deleteQaBusMessage({
+      baseUrl: account.baseUrl,
+      accountId: account.accountId,
+      messageId,
+    });
+    messageId = null;
+    currentText = "";
+  };
+
+  const sendDurable = async (text: string, isError?: boolean, mediaUrls: string[] = []) => {
+    if (!text.trim() && mediaUrls.length === 0) {
+      return;
+    }
+    // Media loading can yield while new tools start. Record only the trace that
+    // accompanies this successful durable send, never later or failed work.
+    const durableToolCalls = [...toolCalls];
+    const message = {
+      cfg: config,
+      accountId: account.accountId,
+      to: target,
+      text,
+      isError,
+      threadId: inbound.threadId,
+      replyToId: inbound.id,
+      toolCalls: durableToolCalls,
+    };
+    if (mediaUrls.length > 0) {
+      await sendQaChannelMediaBatch({
+        ...message,
+        mediaUrls,
+        mediaLocalRoots,
+      });
+    } else {
+      await sendQaChannelText(message);
+    }
+    lastDurableText = text;
+    lastDurableToolCalls = durableToolCalls;
+  };
+
+  const preview = {
+    clear: () => {
+      previewStopped = true;
+      return withPreviewLock(clear);
+    },
+    deliver: (text: string, kind: string, isError?: boolean, mediaUrls: string[] = []) => {
+      // Stop queued partials at final admission, not after an awaited send.
+      // Durable callbacks may still contain several final chunks or attachments.
+      if (kind === "final") {
+        previewStopped = true;
+      }
+      return withPreviewLock(async () => {
+        if (mediaUrls.length > 0 || isError === true) {
+          // Preview edits cannot add attachments or a typed failure marker.
+          // Both need a durable send even when the text matches earlier output.
+          await clear();
+          await sendDurable(text, isError, mediaUrls);
+          return;
+        }
+        // Core may close a streamed block with an identical final payload.
+        // The block is already durable, so posting the final again duplicates the reply.
+        if (
+          kind === "final" &&
+          text === lastDurableText &&
+          isDeepStrictEqual(toolCalls, lastDurableToolCalls)
+        ) {
+          await clear();
+          return;
+        }
+        if (kind === "final" && messageId && toolCalls.length === 0) {
+          await write(text);
+          // The edited message is now durable; preview cleanup no longer owns it.
+          messageId = null;
+          currentText = "";
+          lastDurableText = text;
+          lastDurableToolCalls = [];
+          return;
+        }
+        await clear();
+        await sendDurable(text);
+      });
+    },
+    update: (text: string) =>
+      withPreviewLock(async () => {
+        if (!previewStopped) {
+          await write(text);
+        }
+      }),
+  };
+  const isGroup = inbound.conversation.kind !== "direct";
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: route.sessionKey,
+    threadId: inbound.threadId,
+    parentSessionKey: isGroup ? route.sessionKey : undefined,
+  });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
+    cfg: params.config,
+    route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
+  });
+  const wasMentioned = isGroup
+    ? channelRuntime.mentions.matchesMentionPatterns(
+        inbound.text,
+        channelRuntime.mentions.buildMentionRegexes(params.config, route.agentId),
+      )
+    : undefined;
+  const groups = isGroup ? params.account.config.groups : undefined;
+  const groupConfig = groups?.[inbound.conversation.id] ?? groups?.[target] ?? groups?.["*"];
+  const nativeCommand = inbound.nativeCommand;
+  const commandTargets = nativeCommand
+    ? resolveNativeCommandSessionTargets({
+        agentId: route.agentId,
+        sessionPrefix: "qa-channel:slash",
+        userId: inbound.senderId,
+        targetSessionKey: threadKeys.sessionKey,
+      })
+    : undefined;
+  const sessionKey = commandTargets?.sessionKey ?? threadKeys.sessionKey;
+  const access = await channelRuntime.inbound.ingress.resolveStable({
+    cfg: params.config,
+    channelId: params.channelId,
+    accountId: params.account.accountId,
+    identity: { key: "sender", entryIdPrefix: "qa-entry" },
+    groupAllowFromFallbackToAllowFrom: true,
+    subject: { stableId: inbound.senderId },
+    conversation: {
+      kind: inbound.conversation.kind,
+      id: inbound.conversation.id,
+      threadId: inbound.threadId,
+      title: inbound.conversation.title,
+    },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey,
+      nativeChannelId: inbound.conversation.id,
+      messageId: inbound.id,
+      inboundEventKind: "user_request",
+    },
+    mentionFacts: isGroup
+      ? {
+          canDetectMention: true,
+          wasMentioned: wasMentioned ?? false,
+        }
+      : undefined,
+    dmPolicy: "open",
+    groupPolicy: params.account.config.groupPolicy ?? "open",
+    policy: {
+      activation: isGroup
+        ? {
+            requireMention: groupConfig?.requireMention ?? false,
+            allowTextCommands: true,
+          }
+        : undefined,
+    },
+    allowFrom: params.account.config.allowFrom,
+    groupAllowFrom: params.account.config.groupAllowFrom,
+  });
+  if (access.ingress.admission !== "dispatch") {
+    return;
+  }
+  const { media, unavailableCount } = await resolveQaInboundMediaFacts(
+    inbound.attachments,
+    params.account.mediaMaxBytes,
+  );
+  const bodyForAgent = unavailableCount
+    ? formatInboundMediaUnavailableText({
+        body: inbound.text,
+        notice: `[${unavailableCount} QA attachment${unavailableCount === 1 ? "" : "s"} unavailable]`,
+      })
+    : inbound.text;
+  const body = buildEnvelope({
+    channel: params.channelLabel,
+    from: inbound.senderName || inbound.senderId,
+    timestamp: inbound.timestamp,
+    body: bodyForAgent,
+  });
+  const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
+    channel: params.channelId,
+    accountId: route.accountId ?? params.account.accountId,
+    messageId: inbound.id,
+    messageIdFull: inbound.id,
+    timestamp: inbound.timestamp,
+    from: target,
+    sender: { id: inbound.senderId, name: inbound.senderName },
+    conversation: {
+      kind: inbound.conversation.kind === "direct" ? "direct" : "group",
+      id: inbound.conversation.id,
+      label:
+        inbound.threadTitle ||
+        inbound.conversation.title ||
+        inbound.senderName ||
+        inbound.conversation.id,
+      threadId: inbound.threadId,
+      nativeChannelId: inbound.conversation.id,
+    },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: sessionKey,
+      dispatchSessionKey: sessionKey,
+      parentSessionKey: threadKeys.parentSessionKey,
+    },
+    reply: {
+      to: target,
+      originatingTo: target,
+      replyToId: inbound.replyToId,
+      messageThreadId: inbound.threadId,
+      threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
+    },
+    message: { body, bodyForAgent, rawBody: inbound.text, commandBody: inbound.text },
+    media,
+    channelIngress: access,
+    access: {
+      commands: { authorized: true },
+      mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
+    },
+    command: nativeCommand
+      ? { kind: "native", name: nativeCommand.name, body: inbound.text, authorized: true }
+      : undefined,
+    extra: {
+      CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
+      GroupSubject: isGroup
+        ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
+        : undefined,
+      GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
+      ThreadLabel: inbound.threadTitle,
+    },
+  });
+
+  const clearPreview = () =>
+    preview.clear().catch((error: unknown) => {
+      console.warn(`[qa-channel] failed to clear reply preview: ${formatQaErrorForLog(error)}`);
+    });
+
+  const queuedDelivery = createDeferred<boolean>();
+  let queueDisposition:
+    | Parameters<NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>>[0]
+    | undefined;
+  const turnAdoptionLifecycle = params.turnAdoptionLifecycle;
+  const dispatch = channelRuntime.inbound.dispatch({
+    turnAdoptionLifecycle: turnAdoptionLifecycle
+      ? {
+          ...turnAdoptionLifecycle,
+          onAbandoned: () => {
+            // Queue policy publishes its terminal disposition before abandonment.
+            // Preserve genuine admission failures for retry, not intentional drops.
+            if (!queueDisposition) {
+              return turnAdoptionLifecycle.onAbandoned?.();
+            }
+            return undefined;
+          },
+        }
+      : undefined,
+    cfg: params.config,
+    channel: params.channelId,
+    accountId: params.account.accountId,
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: threadKeys.sessionKey },
+    ctxPayload,
+    delivery: {
+      deliver: async (payload, info) => {
+        const text = payload.text ?? "";
+        const mediaUrls = collectQaMediaUrls(payload.mediaUrl, ...(payload.mediaUrls ?? []));
+        if (!text.trim() && mediaUrls.length === 0) {
+          return;
+        }
+        await preview.deliver(text, info?.kind ?? "final", payload.isError, mediaUrls);
+      },
+      onError: (error) => {
+        void clearPreview();
+        console.warn(`[qa-channel] reply dispatch failed: ${formatQaErrorForLog(error)}`);
+      },
+    },
+    dispatcherOptions: {
+      onSkip: (_payload, info) => {
+        if (info.kind === "final") {
+          void clearPreview();
+        }
+      },
+    },
+    replyOptions: {
+      onFollowupQueueDisposition: (disposition) => {
+        queueDisposition = disposition;
+        // A policy discard never executes, so no delivery scope will settle it.
+        queuedDelivery.resolve(false);
+      },
+      queuedDeliveryCorrelations: [
+        {
+          begin: () => (settlement) => {
+            if (settlement !== undefined) {
+              queuedDelivery.resolve(
+                settlement.completed === true && !settlement.failed && !settlement.transportPending,
+              );
+            }
+          },
+        },
+      ],
+      allowToolLifecycleWhenProgressHidden: true,
+      onPartialReply: async (payload) => {
+        await preview.update(payload.text ?? "");
+      },
+      onToolStart: (payload) => {
+        if (payload.phase && payload.phase !== "start") {
+          return;
+        }
+        const name = payload.name?.trim();
+        if (!name) {
+          return;
+        }
+        const args = sanitizeQaBusToolCallArguments(payload.args);
+        toolCalls.push({
+          name,
+          ...(args && Object.keys(args).length > 0 ? { arguments: args } : {}),
+        });
+      },
+    },
+    replyPipeline: {},
+    record: {
+      onRecordError: (error) => {
+        throw error instanceof Error
+          ? error
+          : new Error(`qa-channel session record failed: ${String(error)}`);
+      },
+    },
+  });
+  let dispatchFailed = false;
+  try {
+    const result = await dispatch;
+    if (!result.dispatched) {
+      return;
+    }
+    const { dispatchResult } = result;
+    // Followup admission returns before delivery. Keep preview and completion
+    // ownership until the queue reports its terminal delivery, including retries.
+    if (dispatchResult.deferredToActiveRun === "followup") {
+      // Intake may continue only after core confirms followup admission, not
+      // its earlier onDeferred notification. Delivery still owns this handler.
+      params.onFollowupQueued?.();
+      const delivered = await queuedDelivery.promise;
+      if (!delivered && !queueDisposition) {
+        throw new Error("QA queued reply did not complete delivery");
+      }
+    }
+    if (queueDisposition) {
+      // A terminal policy drop consumes transport custody after queued cleanup,
+      // even when its status notice failed. It must never execute after restart.
+      await turnAdoptionLifecycle?.onAdopted();
+    } else if (dispatchResult.deferredToActiveRun === "followup") {
+      return;
+    }
+    const receipt = dispatchResult.settledReceipt;
+    if (receipt) {
+      const { final, block, tool } = receipt.counts;
+      const failedFinal = final.failedBeforeSend + final.failedAfterSend > 0;
+      const failedProgress =
+        block.failedBeforeSend +
+          block.failedAfterSend +
+          tool.failedBeforeSend +
+          tool.failedAfterSend >
+        0;
+      // A recovered final owns success; early onError callbacks do not. Failed
+      // progress can recover through a final, while unresolved delivery stays incomplete.
+      if (
+        receipt.hasPendingDelivery ||
+        (failedFinal &&
+          !(final.delivered > 0 && dispatchResult.noVisibleReplyFallbackDelivered === true)) ||
+        (failedProgress && final.delivered === 0)
+      ) {
+        throw new Error("QA reply did not complete delivery");
+      }
+    }
+  } catch (error) {
+    dispatchFailed = true;
+    throw error;
+  } finally {
+    // Completion requires cleanup; a prior dispatch rejection still owns failure.
+    if (dispatchFailed) {
+      await clearPreview();
+    } else {
+      await preview.clear();
+    }
+  }
+}

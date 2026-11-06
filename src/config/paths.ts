@@ -1,0 +1,372 @@
+// Resolves config, state, cache, and runtime filesystem paths.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  normalizeProfileName,
+  resolveProfileGatewayPort,
+  resolveProfileStateDir,
+} from "../cli/profile-utils.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
+import {
+  resolveHomeRelativePath,
+  resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
+  resolveUserPath,
+} from "../infra/home-dir.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
+import { resolveNewStateDir, resolveStateDir } from "./state-dir.js";
+import type { OpenClawConfig } from "./types.js";
+export { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "./state-dir.js";
+
+/**
+ * Nix mode detection: When OPENCLAW_NIX_MODE=1, the gateway is running under Nix.
+ * In this mode:
+ * - No auto-install flows should be attempted
+ * - Missing dependencies should produce actionable Nix-specific error messages
+ * - Config is managed externally (read-only from Nix perspective)
+ */
+export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OPENCLAW_NIX_MODE === "1";
+}
+
+export let isNixMode = resolveIsNixMode();
+
+/** Config mutation policy is independent of Nix package and service ownership. */
+export function resolveIsConfigReadOnly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OPENCLAW_CONFIG_READONLY === "1" || resolveIsNixMode(env);
+}
+const CONFIG_FILENAME = "openclaw.json";
+
+/** True when the root CLI selected a non-default isolated profile. */
+export function isNamedProfile(env: NodeJS.ProcessEnv = process.env): boolean {
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  return Boolean(profile && profile.toLowerCase() !== "default");
+}
+
+function resolveSystemAccountHomeDir(): string {
+  return os.userInfo().homedir;
+}
+
+/** Build a homedir thunk that respects OPENCLAW_HOME for the given env. */
+function envHomedir(env: NodeJS.ProcessEnv): () => string {
+  return () => resolveRequiredHomeDir(env, os.homedir);
+}
+
+function normalizePathForComparison(candidate: string): string {
+  const resolved = path.resolve(candidate);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    // Missing paths have no filesystem identity yet; exact resolution is the safe fallback.
+    return resolved;
+  }
+}
+
+/** Whether the process uses the default home-scoped state directory. */
+export function isDefaultStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): boolean {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    return !normalizeProfileName(env.OPENCLAW_PROFILE);
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  return (
+    normalizePathForComparison(resolveStateDir(env, effectiveHomedir)) ===
+    normalizePathForComparison(resolveNewStateDir(effectiveHomedir))
+  );
+}
+
+export function resolveNativeServiceProfileConflict(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform !== "darwin" && platform !== "win32") {
+    return null;
+  }
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || profile.toLowerCase() === "default") {
+    return null;
+  }
+  // Normal macOS and Windows filesystems fold case, so case-distinct profile
+  // names can share state and native-service paths even though the CLI keeps
+  // them distinct. Leave the runtime profile valid, but deny service mutation.
+  if (profile !== profile.toLowerCase()) {
+    return profile;
+  }
+  if (platform !== "darwin") {
+    return null;
+  }
+  // These names map to the shipped default Gateway and node-host LaunchAgent
+  // labels, so authorizing them would let one profile control another service.
+  return profile === "gateway" || profile === "node" ? profile : null;
+}
+
+/** Whether host service management belongs to the active default install identity. */
+export function isDefaultInstallIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const accountHome = normalizePathForComparison(resolveRequiredHomeDir({}, homedir));
+  // Native service paths use the process home independently of OPENCLAW_HOME.
+  // A canonical runtime override must not hide a relocated service home.
+  if (
+    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !== accountHome ||
+    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !== accountHome
+  ) {
+    return false;
+  }
+  if (
+    resolveNativeServiceProfileConflict(env, platform) ||
+    resolveGatewayNativeServiceIdentityConflict(env, platform)
+  ) {
+    return false;
+  }
+  let canonicalStateDir: string;
+  try {
+    canonicalStateDir = resolveProfileStateDir(env.OPENCLAW_PROFILE ?? "default", env, homedir);
+  } catch {
+    // Environment profiles can bypass root CLI parsing. Reject invalid names
+    // before path construction so separators cannot authorize a host service.
+    return false;
+  }
+  if (
+    normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
+    normalizePathForComparison(canonicalStateDir)
+  ) {
+    return false;
+  }
+  // Named profiles must resolve their own config so they cannot inherit the default profile.
+  if (!isNamedProfile(env) && !env.OPENCLAW_CONFIG_PATH?.trim()) {
+    return true;
+  }
+  return (
+    normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
+    normalizePathForComparison(path.join(canonicalStateDir, CONFIG_FILENAME))
+  );
+}
+
+/** Whether external session catalogs may inherit a scan root from process HOME. */
+export function allowsProcessHomeSessionScan(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return !isNamedProfile(env) && isDefaultInstallIdentity(env, homedir, platform);
+}
+
+export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
+  const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();
+  if (openclawOverride) {
+    env.OPENCLAW_STATE_DIR = resolveUserPath(openclawOverride, env, effectiveHomedir);
+  }
+}
+
+/**
+ * Optional allowlist of directories that `$include` directives may resolve
+ * outside the config directory. Set via `OPENCLAW_INCLUDE_ROOTS` as a
+ * platform-delimited path list (`:` on POSIX, `;` on Windows).
+ *
+ * Each entry is tilde-expanded and resolved to an absolute path. Entries that
+ * cannot be resolved or that are not absolute after expansion are dropped.
+ *
+ * Returns an empty array when the var is unset or contains no usable entries,
+ * preserving the historical behavior where `$include` is confined to the
+ * directory containing `openclaw.json`.
+ */
+export function resolveIncludeRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string[] {
+  const raw = env.OPENCLAW_INCLUDE_ROOTS?.trim();
+  if (!raw) {
+    return [];
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const entry of raw.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.resolve(
+      resolveHomeRelativePath(trimmed, { env, homedir: effectiveHomedir }),
+    );
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
+}
+
+export let STATE_DIR = resolveStateDir();
+
+/**
+ * Config file path (JSON or JSON5).
+ * Can be overridden via OPENCLAW_CONFIG_PATH.
+ * Default: ~/.openclaw/openclaw.json (or $OPENCLAW_STATE_DIR/openclaw.json)
+ */
+export function resolveCanonicalConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir?: string,
+): string {
+  return resolveConfigPath(env, stateDir);
+}
+
+/**
+ * Resolve the explicitly selected or canonical config path.
+ */
+export function resolveConfigPathCandidate(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string {
+  return resolveConfigPath(env, undefined, homedir);
+}
+
+/**
+ * Active config path.
+ */
+export function resolveConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir?: string,
+  homedir: () => string = envHomedir(env),
+): string {
+  const override = env.OPENCLAW_CONFIG_PATH?.trim();
+  if (override) {
+    return resolveUserPath(override, env, homedir);
+  }
+  return path.join(stateDir ?? resolveStateDir(env, homedir), CONFIG_FILENAME);
+}
+
+export let CONFIG_PATH = resolveConfigPathCandidate();
+
+/**
+ * Re-pins process-stable runtime paths after an early startup selector changes the environment.
+ *
+ * Gateway startup must call this before importing runtime modules that derive their own constants
+ * from these live bindings, otherwise one process can split reads and writes across two targets.
+ */
+export function pinRuntimePaths(env: NodeJS.ProcessEnv = process.env): {
+  configPath: string;
+  stateDir: string;
+} {
+  normalizeStateDirEnv(env);
+  isNixMode = resolveIsNixMode(env);
+  STATE_DIR = resolveStateDir(env);
+  CONFIG_PATH = resolveConfigPathCandidate(env);
+  return { configPath: CONFIG_PATH, stateDir: STATE_DIR };
+}
+
+export function captureRuntimeStateEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR?.trim() || STATE_DIR,
+  };
+}
+
+/**
+ * Resolve the configured runtime path without inspecting legacy locations.
+ */
+export function resolveDefaultConfigCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string[] {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  return [resolveConfigPath(env, undefined, effectiveHomedir)];
+}
+
+export const DEFAULT_GATEWAY_PORT = 18789;
+
+/**
+ * Gateway lock directory inside the selected state tree.
+ * Default: $OPENCLAW_STATE_DIR/tmp/openclaw-<uid> (uid suffix when available).
+ */
+export function resolveGatewayLockDir(
+  stateDir: string = resolveStateDir(),
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string {
+  return resolveGatewayLockDirForCanonicalStateDir(normalizePathForComparison(stateDir), uid);
+}
+
+/** Append the lock layout when the caller has already resolved the state directory. */
+export function resolveGatewayLockDirForCanonicalStateDir(
+  stateDir: string,
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string {
+  const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
+  // Clean break: older binaries still use process temp and do not exclude a
+  // state-local binary during a mixed-version upgrade.
+  return path.join(stateDir, "tmp", suffix);
+}
+
+/**
+ * Queue-owned copies of outbound attachments that have not been delivered yet,
+ * held outside the media store so its TTL sweep cannot reclaim an attachment a
+ * durable row still has to send.
+ */
+export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
+  return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
+}
+
+/** Resolves the legacy credentials directory retained for Doctor and backup ownership. */
+export function resolveOAuthDir(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir: string = resolveStateDir(env, envHomedir(env)),
+): string {
+  const override = env.OPENCLAW_OAUTH_DIR?.trim();
+  if (override) {
+    return resolveUserPath(override, env, envHomedir(env));
+  }
+  return path.join(stateDir, "credentials");
+}
+
+export function parseGatewayPortEnvValue(raw: string | undefined): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return parseTcpPort(trimmed);
+  }
+
+  // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
+  // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
+  const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
+  if (bracketedIpv6Match?.[1]) {
+    return parseTcpPort(bracketedIpv6Match[1]);
+  }
+
+  const firstColon = trimmed.indexOf(":");
+  const lastColon = trimmed.lastIndexOf(":");
+  if (firstColon <= 0 || firstColon !== lastColon) {
+    return null;
+  }
+  const suffix = trimmed.slice(firstColon + 1);
+  if (!/^\d+$/.test(suffix)) {
+    return null;
+  }
+  return parseTcpPort(suffix);
+}
+
+export function resolveGatewayPort(
+  cfg?: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const envPort = parseGatewayPortEnvValue(env.OPENCLAW_GATEWAY_PORT);
+  if (envPort !== null) {
+    return envPort;
+  }
+  const configPort = cfg?.gateway?.port;
+  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
+    return configPort;
+  }
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  return profile ? resolveProfileGatewayPort(profile) : DEFAULT_GATEWAY_PORT;
+}

@@ -1,0 +1,181 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { stripLeadingEmptyLines } from "../../shared/text/strip-leading-empty-lines.js";
+import { stripHeartbeatToken } from "../heartbeat.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
+import { HEARTBEAT_TOKEN, isInternalFormattingArtifact } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
+import type {
+  NormalizeReplyOutcome as PayloadNormalizationOutcome,
+  NormalizeReplySkipReason,
+} from "./normalize-reply-skip-reason.js";
+import {
+  resolveResponsePrefixTemplate,
+  type ResponsePrefixContext,
+} from "./response-prefix-template.js";
+
+export type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
+
+export type NormalizeReplyOutcome<T = ReplyPayload> = PayloadNormalizationOutcome<T>;
+
+const channelReplyTransformOwners = new WeakMap<
+  (payload: ReplyPayload) => ReplyPayload | null,
+  object
+>();
+
+export function bindNormalizeReplyTransformOwner<
+  T extends (payload: ReplyPayload) => ReplyPayload | null,
+>(transform: T, owner: object): T {
+  channelReplyTransformOwners.set(transform, owner);
+  return transform;
+}
+
+function resolveNormalizeReplyTransformOwner(
+  transform: ((payload: ReplyPayload) => ReplyPayload | null) | undefined,
+): object | undefined {
+  return transform ? (channelReplyTransformOwners.get(transform) ?? transform) : undefined;
+}
+
+type NormalizeReplyOptions = {
+  responsePrefix?: string;
+  applyChannelTransforms?: boolean;
+  preserveLeadingSourceBoundary?: boolean;
+  /** The same delivery owner already applied filtering, transforms, and prefix. */
+  prepared?: boolean;
+  /** Context for template variable interpolation in responsePrefix */
+  responsePrefixContext?: ResponsePrefixContext;
+  onHeartbeatStrip?: () => void;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  conversationContext?: string;
+  onSkip?: (reason: NormalizeReplySkipReason) => void;
+};
+
+export function normalizeReplyPayloadOutcome(
+  payload: ReplyPayload,
+  opts: NormalizeReplyOptions = {},
+): NormalizeReplyOutcome {
+  if (opts.prepared) {
+    // A prepared continuation can change dispatch lanes without repeating its
+    // prefix or channel transform; only the block's leading boundary changes.
+    return {
+      kind: "deliver",
+      payload:
+        !opts.preserveLeadingSourceBoundary && payload.text?.startsWith("\n")
+          ? copyReplyPayloadMetadata(payload, {
+              ...payload,
+              text: stripLeadingEmptyLines(payload.text),
+            })
+          : payload,
+    };
+  }
+  const suppress = (reason: NormalizeReplySkipReason): NormalizeReplyOutcome => {
+    opts.onSkip?.(reason);
+    return { kind: "suppress", reason };
+  };
+  const applyChannelTransforms = opts.applyChannelTransforms ?? true;
+  const hasContent = (text: string | undefined) =>
+    hasReplyPayloadContent({
+      ...payload,
+      text,
+    });
+  const trimmed = normalizeOptionalString(payload.text) ?? "";
+  const hasSpeechContent = hasReplyPayloadSpeechContent(payload);
+  if (!hasContent(trimmed) && !hasSpeechContent) {
+    return suppress("empty");
+  }
+
+  let text = payload.text;
+  if (getReplyPayloadMetadata(payload)?.silentReply === true) {
+    if (!hasContent("") && !hasSpeechContent) {
+      return suppress("silent");
+    }
+    text = "";
+  }
+  if (text && !trimmed) {
+    // Keep empty text when media exists so media-only replies still send.
+    text = "";
+  }
+
+  if (text?.includes(HEARTBEAT_TOKEN)) {
+    const stripped = stripHeartbeatToken(text, { mode: "message" });
+    if (stripped.didStrip) {
+      opts.onHeartbeatStrip?.();
+    }
+    if (stripped.shouldSkip && !hasContent(stripped.text)) {
+      return suppress("heartbeat");
+    }
+    text = stripped.text;
+  }
+
+  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    return suppress("silent");
+  }
+
+  if (text) {
+    text = payload.isError
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext: opts.conversationContext,
+        })
+      : sanitizeUserFacingText(text, {
+          conversationContext: opts.conversationContext,
+          preserveLeadingSourceBoundary: opts.preserveLeadingSourceBoundary,
+        });
+  }
+  if (!hasContent(text) && !hasSpeechContent) {
+    return suppress("empty");
+  }
+
+  let enrichedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, { ...payload, text });
+  const channelTransformOwner = resolveNormalizeReplyTransformOwner(opts.transformReplyPayload);
+  const transformAlreadyApplied =
+    channelTransformOwner != null &&
+    getReplyPayloadMetadata(enrichedPayload)?.channelReplyTransformOwner === channelTransformOwner;
+  if (applyChannelTransforms && opts.transformReplyPayload && !transformAlreadyApplied) {
+    const transformedPayload = opts.transformReplyPayload(enrichedPayload);
+    if (transformedPayload === null) {
+      return suppress("channel_transform");
+    }
+    const copiedPayload = transformedPayload
+      ? copyReplyPayloadMetadata(enrichedPayload, transformedPayload)
+      : enrichedPayload;
+    const appliedOwner = resolveNormalizeReplyTransformOwner(opts.transformReplyPayload);
+    enrichedPayload = appliedOwner
+      ? setReplyPayloadMetadata(copiedPayload, { channelReplyTransformOwner: appliedOwner })
+      : copiedPayload;
+    text = enrichedPayload.text;
+  }
+
+  const effectivePrefix = opts.responsePrefixContext
+    ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
+    : opts.responsePrefix;
+
+  if (
+    effectivePrefix &&
+    text &&
+    text.trim() !== HEARTBEAT_TOKEN &&
+    !text.startsWith(effectivePrefix)
+  ) {
+    const prefix = `${effectivePrefix} `;
+    text = `${prefix}${text}`;
+    setReplyPayloadMetadata(enrichedPayload, { responsePrefix: prefix });
+  }
+
+  enrichedPayload = copyReplyPayloadMetadata(enrichedPayload, { ...enrichedPayload, text });
+  return { kind: "deliver", payload: enrichedPayload };
+}
+
+export function normalizeReplyPayload(
+  payload: ReplyPayload,
+  opts: NormalizeReplyOptions = {},
+): ReplyPayload | null {
+  const outcome = normalizeReplyPayloadOutcome(payload, opts);
+  return outcome.kind === "deliver" ? outcome.payload : null;
+}

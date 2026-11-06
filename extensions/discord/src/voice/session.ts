@@ -1,0 +1,128 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { ChannelType } from "../internal/discord.js";
+import type { VoiceCaptureState } from "./capture-state.js";
+import type { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
+import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
+import type { DiscordVoiceAudioReceipt, DiscordVoiceTranscriptCapture } from "./recording-types.js";
+
+export const MIN_SEGMENT_SECONDS = 0.35;
+export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
+export const VOICE_CONNECT_READY_TIMEOUT_MS = 30_000;
+export const VOICE_RECONNECT_GRACE_MS = 15_000;
+
+export type VoiceOperationResult = {
+  ok: boolean;
+  message: string;
+  channelId?: string;
+  channelName?: string;
+  guildId?: string;
+  warning?: string;
+};
+
+export type VoiceJoinOptions = {
+  preserveFollowState?: boolean;
+  autoJoinWhenOccupied?: boolean;
+  captureOnly?: boolean;
+};
+
+export type VoiceSessionGeneration = {
+  generation: number;
+  isCurrent: () => boolean;
+};
+
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+
+export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
+  return voice?.mode ?? "agent-proxy";
+}
+
+export function isDiscordRealtimeVoiceMode(
+  mode: DiscordVoiceMode,
+): mode is Exclude<DiscordVoiceMode, "stt-tts"> {
+  return mode === "agent-proxy" || mode === "bidi";
+}
+
+export type VoiceRealtimeSpeakerContext = {
+  extraSystemPrompt?: string;
+  senderIsOwner: boolean;
+  speakerLabel: string;
+};
+
+export type VoiceRealtimeAgentTurnParams = {
+  context: VoiceRealtimeSpeakerContext;
+  message: string;
+  toolsAllow?: string[];
+  userId: string;
+  isCurrent: () => boolean;
+  signal?: AbortSignal;
+  voiceSelection?: import("openclaw/plugin-sdk/realtime-voice").RealtimeVoiceSelectionHandle;
+};
+
+export type VoiceRealtimeSpeakerTurn = {
+  close: (reason?: "incomplete-input") => void;
+  sendInputAudio: (discordPcm48kStereo: Buffer, receipt?: DiscordVoiceAudioReceipt) => void;
+};
+
+export type VoiceRealtimeSession = {
+  beginSpeakerTurn: (
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+    recordingInput?: DiscordRealtimeRecordingInput,
+  ) => VoiceRealtimeSpeakerTurn;
+  close: (disposition?: "abort" | "text-fallback") => void | Promise<void>;
+  connect: () => Promise<void>;
+  canReceiveDuringPlayback: () => boolean;
+};
+
+export type VoiceGuildLifecycle =
+  | { status: "inactive"; generation: number }
+  | {
+      status: "starting";
+      generation: number;
+      cancelled: boolean;
+      instance: { guildId: string; channelId: string; captureOnly: boolean };
+    }
+  | { status: "active"; generation: number; instance: VoiceSessionEntry }
+  | { status: "stopped"; generation: number; reason: string };
+
+export type VoiceSessionEntry = {
+  generation: number;
+  captureOnly: boolean;
+  autoJoinWhenOccupied: boolean;
+  sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
+  guildId: string;
+  guildName?: string;
+  channelId: string;
+  channelName?: string;
+  voiceSessionKey: string;
+  route: ReturnType<typeof resolveAgentRoute>;
+  audio: import("./audio-transport.js").DiscordAudioTransport;
+  playbackQueue: Promise<void>;
+  // Conversation-only segments may retain their WAV after this recording frontier settles.
+  processingQueue: Promise<void>;
+  conversations: import("./voice-conversation-input.js").DiscordVoiceConversationQueue;
+  audioInputBudget: Awaited<
+    ReturnType<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>
+  >;
+  ttsStreamFallbackWarned: boolean;
+  capture: VoiceCaptureState;
+  realtimeLifecycle:
+    | { status: "inactive" }
+    | { status: "starting"; instance: VoiceRealtimeSession }
+    | { status: "active"; instance: VoiceRealtimeSession }
+    | { status: "stopped"; reason: string };
+  transcripts?: DiscordVoiceTranscriptCapture;
+  receiveRecovery: VoiceReceiveRecoveryState;
+  stop: (reason?: string, disposition?: "abort" | "text-fallback") => void | Promise<void>;
+};
+
+export function logVoiceVerbose(message: string): void {
+  logVerbose(`discord voice: ${message}`);
+}
+
+export function isVoiceChannel(type: ChannelType): boolean {
+  return type === ChannelType.GuildVoice || type === ChannelType.GuildStageVoice;
+}

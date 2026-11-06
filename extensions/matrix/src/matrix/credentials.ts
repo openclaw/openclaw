@@ -1,0 +1,79 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { openMatrixCredentialsAsyncStore } from "./credentials-read.js";
+import {
+  isMatrixCredentialRevocation,
+  matrixCredentialsStoreKey,
+  normalizeMatrixStoredCredentials,
+} from "./credentials-state.js";
+import type { MatrixStoredCredentialRecord, MatrixStoredCredentials } from "./credentials-state.js";
+import { updateMatrixKeyedState } from "./sqlite-state.js";
+
+export {
+  clearMatrixCredentials,
+  credentialsMatchConfig,
+  loadMatrixCredentials,
+  resolveMatrixCredentialsDir,
+  resolveMatrixCredentialsPath,
+} from "./credentials-read.js";
+export type { MatrixStoredCredentials } from "./credentials-state.js";
+
+export async function saveMatrixCredentials(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): Promise<void> {
+  await persistMatrixCredentials(credentials, env, accountId, false);
+}
+
+export async function saveBackfilledMatrixDeviceId(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): Promise<"saved" | "skipped"> {
+  return persistMatrixCredentials(credentials, env, accountId, true);
+}
+
+async function persistMatrixCredentials(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv,
+  accountId: string | null | undefined,
+  backfill: boolean,
+): Promise<"saved" | "skipped"> {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const preparedCredentials = { ...credentials };
+  const now = new Date().toISOString();
+  let result: "saved" | "skipped" = "saved";
+  const store = openMatrixCredentialsAsyncStore(env);
+  const key = matrixCredentialsStoreKey(normalizedAccountId);
+  await updateMatrixKeyedState(store, key, (current) => {
+    result = "saved";
+    // A delayed login backfill must not resurrect credentials after logout.
+    if (backfill && isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      result = "skipped";
+      return current;
+    }
+    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
+    if (
+      backfill &&
+      existing &&
+      (existing.homeserver !== preparedCredentials.homeserver ||
+        existing.userId !== preparedCredentials.userId ||
+        existing.accessToken !== preparedCredentials.accessToken)
+    ) {
+      result = "skipped";
+      return existing;
+    }
+    return {
+      accountId: normalizedAccountId,
+      homeserver: preparedCredentials.homeserver,
+      userId: preparedCredentials.userId,
+      accessToken: preparedCredentials.accessToken,
+      ...(typeof preparedCredentials.deviceId === "string"
+        ? { deviceId: preparedCredentials.deviceId }
+        : {}),
+      createdAt: existing?.createdAt ?? now,
+      lastUsedAt: now,
+    } satisfies MatrixStoredCredentialRecord;
+  });
+  return result;
+}

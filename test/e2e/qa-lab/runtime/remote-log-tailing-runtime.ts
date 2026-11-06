@@ -1,0 +1,234 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
+
+const SOURCE_PATH = "test/e2e/qa-lab/runtime/remote-log-tailing-runtime.ts";
+
+function logLine(message: string): string {
+  return `${JSON.stringify({
+    time: new Date().toISOString(),
+    level: "info",
+    subsystem: "qa-remote-logs",
+    message,
+  })}\n`;
+}
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function stopFollowChild(child: ChildProcess, closed: Promise<unknown>): Promise<void> {
+  if (!hasExited(child)) {
+    child.kill("SIGINT");
+  }
+  // The grace escalates shutdown; only the captured close event completes ownership.
+  const escalation = setTimeout(() => {
+    if (!hasExited(child)) {
+      child.kill("SIGKILL");
+    }
+  }, 5_000);
+  try {
+    await closed;
+  } finally {
+    clearTimeout(escalation);
+  }
+}
+
+export async function withOwnedFollowChild<T>(
+  child: ChildProcess,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const closed = once(child, "close");
+  void closed.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    await stopFollowChild(child, closed);
+  }
+}
+
+export function assertInitialTailBound(result: { lines: string[]; truncated: boolean }): void {
+  if (result.lines.length !== 2 || !result.truncated) {
+    throw new Error(`logs.tail did not honor limit: ${JSON.stringify(result)}`);
+  }
+}
+
+export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) {
+  const logPath = path.join(outputRoot, "gateway.jsonl");
+  await mkdir(outputRoot, { recursive: true });
+  const gatewayOwner = createQaGatewayChild();
+  try {
+    const gateway = await gatewayOwner.start({
+      repoRoot,
+      initializeCurrentRuntimeState: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(repoRoot, "dist", "index.js")],
+        cwd: repoRoot,
+        usePackagedPlugins: true,
+      },
+      transportBaseUrl: "http://127.0.0.1:9",
+      controlUiEnabled: false,
+      mutateConfig: (config) => ({
+        ...config,
+        logging: { ...config.logging, file: logPath, level: "info" },
+      }),
+    });
+    await appendFile(logPath, logLine("qa-line-one"));
+    await appendFile(logPath, logLine("qa-line-two"));
+    await appendFile(logPath, logLine("qa-line-three"));
+
+    const first = (await gateway.call("logs.tail", { limit: 2, maxBytes: 4096 })) as {
+      cursor: number;
+      lines: string[];
+      truncated: boolean;
+    };
+    assertInitialTailBound(first);
+    const bounded = (await gateway.call("logs.tail", { limit: 20, maxBytes: 96 })) as {
+      cursor: number;
+      lines: string[];
+      truncated: boolean;
+    };
+    if (!bounded.truncated || bounded.cursor <= 0) {
+      throw new Error(`logs.tail did not honor maxBytes: ${JSON.stringify(bounded)}`);
+    }
+    await appendFile(logPath, logLine("qa-cursor-line"));
+    const cursorTail = (await gateway.call("logs.tail", {
+      cursor: first.cursor,
+      limit: 20,
+      maxBytes: 4096,
+    })) as { lines: string[] };
+    if (
+      !cursorTail.lines.some((line) => line.includes("qa-cursor-line")) ||
+      cursorTail.lines.some((line) => /qa-line-(?:one|two|three)/.test(line))
+    ) {
+      throw new Error(`logs.tail did not honor cursor: ${JSON.stringify(cursorTail)}`);
+    }
+
+    const cliJson = await gateway.runCli([
+      "logs",
+      "--url",
+      gateway.wsUrl,
+      "--token",
+      gateway.token,
+      "--json",
+      "--limit",
+      "200",
+      "--max-bytes",
+      "250000",
+    ]);
+    const cliRecords = cliJson
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type?: string; message?: string });
+    if (!cliRecords.some((record) => record.type === "meta")) {
+      throw new Error(`packaged logs CLI omitted metadata: ${cliJson}`);
+    }
+    if (!cliRecords.some((record) => record.message === "qa-cursor-line")) {
+      throw new Error(`packaged logs CLI omitted the tailed record: ${cliJson}`);
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        path.join(repoRoot, "dist", "index.js"),
+        "logs",
+        "--url",
+        gateway.wsUrl,
+        "--token",
+        gateway.token,
+        "--json",
+        "--follow",
+        "--interval",
+        "50",
+        "--limit",
+        "200",
+        "--max-bytes",
+        "4096",
+      ],
+      { cwd: repoRoot, env: gateway.runtimeEnv, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const followOutput = await withOwnedFollowChild(child, async () => {
+      const deadline = Date.now() + 10_000;
+      const records = () =>
+        stdout
+          .split("\n")
+          .slice(0, -1)
+          .map((line) => JSON.parse(line) as { type?: string; message?: string });
+      while (!records().some((record) => record.type === "meta") && Date.now() < deadline) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!records().some((record) => record.type === "meta")) {
+        throw new Error(`follow did not receive initial snapshot: ${stderr}`);
+      }
+      // Each poll logs its admitted connection; the window must also retain the appended record.
+      await appendFile(logPath, logLine("qa-follow-line"));
+      while (
+        !records().some((record) => record.message === "qa-follow-line") &&
+        Date.now() < deadline
+      ) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!records().some((record) => record.message === "qa-follow-line")) {
+        throw new Error(`follow did not receive appended record: ${stderr}`);
+      }
+      return stdout;
+    });
+    return { first, bounded, cursorTail, cliRecords, followOutput };
+  } finally {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
+}
+
+async function main() {
+  const repoRoot = process.cwd();
+  const outputRoot = parseQaArtifactBase(process.argv.slice(2));
+  const startedAt = Date.now();
+  const writer = createQaScriptEvidenceWriter({
+    artifactBase: outputRoot,
+    logFileName: "remote-log-tailing.log",
+    primaryModel: "none",
+    providerMode: "mock-openai",
+    repoRoot,
+    target: {
+      id: "remote-log-tailing",
+      sourcePath: "qa/scenarios/cli/remote-log-tailing.yaml",
+      title: "Remote gateway log tailing",
+      codeRefs: [SOURCE_PATH, "src/cli/logs-cli.ts", "src/gateway/server-methods/logs.ts"],
+    },
+  });
+  try {
+    const result = await runRemoteLogTailing(repoRoot, outputRoot);
+    writer.appendLog(`${JSON.stringify(result)}\n`);
+    await writer.write({ durationMs: Date.now() - startedAt, status: "pass" });
+  } catch (error) {
+    writer.appendLog(`${String(error)}\n`);
+    await writer.write({
+      details: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt,
+      status: "fail",
+    });
+    throw error;
+  }
+}
+
+if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
+  await main();
+}

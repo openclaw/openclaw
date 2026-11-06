@@ -1,0 +1,109 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import type { ConfigValidationIssue } from "./types.js";
+
+type ConfigIssueLineInput = {
+  path?: string | null;
+  pathSegments?: readonly (string | number)[];
+  message: string;
+  line?: number;
+  sourceFile?: string;
+};
+
+type ConfigIssueFormatOptions = {
+  normalizeRoot?: boolean;
+  sourceFile?: string;
+};
+
+/** Return the public config issue shape with a normalized path and non-empty allowed values. */
+function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
+  const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
+  const normalized: ConfigValidationIssue = {
+    path: normalizeOptionalString(issue.path) ?? "<root>",
+    message: issue.message,
+    ...(hasAllowedValues ? { allowedValues: issue.allowedValues } : {}),
+    ...(hasAllowedValues &&
+    typeof issue.allowedValuesHiddenCount === "number" &&
+    issue.allowedValuesHiddenCount > 0
+      ? { allowedValuesHiddenCount: issue.allowedValuesHiddenCount }
+      : {}),
+  };
+  if (issue.pathSegments) {
+    Object.defineProperty(normalized, "pathSegments", {
+      value: issue.pathSegments,
+      enumerable: false,
+    });
+  }
+  return normalized;
+}
+
+/** Normalize a batch of config validation issues for display or JSON output. */
+export function normalizeConfigIssues(
+  issues: ReadonlyArray<ConfigValidationIssue>,
+): ConfigValidationIssue[] {
+  return issues.map((issue) => normalizeConfigIssue(issue));
+}
+
+function resolveIssueLocationPrefix(
+  issue: ConfigIssueLineInput,
+  opts?: ConfigIssueFormatOptions,
+): string {
+  const sourceFile =
+    normalizeOptionalString(issue.sourceFile) ?? normalizeOptionalString(opts?.sourceFile);
+  if (!sourceFile || typeof issue.line !== "number" || issue.line <= 0) {
+    return "";
+  }
+  return `${sanitizeTerminalText(sourceFile)}:${issue.line} — `;
+}
+
+/**
+ * Format one config issue for terminal output.
+ * Path and message are sanitized because issues can include user-edited config text.
+ */
+export function formatConfigIssueLine(
+  issue: ConfigIssueLineInput,
+  marker = "-",
+  opts?: ConfigIssueFormatOptions,
+): string {
+  const prefix = marker ? `${marker} ` : "";
+  const locationPrefix = resolveIssueLocationPrefix(issue, opts);
+  const issuePath = issue.pathSegments?.length
+    ? formatConcreteConfigPath(issue.pathSegments)
+    : issue.path;
+  const path = sanitizeTerminalText(
+    opts?.normalizeRoot
+      ? (normalizeOptionalString(issuePath) ?? "<root>")
+      : typeof issuePath === "string"
+        ? issuePath
+        : "",
+  );
+  const message = sanitizeTerminalText(issue.message);
+  return `${prefix}${locationPrefix}${path}: ${message}`;
+}
+
+/** Format config issues as terminal-safe lines with a shared marker prefix. */
+export function formatConfigIssueLines(
+  issues: ReadonlyArray<ConfigIssueLineInput>,
+  marker = "-",
+  opts?: ConfigIssueFormatOptions,
+): string[] {
+  return issues.map((issue) => formatConfigIssueLine(issue, marker, opts));
+}
+
+/** Build a compact, terminal-safe issue summary for logs and recovery diagnostics. */
+export function formatConfigIssueSummary(
+  issues: ReadonlyArray<ConfigIssueLineInput>,
+): string | null {
+  if (issues.length === 0) {
+    return null;
+  }
+  const visibleIssues = issues.slice(0, 5);
+  const lines = formatConfigIssueLines(visibleIssues, "", { normalizeRoot: true });
+  const hiddenIssueCount = issues.length - visibleIssues.length;
+  if (hiddenIssueCount <= 0) {
+    return lines.join("; ");
+  }
+  // Keep log lines bounded while preserving the exact hidden count for triage.
+  return `${lines.join("; ")}; and ${hiddenIssueCount} more`;
+}

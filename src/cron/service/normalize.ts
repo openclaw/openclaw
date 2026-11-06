@@ -1,0 +1,56 @@
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+/** Normalizes optional cron agent ids through the canonical session-key agent id rules. */
+export { normalizeOptionalAgentId } from "../../routing/session-key.js";
+
+/** Normalizes a required cron job name and throws the public validation error when absent. */
+export function normalizeRequiredName(raw: unknown) {
+  if (typeof raw !== "string") {
+    throw new Error("automation name is required");
+  }
+  const name = raw.trim();
+  if (!name) {
+    throw new Error("automation name is required");
+  }
+  return name;
+}
+
+function truncateText(input: string, maxLen: number) {
+  return truncateWithMarker(input, maxLen, { marker: "…", reserve: 1, trimEnd: true });
+}
+
+/** Infers a compact cron job name from payload text first, then schedule shape. */
+export function inferCronJobName(job: {
+  schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
+  payload?: { kind?: unknown; text?: unknown; message?: unknown; argv?: unknown };
+}) {
+  const text =
+    job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
+      ? job.payload.text
+      : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
+        ? job.payload.message
+        : job?.payload?.kind === "command" && Array.isArray(job.payload.argv)
+          ? job.payload.argv.join(" ")
+          : "";
+  const firstLine =
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .find(Boolean) ?? "";
+  if (firstLine) {
+    // Names appear in CLI lists and alerts; keep them single-line and UTF-16
+    // safe so emoji/surrogate pairs are not split by truncation.
+    return truncateText(firstLine, 60);
+  }
+
+  const kind = typeof job?.schedule?.kind === "string" ? job.schedule.kind : "";
+  if (kind === "cron" && typeof job?.schedule?.expr === "string") {
+    return `Cron: ${truncateText(job.schedule.expr, 52)}`;
+  }
+  if (kind === "every" && typeof job?.schedule?.everyMs === "number") {
+    return `Every: ${job.schedule.everyMs}ms`;
+  }
+  if (kind === "at") {
+    return "One-shot";
+  }
+  return "Automation";
+}

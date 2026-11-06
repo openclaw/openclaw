@@ -1,0 +1,173 @@
+import {
+  emitTrustedDiagnosticEventWithPrivateData,
+  type DiagnosticModelCallContent,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
+
+type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+type ModelCallDiagnosticBase = Omit<
+  Extract<TrustedDiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
+
+export function utf8JsonByteLength(value: unknown): number | undefined {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function fingerprintCodexLogValue(namespace: string, value: string): string {
+  return `sha256:${sha256Hex(`${namespace}\0${value}`).slice(0, 16)}`;
+}
+
+type CodexModelCallFailureKind = "aborted" | "timeout";
+
+type CodexModelCallDiagnosticCapture = Partial<Record<keyof DiagnosticModelCallContent, boolean>>;
+
+type CodexModelCallDiagnosticTool = {
+  name: string;
+  description: string;
+  inputSchema?: unknown;
+  parameters?: unknown;
+};
+
+export function createCodexModelCallDiagnosticEmitter(params: {
+  baseFields: ModelCallDiagnosticBase;
+  capture: CodexModelCallDiagnosticCapture;
+  tools: readonly CodexModelCallDiagnosticTool[];
+  buildInputMessages: () => unknown;
+  buildSystemPrompt: () => string | undefined;
+  onErrorDiagnostic?: (error: unknown) => void;
+}) {
+  const toolDefinitions = params.capture.toolDefinitions
+    ? params.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema ?? tool.parameters,
+      }))
+    : undefined;
+  let startedAt = Date.now();
+  let started = false;
+  let terminalEmitted = false;
+  let requestPayloadBytes: number | undefined;
+
+  const buildPrivateData = (
+    terminalOutput?: Pick<DiagnosticModelCallContent, "outputMessages">,
+  ) => {
+    const modelContent: DiagnosticModelCallContent = {
+      ...(params.capture.inputMessages ? { inputMessages: params.buildInputMessages() } : {}),
+      ...(params.capture.systemPrompt ? { systemPrompt: params.buildSystemPrompt() } : {}),
+      ...(toolDefinitions ? { toolDefinitions } : {}),
+      ...(terminalOutput && params.capture.outputMessages ? terminalOutput : {}),
+    };
+    return Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
+  };
+  const emitTerminal = (
+    type: "model.call.completed" | "model.call.error",
+    outputMessages: unknown,
+    fields: { errorCategory?: string; failureKind?: CodexModelCallFailureKind } = {},
+  ): boolean => {
+    if (!started || terminalEmitted) {
+      return false;
+    }
+    terminalEmitted = true;
+    const event = {
+      ...params.baseFields,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      ...fields,
+      ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
+    };
+    emitTrustedDiagnosticEventWithPrivateData(
+      type === "model.call.error"
+        ? { ...event, type, errorCategory: fields.errorCategory ?? "error" }
+        : { ...event, type },
+      buildPrivateData({ outputMessages }),
+    );
+    return true;
+  };
+
+  return {
+    setRequestPayloadBytes(bytes: number | undefined): void {
+      requestPayloadBytes = bytes;
+    },
+    emitStarted(): void {
+      startedAt = Date.now();
+      started = true;
+      emitTrustedDiagnosticEventWithPrivateData(
+        {
+          type: "model.call.started",
+          ...params.baseFields,
+        },
+        buildPrivateData(),
+      );
+    },
+    emitCompleted(result: { assistantTexts?: unknown; lastAssistant?: unknown }): void {
+      emitTerminal(
+        "model.call.completed",
+        result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
+      );
+    },
+    emitResponseObserved(
+      this: void,
+      response: NonNullable<ReturnType<CodexUsageProjection["record"]>>,
+    ): void {
+      if (!started || terminalEmitted) {
+        return;
+      }
+      const { observationUnit: _unit, promptStats: _stats, ...baseFields } = params.baseFields;
+      const usage = response.usage;
+      emitTrustedDiagnosticEventWithPrivateData({
+        ...baseFields,
+        type: "model.response.observed",
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      });
+    },
+    emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
+      if (
+        emitTerminal("model.call.error", [], {
+          errorCategory: fields.failureKind ?? "error",
+          ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
+        })
+      ) {
+        params.onErrorDiagnostic?.(error);
+      }
+    },
+  };
+}
+
+export function classifyCodexModelCallFailureKind(params: {
+  error: unknown;
+  timedOut: boolean;
+  runAborted: boolean;
+  abortReason: unknown;
+  clientClosedAbort: boolean;
+  formatError: (error: unknown) => string;
+}): CodexModelCallFailureKind | undefined {
+  if (params.timedOut) {
+    return "timeout";
+  }
+  const errorMessage = params.error ? params.formatError(params.error).toLowerCase() : "";
+  if (errorMessage.includes("timed out") || errorMessage.includes("timeout")) {
+    return "timeout";
+  }
+  if (params.runAborted && !params.clientClosedAbort) {
+    const abortReason =
+      typeof params.abortReason === "string"
+        ? params.abortReason.toLowerCase()
+        : params.abortReason
+          ? params.formatError(params.abortReason).toLowerCase()
+          : "";
+    return abortReason.includes("timeout") ? "timeout" : "aborted";
+  }
+  return errorMessage.includes("aborted") ? "aborted" : undefined;
+}

@@ -1,0 +1,393 @@
+import { performance } from "node:perf_hooks";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const restartTraceLog = createSubsystemLogger("gateway");
+const RESTART_TRACE_HANDOFF_STARTED_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS";
+const RESTART_TRACE_HANDOFF_LAST_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS";
+const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
+const CLOSE_STEP_SLOW_MS = 1_000;
+const CLOSE_PENDING_REPORT_MS = 5_000;
+const MAX_PENDING_CLOSE_STEPS = 8;
+const MAX_PENDING_CLOSE_METRICS = 8;
+
+type RestartTraceMetricValue = boolean | number | string | null | undefined;
+type RestartTraceMetrics =
+  | Readonly<Record<string, RestartTraceMetricValue>>
+  | ReadonlyArray<readonly [string, RestartTraceMetricValue]>;
+type GatewayRestartTraceHandoff = {
+  startedAt: number;
+  lastAt: number;
+};
+
+let startedAt = 0;
+let lastAt = 0;
+let active = false;
+const pendingCloseSteps = new Set<{
+  name: string;
+  startedAt: number;
+  metrics?: () => RestartTraceMetrics | undefined;
+}>();
+let pendingCloseCount = 0;
+let pendingCloseTimer: ReturnType<typeof setInterval> | undefined;
+
+function nowMs(): number {
+  return performance.timeOrigin + performance.now();
+}
+
+function isRestartTraceEnabled(): boolean {
+  return isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE);
+}
+
+function formatMetricKey(key: string): string {
+  // Metric keys are log tokens, not structured JSON. Keep them compact and
+  // shell-friendly so trace lines remain grepable.
+  const normalized = key.replace(/[^A-Za-z0-9]/gu, "");
+  if (!normalized) {
+    return "metric";
+  }
+  return /^[A-Za-z]/u.test(normalized) ? normalized : `metric${normalized}`;
+}
+
+function formatMetricValue(value: RestartTraceMetricValue): string | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toFixed(1) : null;
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    const normalized = value
+      .trim()
+      .replace(/\s+/gu, "_")
+      .replace(/[^A-Za-z0-9_.:/-]/gu, "_")
+      .slice(0, 120);
+    return normalized || null;
+  }
+  return null;
+}
+
+function formatMetrics(metrics?: RestartTraceMetrics): string {
+  const parts: string[] = [];
+  for (const [key, value] of Array.isArray(metrics) ? metrics : Object.entries(metrics ?? {})) {
+    const formatted = formatMetricValue(value);
+    if (formatted === null) {
+      continue;
+    }
+    parts.push(`${formatMetricKey(key)}=${formatted}`);
+  }
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+function emitRestartTrace(
+  name: string,
+  durationMs: number,
+  totalMs: number,
+  metrics?: RestartTraceMetrics,
+) {
+  restartTraceLog.info(
+    `restart trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${formatMetrics(metrics)}`,
+  );
+}
+
+export function startGatewayRestartTrace(name: string, metrics?: RestartTraceMetrics): void {
+  if (!isRestartTraceEnabled()) {
+    active = false;
+    return;
+  }
+  const now = nowMs();
+  startedAt = now;
+  lastAt = now;
+  active = true;
+  emitRestartTrace(name, 0, 0, metrics);
+}
+
+function isGatewayRestartTraceActive(): boolean {
+  return isRestartTraceEnabled() && active;
+}
+
+export function markGatewayRestartTrace(name: string, metrics?: RestartTraceMetrics): void {
+  if (!isGatewayRestartTraceActive()) {
+    return;
+  }
+  const now = nowMs();
+  emitRestartTrace(name, now - lastAt, now - startedAt, metrics);
+  lastAt = now;
+}
+
+export function finishGatewayRestartTrace(name: string, metrics?: RestartTraceMetrics): void {
+  markGatewayRestartTrace(name, metrics);
+  active = false;
+}
+
+/** Tracked runtime waits become visible if shutdown begins before they finish. */
+export async function measureGatewayRestartTrace<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
+  trackPending = false,
+): Promise<T> {
+  return await measureGatewayTraceSpan(name, run, metrics, false, trackPending);
+}
+
+/** Tracks shutdown joins even when detailed restart tracing is disabled. */
+export async function measureGatewayCloseStep<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
+): Promise<T> {
+  return await measureGatewayTraceSpan(formatMetricValue(name) ?? "unnamed", run, metrics, true);
+}
+
+/** A bounded snapshot for the process deadline; overlapping joins retain separate identities. */
+export function formatGatewayPendingCloseSteps(): string {
+  if (pendingCloseCount === 0) {
+    return "none";
+  }
+  const now = nowMs();
+  const entries: string[] = [];
+  for (const step of pendingCloseSteps) {
+    let detail = "";
+    try {
+      const metrics = step.metrics?.();
+      if (metrics) {
+        detail = formatMetrics(
+          (Array.isArray(metrics) ? metrics : Object.entries(metrics)).slice(
+            0,
+            MAX_PENDING_CLOSE_METRICS,
+          ),
+        );
+      }
+    } catch {
+      // Retiring an observed owner must not turn diagnostics into a shutdown failure.
+    }
+    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms${detail}`);
+    if (entries.length === MAX_PENDING_CLOSE_STEPS) {
+      break;
+    }
+  }
+  const omitted = pendingCloseSteps.size - entries.length;
+  if (omitted > 0) {
+    entries.push(`+${omitted} more`);
+  }
+  return entries.join(", ") || "none";
+}
+
+async function measureGatewayTraceSpan<T>(
+  name: string,
+  run: () => Promise<T> | T,
+  metrics: RestartTraceMetrics | (() => RestartTraceMetrics | undefined) | undefined,
+  closeStep: boolean,
+  trackPending = false,
+): Promise<T> {
+  const trace = isGatewayRestartTraceActive();
+  if (!trace && !closeStep && !trackPending) {
+    return await run();
+  }
+  const before = nowMs();
+  const pending =
+    closeStep || trackPending
+      ? {
+          name: formatMetricValue(name) ?? "unnamed",
+          startedAt: before,
+          ...(typeof metrics === "function" ? { metrics } : {}),
+        }
+      : undefined;
+  if (pending) {
+    pendingCloseSteps.add(pending);
+  }
+  if (closeStep) {
+    pendingCloseCount += 1;
+    if (!pendingCloseTimer) {
+      pendingCloseTimer = setInterval(() => {
+        restartTraceLog.info(
+          `shutdown pending: count=${pendingCloseSteps.size} ${formatGatewayPendingCloseSteps()}`,
+        );
+      }, CLOSE_PENDING_REPORT_MS);
+      pendingCloseTimer.unref();
+    }
+    markGatewayRestartTrace(`${name}.begin`);
+  }
+  try {
+    return await run();
+  } finally {
+    if (pending) {
+      pendingCloseSteps.delete(pending);
+    }
+    if (closeStep) {
+      pendingCloseCount -= 1;
+      if (pendingCloseCount === 0) {
+        clearInterval(pendingCloseTimer);
+        pendingCloseTimer = undefined;
+      }
+    }
+    const now = nowMs();
+    if (trace) {
+      emitRestartTrace(
+        name,
+        now - before,
+        now - startedAt,
+        typeof metrics === "function" ? metrics() : metrics,
+      );
+      lastAt = now;
+    } else if (closeStep && now - before >= CLOSE_STEP_SLOW_MS) {
+      restartTraceLog.info(`shutdown step ${name} settled after ${Math.round(now - before)}ms`);
+    }
+  }
+}
+
+export function recordGatewayRestartTrace(
+  name: string,
+  durationMs: number,
+  metrics?: RestartTraceMetrics,
+): void {
+  if (!isGatewayRestartTraceActive() || !Number.isFinite(durationMs)) {
+    return;
+  }
+  const now = nowMs();
+  emitRestartTrace(name, Math.max(0, durationMs), now - startedAt, metrics);
+  lastAt = now;
+}
+
+export function recordGatewayRestartTraceSpan(
+  name: string,
+  durationMs: number,
+  totalMs: number,
+  metrics?: RestartTraceMetrics,
+): void {
+  if (!isGatewayRestartTraceActive() || !Number.isFinite(durationMs) || !Number.isFinite(totalMs)) {
+    return;
+  }
+  emitRestartTrace(name, Math.max(0, durationMs), Math.max(0, totalMs), metrics);
+}
+
+export function recordGatewayRestartTraceDetail(name: string, metrics: RestartTraceMetrics): void {
+  if (!isGatewayRestartTraceActive()) {
+    return;
+  }
+  const formatted = formatMetrics(metrics).trim();
+  if (formatted) {
+    restartTraceLog.info(`restart trace: ${name} ${formatted}`);
+  }
+}
+
+export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
+  const usage = process.memoryUsage();
+  const toMb = (bytes: number) => bytes / 1024 / 1024;
+  const metrics: Array<readonly [string, number]> = [
+    ["rssMb", toMb(usage.rss)],
+    ["heapTotalMb", toMb(usage.heapTotal)],
+    ["heapUsedMb", toMb(usage.heapUsed)],
+    ["externalMb", toMb(usage.external)],
+    ["arrayBuffersMb", toMb(usage.arrayBuffers)],
+  ];
+  const processWithResourceAccess = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    _getActiveRequests?: () => unknown[];
+  };
+  const activeHandles = processWithResourceAccess["_getActiveHandles"]?.();
+  const activeRequests = processWithResourceAccess["_getActiveRequests"]?.();
+  const activeResources = process.getActiveResourcesInfo();
+  metrics.push(
+    ["processSigintListenersCount", process.listenerCount("SIGINT")],
+    ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
+    ["processRestartListenersCount", process.listenerCount("SIGUSR2")],
+  );
+  if (activeHandles) {
+    metrics.push(["activeHandlesCount", activeHandles.length]);
+  }
+  if (activeRequests) {
+    metrics.push(["activeRequestsCount", activeRequests.length]);
+  }
+  metrics.push([
+    "activeTimersCount",
+    activeResources.filter((resource) => resource === "Timeout" || resource === "Timer").length,
+  ]);
+  return metrics;
+}
+
+function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {
+  // Handoff values come from another process. Reject stale/future values so a
+  // reused shell environment cannot poison later restart measurements.
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as { startedAt?: unknown; lastAt?: unknown };
+  if (
+    typeof record.startedAt !== "number" ||
+    !Number.isFinite(record.startedAt) ||
+    typeof record.lastAt !== "number" ||
+    !Number.isFinite(record.lastAt) ||
+    record.startedAt <= 0 ||
+    record.lastAt < record.startedAt ||
+    record.lastAt - record.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS
+  ) {
+    return null;
+  }
+  const now = nowMs();
+  if (record.startedAt > now || now - record.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS) {
+    return null;
+  }
+  return {
+    startedAt: record.startedAt,
+    lastAt: record.lastAt,
+  };
+}
+
+export function captureGatewayRestartTraceHandoff(): GatewayRestartTraceHandoff | undefined {
+  if (!isGatewayRestartTraceActive()) {
+    return undefined;
+  }
+  return { startedAt, lastAt };
+}
+
+export function createGatewayRestartTraceHandoffEnv(
+  handoff: GatewayRestartTraceHandoff | undefined = captureGatewayRestartTraceHandoff(),
+): NodeJS.ProcessEnv | undefined {
+  const normalized = normalizeRestartTraceHandoff(handoff);
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    [RESTART_TRACE_HANDOFF_STARTED_AT_ENV]: String(normalized.startedAt),
+    [RESTART_TRACE_HANDOFF_LAST_AT_ENV]: String(normalized.lastAt),
+  };
+}
+
+export function resumeGatewayRestartTraceFromHandoff(
+  handoff: unknown,
+  metrics?: RestartTraceMetrics,
+): boolean {
+  if (!isRestartTraceEnabled() || active) {
+    return false;
+  }
+  const normalized = normalizeRestartTraceHandoff(handoff);
+  if (!normalized) {
+    return false;
+  }
+  startedAt = normalized.startedAt;
+  lastAt = normalized.lastAt;
+  active = true;
+  markGatewayRestartTrace("restart.process-resume", metrics);
+  return true;
+}
+
+export function resumeGatewayRestartTraceFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  metrics?: RestartTraceMetrics,
+): boolean {
+  const startedRaw = env[RESTART_TRACE_HANDOFF_STARTED_AT_ENV];
+  const lastRaw = env[RESTART_TRACE_HANDOFF_LAST_AT_ENV];
+  delete env[RESTART_TRACE_HANDOFF_STARTED_AT_ENV];
+  delete env[RESTART_TRACE_HANDOFF_LAST_AT_ENV];
+  return resumeGatewayRestartTraceFromHandoff(
+    {
+      startedAt: Number(startedRaw),
+      lastAt: Number(lastRaw),
+    },
+    metrics,
+  );
+}

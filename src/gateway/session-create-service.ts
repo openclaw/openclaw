@@ -1,0 +1,1198 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+  normalizeSessionColorValue,
+} from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import {
+  createSessionEntryWithTranscript,
+  type SessionEntryCreateWithTranscriptOptions,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { SessionEntryCreationNotCommittedError } from "../config/sessions/session-creation-operation.js";
+import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
+import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import {
+  createInternalHookEvent,
+  hasInternalHookListeners,
+  triggerInternalHook,
+} from "../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+} from "../sessions/agent-harness-session-key.js";
+import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import {
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import {
+  prepareSessionCreateFilesystemRoot,
+  prepareSessionForkFilesystemRoot,
+} from "./server-methods/session-create-root.js";
+import {
+  createSessionAccessProgramValidation,
+  refreshSessionPatchQueuedSelection,
+} from "./server-methods/sessions-patch-model-selection.js";
+import {
+  completeGatewaySessionCreation,
+  rollbackAtomicGatewaySessionCreation,
+} from "./session-create-completion.js";
+import {
+  buildSessionCreateSettingsPatch,
+  prepareSessionCreatePermissionSelection,
+  validateExistingSessionCreateSelection,
+  sessionCreatePolicyAdoptionError,
+} from "./session-create-existing-selection.js";
+import { prepareGatewaySessionFork } from "./session-create-fork.js";
+import {
+  inheritSessionCreateParentFields,
+  prepareSessionCreateParent,
+  resolveSessionCreateInheritance,
+  resolveSessionCreateRoot,
+  resolveSessionCreateSpawnPolicy,
+} from "./session-create-inheritance.js";
+import {
+  resolveSessionCreateTrustedOwners,
+  validateFreshSessionConstraints,
+  withInitialAssistantTranscript,
+} from "./session-create-initial-assistant.js";
+import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
+import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
+import {
+  prepareSessionCreateRuntimeSelection,
+  resolveSessionCreationCommitGuard,
+  prepareSessionCreateDefaultAccount,
+  prepareSessionCreateModelSelection,
+  projectSessionCreateSpawnModelSelection,
+  resolveSessionCreateModelInputError,
+} from "./session-create-model-selection.js";
+import { tryResetGatewaySessionForCreation } from "./session-create-reset.js";
+import type {
+  CreatedGatewaySession,
+  CreateGatewaySessionParams,
+  CreateGatewaySessionResult,
+  GatewaySessionCommitResult,
+  PreparedGatewaySessionLifecycle,
+} from "./session-create-service.types.js";
+import {
+  readRequestedSessionCreateTarget,
+  readSessionCreateTarget,
+  withSessionCreateAdmission,
+  validateSessionCreateIncognitoTarget,
+} from "./session-create-target.js";
+import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
+import {
+  prepareGatewaySessionLifecycleTargets,
+  projectPreparedSessionWorkspace,
+  resolveSessionCreateLifecycleIntentError,
+  resolveSessionCreateIncognitoIntentError,
+  resolveSessionCreateChildIntentError,
+  rollbackGatewaySessionPreparation,
+} from "./session-lifecycle-preparation.js";
+import { loadSessionLifecycleRuntime } from "./session-lifecycle-runtime-loader.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { prepareSessionPublicShareGrant } from "./session-publication-grant.js";
+import * as sessionAgent from "./session-request-agent.js";
+import {
+  invalidSessionRequest,
+  sessionCreationFailure,
+  unavailableSessionRequest,
+} from "./session-request-error.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import { projectSessionsPatchEntry } from "./sessions-patch.js";
+
+export class SessionCreationNotCommittedError extends Error {
+  constructor(cause: unknown) {
+    super("session creation failed before write admission", { cause });
+  }
+}
+
+export async function createGatewaySession(
+  params: CreateGatewaySessionParams,
+): Promise<CreateGatewaySessionResult> {
+  let storageStarted = false;
+  const catalogInitialization = params.initialCatalogContinuation && params.atomicInitialization;
+  try {
+    const result = await withSessionCreateAdmission(params, (admitted, agentId, generatedKey) =>
+      createGatewaySessionInScope(admitted, agentId, generatedKey, () => {
+        storageStarted = true;
+      }),
+    );
+    return !result.ok && !storageStarted && catalogInitialization
+      ? { ...result, initializationNotCommitted: true }
+      : result;
+  } catch (error) {
+    // Unknown writer outcomes never authorize retry. Before writer admission, no
+    // destination commit was possible; preserve the original denial as the cause.
+    if (
+      catalogInitialization &&
+      !hasSqliteWorkerOutcomeUnknown(error) &&
+      (!storageStarted || error instanceof SessionEntryCreationNotCommittedError)
+    ) {
+      throw new SessionCreationNotCommittedError(
+        error instanceof SessionEntryCreationNotCommittedError ? error.cause : error,
+      );
+    }
+    throw error;
+  }
+}
+
+async function createGatewaySessionInScope(
+  params: CreateGatewaySessionParams,
+  agentId: string,
+  generatedKey?: string,
+  startStorage?: () => void,
+): Promise<CreateGatewaySessionResult> {
+  const { personalAccountDefaults, onPhase } = params;
+  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  let assertPreparedTargetCurrent: (() => void) | undefined;
+  let creationOperation: SessionEntryCreationOperation | undefined;
+  let createdTargetCommitted = false;
+  let assertPermissionDefaultCurrent: (() => void) | undefined;
+  let bindPreparedCreation: SessionEntryCreateWithTranscriptOptions["bindCreation"];
+  const modelInputError = resolveSessionCreateModelInputError(params);
+  if (modelInputError) {
+    return { ok: false, error: modelInputError };
+  }
+  // Fresh account authority covers title generation and resource preparation,
+  // not just the final row. An inherited parent pin is not a new selection.
+  let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
+  let validateVisibility: (() => ErrorShape | undefined) | undefined;
+  let releaseRuntimeSelection: (() => void) | undefined;
+  const assertCreationCurrent = resolveSessionCreationCommitGuard(params, {
+    readOperatorAuthority: () => operatorAuthority,
+    assertPreparedTargetCurrent: () => assertPreparedTargetCurrent?.(),
+    validateSelection: () => validateRuntimeSelection?.(),
+  });
+  const commitGuard = () => {
+    assertCreationCurrent?.();
+    if (!createdTargetCommitted) {
+      assertPermissionDefaultCurrent?.();
+    }
+    // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
+    const error = !createdTargetCommitted && validateVisibility?.();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  };
+  commitGuard?.();
+  const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
+  const label = normalizeOptionalString(params.label);
+  const requestedKey = normalizeOptionalString(params.key);
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  const projectId = normalizeOptionalString(params.projectId);
+  const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
+  const requestedToolOverrides = params.toolOverrides !== undefined;
+  const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
+  const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
+  const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
+  if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
+    return invalidSessionRequest("invalid catalog session target");
+  }
+  const lifecycleIntentError = resolveSessionCreateLifecycleIntentError(params, parentSessionKey);
+  if (lifecycleIntentError) {
+    return { ok: false, error: lifecycleIntentError };
+  }
+  const explicitTargetKey = resolveSessionCreateTargetKey({
+    cfg: params.cfg,
+    agentId,
+    requestedKey,
+  });
+  const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
+  if (explicitIncognito || params.incognito === true) {
+    const incognitoTarget = await validateSessionCreateIncognitoTarget(
+      params,
+      agentId,
+      explicitTargetKey,
+      commitGuard,
+    );
+    if (!incognitoTarget.ok) {
+      return incognitoTarget;
+    }
+  }
+  if (
+    params.catalogTarget &&
+    explicitTargetKey &&
+    !explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
+  ) {
+    return invalidSessionRequest("catalog sessions require a generated dashboard key");
+  }
+
+  const { authorizedHarnessCreation, authorizedPluginCreation } = resolveSessionCreateTrustedOwners(
+    params,
+    explicitTargetKey,
+  );
+  if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
+    return invalidSessionRequest("trusted plugin session owner is not authorized");
+  }
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
+  const initialTargetEntry = explicitTarget?.entry;
+  if (
+    explicitTargetKey &&
+    isAgentHarnessSessionKey(explicitTargetKey) &&
+    !authorizedHarnessCreation &&
+    (!initialTargetEntry || initialTargetEntry.modelSelectionLocked === true)
+  ) {
+    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  }
+
+  const childIntentError = resolveSessionCreateChildIntentError(params, parentSessionKey);
+  if (childIntentError) {
+    return { ok: false, error: childIntentError };
+  }
+  let canonicalParentSessionKey: string | undefined;
+  let parentSessionEntry: SessionEntry | undefined;
+  let parentSelectedAgentId: string | undefined;
+  let parentSessionTarget: GatewaySessionStoreTarget | undefined;
+  if (parentSessionKey) {
+    const parentRequestedAgent = sessionAgent.resolveRequestedSessionAgentId(
+      params.cfg,
+      parentSessionKey,
+      !parseAgentSessionKey(parentSessionKey) &&
+        ["global", "unknown"].includes(parentSessionKey.toLowerCase())
+        ? params.agentId
+        : undefined,
+    );
+    if (!parentRequestedAgent.ok) {
+      return parentRequestedAgent;
+    }
+    parentSelectedAgentId = parentRequestedAgent.agentId;
+    const parent = await prepareSessionCreateParent({
+      params,
+      key: parentSessionKey,
+      agentId: parentSelectedAgentId,
+      assertCurrent: commitGuard,
+    });
+    if (!parent.ok) {
+      return parent;
+    }
+    canonicalParentSessionKey = parent.canonicalKey;
+    parentSessionEntry = parent.entry;
+    parentSessionTarget = parent.target;
+  }
+  if (
+    params.activeParentFork &&
+    (params.fork !== true ||
+      parentSelectedAgentId !== agentId ||
+      (
+        await resolveGatewaySessionStoreTargetInWorker({
+          cfg: params.cfg,
+          key: params.activeParentFork.requesterSessionKey,
+          agentId,
+          assertActive: commitGuard,
+        })
+      ).canonicalKey !== canonicalParentSessionKey)
+  ) {
+    return invalidSessionRequest("active fork parent must match the same-agent requester");
+  }
+  const parentIncognito =
+    parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
+  const incognito = params.incognito === true || parentIncognito;
+  const incognitoIntentError = resolveSessionCreateIncognitoIntentError({
+    incognito,
+    parentIncognito,
+    parentSessionKey: canonicalParentSessionKey,
+    targetKey: explicitTargetKey,
+    requestingOperatorScopes: params.requestingOperatorScopes,
+  });
+  if (incognitoIntentError) {
+    return { ok: false, error: incognitoIntentError };
+  }
+
+  const targetSessionKey =
+    explicitTargetKey ?? generatedKey ?? buildDashboardSessionKey(agentId, { incognito });
+  const target =
+    explicitTarget ??
+    (await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      agentId,
+      assertActive: commitGuard,
+    }));
+  const followRegistration: SessionEntryCreateWithTranscriptOptions["followRegistration"] = (
+    change,
+  ) =>
+    params.followSharingRegistration?.(
+      { agentId: target.agentId, sessionKey: target.canonicalKey },
+      change,
+    );
+  const initializingSessionFailure = () =>
+    unavailableSessionRequest(
+      `Session ${target.canonicalKey} is still initializing; retry creation later.`,
+    );
+  if (explicitTargetKey && target.canonicalKey === canonicalParentSessionKey) {
+    return invalidSessionRequest("sessions.create key must differ from parentSessionKey");
+  }
+  if (explicitTargetKey && !params.initialEntry) {
+    // A trusted initializer holds the lifecycle fence through afterCreate. Waiting
+    // on that fence would deadlock callers that must reject its visible pending row.
+    if (initialTargetEntry?.initializationPending === true) {
+      return initializingSessionFailure();
+    }
+  }
+  const { standalone: standaloneRoot, mainParentSessionKey: dashboardParentSessionKey } =
+    resolveSessionCreateRoot(params, {
+      parentSessionKey,
+      incognito,
+      targetSessionKey,
+      mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
+    });
+
+  const authorityTargets = params.operatorAuthority
+    ? [
+        { target, entry: initialTargetEntry },
+        ...(parentSessionTarget
+          ? [{ target: parentSessionTarget, entry: parentSessionEntry }]
+          : []),
+      ]
+    : [];
+  const operatorReady = params.operatorAuthority?.then((captured) => {
+    operatorAuthority = captured?.authority;
+  });
+  onPhase?.("admission");
+  await using targetCustody = prepareGatewaySessionLifecycleTargets({
+    cfg: params.cfg,
+    targets: authorityTargets,
+    getCurrentConfig: params.getCurrentConfig,
+    ...(operatorReady && !incognito
+      ? {
+          creation: {
+            ready: operatorReady,
+            assertCurrent: () => commitGuard?.(),
+            followRegistration,
+            selectTargetInLifecycle: Boolean(
+              explicitTargetKey && !initialTargetEntry && !params.initialEntry,
+            ),
+          },
+        }
+      : {}),
+  });
+  let preparedCreation:
+    | Awaited<ReturnType<typeof targetCustody.prepareCreationTargets>>
+    | undefined;
+  if (operatorReady) {
+    assertPreparedTargetCurrent = targetCustody.assertCurrent;
+    try {
+      await operatorReady;
+    } catch (error) {
+      return { ok: false, error: errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error)) };
+    }
+    preparedCreation = await targetCustody.prepareCreationTargets(() => createdTargetCommitted);
+    bindPreparedCreation = preparedCreation.bindCreation;
+    assertPreparedTargetCurrent = preparedCreation.assertCurrent;
+    commitGuard?.();
+  }
+
+  const reset = tryResetGatewaySessionForCreation(params, {
+    parentSessionKey: canonicalParentSessionKey,
+    parentSelectedAgentId,
+    agentId,
+    parentIncognito,
+    requestedKey,
+    requestedToolOverrides,
+    commitGuard,
+  });
+  if (reset) {
+    return await reset;
+  }
+
+  let createdContext: CreatedGatewaySession | undefined;
+  let atomicTarget:
+    | { session: CreatedGatewaySession; expectedEntry: InternalSessionEntry }
+    | undefined;
+  let createdNewEntry = false;
+  let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
+  let lifecyclePreparationCommitted = false;
+  const holdParentLifecycle =
+    params.creation?.via === "spawn" ||
+    params.emitCommandHooks === true ||
+    params.fork === true ||
+    params.authorizedPluginId !== undefined;
+  const spawnToolPolicy = resolveSessionCreateSpawnPolicy(params, canonicalParentSessionKey);
+  const createChildSession = async (): Promise<GatewaySessionCommitResult> => {
+    commitGuard?.();
+    if (preparedCreation) {
+      onPhase?.("targetPreparation");
+      await preparedCreation.enterCreationLifecycle();
+      commitGuard?.();
+    }
+    onPhase?.("entry");
+    let currentParentSessionEntry = parentSessionEntry;
+    if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
+      const currentParent = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+        assertActive: commitGuard,
+      });
+      const currentParentEntry = currentParent.entry;
+      if (
+        !currentParentEntry?.sessionId ||
+        currentParentEntry.sessionId !== parentSessionEntry?.sessionId ||
+        currentParentEntry.lifecycleRevision !== parentSessionEntry?.lifecycleRevision
+      ) {
+        return invalidSessionRequest(
+          `Parent session ${parentSessionKey} changed before child creation; retry.`,
+        );
+      }
+      currentParentSessionEntry = currentParentEntry;
+      const parentOwnershipError = resolvePluginSessionOwnershipError({
+        action: params.fork === true ? "fork" : "link",
+        entry: currentParentEntry,
+        key: canonicalParentSessionKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (parentOwnershipError) {
+        return { ok: false, error: parentOwnershipError };
+      }
+      if (
+        (params.emitCommandHooks === true || params.fork === true) &&
+        isModelSelectionLocked(currentParentEntry)
+      ) {
+        return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+      }
+      const parentHasActiveWork =
+        (params.emitCommandHooks === true || params.fork === true) &&
+        isSessionControllerWorkActive(
+          parentSessionTarget.storePath,
+          [canonicalParentSessionKey, currentParentEntry.sessionId],
+          parentSessionTarget.agentId,
+        );
+      if (
+        parentHasActiveWork &&
+        (params.emitCommandHooks === true ||
+          (params.forkFrom !== "last-completed" && !params.activeParentFork))
+      ) {
+        return unavailableSessionRequest(
+          `Parent session ${parentSessionKey} is still active; try again in a moment.`,
+        );
+      }
+    }
+
+    if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
+      const parentEntry = currentParentSessionEntry;
+      const parentAgentId = normalizeAgentId(
+        parentSelectedAgentId ?? resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? agentId,
+      );
+      const workspaceDir = resolveAgentWorkspaceDir(params.cfg, parentAgentId);
+      if (hasInternalHookListeners("command", "new")) {
+        await triggerInternalHook(
+          createInternalHookEvent("command", "new", canonicalParentSessionKey, {
+            agentId: parentAgentId,
+            sessionEntry: parentEntry,
+            previousSessionEntry: parentEntry,
+            commandSource: params.commandSource,
+            cfg: params.cfg,
+            storePath: parentSessionTarget.storePath,
+            workspaceDir,
+          }),
+        );
+      }
+      const { emitGatewayBeforeResetPluginHook } = await loadSessionLifecycleRuntime();
+      await emitGatewayBeforeResetPluginHook({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        target: parentSessionTarget,
+        storePath: parentSessionTarget.storePath,
+        entry: parentEntry,
+        reason: "new",
+      });
+    }
+
+    // The locked parent owns delegated isolation, including signed remote callers whose
+    // transport context carries only agent identity and cannot carry creator authority.
+    const { creation, ownerAssignment: inheritedSpawnOwner } = resolveSessionCreateInheritance({
+      request: params,
+      parent: { entry: currentParentSessionEntry, target: parentSessionTarget },
+    });
+    const targetRead = await readSessionCreateTarget(
+      { ...params, commitGuard },
+      target,
+      initialTargetEntry?.sessionId,
+      targetLifecycleIdentities,
+    );
+    commitGuard?.();
+    if (!targetRead.ok) {
+      return targetRead;
+    }
+    const currentTargetEntry = targetRead.value;
+    const visibilityAdmission = resolveSessionCreateVisibility(
+      params,
+      currentTargetEntry,
+      currentParentSessionEntry,
+    );
+    if (!visibilityAdmission.ok) {
+      return visibilityAdmission;
+    }
+    const permission = prepareSessionCreatePermissionSelection(params, {
+      agentId: target.agentId,
+      existingEntry: currentTargetEntry,
+      creation,
+      operatorAuthority,
+    });
+    if (!permission.ok) {
+      return permission;
+    }
+    assertPermissionDefaultCurrent = permission.assertCurrent;
+    // Delegated isolation survives changes to the creator's current role.
+    const creationSandbox =
+      creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
+    const sandboxRequired =
+      currentTargetEntry?.sandbox === "required" || creationSandbox === "required";
+    const forkWorkspace =
+      params.fork === true &&
+      currentParentSessionEntry &&
+      !currentTargetEntry &&
+      parentSessionTarget?.agentId === target.agentId &&
+      !projectId &&
+      !params.spawnedCwd &&
+      !params.sessionRoot &&
+      !params.execNode &&
+      !params.deviceFolder &&
+      !params.prepareLifecycle &&
+      !params.pendingWorktree &&
+      !params.pendingProjectGitUrl
+        ? prepareSessionForkFilesystemRoot({
+            cfg: params.cfg,
+            parent: currentParentSessionEntry,
+            targetAgentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            sandboxRequired,
+          })
+        : undefined;
+    if (forkWorkspace && !forkWorkspace.ok) {
+      return { ok: false, error: forkWorkspace.error };
+    }
+    const inheritedWorkspace = forkWorkspace?.value;
+    const requestedRoot = normalizeOptionalString(params.spawnedCwd ?? params.sessionRoot);
+    // The parent lock has resolved inherited policy; validate direct roots before binding
+    // a child or allowing transcript/baseline preparation to process the selected checkout.
+    if (sandboxRequired && requestedRoot && !params.execNode) {
+      const root = prepareSessionCreateFilesystemRoot({
+        cfg: params.cfg,
+        enforceSandboxContainment: true,
+        sandboxRequired,
+        requestedProjectId: projectId,
+        sessionCwd: requestedRoot,
+        sessionKey: target.canonicalKey,
+        targetAgentId: target.agentId,
+      });
+      if (!root.ok) {
+        return { ok: false, error: root.error };
+      }
+    }
+    const modelSelection = prepareSessionCreateModelSelection({
+      cfg: params.cfg,
+      agentId: target.agentId,
+      input:
+        params.catalogTarget ??
+        (params.model ? { model: params.model, agentRuntime: params.agentRuntime } : undefined),
+      parentEntry: currentParentSessionEntry,
+      preparedModelSelection: params.preparedModelSelection?.ref,
+      operatorAuthority,
+    });
+    if (!modelSelection.ok) {
+      return modelSelection;
+    }
+    validateRuntimeSelection = modelSelection.validate;
+    commitGuard?.();
+    onPhase?.("worktree");
+    const preparationResult = params.prepareLifecycle
+      ? await params.prepareLifecycle({
+          agentId: target.agentId,
+          entry: currentTargetEntry,
+          key: target.canonicalKey,
+          storePath: target.storePath,
+          titleModelSelection: modelSelection.selection,
+          projectId,
+          sandboxRequired,
+        })
+      : undefined;
+    if (preparationResult && !preparationResult.ok) {
+      return { ok: false, error: preparationResult.error };
+    }
+    preparedLifecycle = preparationResult?.value;
+    const pendingWorktree = preparedLifecycle?.pendingWorktree ?? params.pendingWorktree;
+    const spawnedCwd = normalizeOptionalString(
+      preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? inheritedWorkspace?.spawnedCwd,
+    );
+    const sessionRoot = normalizeOptionalString(
+      preparedLifecycle?.sessionRoot ??
+        params.sessionRoot ??
+        inheritedWorkspace?.sessionRoot ??
+        params.defaultSessionRoot,
+    );
+    const runtimeCwd = spawnedCwd ?? sessionRoot;
+
+    const loadModelCatalog = params.loadGatewayModelCatalogSnapshot;
+    let preparedModelCatalog: ModelCatalogSnapshot | undefined;
+    onPhase?.("snapshot");
+    startStorage?.();
+    const created = await createSessionEntryWithTranscript<ErrorShape>(
+      {
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      },
+      async ({ existingEntry, targetEntry, labelInUse }) => {
+        // This callback owns generated and explicit keys alike; no existing row
+        // is the canonical signal that this request will actually create one.
+        if (!existingEntry) {
+          const creationError = authorizeGatewaySessionCreation({
+            cfg: params.cfg,
+            agentId: target.agentId,
+            ...(params.operatorRoleActor
+              ? { actor: params.operatorRoleActor }
+              : { profileId: params.requestingOperatorProfileId }),
+          });
+          if (creationError) {
+            return { ok: false, error: creationError };
+          }
+        }
+        if (
+          isAgentHarnessSessionKey(target.canonicalKey) &&
+          !authorizedHarnessCreation &&
+          (!existingEntry || existingEntry.modelSelectionLocked === true)
+        ) {
+          return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+        }
+        const freshSessionError = validateFreshSessionConstraints({
+          params,
+          existingEntry,
+          sessionKey: target.canonicalKey,
+          hasWorkspacePreparation: Boolean(pendingProjectGitUrl || pendingWorktree),
+          hasSpawnToolPolicy: Boolean(spawnToolPolicy),
+        });
+        if (freshSessionError) {
+          return freshSessionError;
+        }
+        const visibility = resolveSessionCreateVisibility(
+          params,
+          existingEntry,
+          currentParentSessionEntry,
+        );
+        if (!visibility.ok) {
+          return visibility;
+        }
+        if (!existingEntry && visibility.value) {
+          validateVisibility = () => {
+            const current = resolveSessionCreateVisibility(
+              params,
+              undefined,
+              currentParentSessionEntry,
+            );
+            return current.ok ? undefined : current.error;
+          };
+        }
+        // Adoption of an existing key must not stamp provenance or emit a
+        // `created` event; only a genuinely new row is a node creation.
+        createdNewEntry = existingEntry === undefined;
+        const requestedModel = normalizeOptionalString(params.model);
+        const requestedContextWindow = normalizeOptionalString(params.contextWindow);
+        const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        const requestedFastMode = params.fastMode;
+        if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
+          const selectionError = await validateExistingSessionCreateSelection(params, {
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            existingEntry,
+          });
+          if (selectionError) {
+            return { ok: false, error: selectionError };
+          }
+        }
+        const patched = await projectSessionsPatchEntry({
+          cfg: params.cfg,
+          existingEntry: targetEntry,
+          isLabelInUse: () => labelInUse,
+          storeKey: target.canonicalKey,
+          agentId: target.agentId,
+          preparedSessionRoot: sessionRoot,
+          preparedAgentRuntime: catalogAgentRuntime,
+          patch: buildSessionCreateSettingsPatch(
+            { ...params, permissionMode: permission.mode },
+            {
+              key: target.canonicalKey,
+              label,
+              model: catalogModel ?? requestedModel,
+              contextWindow: requestedContextWindow,
+              thinkingLevel: requestedThinkingLevel,
+              fastMode: requestedFastMode,
+            },
+          ),
+          loadGatewayModelCatalogSnapshot: loadModelCatalog
+            ? async () => {
+                preparedModelCatalog = await loadModelCatalog();
+                return preparedModelCatalog;
+              }
+            : undefined,
+          authorizedAgentHarnessId: params.authorizedAgentHarnessId,
+          personalModelSelection: params.personalModelSelection,
+          operatorAuthority,
+          preparedModelSelection: params.preparedModelSelection?.ref,
+        });
+        if (!patched.ok) {
+          return patched;
+        }
+        const adoptionError = sessionCreatePolicyAdoptionError(
+          existingEntry,
+          patched.entry,
+          params,
+        );
+        if (adoptionError) {
+          return invalidSessionRequest(adoptionError);
+        }
+        const execNode = normalizeOptionalString(params.execNode);
+        const execCwd = normalizeOptionalString(params.execCwd);
+        const initialAgentHarnessId = params.initialEntry
+          ? normalizeOptionalString(params.initialEntry.agentHarnessId)
+          : undefined;
+        // Initializers compare their callback snapshot with the stored row during finalization.
+        // Normalize before both so persistence cannot make this creation look like external drift.
+        const initialColor = params.initialEntry?.color
+          ? normalizeSessionColorValue(params.initialEntry.color)
+          : null;
+        if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
+          return invalidSessionRequest(
+            params.initialEntry?.agentHarnessId !== undefined
+              ? "initial agentHarnessId must be non-empty"
+              : "trusted initial session state requires an authorized owner",
+          );
+        }
+        const catalogResolvedModel = params.catalogTarget
+          ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
+          : undefined;
+        const initializedEntry: InternalSessionEntry = {
+          ...patched.entry,
+          ...inheritedWorkspace,
+          ...(createdNewEntry && displayName ? { displayName } : {}),
+          ...projectSessionCreateSpawnModelSelection({
+            entry: patched.entry,
+            creation: params.creation,
+            requestedModel,
+            createdNewEntry,
+          }),
+          // New rows must expose the same canonical delivery shape to callbacks
+          // that the SQLite writer persists, or guarded finalization sees its own write as drift.
+          ...(existingEntry === undefined && patched.entry.delivery === undefined
+            ? { delivery: normalizeSessionDeliveryState() }
+            : {}),
+          // Stamp provenance only for genuinely new rows: adopting an existing key
+          // must not restamp write-once node facts (this direct store write bypasses
+          // the merge-level write-once guard), and legacy rows stay "unknown".
+          ...(creation && createdNewEntry
+            ? buildSessionCreationStamp({ ...creation, sandbox: creationSandbox, incognito })
+            : {}),
+          ...(createdNewEntry && inheritedSpawnOwner ? { owner: inheritedSpawnOwner } : {}),
+          ...(visibility.value && createdNewEntry ? { visibility: visibility.value } : {}),
+          ...projectPreparedSessionWorkspace(existingEntry, {
+            projectId,
+            pendingProjectGitUrl,
+            pendingWorktree,
+            spawnedCwd,
+            preparedLifecycle,
+          }),
+          ...(catalogResolvedModel && catalogAgentRuntime
+            ? {
+                providerOverride: catalogResolvedModel.provider,
+                modelOverride: catalogResolvedModel.model,
+                modelOverrideSource: "user" as const,
+                modelOverrideRouteResolution: "resolved" as const,
+                agentRuntimeOverride: catalogAgentRuntime,
+                modelSelectionLocked: true,
+                pluginOwnerId: catalogPluginOwnerId,
+              }
+            : {}),
+          ...(params.deviceFolder ? { deviceFolder: { ...params.deviceFolder } } : {}),
+          ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
+          ...(createdNewEntry &&
+          params.armSessionDiffBaselineCapture &&
+          !execNode &&
+          !params.deviceFolder
+            ? {
+                sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+              }
+            : {}),
+          ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(initialColor ? { color: initialColor } : {}),
+          ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
+            ? { pluginOwnerId: params.authorizedPluginId }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.providerOverride
+            ? { providerOverride: params.initialEntry.providerOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverride
+            ? { modelOverride: params.initialEntry.modelOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverrideRouteResolution
+            ? { modelOverrideRouteResolution: params.initialEntry.modelOverrideRouteResolution }
+            : {}),
+          // Seeded CLI bindings ride only the plugin-authorized creation path;
+          // harness creations must never smuggle pre-bound CLI session ids.
+          ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
+            ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
+            : {}),
+          ...(params.initialEntry?.initializationPending === true ||
+          params.atomicInitialization === true
+            ? { initializationPending: true }
+            : {}),
+          ...(params.initialEntry?.modelSelectionLocked === true
+            ? { modelSelectionLocked: true }
+            : {}),
+          ...(params.initialEntry?.pluginExtensions !== undefined
+            ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+            : {}),
+          // Ordinary catalog handoffs retain logical origin without taking plugin runtime ownership.
+          ...(createdNewEntry && params.initialCatalogContinuation
+            ? {
+                pluginExtensions: {
+                  ...params.initialEntry?.pluginExtensions,
+                  [params.initialCatalogContinuation.catalogId]: {
+                    catalogContinuation: structuredClone(params.initialCatalogContinuation),
+                  },
+                },
+              }
+            : {}),
+          // Spawn lineage is declared, never inferred: spawn-owned creations pass
+          // spawnDepth explicitly; everything else (operator chats, forks, harness
+          // and plugin sessions) persists as a depth-0 root. Reused entries keep
+          // their stored depth.
+          ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          ...(existingEntry === undefined ? spawnToolPolicy : {}),
+          ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
+        };
+        const explicitParentSessionKey =
+          canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const newStandaloneRoot = createdNewEntry && standaloneRoot && !explicitParentSessionKey;
+        const entry: InternalSessionEntry = {
+          ...initializedEntry,
+          ...inheritSessionCreateParentFields({
+            parent: currentParentSessionEntry,
+            overrides: params,
+            newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
+            newDashboardRoot: newStandaloneRoot && Boolean(dashboardParentSessionKey),
+            newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
+            selectedModel: initializedEntry.modelOverride,
+          }),
+          ...buildSessionParentLink({
+            parentSessionKey: explicitParentSessionKey ?? dashboardParentSessionKey,
+            parent: canonicalParentSessionKey ? currentParentSessionEntry : undefined,
+            captureSpawnAuthority:
+              createdNewEntry && params.creation?.via === "spawn" && Boolean(spawnToolPolicy),
+            requesterSenderIsOwner: params.creation?.requesterSenderIsOwner,
+          }),
+        };
+        let validateAccountModel: (() => ErrorShape | undefined) | undefined;
+        if (params.fork !== true) {
+          if (createdNewEntry && !entry.authProfileOverride && personalAccountDefaults) {
+            const account = await prepareSessionCreateDefaultAccount({
+              cfg: params.cfg,
+              agentId: target.agentId,
+              entry,
+              defaults: personalAccountDefaults,
+              operatorAuthority,
+              resetToDefault: params.model === undefined && !params.catalogTarget,
+              assertCurrent: commitGuard,
+            });
+            if (!account.ok) {
+              return account;
+            }
+            validateAccountModel = account.validate;
+            validateRuntimeSelection = account.validate;
+            commitGuard?.();
+            if (account.profileId) {
+              // Pin before the first turn; later default changes must not claim this session.
+              entry.authProfileOverride = account.profileId;
+              entry.authProfileOverrideSource = "user-link";
+              delete entry.authProfileOverrideCompactionCount;
+            }
+          }
+        }
+        const validateSelection = createSessionAccessProgramValidation({
+          operatorAuthority,
+          entry,
+          validateModelSelection:
+            validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
+        });
+        const runtimeSelection = await prepareSessionCreateRuntimeSelection({
+          request: params,
+          operatorAuthority,
+          agentId: target.agentId,
+          sessionKey: target.canonicalKey,
+          storePath: target.storePath,
+          existingEntry,
+          entry,
+          catalog: preparedModelCatalog,
+          validateModelSelection: validateSelection,
+        });
+        if (!runtimeSelection.ok) {
+          return runtimeSelection;
+        }
+        releaseRuntimeSelection?.();
+        releaseRuntimeSelection = runtimeSelection.release;
+        validateRuntimeSelection = runtimeSelection.validate;
+        if (params.childSessionPublication) {
+          params.childSessionPublication.claim({
+            sessionKey: target.canonicalKey,
+            entry,
+            parentSessionKey: canonicalParentSessionKey,
+            parent: currentParentSessionEntry,
+            isNew: createdNewEntry,
+            fork: params.fork,
+          });
+          entry.publicShare = prepareSessionPublicShareGrant(entry, target.canonicalKey);
+        }
+        if (params.fork !== true) {
+          return withInitialAssistantTranscript(
+            patched,
+            entry,
+            params.initialAssistantMessage,
+            runtimeCwd,
+          );
+        }
+        if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
+          return unavailableSessionRequest("failed to resolve parent session for fork");
+        }
+        const forkResult = await prepareGatewaySessionFork({
+          request: params,
+          target,
+          entry,
+          existingEntry,
+          parent: { entry: currentParentSessionEntry, target: parentSessionTarget },
+          commitGuard,
+          withCommit: preparedLifecycle?.withCommit,
+          creationOperation,
+        });
+        return forkResult.ok ? { ...patched, ...forkResult } : forkResult;
+      },
+      {
+        onPhase,
+        ...(params.initialCatalogContinuation && params.atomicInitialization
+          ? { certifyNotCommitted: true as const }
+          : {}),
+        creationOperation: params.creationOperation,
+        label,
+        ...(params.initialEntry
+          ? {
+              activeSessionKey: target.canonicalKey,
+              requireWriteSuccess: true,
+            }
+          : {}),
+        commitGuard,
+        followRegistration,
+        ...(bindPreparedCreation || params.bindSharingCreation
+          ? {
+              bindCreation: (operation) => {
+                commitGuard?.();
+                bindPreparedCreation?.(operation);
+                params.bindSharingCreation?.(operation);
+                creationOperation = operation;
+              },
+            }
+          : {}),
+        ...(preparedLifecycle?.withCommit ? { withCommit: preparedLifecycle.withCommit } : {}),
+        ...(inheritedSpawnOwner
+          ? {
+              resolveOwnerAssignment: () => (createdNewEntry ? inheritedSpawnOwner : undefined),
+            }
+          : {}),
+        afterCommitted: params.afterSessionCommitted,
+        onLifecycleCommitted: (entry) => {
+          lifecyclePreparationCommitted = true;
+          createdTargetCommitted = true;
+          if (createdNewEntry && params.atomicInitialization) {
+            atomicTarget = {
+              session: {
+                key: target.canonicalKey,
+                agentId: target.agentId,
+                storePath: target.storePath,
+                entry: projectPublicSessionEntry(entry),
+                isNew: true,
+              },
+              expectedEntry: structuredClone(entry),
+            };
+          }
+          onPhase?.("publication");
+          if (createdNewEntry) {
+            params.onCreatedSessionCommitted?.({
+              key: target.canonicalKey,
+              agentId: target.agentId,
+              storePath: target.storePath,
+              entry,
+              isNew: true,
+            });
+          }
+        },
+        ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+      },
+    ).catch((error: unknown) => {
+      if (error instanceof Error && error.name === "SessionLabelConflictError") {
+        return { ...invalidSessionRequest(error.message), phase: "entry" as const };
+      }
+      throw error;
+    });
+    if (!created.ok) {
+      const failure = sessionCreationFailure(created);
+      return params.initialCatalogContinuation && params.atomicInitialization
+        ? { ...failure, initializationNotCommitted: true }
+        : failure;
+    }
+    onPhase?.("effects");
+    createdContext = {
+      key: target.canonicalKey,
+      agentId: target.agentId,
+      entry: projectPublicSessionEntry(created.entry),
+      storePath: target.storePath,
+      isNew: createdNewEntry,
+    };
+    if (!createdNewEntry && (params.agentRuntime !== undefined || params.model !== undefined)) {
+      refreshSessionPatchQueuedSelection({
+        cfg: params.cfg,
+        entry: created.entry,
+        patch: { key: target.canonicalKey, agentRuntime: params.agentRuntime, model: params.model },
+        sessionKey: target.canonicalKey,
+        agentId: target.agentId,
+        catalog: preparedModelCatalog?.entries,
+      });
+    }
+    if (createdNewEntry) {
+      // The created fact belongs to this row generation; record it before a
+      // same-key delete can acquire the lifecycle fence and purge that state.
+      await recordSessionCreated(params.cfg, {
+        sessionKey: createdContext.key,
+        agentId: createdContext.agentId,
+        entry: createdContext.entry,
+      });
+    }
+
+    if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
+      const parentEntry = currentParentSessionEntry;
+      const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+        await loadSessionLifecycleRuntime();
+      // Child key shape does not establish lifecycle ownership. The caller owns
+      // that fact; omission keeps the shipped rollover for out-of-tree clients.
+      if (params.succeedsParent !== false) {
+        emitGatewaySessionEndPluginHook({
+          cfg: params.cfg,
+          sessionKey: canonicalParentSessionKey,
+          sessionId: parentEntry?.sessionId,
+          storePath: parentSessionTarget.storePath,
+          sessionFile: canonicalParentSessionKey,
+          agentId: parentSessionTarget.agentId,
+          reason: "new",
+          nextSessionId: created.entry.sessionId,
+          nextSessionKey: target.canonicalKey,
+        });
+      }
+      emitGatewaySessionStartPluginHook({
+        sessionKey: target.canonicalKey,
+        sessionId: created.entry.sessionId,
+        resumedFrom: parentEntry?.sessionId,
+        storePath: target.storePath,
+        sessionFile: target.canonicalKey,
+        agentId: target.agentId,
+      });
+    }
+
+    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
+
+    return {
+      ok: true,
+      key: target.canonicalKey,
+      agentId: target.agentId,
+      entry: projectPublicSessionEntry(created.entry),
+      resolved: {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      },
+      resetExisting: false,
+    };
+  };
+
+  const targetLifecycleIdentities = [
+    target.canonicalKey,
+    ...target.storeKeys,
+    ...(requestedKey ? [requestedKey] : []),
+    ...(initialTargetEntry?.sessionId ? [initialTargetEntry.sessionId] : []),
+  ];
+  const lifecycleTargets = buildSessionCreateLifecycleTargets({
+    target,
+    targetSessionId: initialTargetEntry?.sessionId,
+    targetLifecycleIdentities,
+    canonicalParentSessionKey,
+    parentSessionEntry,
+    parentSessionTarget,
+    holdParentLifecycle,
+  });
+  // Generated, keyed, same-store, and cross-agent creations all share the
+  // lifecycle owner's canonical identity order and one active mutation fence.
+  onPhase?.("lifecycleAdmission");
+  try {
+    const result = await runSessionMutation({
+      diagnosticLabel: "create",
+      policy: "allow-live",
+      targets: lifecycleTargets,
+      run: createChildSession,
+      finalize: async () => {
+        if (!lifecyclePreparationCommitted) {
+          await rollbackGatewaySessionPreparation({
+            prepared: preparedLifecycle,
+            onError: params.onLifecycleCleanupError,
+          });
+        }
+      },
+    });
+    if (!result.ok) {
+      return result;
+    }
+    onPhase?.("initialTurn");
+    return await completeGatewaySessionCreation(
+      params,
+      result,
+      createdContext,
+      commitGuard,
+      atomicTarget?.expectedEntry,
+    );
+  } catch (error) {
+    if (atomicTarget) {
+      return rollbackAtomicGatewaySessionCreation(
+        atomicTarget.session,
+        atomicTarget.expectedEntry,
+        error,
+      );
+    }
+    throw error;
+  } finally {
+    releaseRuntimeSelection?.();
+  }
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

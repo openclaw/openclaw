@@ -1,0 +1,99 @@
+import { describe, expect, it, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { ToolCardRow } from "./chat-tool-card-row.solid.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+
+describe("plugin activity icons", () => {
+  it.each([
+    ["assistant", "meeting_status"],
+    ["toolResult", "meeting_status"],
+    ["assistant", "mcp__other__browser"],
+    ["toolResult", "mcp__other__browser"],
+    ["assistant", "memory_search"],
+    ["assistant", "lobster"],
+  ])(
+    "uses the owner's monochrome mask for %s %s rows and restores the fallback after failure",
+    async (role, name) => {
+      const container = document.createElement("div");
+      const message =
+        role === "assistant"
+          ? {
+              role,
+              content: [{ type: "toolCall", id: "call", name, arguments: { command: "run" } }],
+            }
+          : {
+              role,
+              toolCallId: "call",
+              toolName: name,
+              content: [{ type: "text", text: "No active meetings." }],
+            };
+      const onError = vi.fn();
+      const options = {
+        isStreaming: false,
+        showReasoning: false,
+        showToolCalls: true,
+        pluginToolIcons: new Map([[name, { url: "blob:activity-icon", onError }]]),
+      };
+      const mounted = mountSolid(
+        GroupedMessage,
+        {
+          preparation: prepareChatMessageRender(message),
+          messageKey: "message",
+          options,
+        },
+        container,
+      );
+      await settleToolBridges(container);
+      const mask = container.querySelector<HTMLElement>(".chat-tool-activity-icon");
+      expect(mask?.style.maskImage).toBe('url("blob:activity-icon")');
+      expect(mask?.getAttribute("aria-hidden")).toBe("true");
+      const icon = mask?.querySelector<HTMLImageElement>("img");
+      expect(icon?.hidden).toBe(true);
+      expect(icon?.getAttribute("src")).toBe("blob:activity-icon");
+      expect(container.querySelector(".chat-tool-msg-summary__icon svg")).toBeNull();
+      icon?.dispatchEvent(new Event("error"));
+      expect(onError).toHaveBeenCalledOnce();
+
+      mounted.update({
+        preparation: prepareChatMessageRender(message),
+        messageKey: "message",
+        options: { ...options, pluginToolIcons: new Map() },
+      });
+      await settleToolBridges(container);
+      expect(container.querySelector(".chat-tool-activity-icon")).toBeNull();
+      expect(container.querySelector(".chat-tool-msg-summary__icon img")).toBeNull();
+      expect(container.querySelector(".chat-tool-msg-summary__icon svg")).not.toBeNull();
+    },
+  );
+
+  it.each(["tool_call", "dispatch_action"])(
+    "unwraps %s in materialized tool rows",
+    async (name) => {
+      const { container } = mountSolid(ToolCardRow, {
+        card: {
+          id: "wrapped-tool",
+          name,
+          args: { id: "mcp:fixture:meeting_status", args: {} },
+          completed: true,
+        },
+        options: {
+          messageKey: "wrapped-tool",
+          expanded: false,
+          onToggleExpanded: vi.fn(),
+          pluginToolIcons: new Map([
+            ["meeting_status", { url: "blob:activity-icon", onError: vi.fn() }],
+          ]),
+        },
+      });
+      await settleToolBridges(container);
+      const identity = container.querySelector(".chat-tool-msg-summary__icon");
+      expect(identity?.getAttribute("aria-label")).toBe("meeting_status");
+      expect(identity?.getAttribute("title")).toBe("meeting_status");
+      expect(
+        container.querySelector<HTMLElement>(".chat-tool-activity-icon")?.style.maskImage,
+      ).toBe('url("blob:activity-icon")');
+    },
+  );
+});

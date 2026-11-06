@@ -1,0 +1,689 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../../cli-invocation.mjs";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveBrewOpenClawPath } from "../../infra/brew.js";
+import { hasErrnoCode } from "../../infra/errors.js";
+import { UPDATE_GIT_RETRY_DELAYS_MS, withGitNetworkRetry } from "../../infra/git-network-retry.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
+import { normalizePackageTagInput } from "../../infra/package-tag.js";
+import { parseSemver } from "../../infra/runtime-guard.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { fetchNpmTagVersion } from "../../infra/update-check.js";
+import {
+  canResolveRegistryVersionForPackageTarget,
+  createGlobalInstallEnv,
+  detectGlobalInstallManagerByPresence,
+  detectGlobalInstallManagerForRoot,
+  type GlobalInstallManager,
+} from "../../infra/update-global.js";
+import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
+import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { reportUpdateStepCompletion, runStep } from "../../infra/update-runner-command.js";
+import {
+  describeUpdateInstallRoot,
+  resolveUnmanagedUpdateInstallReason,
+} from "../../infra/update-runner-install-surface.js";
+import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
+import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
+import { pathExists } from "../../utils.js";
+import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
+import { resolveNodeRunner } from "./node-runner.js";
+
+export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
+export { resolveNodeRunner } from "./node-runner.js";
+
+export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
+  /** Doctor's accepted source update targets dev without changing the saved channel. */
+  sourceUpdate?: { root: string };
+  /** In-process reporting only, after the update owner settles. Never serialized. */
+  onResult?: (result: UpdateRunResult) => void;
+  /** Captured before dotenv; only inherited selectors may choose a Node executable. */
+  runtimeRecoveryEnv?: NodeJS.ProcessEnv;
+  /** In-process executor only; workers must reacquire authority, never deserialize this. */
+  /** Legacy live context is unsupported; its presence is refusal-only. */
+  recovery?: unknown;
+  reapplyLocalOverrides?: boolean;
+  /** Internal orchestration context, shared across update phases and child processes. */
+  run?: {
+    runId: string;
+    /** Immutable original bytes for this invocation; never restoration authority. */
+    originalRecoveryCapture?: UpdateRecoveryBaselineRef;
+    defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
+    activationTimeoutMs?: number;
+    /** Explicit operator budget, minted once by this invocation’s admission. */
+    deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
+    env: NodeJS.ProcessEnv;
+    /** Candidate-reported admission checks; execution authority remains installed-owned. */
+    candidateAdmissionChecks?: readonly string[];
+    /** Completion routing only; mutation authority remains with the live executor. */
+    completionOwner?: "gateway-restart";
+    /** The handoff helper acknowledged the foreground Gateway's closure. */
+    gatewayRestartRequired?: true;
+    /** Prepared before replacement; never load the old authority graph after activation. */
+    requesterAuthority?: UpdateRequesterAuthority;
+    /** Live local executor only. A child must independently acquire its owner. */
+    executorFence?: UpdateRecoveryFence;
+    /** A signal closes forward admission while accepted receipts settle. */
+    interrupted?: true;
+    sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
+  };
+  acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
+  admission?: "auto" | "installed";
+  json?: boolean;
+  restart?: boolean;
+  dryRun?: boolean;
+  channel?: string;
+  tag?: string;
+  sha?: string;
+  timeout?: string;
+  drainTimeout?: string;
+  yes?: boolean;
+};
+
+export type UpdateStatusOptions = Pick<UpdateCommandOptions, "json" | "timeout">;
+
+/** Only package updates hand admission to a privately staged candidate. */
+export function usesCandidateUpdateAdmission(
+  opts: Pick<UpdateCommandOptions, "admission" | "dryRun">,
+  installKind: "git" | "package" | "unknown",
+): boolean {
+  return installKind === "package" && !opts.dryRun && opts.admission !== "installed";
+}
+
+export type UpdateFinalizeOptions = Pick<
+  UpdateCommandOptions,
+  "acceptCapabilities" | "fullIntegrityCheck" | "json" | "channel" | "timeout" | "yes"
+> & {
+  /** Internal external-supervisor handshake; public repair always leaves this false. */
+  deferCompletionCache?: boolean;
+};
+
+export type UpdateWizardOptions = Pick<
+  UpdateCommandOptions,
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
+>;
+
+export function parseUpdateChannel(value?: string) {
+  const channel = normalizeUpdateChannel(value);
+  if (value !== undefined && !channel) {
+    throwExpectedCliError(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(value)})`,
+    );
+  }
+  return channel;
+}
+
+/** Parse the shared timeout contract without exiting an owning operation. */
+export function parseUpdateTimeoutMs(
+  timeout?: string,
+  option: "--timeout" | "--drain-timeout" = "--timeout",
+): number | undefined {
+  if (timeout === undefined) {
+    return undefined;
+  }
+  const milliseconds = positiveSecondsToSafeMilliseconds(timeout.trim());
+  if (milliseconds === undefined) {
+    throw new Error(`${option} must be a positive integer (seconds)`);
+  }
+  return milliseconds;
+}
+
+const UPSTREAM_REPOSITORY_URL = "https://github.com/openclaw/openclaw.git";
+// Keep the full commit graph for dev ref switching while deferring historical blobs.
+// A shallow clone would make older or non-default dev targets unreachable.
+const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
+
+export const DEFAULT_PACKAGE_NAME = "openclaw";
+
+export function normalizeTag(value?: string | null): string | null {
+  return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
+}
+
+export { readPackageName, readPackageVersion };
+
+export async function resolveTargetVersion(
+  tag: string,
+  timeoutMs?: number,
+  options: { spec?: string; command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<Pick<Awaited<ReturnType<typeof fetchNpmTagVersion>>, "version" | "metadata">> {
+  if (!canResolveRegistryVersionForPackageTarget(tag)) {
+    return { version: null };
+  }
+  const trimmed = tag.trim();
+  const direct = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  if (parseSemver(direct)) {
+    return { version: direct };
+  }
+  return await fetchNpmTagVersion({
+    tag,
+    timeoutMs,
+    spec: options.spec,
+    command: options.command,
+    cwd: options.cwd,
+    env: options.env,
+  });
+}
+
+export async function isGitCheckout(root: string): Promise<boolean> {
+  return pathExists(path.join(root, ".git"));
+}
+
+export async function isEmptyDir(targetPath: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(targetPath)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveGitInstallDir(): string {
+  const override = process.env.OPENCLAW_GIT_DIR?.trim();
+  if (override) {
+    return path.resolve(override);
+  }
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
+  if (home.startsWith("/")) {
+    return path.posix.join(home, "openclaw");
+  }
+  return path.join(home, "openclaw");
+}
+
+export async function resolveUpdateRoot(context?: { root: string }): Promise<string> {
+  if (context) {
+    return path.resolve(context.root);
+  }
+  // Preserve the lexical package path from the invoking shim. pnpm 11 package
+  // modules realpath into a shared store, which is not the install owner.
+  const invocationRoot = process.argv[1]
+    ? await resolveOpenClawPackageRoot({ cwd: path.dirname(path.resolve(process.argv[1])) })
+    : null;
+  return (
+    invocationRoot ??
+    (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, cwd: process.cwd() })) ??
+    process.cwd()
+  );
+}
+
+export async function runUpdateStep(
+  params: Omit<Parameters<typeof runStep>[0], "cwd" | "runCommand" | "stepIndex" | "totalSteps"> &
+    Partial<Pick<Parameters<typeof runStep>[0], "cwd" | "runCommand">>,
+): Promise<UpdateStepResult> {
+  return await runStep({
+    ...params,
+    cwd: params.cwd ?? process.cwd(),
+    runCommand:
+      params.runCommand ??
+      ((argv, options) => runCommandWithTimeout(argv, { ...options, killProcessTree: true })),
+    stepIndex: 0,
+    totalSteps: 0,
+  });
+}
+
+type GitCheckoutResult = {
+  checkoutDir: string;
+  step: UpdateStepResult | null;
+};
+
+type StagedGitCheckout = (
+  root: string,
+  publish: () => Promise<string>,
+  targetRoot: string,
+  storageRoot: string,
+) => Promise<void>;
+
+async function cloneGitCheckoutTransactionally(
+  params: Parameters<typeof ensureGitCheckout>[0],
+): Promise<GitCheckoutResult & { commandResult?: SpawnResult }> {
+  const parentDir = path.dirname(params.dir);
+  await fs.mkdir(parentDir, { recursive: true });
+  const canonicalParentDir = await fs.realpath(parentDir);
+  const preserveDir = (await pathExists(params.dir)) && (await isEmptyDir(params.dir));
+  const targetDir = preserveDir
+    ? await fs.realpath(params.dir)
+    : path.join(canonicalParentDir, path.basename(params.dir));
+  const targetIdentity = preserveDir ? await fs.lstat(targetDir, { bigint: true }) : undefined;
+  const stagingParent = preserveDir ? targetDir : canonicalParentDir;
+  // Publication moves only the repository; candidate builds keep their paths
+  // until runtime promotion and cleanup finish on this same filesystem.
+  const storageRoot = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  const storageIdentity = await fs.lstat(storageRoot, { bigint: true });
+  const stagingDir = path.join(storageRoot, "repository");
+  await fs.mkdir(stagingDir).catch(async (error: unknown) => {
+    try {
+      if (await ownsDirectory(storageRoot, storageIdentity)) {
+        await fs.rmdir(storageRoot);
+      }
+    } catch {
+      // Retain nonempty or replaced storage; cleanup must not hide the allocation error.
+    }
+    throw error;
+  });
+  const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
+  let cleanupStaging = true;
+  let published = false;
+  let result: UpdateStepResult | null = null;
+  let commandResult: SpawnResult | undefined;
+
+  async function ownsDirectory(
+    directory: string,
+    identity: typeof storageIdentity,
+    allowMissing = false,
+  ) {
+    try {
+      const current = await fs.lstat(directory, { bigint: true });
+      // Unknown Windows identities cannot authorize publication or recursive cleanup.
+      return (
+        current.isDirectory() &&
+        current.ino !== 0n &&
+        (process.platform !== "win32" || current.dev !== 0n) &&
+        current.ino === identity.ino &&
+        current.dev === identity.dev
+      );
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return allowMissing;
+      }
+      throw error;
+    }
+  }
+
+  const runOperation = async (): Promise<void> => {
+    result = await runUpdateStep({
+      name: "git-clone",
+      runCommand: async (argv, options) => {
+        params.assertCurrent?.();
+        commandResult = await runCommandWithTimeout(argv, options);
+        return commandResult;
+      },
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
+      env: params.env,
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+    });
+    if (result.exitCode !== 0) {
+      return;
+    }
+
+    const publish = async (): Promise<string> => {
+      if (
+        !(await ownsDirectory(storageRoot, storageIdentity)) ||
+        !(await ownsDirectory(stagingDir, stagingIdentity)) ||
+        (targetIdentity && !(await ownsDirectory(targetDir, targetIdentity)))
+      ) {
+        throw new Error(
+          `The clone destination or staging directory changed before publication: ${targetDir}. The replacement was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
+        );
+      }
+      const destinationAppeared = () =>
+        new Error(
+          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+        );
+      if (!preserveDir) {
+        try {
+          await fs.lstat(targetDir);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+          await fs.rename(stagingDir, targetDir);
+          published = true;
+          return targetDir;
+        }
+        throw destinationAppeared();
+      }
+
+      const destinationEntries = await fs.readdir(targetDir);
+      if (destinationEntries.length !== 1 || destinationEntries[0] !== path.basename(storageRoot)) {
+        throw destinationAppeared();
+      }
+
+      const entries = (await fs.readdir(stagingDir)).toSorted((a, b) =>
+        a === ".git" ? 1 : b === ".git" ? -1 : 0,
+      );
+      const moved: string[] = [];
+      let publishError: { value: unknown } | undefined;
+      try {
+        for (const entry of entries) {
+          await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
+          moved.push(entry);
+        }
+      } catch (error) {
+        publishError = { value: error };
+      }
+      if (publishError) {
+        const rollbackErrors: unknown[] = [];
+        for (const entry of moved.toReversed()) {
+          try {
+            await fs.rename(path.join(targetDir, entry), path.join(stagingDir, entry));
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          cleanupStaging = false;
+          throw new AggregateError(
+            [publishError.value, ...rollbackErrors],
+            `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
+          );
+        }
+        throw publishError.value;
+      }
+      published = true;
+      return targetDir;
+    };
+    if (params.useStagedCheckout) {
+      await params.useStagedCheckout(stagingDir, publish, targetDir, storageRoot);
+    } else {
+      await publish();
+    }
+  };
+  let operationFailure: { error: unknown } | undefined;
+  try {
+    await runOperation();
+  } catch (error) {
+    operationFailure = { error };
+    if (hasCommandProcessCleanupError(error)) {
+      cleanupStaging = false;
+    }
+  }
+  let cleanupFailure: { error: unknown } | undefined;
+  // The container does not confer ownership of a replaced repository child.
+  // Only completed publication permits that child to be absent at cleanup.
+  if (cleanupStaging) {
+    // Ordinary diagnostic failures do not replace publication or the operation error.
+    try {
+      await cleanupUpdateTemporaryDirectory({
+        directory: storageRoot,
+        root: targetDir,
+        name: "git-clone-staging-cleanup",
+        canRemove: async () =>
+          (await ownsDirectory(storageRoot, storageIdentity)) &&
+          (await ownsDirectory(stagingDir, stagingIdentity, published)),
+        onWarning: async (warning) => {
+          if (result && warning.advisory) {
+            result.warnings = [...(result.warnings ?? []), warning.advisory.message];
+          }
+          try {
+            await reportUpdateStepCompletion(params.progress, { ...warning, index: 0, total: 0 });
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            // Settled diagnostic failures leave the operation outcome unchanged.
+          }
+        },
+      });
+    } catch (error) {
+      cleanupFailure = { error };
+    }
+  }
+  if (cleanupFailure) {
+    if (
+      operationFailure &&
+      operationFailure.error !== cleanupFailure.error &&
+      hasCommandProcessCleanupError(cleanupFailure.error)
+    ) {
+      throw new AggregateError(
+        [operationFailure.error, cleanupFailure.error],
+        "Git clone and cleanup progress both failed",
+        { cause: operationFailure.error },
+      );
+    }
+    throw cleanupFailure.error;
+  }
+  if (operationFailure) {
+    throw operationFailure.error;
+  }
+  return { checkoutDir: targetDir, step: result, commandResult };
+}
+
+export async function ensureGitCheckout(params: {
+  dir: string;
+  timeoutMs: number;
+  progress?: UpdateStepProgress;
+  env?: NodeJS.ProcessEnv;
+  useStagedCheckout?: StagedGitCheckout;
+  assertCurrent?: () => void;
+}): Promise<GitCheckoutResult> {
+  const gitEnv = params.env ?? (await createGlobalInstallEnv());
+  const dirExists = await pathExists(params.dir);
+  if (!dirExists || !(await isGitCheckout(params.dir))) {
+    if (dirExists && !(await isEmptyDir(params.dir))) {
+      throw new UpdatePreMutationError(
+        "invalid-git-directory",
+        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+      );
+    }
+    // Each attempt settles its transaction and disposes partial artifacts before
+    // retry admission. An uncertain cleanup retains its warning and stops retries.
+    const result = await withGitNetworkRetry(
+      "clone",
+      {
+        timeoutMs: params.timeoutMs,
+        retryDelaysMs: UPDATE_GIT_RETRY_DELAYS_MS,
+        signal: resolveCommandProcessSignal(),
+      },
+      async (timeoutMs) => {
+        const { commandResult, ...checkout } = await cloneGitCheckoutTransactionally({
+          ...params,
+          env: gitEnv,
+          timeoutMs: timeoutMs ?? params.timeoutMs,
+        });
+        // Classify native stderr before the step's diagnostic tail truncates it.
+        return {
+          ...commandResult,
+          checkout,
+          code: commandResult ? commandResult.code : null,
+          stderr: commandResult?.stderr ?? "",
+          termination: commandResult?.termination ?? ("signal" as const),
+          cleanup: checkout.step?.warnings?.length ? "uncertain" : commandResult?.cleanup,
+        };
+      },
+    );
+    if (result.checkout.step) {
+      result.checkout.step.exitCode = result.code;
+      result.checkout.step.termination = result.termination;
+      result.checkout.step.signal = result.signal;
+    }
+    return result.checkout;
+  }
+
+  if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
+    throw new UpdatePreMutationError(
+      "invalid-git-directory",
+      `OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`,
+    );
+  }
+
+  return { checkoutDir: await fs.realpath(params.dir), step: null };
+}
+
+/** Inspect installation ownership without package-manager discovery or cache writes. */
+export async function assertGlobalUpdateOwner(
+  params: Parameters<typeof resolveGlobalManager>[0],
+): Promise<void> {
+  await (
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
+  ).assertUnowned(params.root);
+  if (params.installKind !== "git" && (await resolveBrewOpenClawPath(params.root))) {
+    const reason = resolveUnmanagedUpdateInstallReason();
+    throw new UpdatePreMutationError(
+      reason,
+      "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+      { failureFacts: [] },
+    );
+  }
+}
+
+export async function resolveGlobalManager(params: {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  timeoutMs: number;
+  pkgOwnership?: SystemPackageOwnershipInspection;
+  serviceUnitTarget?: string;
+}): Promise<GlobalInstallManager> {
+  await assertGlobalUpdateOwner(params);
+  if (params.installKind !== "git") {
+    const diagnostics: string[] = [];
+    const detected = await detectGlobalInstallManagerForRoot(
+      runCommandWithTimeout,
+      params.root,
+      params.timeoutMs,
+      diagnostics,
+    );
+    if (!detected) {
+      const reason = resolveUnmanagedUpdateInstallReason();
+      const failure = createUpdatePreflightFailure(
+        "installation-unclassified",
+        `${await describeUpdateInstallRoot(params.root)} Service unit target: ${params.serviceUnitTarget ?? "not inspected"}. Inspected package-manager owners: ${diagnostics.join("; ")}. ${UPDATE_INSTALL_SKIP_GUIDANCE[reason]}`,
+      );
+      throw new UpdatePreMutationError(reason, failure.message, {
+        failureFacts: failure.failureFacts,
+      });
+    }
+    return detected;
+  }
+
+  const byPresence = await detectGlobalInstallManagerByPresence(
+    runCommandWithTimeout,
+    params.timeoutMs,
+  );
+  return byPresence ?? "npm";
+}
+
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
+  "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
+
+/** Best-effort refresh of shell completion state after a successful update. */
+export async function tryWriteCompletionCache(
+  root: string,
+  jsonMode: boolean,
+  timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+  nodeRunner = resolveNodeRunner(),
+): Promise<"completed" | "failed" | "skipped"> {
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
+  const standalone = isStandaloneRuntimeExecutable(nodeRunner);
+  if (!standalone && !(await pathExists(binPath))) {
+    return "skipped";
+  }
+
+  let failure: string;
+  try {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: standalone ? undefined : binPath,
+      execArgv: [],
+      args: ["completion", "--write-state"],
+    });
+    const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+      input: "",
+      timeoutMs,
+      killProcessTree: true,
+    });
+    if (result.code === 0) {
+      return "completed";
+    }
+    failure =
+      result.termination === "timeout"
+        ? `timed out after ${timeoutMs / 1000}s`
+        : result.stderr.trim();
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    failure = String(error);
+  }
+  if (!jsonMode) {
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${failure ? `: ${failure}` : ""}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
+  }
+  return "failed";
+}
+
+export async function requestUpdateDowngradeConfirmation(params: {
+  json: boolean;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<"confirmed" | "cancelled" | "confirmation-required"> {
+  if (!process.stdin.isTTY || params.json) {
+    return "confirmation-required";
+  }
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const { stylePromptMessage } =
+    await import("../../../packages/terminal-core/src/prompt-style.js");
+  const targetLabel = params.targetVersion ?? `${params.tag} (unknown)`;
+  const message = `Downgrading from ${params.currentVersion} to ${targetLabel} can break configuration. Continue?`;
+  const ok = await confirm({ message: stylePromptMessage(message), initialValue: false });
+  return isCancel(ok) || !ok ? "cancelled" : "confirmed";
+}
+
+export async function confirmUpdateDowngrade(params: {
+  opts: UpdateCommandOptions;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<boolean> {
+  const { finishUpdateRun } = await import("../../infra/update-run-ledger.js");
+  const { opts, currentVersion, targetVersion, tag } = params;
+  const decision = await requestUpdateDowngradeConfirmation({
+    json: Boolean(opts.json),
+    currentVersion,
+    targetVersion,
+    tag,
+  });
+  const run = opts.run!;
+  if (decision === "confirmed") {
+    return true;
+  }
+  finishUpdateRun(
+    run.runId,
+    {
+      status: "skipped",
+      reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
+    },
+    run,
+  );
+  if (decision === "confirmation-required") {
+    defaultRuntime.error(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
+  } else if (!opts.json) {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+  }
+  defaultRuntime.exit(decision === "confirmation-required" ? 1 : 0);
+  return false;
+}

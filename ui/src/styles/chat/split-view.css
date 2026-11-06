@@ -1,0 +1,1102 @@
+.chat-split-view.chat-split-view--active-cell
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active) {
+  filter: saturate(0.45);
+}
+
+.chat-split-view.chat-split-view--active-cell
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header
+  :is(
+    .chat-pane__nav-toggle,
+    openclaw-session-owner-chip,
+    .chat-pane__participants,
+    .chat-pane__presence,
+    .chat-pane__sharing-menu,
+    .chat-pane__draft-indicator,
+    .chat-pane__actions
+  ) {
+  display: none;
+}
+
+/* Only the displayed pane owns the shade: cached Incognito chats must not tint
+   the regular chat that replaces them. Pending creation uses the same host. */
+.chat-pane-cache__pane--visible:has(.agent-chat__input[data-incognito="true"]) {
+  --chat-header-tint: var(--text-strong);
+  --chat-header-tint-strength: 7%;
+
+  background: linear-gradient(
+    color-mix(in srgb, var(--chat-header-tint) var(--chat-header-tint-strength), transparent) 44px,
+    transparent 240px
+  );
+}
+
+openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobile) {
+  background: transparent;
+}
+
+/* Dark mode deepens the canvas rather than adding a glow. */
+:root[data-theme-mode="dark"]
+  .chat-pane-cache__pane--visible:has(.agent-chat__input[data-incognito="true"]) {
+  --chat-header-tint: black;
+  --chat-header-tint-strength: 32%;
+}
+
+.chat-pane-cache {
+  display: grid;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-split-view__unbound {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chat-split-view__unbound strong {
+  color: var(--text);
+}
+
+.chat-pane-cache__pane {
+  opacity: 0;
+  grid-area: 1 / 1;
+}
+
+.chat-pane-cache__pane--visible {
+  opacity: 1;
+  z-index: 1;
+}
+
+.chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {
+  display: none;
+}
+
+.chat-split-view__drop-indicator {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-split-view__drop-indicator--center {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.chat-split-view__drop-indicator-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-split-view__drop-indicator {
+    animation: chat-drop-indicator-in 0.12s ease;
+    transition:
+      left 0.14s ease,
+      top 0.14s ease,
+      width 0.14s ease,
+      height 0.14s ease,
+      opacity 0.12s ease;
+  }
+
+  @keyframes chat-drop-indicator-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+/* These groups become the two mobile identity rows. They stay transparent to
+   the desktop flex trail so its existing one-line geometry is unchanged. */
+.chat-pane__project-row,
+.chat-pane__session-trail {
+  display: contents;
+}
+
+/* Renaming needs the row's spare width, which the trail must pass through:
+   without this the input is trapped inside a shrink-only container. */
+.chat-pane__crumbs:has(.chat-pane__session-title-input) {
+  flex: 1 1 auto;
+}
+
+.chat-pane__session-title-button,
+.chat-pane__parent-session {
+  /* Hover padding is drawn outside the text box: the plain-span title (catalog
+     and rename-disabled panes) has none, and without the pull-back the same
+     title would start 5px further right the moment renaming is allowed. */
+  padding: 3px 5px;
+  margin-inline: -5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+}
+
+.chat-pane__session-title-button {
+  cursor: text;
+}
+
+.chat-pane__session-title-button:hover,
+.chat-pane__session-title-button:focus-visible,
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  outline: none;
+}
+
+.chat-pane__parent-session {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
+  color: var(--text);
+}
+
+/* Keep nested identity contextual rather than letting it become the header.
+   The two titles share at most half the container after separator spacing. */
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__parent-session,
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__session-title {
+  max-width: min(18ch, calc((50cqw - 20px) / 2));
+}
+
+.chat-pane__session-title-text,
+.chat-pane__parent-session-text,
+.chat-pane__sharing-member-label {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__session-title-input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Where supported, the rename input hugs its text too, so the workspace chip
+   tracks the title while typing; elsewhere editing falls back to full width. */
+@supports (field-sizing: content) {
+  .chat-pane__session-title-input {
+    flex: 0 1 auto;
+    field-sizing: content;
+    max-width: min(60ch, 100%);
+  }
+}
+
+.chat-pane__workspace-chip svg {
+  width: 14px;
+  height: 14px;
+  /* Lucide outline icons: without this the paths render browser-default
+     black fill, which reads as a solid dark blob on the chip. */
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Project icons are arbitrary artwork, so they keep their own pixels: matched to
+   the glyph box, contained rather than stretched, and deliberately unstyled —
+   no shadow, plate, or filter. Accepted tradeoff: a favicon that is one flat
+   dark color on transparency loses contrast against a dark chip. Rescuing it
+   unconditionally would cost every normal full-color icon, so if it ever
+   matters in practice the escape hatch is a plate applied conditionally, not a
+   blanket effect here. */
+.chat-pane__workspace-chip .workspace-icon-fallback {
+  display: contents;
+}
+
+.chat-pane__workspace-menu,
+.chat-pane__placement-menu {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__placement-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-pane__placement-menu > .oc-menu {
+  width: 250px;
+}
+
+.chat-pane__placement-chip {
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__placement-chip:hover,
+.chat-pane__placement-chip:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__placement-state {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__placement-facts {
+  margin: 0 0 4px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--overlay-border);
+  font-size: 11px;
+}
+
+.chat-pane__placement-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.chat-pane__placement-heading strong {
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.chat-pane__placement-heading > span {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__placement-fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.chat-pane__placement-fact dt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-pane__placement-fact-icon {
+  display: inline-flex;
+  width: 14px;
+  flex: none;
+  justify-content: center;
+}
+
+.chat-pane__placement-fact-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane__placement-reclaim .session-menu__icon svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat-pane__placement-facts dt {
+  color: var(--muted);
+}
+
+.chat-pane__placement-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.chat-pane__placement-note {
+  max-width: 320px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--warn-subtle);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* Menu-item glyphs; header triggers keep the shared 18px .btn--icon svg. */
+.chat-pane__branch-active svg,
+.chat-pane__branch-more svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-trigger svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-back svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Long histories scroll inside a short submenu instead of covering the pane. */
+.oc-menu-item--submenu[data-value="submenu:versions"] + .oc-menu {
+  --oc-overlay-max-height: 360px;
+}
+
+.chat-pane__branch-item {
+  --versions-icon-column: 28px;
+
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px;
+  border-radius: var(--menu-item-radius);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Current is a readable selection, not an unavailable action. */
+.chat-pane__branch-item[data-active="true"] {
+  margin-bottom: 4px;
+  opacity: 1;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__branch-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-pane__branch-headline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__branch-meta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-pane__branch-active,
+.chat-pane__branch-more {
+  display: inline-flex;
+  width: var(--versions-icon-column);
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__branch-active {
+  color: var(--accent);
+}
+
+/* Management remains deferred; this glyph does not introduce another action. */
+.chat-pane__branch-more {
+  color: var(--muted);
+}
+
+.chat-pane__workspace-chip:hover,
+.chat-pane__workspace-chip:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__presence {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.chat-pane__actions {
+  display: flex;
+  align-items: center;
+  border: 0;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0;
+  /* With the title text-hugging, this claims the leftover width so the
+     action cluster stays pinned to the right edge (and doubles as the
+     native window-drag surface between chip and actions). */
+  margin: 0 0 0 auto;
+}
+
+/* One box model for every action, whatever wraps it. A custom element defaults
+   to display:inline, so as a flex child it blockifies but keeps a text line
+   box, and the descender space under its button drags the glyph off the row
+   centerline: the session menu measured 29.8px tall and 0.9px low against the
+   28px buttons beside it. Keep this selector at single-class specificity so the
+   container queries below can still hide individual actions. */
+.chat-pane__actions > * {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The tooltip wrapper stays out of the box tree so the button it wraps remains
+   the flex item that the rule above measures. */
+.chat-pane__actions > openclaw-tooltip {
+  display: contents;
+}
+
+.chat-pane__actions .chat-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.chat-pane__actions .chat-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6px;
+}
+
+.chat-header-session-menu {
+  display: flex;
+}
+
+.chat-header-session-menu__trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__public-share-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.chat-pane__public-share-indicator svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-pane__sharing-menu > .oc-menu {
+  width: 260px;
+  min-width: min(260px, calc(100vw - 24px));
+  max-width: min(260px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-title {
+  padding: 5px 8px 7px;
+}
+
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-members-title,
+.chat-pane__sharing-owner-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-owner,
+.chat-pane__sharing-member-skeleton {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-owner {
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member-skeleton-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.chat-pane__sharing-member-skeleton-label {
+  width: 72%;
+  height: 10px;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(2) .chat-pane__sharing-member-skeleton-label {
+  width: 56%;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(3) .chat-pane__sharing-member-skeleton-label {
+  width: 64%;
+}
+
+.chat-pane__sharing-member {
+  gap: 10px;
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
+}
+
+.chat-pane__draft-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* The labelled actions stay available as split panes narrow; only secondary
+   identity and navigation details yield space to the session title. */
+@container (max-width: 800px) {
+  .chat-pane__header.chat-pane__header--closable .chat-pane__nav-toggle,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__participants,
+  .chat-pane__header.chat-pane__header--closable openclaw-session-owner-chip {
+    display: none;
+  }
+}
+
+@container (max-width: 480px) {
+  .chat-pane__presence {
+    display: none;
+  }
+}
+
+.chat-header-session-menu--compact .session-menu__item {
+  flex: 0 0 34px;
+  min-height: 34px;
+}
+
+.chat-header-session-menu--compact-sharing > .oc-menu {
+  height: min(420px, 60vh);
+}
+
+.chat-pane__sharing-visibility-item > .oc-menu-item__check {
+  display: none;
+}
+
+.continue-in-terminal-dialog__card {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.continue-in-terminal-dialog__header h2,
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin: 0;
+}
+
+.continue-in-terminal-dialog__header p,
+.continue-in-terminal-dialog__note {
+  margin-block-start: 6px;
+  color: var(--muted);
+}
+
+.continue-in-terminal-dialog .login-gate__command {
+  min-width: 0;
+}
+
+.continue-in-terminal-dialog .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.chat-pane__workspace-chip > .oc-menu-item__label,
+.chat-pane__layout-trigger > .oc-menu-item__label,
+.chat-pane__sharing-trigger > .oc-menu-item__label {
+  display: contents;
+}
+
+/* Desktop Sharing H/G; mobile bodies retain their own layout owner. */
+.chat-pane__sharing-menu--desktop > .btn.chat-pane__sharing-trigger {
+  height: 28px;
+  min-height: 28px;
+  gap: 0;
+  padding: 0 5px 0 7px;
+  border-color: transparent;
+  /* Same shape and fills as the Details and Panels toggles beside it. */
+  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  background: transparent;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-pane__sharing-menu--desktop
+  > .btn.chat-pane__sharing-trigger:not(:hover, :focus-visible, [aria-expanded="true"])
+  svg {
+  color: var(--icon-interactive, inherit);
+}
+
+@media (hover: none) {
+  .chat-pane__sharing-menu--desktop
+    > .btn.chat-pane__sharing-trigger:not(
+      :focus-visible,
+      [aria-expanded="true"],
+      :disabled,
+      [aria-disabled="true"]
+    )
+    svg {
+    color: var(--icon-interactive, inherit);
+  }
+}
+
+.chat-pane__sharing-menu--desktop
+  > .btn.chat-pane__sharing-trigger:is(:hover:not(:disabled), [aria-expanded="true"]) {
+  background: var(--session-header-control-hover-bg);
+  color: var(--text);
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Size the disclosure glyph without attenuating its shared foreground again. */
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger svg.chat-pane__sharing-chevron {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane__sharing-menu--desktop
+  > .btn.chat-pane__sharing-trigger[aria-expanded="true"]:not(:disabled) {
+  background: var(--session-header-control-surface);
+  color: var(--session-header-control-active-color, var(--text));
+}
+
+.chat-pane__sharing-draft-glyph {
+  stroke-dasharray: 3 3;
+}
+
+.chat-pane__sharing-menu--desktop {
+  & > .oc-menu {
+    --oc-overlay-max-height: calc(100dvh - 16px);
+    display: flex;
+    flex-direction: column;
+    width: 300px;
+    min-width: min(300px, calc(100vw - 24px));
+    max-width: min(300px, calc(100vw - 24px));
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  & .chat-pane__sharing-section-label {
+    padding: 0 8px 4px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 18px;
+  }
+
+  & .chat-pane__sharing-access-trigger,
+  & .chat-pane__sharing-access-option {
+    display: flex;
+    width: 100%;
+    min-height: 50px;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-radius: var(--menu-item-radius);
+    padding: 7px 8px;
+    color: var(--text);
+    text-align: start;
+  }
+
+  & .chat-pane__sharing-mode-icon {
+    display: flex;
+    width: 20px;
+    flex: 0 0 20px;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+  }
+
+  & .chat-pane__sharing-mode-text {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 1px;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 18px;
+  }
+
+  & .chat-pane__sharing-description {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 16px;
+  }
+
+  & .chat-pane__sharing-access-trigger > .oc-menu-item__label,
+  & .chat-pane__sharing-access-option > .oc-menu-item__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: normal;
+  }
+
+  & .chat-pane__sharing-access-trigger > .oc-menu-item__details,
+  & .chat-pane__sharing-access-option > .oc-menu-item__details {
+    flex: 0 0 24px;
+    justify-content: center;
+    margin-inline-start: 0;
+    color: var(--muted);
+  }
+
+  & .chat-pane__sharing-access-option > .oc-menu-item__check {
+    display: none;
+  }
+
+  & .chat-pane__sharing-back {
+    min-height: 32px;
+    margin-bottom: 4px;
+    padding: 4px 8px;
+    gap: 8px;
+    border-radius: var(--menu-item-radius);
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  & .chat-pane__sharing-back > .oc-menu-item__icon {
+    flex: 0 0 20px;
+    justify-content: center;
+    margin-inline-end: 0;
+    color: var(--muted);
+  }
+
+  & .chat-pane__sharing-section {
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+
+  & .chat-pane__sharing-public-toggle {
+    display: grid;
+    width: 100%;
+    min-height: 27px;
+    grid-template-columns: 20px minmax(0, 1fr) 24px;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    padding: 5px 8px 0;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    text-align: start;
+    cursor: default;
+  }
+
+  & .chat-pane__sharing-public-toggle > svg {
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+  }
+
+  /* The row owns switch semantics; the shared indicator draws it. */
+  & .chat-pane__sharing-switch {
+    display: inline-flex;
+    justify-self: center;
+  }
+
+  & .chat-pane__sharing-disclosure {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 300ms ease-in-out;
+  }
+
+  /* Keep the trailing inset outside the clip and preserve the controls' position. */
+  & .chat-pane__sharing-public-toggle + .chat-pane__sharing-disclosure {
+    margin-bottom: 5px;
+  }
+
+  & .chat-pane__sharing-disclosure[data-open="true"] {
+    grid-template-rows: 1fr;
+  }
+
+  & .chat-pane__sharing-disclosure-body {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  & .chat-pane__sharing-disclosure[data-immediate="true"] {
+    transition: none;
+  }
+
+  & .chat-pane__sharing-link-description {
+    margin: 0 32px 6px 36px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  & .chat-pane__sharing-url {
+    display: flex;
+    width: calc(100% - 44px);
+    min-height: 28px;
+    align-items: center;
+    gap: 8px;
+    margin: 0 8px 0 36px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 5px 8px;
+    background: var(--bg-hover);
+    color: var(--text);
+    font-size: 11px;
+    cursor: default;
+  }
+
+  & .chat-pane__sharing-url-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+    text-align: start;
+    white-space: nowrap;
+  }
+
+  & .chat-pane__sharing-url > svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    color: var(--muted);
+  }
+
+  & .chat-pane__sharing-permissions {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  & .chat-pane__sharing-search-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  & .chat-pane__sharing-search-heading button {
+    display: grid;
+    width: 24px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: default;
+  }
+
+  & .chat-pane__sharing-search-heading svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  & .chat-pane__sharing-search {
+    width: calc(100% - 16px);
+    height: 28px;
+    min-height: 28px;
+    margin: 4px 8px 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  & .chat-pane__sharing-roster {
+    min-height: 0;
+    max-height: 368px;
+    padding-bottom: 8px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+
+  & .chat-pane__sharing-person {
+    display: grid;
+    width: 100%;
+    min-height: 32px;
+    grid-template-columns: 20px minmax(0, 1fr) auto 24px;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-radius: var(--menu-item-radius);
+    padding: 4px 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    text-align: start;
+    cursor: default;
+  }
+
+  & .chat-pane__sharing-person:hover {
+    background: var(--bg-hover);
+  }
+
+  & .chat-pane__sharing-person--creator .chat-pane__sharing-member-icon {
+    filter: saturate(0.65);
+  }
+}
+
+.chat-pane__sharing-permission .oc-menu-item__submenu-icon {
+  color: var(--muted);
+  transform: rotate(90deg);
+}
+
+.chat-pane__sharing-permission[aria-expanded="true"] .oc-menu-item__submenu-icon {
+  transform: rotate(-90deg);
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control {
+  grid-column: 3 / 5;
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control .oc-menu-item--submenu {
+  min-height: 24px;
+  padding: 0;
+  gap: 8px;
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-empty {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 8px 0;
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--bg-hover);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-empty > span:where(:not(:first-child)) {
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane__sharing-menu--desktop .chat-pane__sharing-disclosure {
+    transition: none;
+  }
+}
+
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-roster-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+
+  &::before,
+  &::after {
+    position: absolute;
+    z-index: 1;
+    right: var(--scrollbar-size, 8px);
+    left: 0;
+    height: 16px;
+    pointer-events: none;
+    content: "";
+    opacity: 0;
+  }
+
+  &::before {
+    top: 0;
+    background: linear-gradient(to bottom, var(--popover), transparent);
+  }
+
+  &::after {
+    bottom: 0;
+    background: linear-gradient(to top, var(--popover), transparent);
+  }
+
+  &:has([data-at-start="false"])::before,
+  &:has([data-at-end="false"])::after {
+    opacity: 1;
+  }
+}

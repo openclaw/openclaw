@@ -1,0 +1,320 @@
+/**
+ * Resolves memory-search source, sync, and ranking configuration.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  normalizeConfiguredMemoryExtraPaths,
+  resolveRememberAcrossConversations,
+} from "../memory-host-sdk/host/config-utils.js";
+import {
+  isMemoryMultimodalEnabled,
+  normalizeMemoryMultimodalSettings,
+} from "../memory-host-sdk/multimodal.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { clampNumber } from "../utils.js";
+import { resolveAgentConfig } from "./agent-scope.js";
+
+type MemorySearchSource = "memory" | "sessions";
+
+const DEFAULT_SOURCES: MemorySearchSource[] = ["memory"];
+
+function normalizeSources(
+  sources: readonly MemorySearchSource[] | undefined,
+  sessionMemoryEnabled: boolean,
+): MemorySearchSource[] {
+  const input = sources?.length ? sources : DEFAULT_SOURCES;
+  const normalized = [
+    ...new Set(
+      input.filter(
+        (source) => source === "memory" || (source === "sessions" && sessionMemoryEnabled),
+      ),
+    ),
+  ];
+  return normalized.length > 0 ? normalized : [...DEFAULT_SOURCES];
+}
+
+type ProducedMemorySearchConfig = NonNullable<ReturnType<typeof produceMemorySearchConfig>>;
+
+export type ResolvedMemorySearchConfig = Omit<
+  ProducedMemorySearchConfig,
+  | "cache"
+  | "documentInputType"
+  | "inputFormat"
+  | "inputType"
+  | "local"
+  | "outputDimensionality"
+  | "queryInputType"
+  | "queryInstruction"
+  | "remote"
+  | "store"
+  | "sync"
+> & {
+  inputFormat?: { query: string; document: string };
+  inputType?: string;
+  queryInputType?: string;
+  queryInstruction?: string;
+  documentInputType?: string;
+  outputDimensionality?: number;
+  cache: Omit<ProducedMemorySearchConfig["cache"], "maxEntries"> & { maxEntries?: number };
+  local: Omit<ProducedMemorySearchConfig["local"], "modelPath"> & {
+    modelPath?: string;
+    modelCacheDir?: string;
+    contextSize?: number | "auto";
+  };
+  remote?: Omit<Partial<NonNullable<ProducedMemorySearchConfig["remote"]>>, "batch"> & {
+    batch?: NonNullable<ProducedMemorySearchConfig["remote"]>["batch"];
+    /** @deprecated Ignored; retained for SDK source compatibility until the next major. */
+    nonBatchConcurrency?: number;
+  };
+  store: Omit<ProducedMemorySearchConfig["store"], "vector"> & {
+    vector: Omit<ProducedMemorySearchConfig["store"]["vector"], "extensionPath"> & {
+      extensionPath?: string;
+    };
+  };
+  sync: Omit<ProducedMemorySearchConfig["sync"], "embeddingBatchTimeoutSeconds"> & {
+    embeddingBatchTimeoutSeconds: number | undefined;
+  };
+};
+
+export type ResolvedMemorySearchSyncConfig = ResolvedMemorySearchConfig["sync"];
+
+const DEFAULT_MAX_RESULTS = 6;
+const DEFAULT_MIN_SCORE = 0.35;
+const DEFAULT_CACHE_ENABLED = true;
+// LRU bound for the embedding cache. #111382 purged the operator knob but left the
+// built-in default unset, so pruneEmbeddingCacheIfNeeded early-returns and the cache grows
+// without limit. Must stay above a typical live chunk count: a cap below the working set
+// evicts rows the next sync needs and forces paid re-embedding.
+const DEFAULT_CACHE_MAX_ENTRIES = 50_000;
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+
+export function resolveMemorySearchProviderId(provider?: string): string {
+  const configured = provider?.trim();
+  if (configured?.toLowerCase() === "none") {
+    return "none";
+  }
+  return configured && configured.toLowerCase() !== "auto"
+    ? configured
+    : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+}
+
+/** Compare provider identities without collapsing distinct configured tenants into their adapter. */
+export function isSameMemorySearchProvider(left?: string, right?: string): boolean {
+  const canonical = (id?: string) => {
+    const normalized = resolveMemorySearchProviderId(normalizeProviderId(id ?? ""));
+    return normalized === "google" ? "gemini" : normalized;
+  };
+  return canonical(left) === canonical(right);
+}
+
+function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawConfig) {
+  // `none` is the built-in FTS-only sentinel, never a plugin capability.
+  // Avoid cold plugin discovery when semantic memory is intentionally disabled.
+  if (normalizeProviderId(providerId) === "none") {
+    return undefined;
+  }
+  return getMemoryEmbeddingProvider(providerId, cfg);
+}
+
+/** Resolves source and query settings without loading an embedding provider runtime. */
+export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: string) {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  if (!enabled) {
+    return null;
+  }
+  assertSecretOwnerAvailable("capability", runtimeMemorySecretOwnerId(agentId));
+  const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
+  const configuredSessionMemory =
+    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  const configuredSources = overrides?.sources ?? defaults?.sources;
+  /** Resolve query and indexed sources from already-selected memory policy facts. */
+  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
+  const searchSources = normalizeSources(configuredSources, sessionMemory);
+  const sources = normalizeSources(
+    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
+    sessionMemory,
+  );
+  const sessionSourceExcluded =
+    configuredSources?.includes("sessions") === true && !searchSources.includes("sessions");
+  return {
+    enabled,
+    rememberAcrossConversations,
+    sources,
+    searchSources,
+    sessionSourceExcluded,
+    extraPaths: normalizeConfiguredMemoryExtraPaths([
+      ...(defaults?.extraPaths ?? []),
+      ...(overrides?.extraPaths ?? []),
+    ]),
+    query: {
+      maxResults:
+        overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
+      minScore: clampNumber(
+        overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
+        0,
+        1,
+      ),
+      hybrid: {
+        enabled: true,
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        candidateMultiplier: 4,
+        mmr: { enabled: true, lambda: 0.7 },
+        temporalDecay: { enabled: true, halfLifeDays: 30 },
+      },
+    },
+    experimental: { sessionMemory },
+    sync: resolveSyncConfig(),
+  };
+}
+
+function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
+  const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
+  if (!indexConfig) {
+    return null;
+  }
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  const provider = resolveMemorySearchProviderId(overrides?.provider ?? defaults?.provider);
+  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const defaultRemote = defaults?.remote;
+  const overrideRemote = overrides?.remote;
+  // Auth can follow another adapter only when the shared destination follows it too.
+  const inheritedRemote =
+    isSameMemorySearchProvider(provider, defaults?.provider) ||
+    (overrideRemote?.baseUrl === undefined && defaultRemote?.baseUrl?.trim())
+      ? defaultRemote
+      : undefined;
+  const configuredFallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const fallback = configuredFallback.toLowerCase() === "none" ? "none" : configuredFallback;
+  const fallbackAdapter =
+    normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
+      ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
+      : undefined;
+  const hasRemoteConfig = [overrideRemote, defaultRemote].some(
+    (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
+  );
+  const includeRemote =
+    hasRemoteConfig ||
+    primaryAdapter?.transport !== "local" ||
+    fallbackAdapter?.transport === "remote";
+  const remote = includeRemote
+    ? {
+        baseUrl: overrideRemote?.baseUrl ?? inheritedRemote?.baseUrl,
+        apiKey: overrideRemote?.apiKey ?? inheritedRemote?.apiKey,
+        headers: overrideRemote?.headers ?? inheritedRemote?.headers,
+        batch: {
+          enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
+          wait: true,
+          concurrency: 2,
+          pollIntervalMs: 2_000,
+          timeoutMinutes: 60,
+        },
+      }
+    : undefined;
+  const model = overrides?.model ?? defaults?.model ?? primaryAdapter?.defaultModel ?? "";
+  const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
+  const queryInputType =
+    overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
+  const documentInputType =
+    overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
+  const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
+  const multimodal = normalizeMemoryMultimodalSettings({
+    enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
+    modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
+    maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
+  });
+  const resolved = {
+    ...indexConfig,
+    multimodal,
+    provider,
+    remote,
+    fallback,
+    model,
+    inputFormat: overrides?.inputFormat ?? defaults?.inputFormat,
+    inputType,
+    queryInputType,
+    queryInstruction: (overrides?.queryInstruction ?? defaults?.queryInstruction) || undefined,
+    documentInputType,
+    outputDimensionality,
+    local: { modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath },
+    store: {
+      driver: "sqlite" as const,
+      databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
+      fts: {
+        tokenizer:
+          overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
+      },
+      vector: {
+        enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
+        extensionPath:
+          overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
+      },
+    },
+    chunking: { tokens: 400, overlap: 80 },
+    cache: {
+      enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
+      maxEntries: DEFAULT_CACHE_MAX_ENTRIES,
+    },
+  };
+  const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
+  // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
+  // Reuse the same config-aware adapter for defaults and multimodal validation.
+  if (
+    multimodalActive &&
+    primaryAdapter &&
+    !(primaryAdapter.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
+  ) {
+    throw new Error(
+      "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
+    );
+  }
+  if (multimodalActive && resolved.fallback !== "none") {
+    throw new Error(
+      'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
+    );
+  }
+  return resolved;
+}
+
+export function resolveMemorySearchConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): ResolvedMemorySearchConfig | null {
+  return produceMemorySearchConfig(cfg, agentId);
+}
+
+function resolveSyncConfig() {
+  return {
+    onSessionStart: true,
+    onSearch: true,
+    watch: true,
+    watchDebounceMs: 1500,
+    intervalMinutes: 0,
+    embeddingBatchTimeoutSeconds: undefined,
+    sessions: {
+      deltaBytes: 100_000,
+      deltaMessages: 50,
+      postCompactionForce: true,
+    },
+  };
+}
+
+export function resolveMemorySearchSyncConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): ResolvedMemorySearchSyncConfig | null {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  if (!enabled) {
+    return null;
+  }
+  return resolveSyncConfig();
+}

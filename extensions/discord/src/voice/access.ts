@@ -1,0 +1,128 @@
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { Guild } from "../internal/discord.js";
+import {
+  allowListMatches,
+  hasConfiguredDiscordChannels,
+  isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
+  resolveDiscordChannelConfigWithFallback,
+  type DiscordChannelConfigResolved,
+  resolveDiscordGuildEntry,
+  resolveDiscordMemberAccessState,
+} from "../monitor/allow-list.js";
+import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
+
+export async function authorizeDiscordVoiceIngress(initialParams: {
+  readPolicy?: DiscordLivePolicyReader;
+  cfg: OpenClawConfig;
+  discordConfig: DiscordAccountConfig;
+  accountId?: string;
+  groupPolicy?: "open" | "disabled" | "allowlist";
+  guild?: Guild<true> | Guild | null;
+  guildName?: string;
+  guildId: string;
+  channelId: string;
+  channelName?: string;
+  channelSlug: string;
+  parentId?: string;
+  parentName?: string;
+  parentSlug?: string;
+  scope?: "channel" | "thread";
+  channelLabel?: string;
+  memberRoleIds: string[];
+  admissionAllowFrom?: string[];
+  sender: { id: string; name?: string; tag?: string };
+}): Promise<
+  | {
+      ok: true;
+      channelConfig?: DiscordChannelConfigResolved | null;
+      isCurrent?: () => boolean;
+    }
+  | { ok: false; message: string }
+> {
+  const policy = await initialParams.readPolicy?.();
+  if (policy?.isCurrent() === false) {
+    return { ok: false, message: "Access policy changed. Try this interaction again." };
+  }
+  const params = policy
+    ? {
+        ...initialParams,
+        ...policy,
+        admissionAllowFrom: resolveDiscordVoiceAccess(policy).admissionAllowFrom,
+      }
+    : initialParams;
+  const groupPolicy =
+    params.groupPolicy ??
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: params.cfg.channels?.discord !== undefined,
+      groupPolicy: params.discordConfig.groupPolicy,
+      defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+    }).groupPolicy;
+  const guild =
+    params.guild ??
+    ({ id: params.guildId, ...(params.guildName ? { name: params.guildName } : {}) } as Guild);
+  const guildInfo = resolveDiscordGuildEntry({
+    guild,
+    guildId: params.guildId,
+    guildEntries: params.discordConfig.guilds,
+  });
+  const channelConfig = params.channelId
+    ? resolveDiscordChannelConfigWithFallback({
+        ...params,
+        guildInfo,
+      })
+    : null;
+
+  if (channelConfig?.enabled === false) {
+    return { ok: false, message: "This channel is disabled." };
+  }
+
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
+  const channelAllowed = channelConfig ? channelConfig.allowed : !channelAllowlistConfigured;
+  if (
+    (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) ||
+    !isDiscordGroupAllowedByPolicy({
+      groupPolicy,
+      guildAllowlisted: Boolean(guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed,
+    }) ||
+    channelConfig?.allowed === false
+  ) {
+    return {
+      ok: false,
+      message: `${params.channelLabel ?? "This channel"} is not allowlisted for voice commands.`,
+    };
+  }
+
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig,
+    guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    sender: params.sender,
+    allowNameMatching: false,
+  });
+
+  const admissionAllowList = normalizeDiscordAllowList(
+    params.admissionAllowFrom ?? params.discordConfig.allowFrom,
+    ["discord:", "user:", "pk:"],
+  );
+  const admissionAllowed = admissionAllowList
+    ? allowListMatches(admissionAllowList, params.sender, { allowNameMatching: false })
+    : false;
+
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups: true,
+    authorizers: [
+      { configured: admissionAllowList != null, allowed: admissionAllowed },
+      { configured: hasAccessRestrictions, allowed: memberAllowed },
+    ],
+    modeWhenAccessGroupsOff: "configured",
+  });
+  return commandAuthorized
+    ? { ok: true, channelConfig, ...(policy ? { isCurrent: policy.isCurrent } : {}) }
+    : { ok: false, message: "You are not authorized to use this command." };
+}

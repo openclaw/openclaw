@@ -1,0 +1,292 @@
+import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { clearRotatedSessionMetadata } from "../../agents/session-reset-metadata.js";
+import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
+import { resolveTerminalMainSessionTranscriptRegistryCheck } from "../../config/sessions/lifecycle.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  mergeDeliveryContext,
+  normalizeSessionDeliveryState,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import {
+  normalizeTrustedGroupMetadata,
+  resolveAgentSessionGroup,
+  type TrustedGroupMetadata,
+} from "./agent-subagent-registration.js";
+
+export async function buildAgentSessionPatch(params: {
+  freshEntry: SessionEntry | undefined;
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  canonicalSessionKey: string;
+  storePath: string;
+  expectedExistingSessionId?: string;
+  hasRestoredCronContinuation: boolean;
+  resetPolicy: ReturnType<typeof import("../../config/sessions.js").resolveSessionResetPolicy>;
+  now: number;
+  requestedSessionId?: string;
+  isSystemGatewayRun: boolean;
+  visibleRequest: boolean;
+  initialEntry: SessionEntry | undefined;
+  normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
+  requestDeliveryHint: DeliveryContext | undefined;
+  requestLabel?: string;
+  explicitSessionKey?: string;
+  pluginOwnerId?: string;
+  fallbackSessionId?: string;
+  touchInteraction: boolean;
+}) {
+  // Re-evaluate each read; callers retain admission and concurrent-rotation fencing.
+  const lifecycleTimestamps = params.freshEntry
+    ? await resolveSessionLifecycleTimestampsAsync({
+        entry: params.freshEntry,
+        storePath: params.storePath,
+        agentId: params.sessionAgentId,
+        sessionKey: params.canonicalSessionKey,
+      })
+    : undefined;
+  const skipImplicitExpiry =
+    params.expectedExistingSessionId !== undefined ||
+    params.hasRestoredCronContinuation ||
+    params.freshEntry?.modelSelectionLocked === true ||
+    (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
+  const freshness: SessionFreshness | undefined = params.freshEntry
+    ? skipImplicitExpiry
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshness({
+          updatedAt: params.freshEntry.updatedAt,
+          ...lifecycleTimestamps,
+          now: params.now,
+          policy: params.resetPolicy,
+        })
+    : undefined;
+  const requestedSessionMatchesEntry = Boolean(
+    params.requestedSessionId && params.freshEntry?.sessionId?.trim() === params.requestedSessionId,
+  );
+  const terminalCheck =
+    params.isSystemGatewayRun || requestedSessionMatchesEntry
+      ? undefined
+      : resolveTerminalMainSessionTranscriptRegistryCheck({
+          entry: params.freshEntry,
+          sessionScope: params.cfg.session?.scope,
+          sessionKey: params.canonicalSessionKey,
+          agentId: params.sessionAgentId,
+          mainKey: params.cfg.session?.mainKey,
+          storePath: params.storePath,
+        });
+  const failedSession =
+    params.freshEntry?.status === "failed" && Boolean(params.freshEntry.sessionId?.trim());
+  const needsMetadata = failedSession || terminalCheck !== undefined;
+  // Transcript facts can change independently of the session row.
+  const metadata =
+    params.freshEntry && needsMetadata
+      ? await readSessionTranscriptAnchorsAsync(
+          {
+            agentId: params.sessionAgentId,
+            sessionId: params.freshEntry.sessionId,
+            sessionKey: params.canonicalSessionKey,
+            storePath: params.storePath,
+          },
+          { entryIds: [], includeMetadata: true },
+        ).then(
+          (facts) => facts.metadata,
+          () => undefined,
+        )
+      : undefined;
+  const terminalMainTranscriptNewerThanRegistry = Boolean(
+    terminalCheck &&
+    metadata?.updatedAt != null &&
+    Number.isFinite(metadata.updatedAt) &&
+    Math.floor(metadata.updatedAt) >
+      Math.floor(metadata.observedAt ?? terminalCheck.registryTimestampMs),
+  );
+  const recoverableTerminalSession =
+    Boolean(params.freshEntry?.sessionId) &&
+    params.visibleRequest &&
+    isRecoverableTerminalSessionStatus(params.freshEntry?.status);
+  const canReuseSession =
+    Boolean(params.freshEntry?.sessionId) &&
+    ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
+    !(failedSession && !metadata?.present) &&
+    !terminalMainTranscriptNewerThanRegistry;
+  const usableRequestedSessionId =
+    params.requestedSessionId && (!params.freshEntry?.sessionId || canReuseSession)
+      ? params.requestedSessionId
+      : undefined;
+  const automaticResetReason =
+    !canReuseSession &&
+    !usableRequestedSessionId &&
+    !(failedSession && !metadata?.present) &&
+    !terminalMainTranscriptNewerThanRegistry
+      ? freshness?.staleReason
+      : undefined;
+  const sessionId =
+    usableRequestedSessionId ??
+    (canReuseSession || automaticResetReason ? params.freshEntry?.sessionId : undefined);
+  const isNewSession =
+    !params.freshEntry ||
+    (!canReuseSession && !usableRequestedSessionId) ||
+    Boolean(usableRequestedSessionId && params.freshEntry?.sessionId !== usableRequestedSessionId);
+  const storedSpawnedBy = normalizeOptionalString(params.freshEntry?.spawnedBy);
+  const freshSpawnedBy = storedSpawnedBy
+    ? resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: storedSpawnedBy,
+        storeAgentId: params.sessionAgentId,
+      })
+    : undefined;
+  const storedGroup = normalizeTrustedGroupMetadata(params.freshEntry);
+  let inheritedGroup: TrustedGroupMetadata | undefined;
+  if (
+    freshSpawnedBy &&
+    (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
+  ) {
+    try {
+      const parentEntry = (
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: params.cfg,
+          key: freshSpawnedBy,
+        })
+      ).entry;
+      inheritedGroup = normalizeTrustedGroupMetadata({
+        groupId: parentEntry?.groupId,
+        groupChannel: parentEntry?.groupChannel,
+        groupSpace: parentEntry?.space,
+      });
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
+        throw error;
+      }
+    }
+  }
+  const nextGroup = resolveAgentSessionGroup({
+    sessionKey: params.canonicalSessionKey,
+    spawnedBy: freshSpawnedBy,
+    stored: storedGroup,
+    inherited: inheritedGroup,
+    requested: params.normalizedSpawned,
+  });
+
+  const effectiveDelivery = mergeDeliveryContext(
+    deliveryContextFromSession(params.freshEntry),
+    params.requestDeliveryHint,
+  );
+  const delivery =
+    !params.requestDeliveryHint && params.freshEntry?.delivery
+      ? params.freshEntry.delivery
+      : normalizeSessionDeliveryState({
+          route: sessionDeliveryRoute(params.freshEntry),
+          context: effectiveDelivery,
+          origin: sessionDeliveryOrigin(params.freshEntry),
+        });
+  const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
+  const explicitSessionDisplayName =
+    params.freshEntry === undefined &&
+    params.visibleRequest &&
+    normalizeOptionalString(params.explicitSessionKey) &&
+    !labelValue &&
+    !isCronSessionKey(params.canonicalSessionKey) &&
+    !isSubagentSessionKey(params.canonicalSessionKey) &&
+    !isAcpSessionKey(params.canonicalSessionKey)
+      ? parseAgentSessionKey(params.canonicalSessionKey)?.rest.trim()
+      : undefined;
+  const freshSessionRotatedSinceLoad = Boolean(
+    params.initialEntry?.sessionId &&
+    params.freshEntry?.sessionId &&
+    params.freshEntry.sessionId !== params.initialEntry.sessionId,
+  );
+  const freshSessionId = sessionId ?? params.fallbackSessionId ?? randomUUID();
+  const freshRotatedSessionId = Boolean(
+    params.freshEntry?.sessionId && params.freshEntry.sessionId !== freshSessionId,
+  );
+  const patchSessionId = freshSessionRotatedSinceLoad
+    ? params.freshEntry?.sessionId
+    : freshSessionId;
+  const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
+  const shouldClearTerminalState =
+    canReuseSession &&
+    recoverableTerminalSession &&
+    !freshSessionRotatedSinceLoad &&
+    patchSessionId === params.freshEntry?.sessionId;
+  const patch: Partial<SessionEntry> = {
+    ...(automaticResetReason && params.freshEntry
+      ? { ...clearRotatedSessionMetadata(params.freshEntry), agentHarnessId: undefined }
+      : {}),
+    sessionId: patchSessionId,
+    updatedAt: params.now,
+    ...(isNewSession && !freshSessionRotatedSinceLoad
+      ? { lifecycleRevision: randomUUID(), sessionStartedAt: params.now }
+      : params.freshEntry?.sessionStartedAt === undefined &&
+          patchSessionId === params.freshEntry?.sessionId &&
+          lifecycleTimestamps?.sessionStartedAt !== undefined
+        ? { sessionStartedAt: lifecycleTimestamps.sessionStartedAt }
+        : {}),
+    ...(params.touchInteraction
+      ? {
+          lastInteractionAt: params.now,
+          // Clear at human-turn admission, before the model may declare a new
+          // status. Later lifecycle writes must not erase a same-turn declaration.
+          agentStatus: undefined,
+        }
+      : {}),
+    ...(shouldClearRotatedState ? { resumeAfterRestart: undefined } : {}),
+    delivery,
+    ...(labelValue ? { label: labelValue } : {}),
+    // An operator-supplied key is an explicit name: keep it instead of generating
+    // a dashboard title later, matching the semantics of a Control UI rename.
+    ...(explicitSessionDisplayName ? { displayName: explicitSessionDisplayName } : {}),
+    ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
+    groupId: nextGroup.groupId,
+    groupChannel: nextGroup.groupChannel,
+    space: nextGroup.groupSpace,
+    // Plugin ownership is creation-only; existing sessions keep their original owner.
+    ...(params.freshEntry === undefined && params.pluginOwnerId
+      ? { pluginOwnerId: params.pluginOwnerId }
+      : {}),
+    ...(shouldClearRotatedState || shouldClearTerminalState
+      ? {
+          status: undefined,
+          lifecycleRunId: undefined,
+          lastRunId: undefined,
+          startedAt: undefined,
+          endedAt: undefined,
+          runtimeMs: undefined,
+          abortedLastRun: undefined,
+        }
+      : {}),
+  };
+  if (shouldClearRotatedState) {
+    clearAllCliSessions(patch);
+  }
+  return {
+    patch,
+    ...(automaticResetReason ? { automaticResetReason } : {}),
+    spawnedBy: freshSpawnedBy,
+    ...nextGroup,
+    freshSessionRotatedSinceLoad,
+    isNewSession,
+    rotatedSessionId: freshRotatedSessionId,
+    usableRequestedSessionId,
+    freshness,
+  };
+}

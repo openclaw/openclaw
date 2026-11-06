@@ -1,0 +1,53 @@
+/**
+ * Markdown AST — addressing index for workspace files.
+ *
+ * Pure addressing structure; no per-file opinions (those live in lint
+ * rules). Byte-fidelity: `parseMd(raw).raw === raw`; `raw` on the
+ * root preserves the original bytes for round-trip.
+ *
+ * @module @openclaw/oc-path/ast
+ */
+
+/** Frontmatter entry. YAML string scalars decoded; non-string scalar spelling preserved. */
+export interface FrontmatterEntry {
+  readonly key: string;
+  readonly value: string;
+  readonly line: number;
+}
+
+/**
+ * Bullet item. `slug` is the addressing key (kv.key when present, else
+ * item text). `kv` is populated for `- key: value` bullets.
+ */
+export interface AstItem {
+  readonly text: string;
+  readonly slug: string;
+  readonly line: number;
+  readonly kv?: { readonly key: string; readonly value: string };
+}
+
+/**
+ * H2-delimited block. `bodyText` is the verbatim prose between this
+ * heading and the next; `items` are extracted for addressing.
+ *
+ * Tables and code blocks aren't first-class — addressing into them is
+ * out of scope. Lint rules re-tokenize `bodyText` if needed.
+ */
+export interface AstBlock {
+  readonly heading: string;
+  readonly slug: string;
+  readonly line: number;
+  readonly bodyText: string;
+  readonly items: readonly AstItem[];
+}
+
+/** Root AST. `raw` carries the original bytes for byte-identical round-trip. */
+export interface MdAst {
+  readonly kind: "md";
+  readonly raw: string;
+  readonly frontmatter: readonly FrontmatterEntry[];
+  /** 1-based line of the closing frontmatter fence, including an empty block. */
+  readonly frontmatterEndLine?: number;
+  readonly preamble: string;
+  readonly blocks: readonly AstBlock[];
+}

@@ -1,0 +1,172 @@
+title: Subagent fanout synthesis
+
+scenario:
+  id: subagent-fanout-synthesis
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-synthesis
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+  objective: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
+  successCriteria:
+    - Parent flow launches at least two bounded subagent tasks.
+    - Both delegated results are acknowledged in the main flow.
+    - Final answer synthesizes both worker outputs in one reply.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/subagents/spawn/subagent-spawn.ts
+    - src/agents/system-prompt.ts
+    - extensions/qa-lab/src/suite.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    suiteIsolation: isolated
+    summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
+    config:
+      prompt: |-
+        Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn with cleanup: delete, not ACP.
+        First spawn exactly one child with label qa-fanout-alpha and task: verify that `AGENTS.md` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        Then spawn exactly one child with label qa-fanout-beta and task: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        Do not spawn any more children after qa-fanout-beta finishes.
+        Then reply with exactly these two lines and nothing else:
+        subagent-1: ok
+        subagent-2: ok
+      expectedReply: |-
+        subagent-1: ok
+        subagent-2: ok
+      expectedChildLabels:
+        - qa-fanout-alpha
+        - qa-fanout-beta
+flow:
+  steps:
+    - name: spawns sequential workers and folds both results back into the parent reply
+      actions:
+        - set: attempts
+          value:
+            expr: "env.providerMode === 'mock-openai' ? 1 : 2"
+        - set: lastError
+          value: null
+        - forEach:
+            items:
+              expr: "Array.from({ length: attempts }, (_, index) => index + 1)"
+            item: attempt
+            actions:
+              - if:
+                  expr: "lastError === '__done__'"
+                  then:
+                    - set: skippedAttempt
+                      value:
+                        expr: attempt
+                  else:
+                    - try:
+                        actions:
+                          - call: waitForGatewayHealthy
+                            args:
+                              - ref: env
+                              - 120000
+                          - call: reset
+                          - set: alphaLabel
+                            value:
+                              expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[0] : `${config.expectedChildLabels[0]}-${attempt}`"
+                          - set: betaLabel
+                            value:
+                              expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[1] : `${config.expectedChildLabels[1]}-${attempt}`"
+                          - set: prompt
+                            value:
+                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn with cleanup: delete, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`AGENTS.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
+                          - set: sessionKey
+                            value:
+                              expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
+                          # sessions_yield ends the original run. Observe the resumed
+                          # parent result through its public session history.
+                          - call: startAgentRun
+                            args:
+                              - ref: env
+                              - sessionKey:
+                                  ref: sessionKey
+                                message:
+                                  expr: "`${prompt}\nQA parent correlation: ${sessionKey}`"
+                                timeoutMs:
+                                  expr: liveTurnTimeoutMs(env, 30000)
+                          - call: waitForAgentHistoryReply
+                            saveAs: parentOutbound
+                            args:
+                              - ref: env
+                              - ref: sessionKey
+                              - lambda:
+                                  params: [text]
+                                  expr: "text.trim() === config.expectedReply"
+                              - expr: liveTurnTimeoutMs(env, 90000)
+                              - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                          # Spawn receipts bind child sessions to runs; agent.wait retains
+                          # terminal outcomes and replies after delete-cleanup retires child rows.
+                          - call: waitForCondition
+                            saveAs: fanoutSpawns
+                            args:
+                              - lambda:
+                                  async: true
+                                  expr: |-
+                                    (async () => {
+                                      const activity = await readSessionToolActivity(env, sessionKey);
+                                      const spawns = [alphaLabel, betaLabel].map((label, index) => {
+                                        const call = activity.find((item) => item.toolName === 'sessions_spawn' && item.successful && item.input?.label === label);
+                                        const receipt = extractQaToolPayload(call?.result);
+                                        return call?.toolCallId && receipt?.status === 'accepted' && typeof receipt.childSessionKey === 'string' && receipt.childSessionKey.length > 0 && typeof receipt.runId === 'string' && receipt.runId.length > 0
+                                          ? { label, toolCallId: call.toolCallId, childSessionKey: receipt.childSessionKey, runId: receipt.runId, expectedReply: env.providerMode === 'mock-openai' ? ['ALPHA-OK', 'BETA-OK'][index] : 'ok' }
+                                          : undefined;
+                                      });
+                                      return spawns.every(Boolean) && new Set(spawns.map((spawn) => spawn.toolCallId)).size === 2 && new Set(spawns.map((spawn) => spawn.childSessionKey)).size === 2 && new Set(spawns.map((spawn) => spawn.runId)).size === 2 ? spawns : undefined;
+                                    })()
+                              - expr: liveTurnTimeoutMs(env, 30000)
+                              - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                          - set: fanoutCompletions
+                            value: []
+                          - forEach:
+                              items:
+                                ref: fanoutSpawns
+                              item: child
+                              actions:
+                                - call: waitForAgentRun
+                                  saveAs: completion
+                                  args:
+                                    - ref: env
+                                    - expr: child.runId
+                                    - expr: liveTurnTimeoutMs(env, 30000)
+                                - assert:
+                                    expr: "completion.runId === child.runId && completion.status === 'ok' && completion.yielded !== true && typeof completion.endedAt === 'number' && completion.terminalReply?.disposition === 'visible' && completion.terminalReply.text.trim() === child.expectedReply"
+                                    message:
+                                      expr: "`child completion missing for ${child.label}: ${JSON.stringify({ child, completion })}`"
+                                - set: fanoutCompletions
+                                  value:
+                                    expr: "[...fanoutCompletions, { ...child, completion }]"
+                          - set: details
+                            value:
+                              expr: "JSON.stringify({ reply: parentOutbound.text, children: fanoutCompletions })"
+                          - set: lastError
+                            value: __done__
+                        catchAs: attemptError
+                        catch:
+                          - set: lastError
+                            value:
+                              ref: attemptError
+                          - if:
+                              expr: "lastError !== '__done__' && attempt < attempts"
+                              then:
+                                - try:
+                                    actions:
+                                      - call: waitForGatewayHealthy
+                                        args:
+                                          - ref: env
+                                          - 120000
+                                    catch:
+                                      - set: ignoredRetryWait
+                                        value: true
+        - assert:
+            expr: "lastError === '__done__'"
+            message:
+              expr: "lastError instanceof Error ? formatErrorMessage(lastError) : String(lastError ?? 'fanout retry exhausted')"
+      detailsExpr: "details"

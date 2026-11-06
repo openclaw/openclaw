@@ -1,0 +1,140 @@
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+
+/** Boot-stable quarantine state for configured plugins whose payload failed verification. */
+
+export const PLUGIN_AVAILABILITY_POLICY = {
+  state: "configured-unavailable",
+  severity: "warning",
+  repairCommand: "openclaw doctor --fix",
+} as const;
+
+/** Availability findings share one disposition across startup and Doctor lint. */
+export function describePluginAvailabilityFailure(pluginId: string, detail: string) {
+  return {
+    source: pluginId,
+    severity: PLUGIN_AVAILABILITY_POLICY.severity,
+    message: `Plugin "${pluginId}" is unavailable: ${detail} Run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`,
+  };
+}
+
+export type PluginVerificationFailureReason =
+  | "missing-install-path"
+  | "missing-package-dir"
+  | "missing-package-json"
+  | "unreadable-package-json"
+  | "invalid-package-json"
+  | "missing-bundle-manifest"
+  | "invalid-bundle-manifest"
+  | "missing-main-entry"
+  | "missing-extension-entry"
+  | "missing-openclaw-peer-link";
+
+type PluginVerificationDiagnostic = {
+  readonly kind: "plugin-verification";
+  readonly reason: PluginVerificationFailureReason;
+  readonly detail: string;
+  readonly installPath?: string;
+};
+
+type PublicPluginVerificationDiagnostic = Pick<
+  PluginVerificationDiagnostic,
+  "kind" | "reason" | "detail"
+>;
+
+export type DegradedPlugin = {
+  readonly pluginId: string;
+  readonly state: typeof PLUGIN_AVAILABILITY_POLICY.state;
+  readonly diagnostic: PluginVerificationDiagnostic;
+};
+
+export type PluginVerificationFailure = {
+  pluginId: string;
+  installPath?: string;
+  reason: PluginVerificationFailureReason;
+  detail: string;
+};
+
+let activeDegradedPlugins: readonly DegradedPlugin[] = [];
+
+/** Converts verified ownership failures into the quarantine state used for this boot. */
+export function buildDegradedPluginsFromVerificationFailures(
+  failures: readonly PluginVerificationFailure[],
+): DegradedPlugin[] {
+  const degraded = new Map<string, DegradedPlugin>();
+  for (const failure of failures) {
+    // One owner produces one quarantine record even when several payload files
+    // fail verification; startup already emits every finding before this fold.
+    if (degraded.has(failure.pluginId)) {
+      continue;
+    }
+    degraded.set(failure.pluginId, {
+      pluginId: failure.pluginId,
+      state: PLUGIN_AVAILABILITY_POLICY.state,
+      diagnostic: {
+        kind: "plugin-verification",
+        reason: failure.reason,
+        detail: failure.detail,
+        ...(failure.installPath ? { installPath: failure.installPath } : {}),
+      },
+    });
+  }
+  return [...degraded.values()];
+}
+
+/** Replaces the process-local quarantine snapshot established before Gateway plugin loading. */
+export function setActiveDegradedPlugins(plugins: readonly DegradedPlugin[]): void {
+  activeDegradedPlugins = [...plugins];
+}
+
+export function listActiveDegradedPlugins(): readonly DegradedPlugin[] {
+  return activeDegradedPlugins;
+}
+
+export function findActiveDegradedPlugin(pluginId: string): DegradedPlugin | undefined {
+  return activeDegradedPlugins.find((entry) => entry.pluginId === pluginId);
+}
+
+/** Drops a verification failure that belongs to a different selected plugin root. */
+export function clearActiveDegradedPlugin(pluginId: string): void {
+  activeDegradedPlugins = activeDegradedPlugins.filter((entry) => entry.pluginId !== pluginId);
+}
+
+/** Matches an install-record path and discovered root across symlink/path aliases. */
+export function pluginInstallPathMatchesRoot(
+  installPath: string | undefined,
+  rootDir: string,
+): boolean {
+  if (!installPath) {
+    return false;
+  }
+  return resolveRealpathOrAbsolute(installPath) === resolveRealpathOrAbsolute(rootDir);
+}
+
+/** Matches install-record and discovered roots across symlink/path aliases. */
+export function degradedPluginMatchesRoot(plugin: DegradedPlugin, rootDir: string): boolean {
+  return pluginInstallPathMatchesRoot(plugin.diagnostic.installPath, rootDir);
+}
+
+/** Removes the known private install root before diagnostics leave the Gateway process. */
+export function toPublicPluginVerificationDiagnostic(
+  diagnostic: PluginVerificationDiagnostic,
+): PublicPluginVerificationDiagnostic {
+  const detail =
+    diagnostic.reason === "missing-openclaw-peer-link"
+      ? 'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.'
+      : diagnostic.installPath
+        ? diagnostic.detail.replaceAll(diagnostic.installPath, "<plugin-install>")
+        : diagnostic.detail;
+  return {
+    kind: diagnostic.kind,
+    reason: diagnostic.reason,
+    detail,
+  };
+}
+
+export function formatPluginVerificationDiagnostic(
+  diagnostic: PluginVerificationDiagnostic,
+): string {
+  const publicDiagnostic = toPublicPluginVerificationDiagnostic(diagnostic);
+  return `configured plugin payload verification failed (${publicDiagnostic.reason}): ${publicDiagnostic.detail}`;
+}

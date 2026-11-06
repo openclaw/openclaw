@@ -1,0 +1,490 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
+import { runAdmittingGatewayDelivery } from "../../channels/turn/admitting-gateway-delivery.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  isOutboundDeliveryError,
+  isPlatformMessageNotDispatchedError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
+import {
+  createStructuredOutboundPayloadPlan,
+  resolveOutboundPayloadMirrorText,
+  type NormalizedOutboundPayload,
+} from "../../infra/outbound/payloads.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  copyReplyPayloadMetadata,
+  formatBtwTextForExternalDelivery,
+  getReplyPayloadMetadata,
+  shouldSuppressReasoningPayload,
+  type ReplyDeliveryContext,
+} from "../reply-payload.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
+import { mirrorDeliveredReplyToTranscript } from "./dispatch-from-config.transcript.js";
+import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
+import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
+
+const messageRuntimeLoader = createLazyImportLoader(
+  () => import("../../channels/message/runtime.js"),
+);
+
+const BLOCK_REPLY_COMPLETION_RETENTION = {
+  idPrefix: "block-reply:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
+
+type RouteReplyParams = {
+  payload: ReplyPayload;
+  channel: OriginatingChannelType;
+  to: string;
+  /** Session key for deriving agent identity defaults (multi-agent). */
+  sessionKey?: string;
+  /** Original session generation retained by durable delivery after producer settlement. */
+  sessionGeneration?: SessionDeliveryGeneration;
+  /** Prepared owner for unscoped sessions; an agent-scoped target remains authoritative. */
+  agentId?: string;
+  /** Session key for policy resolution when native-command delivery targets a different session. */
+  policySessionKey?: string;
+  /** Explicit conversation type for policy resolution when the policy key is generic. */
+  policyConversationType?: SilentReplyConversationType;
+  accountId?: string;
+  /** Originating sender id for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
+  /** Originating sender display name for name-keyed sender policy matching. */
+  requesterSenderName?: string;
+  /** Originating sender username for username-keyed sender policy matching. */
+  requesterSenderUsername?: string;
+  /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+  requesterSenderE164?: string;
+  /** Thread id for replies (Telegram topic id or Matrix thread event id). */
+  threadId?: string | number;
+  /** Originating inbound message fact for the owning channel's reply resolver. */
+  currentMessageId?: string;
+  /** Reply policy fallback for delivery kinds that do not carry payload metadata. */
+  replyDelivery?: ReplyDeliveryContext;
+  cfg: OpenClawConfig;
+  abortSignal?: AbortSignal;
+  /** Record transcript-only reply bookkeeping in the producing session (default: true). */
+  mirror?: boolean;
+  isGroup?: boolean;
+  /** Group or channel identifier for correlation with received events */
+  groupId?: string;
+  /** Reply lane for reply_payload_sending hooks. */
+  replyKind: ReplyDispatchKind;
+  runId?: string;
+  /** @internal Stable producer-owned block delivery intent. */
+  deliveryIntentId?: string;
+  /** Model/session context for response-prefix template interpolation. */
+  responsePrefixContext?: ResponsePrefixContext;
+  /** Private producer authority revalidated at the final outbound adapter handoff. */
+  assertCurrent?: () => void;
+  beforeDeliver?: () => Promise<void>;
+};
+
+type RouteReplyResult = {
+  ok: boolean;
+  /** Whether a recipient-visible send completed or may already have completed. */
+  delivered: boolean;
+  /** True when the adapter may have sent but returned no delivery identity. */
+  ambiguous?: boolean;
+  queueCustody?: "held" | "released";
+  /** True when a hook intentionally suppressed provider delivery. */
+  suppressed?: boolean;
+  reason?: "channel_transform";
+  messageId?: string;
+  error?: string;
+  /** Original failure retains the delivery owner's no-send proof. */
+  cause?: unknown;
+};
+
+function summarizeVisibleRouteReplyDelivery(
+  results: readonly { messageId?: string }[],
+): Pick<RouteReplyResult, "delivered" | "messageId"> {
+  // Durable results may prove delivery through a receipt or alternate identity
+  // when messageId is empty. Provider success sentinels prove delivery but are
+  // not editable IDs; explicit suppression sentinels prove neither.
+  let delivery: Pick<RouteReplyResult, "delivered" | "messageId"> | undefined;
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    const result = results[index];
+    if (!result) {
+      continue;
+    }
+    const messageId = result.messageId?.trim().toLowerCase();
+    if (messageId === "skipped" || messageId === "suppressed") {
+      continue;
+    }
+    delivery ??= { delivered: true, messageId: messageId ? undefined : result.messageId };
+    if (messageId && messageId !== "unknown" && messageId !== "ok") {
+      return { delivered: true, messageId: result.messageId };
+    }
+  }
+  return delivery ?? { delivered: false, messageId: undefined };
+}
+
+/** Routes to the originating channel; shared sessions may have a different last channel. */
+export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
+  const { payload, ...route } = params;
+  return await routeReplyFromProducer(route, { kind: "raw", payload });
+}
+
+/** Routes a prepared reply without reinterpreting its text as delivery directives. */
+export async function routePreparedReply(
+  params: Omit<RouteReplyParams, "payload"> & { plan: OutboundPayloadPlan },
+): Promise<RouteReplyResult> {
+  const { plan, ...route } = params;
+  return await routeReplyFromProducer(route, { kind: "prepared", plan });
+}
+
+/**
+ * A reload can retire the turn registry that produced a reply before the reply is routed.
+ * Its borrowed channels then refuse every call, so the send belongs to the admitting Gateway.
+ */
+async function routeReplyFromProducer(
+  params: Omit<RouteReplyParams, "payload">,
+  operation: ReplyDispatchOperation,
+): Promise<RouteReplyResult> {
+  const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  if (!registry || !isPluginRegistryRetired(registry)) {
+    return await routeReplyOperation(params, operation);
+  }
+  const channel =
+    normalizeChannelId(params.channel) ?? normalizeOptionalLowercaseString(params.channel);
+  try {
+    return await runAdmittingGatewayDelivery(
+      { registry, cfg: params.cfg, channel: channel ?? String(params.channel) },
+      (cfg, assertGatewayCurrent) =>
+        routeReplyOperation({ ...params, cfg }, operation, assertGatewayCurrent),
+    );
+  } catch (err) {
+    // Only the Gateway handoff's own refusal is reported here; it proves nothing was sent.
+    if (!isPlatformMessageNotDispatchedError(err)) {
+      throw err;
+    }
+    return {
+      ok: false,
+      delivered: false,
+      error: `Failed to route reply to ${params.channel}: ${formatErrorMessage(err)}`,
+      cause: err,
+    };
+  }
+}
+
+async function routeReplyOperation(
+  params: Omit<RouteReplyParams, "payload">,
+  operation: ReplyDispatchOperation,
+  assertGatewayCurrent?: () => void,
+): Promise<RouteReplyResult> {
+  const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const suppress = (reason?: "suppressed" | "channel_transform"): RouteReplyResult => ({
+    ok: true,
+    delivered: false,
+    ...(reason ? { suppressed: true } : {}),
+    ...(reason === "channel_transform" ? { reason } : {}),
+  });
+  const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
+  if (operation.kind === "raw" && shouldSuppressReasoningPayload(payload)) {
+    return suppress("suppressed");
+  }
+  const normalizedChannel = normalizeMessageChannel(channel);
+  const channelId =
+    normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
+  const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
+  const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
+  const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
+  const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
+  const resolvedAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: cfg,
+    fallbackAgentId: params.agentId,
+  });
+
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, resolvedAgentId, {
+    channel: normalizedChannel,
+    accountId,
+  }).responsePrefix;
+  const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
+  const normalization = normalizeReplyPayloadOutcome(payload, {
+    preserveLeadingSourceBoundary:
+      params.replyKind === "block" &&
+      getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
+    responsePrefix,
+    responsePrefixContext: params.responsePrefixContext,
+    transformReplyPayload,
+  });
+  if (normalization.kind === "suppress") {
+    return suppress(
+      normalization.reason === "channel_transform" ? normalization.reason : undefined,
+    );
+  }
+  const normalized = normalization.payload;
+  const externalPayload: ReplyPayload = {
+    ...normalized,
+    text: operation.kind === "raw" ? formatBtwTextForExternalDelivery(normalized) : normalized.text,
+  };
+
+  const text = externalPayload.text ?? "";
+  let mediaUrls = externalPayload.mediaUrls?.filter(Boolean) ?? [];
+  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
+    mediaUrls = [externalPayload.mediaUrl];
+  }
+  const replyToId = externalPayload.replyToId;
+  const hasChannelData = messaging?.hasStructuredReplyPayload?.({
+    payload: externalPayload,
+  });
+
+  if (
+    !hasReplyPayloadContent(
+      {
+        ...externalPayload,
+        text,
+        mediaUrls,
+      },
+      {
+        hasChannelData,
+      },
+    )
+  ) {
+    return suppress();
+  }
+
+  const rejectBeforeSend = (error: string): RouteReplyResult => ({
+    ok: false,
+    delivered: false,
+    error,
+    cause: new PlatformMessageNotDispatchedError(error, { cause: undefined }),
+  });
+  if (channel === INTERNAL_MESSAGE_CHANNEL) {
+    return rejectBeforeSend("Webchat routing not supported for queued replies");
+  }
+  if (!channelId) {
+    return rejectBeforeSend(`Unknown channel: ${String(channel)}`);
+  }
+  if (abortSignal?.aborted) {
+    return rejectBeforeSend("Reply routing aborted");
+  }
+
+  const payloadMetadata = getReplyPayloadMetadata(normalized);
+  const payloadReplyDelivery = payloadMetadata?.replyDelivery;
+  const replyDeliverySource = payloadMetadata?.replyDeliverySource;
+  const payloadPolicyMatchesRoute =
+    payloadReplyDelivery &&
+    params.replyDelivery &&
+    replyDeliverySource &&
+    normalizeMessageChannel(replyDeliverySource.channel) === normalizeMessageChannel(channelId) &&
+    normalizeAccountId(replyDeliverySource.accountId) === normalizeAccountId(accountId) &&
+    normalizeChatType(payloadReplyDelivery.chatType ?? undefined) ===
+      normalizeChatType(params.replyDelivery.chatType ?? undefined);
+  const replyDelivery = payloadPolicyMatchesRoute
+    ? payloadReplyDelivery
+    : (params.replyDelivery ?? payloadReplyDelivery);
+  const replyTransport =
+    threading?.resolveReplyTransport?.({
+      cfg,
+      accountId,
+      threadId,
+      replyToId,
+      currentMessageId: params.currentMessageId,
+      replyToIsExplicit: Boolean(
+        payloadMetadata?.replyToIdExplicit || normalized.replyToTag || normalized.replyToCurrent,
+      ),
+      replyToCurrent: normalized.replyToCurrent,
+      replyDelivery,
+    }) ?? null;
+  const resolvedReplyToId =
+    replyTransport?.replyToId === null
+      ? undefined
+      : (replyTransport?.replyToId ?? replyToId ?? undefined);
+  const resolvedThreadId =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (threadId ?? null);
+  const inferredReplyTarget = replyTransport?.replyToIdSource === "implicit";
+  const deliveryPayload = copyReplyPayloadMetadata(normalized, {
+    ...externalPayload,
+    replyToId: inferredReplyTarget ? undefined : resolvedReplyToId,
+  });
+
+  try {
+    // Keep outbound plumbing off the import path until a send is needed.
+    const {
+      durableMessageBatchMayHaveReachedRecipient,
+      sendDurableMessageBatchCore,
+      sendStructuredDurableMessageBatchCore,
+    } = await messageRuntimeLoader.load();
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: params.sessionKey,
+      policySessionKey: params.policySessionKey,
+      conversationType: params.policyConversationType,
+      isGroup:
+        params.policySessionKey || params.policyConversationType ? undefined : params.isGroup,
+      requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
+    });
+    const deliveredPayloads: NormalizedOutboundPayload[] | undefined =
+      params.mirror !== false && params.sessionKey ? [] : undefined;
+    const sendParams = {
+      cfg,
+      channel: channelId,
+      to,
+      accountId: accountId ?? undefined,
+      replyPayloadSendingHook: {
+        kind: params.replyKind,
+        channel: channelId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        context: {
+          channelId,
+          ...(accountId ? { accountId } : {}),
+          conversationId: to,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
+        },
+      },
+      replyToId: resolvedReplyToId ?? null,
+      ...(inferredReplyTarget ? { replyToMode: replyDelivery?.replyToMode ?? "all" } : {}),
+      threadId: resolvedThreadId,
+      session: outboundSession,
+      signal: abortSignal,
+      onPlatformSendDispatch: params.beforeDeliver,
+      assertDirectAdapterHandoff:
+        assertGatewayCurrent && params.assertCurrent
+          ? () => {
+              assertGatewayCurrent();
+              params.assertCurrent?.();
+            }
+          : (assertGatewayCurrent ?? params.assertCurrent),
+      ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
+      ...(params.deliveryIntentId
+        ? {
+            deliveryIntentId: params.deliveryIntentId,
+            reusePendingDeliveryIntent: true,
+            completionRetention: BLOCK_REPLY_COMPLETION_RETENTION,
+            durability: "required" as const,
+          }
+        : {}),
+      onDeliveredPayload: deliveredPayloads
+        ? (delivered: NormalizedOutboundPayload) => deliveredPayloads.push(delivered)
+        : undefined,
+    } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
+    const send =
+      operation.kind === "prepared"
+        ? await sendStructuredDurableMessageBatchCore(
+            {
+              ...sendParams,
+              plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
+            },
+            params.sessionGeneration,
+          )
+        : await sendDurableMessageBatchCore(
+            { ...sendParams, payloads: [deliveryPayload] },
+            undefined,
+            undefined,
+            params.sessionGeneration,
+          );
+    if (params.sessionKey && deliveredPayloads && deliveredPayloads.length > 0) {
+      const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
+      await mirrorDeliveredReplyToTranscript({
+        cfg,
+        metadata: {
+          sessionKey: params.sessionKey,
+          agentId: resolvedAgentId,
+          ...writerFence,
+          text: deliveredPayloads
+            .map(
+              (delivered) => delivered.hookContent ?? resolveOutboundPayloadMirrorText(delivered),
+            )
+            .filter((deliveredText) => deliveredText.trim())
+            .join("\n"),
+          mediaUrls: deliveredPayloads.flatMap((delivered) => delivered.mediaUrls),
+        },
+      });
+    }
+    if (send.status === "failed" || send.status === "partial_failed") {
+      const delivery = summarizeVisibleRouteReplyDelivery(
+        send.status === "failed" ? [] : send.results,
+      );
+      return {
+        ok: false,
+        delivered: delivery.delivered,
+        error: `Failed to route reply to ${channel}: ${formatErrorMessage(send.error)}`,
+        cause: send.error,
+        messageId: delivery.messageId,
+        ...(!delivery.delivered && durableMessageBatchMayHaveReachedRecipient(send)
+          ? { ambiguous: true }
+          : {}),
+        ...(isOutboundDeliveryError(send.error) && send.error.queueCustody
+          ? { queueCustody: send.error.queueCustody }
+          : {}),
+      };
+    }
+    if (
+      send.status === "suppressed" &&
+      (send.reason === "cancelled_by_message_sending_hook" ||
+        send.reason === "adapter_returned_no_send" ||
+        send.reason === "cancelled_by_reply_payload_sending_hook" ||
+        send.reason === "empty_after_message_sending_hook" ||
+        send.reason === "empty_after_reply_payload_sending_hook")
+    ) {
+      return suppress("suppressed");
+    }
+    if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
+      return {
+        ok: true,
+        delivered: false,
+        ambiguous: true,
+      };
+    }
+    const results = send.status === "sent" ? send.results : [];
+    const delivery = summarizeVisibleRouteReplyDelivery(results);
+    return { ok: true, ...delivery };
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    return {
+      ok: false,
+      delivered: false,
+      ...(isOutboundDeliveryError(err)
+        ? {
+            queueCustody: err.queueCustody,
+            ...(err.sentBeforeError ? { ambiguous: true } : {}),
+          }
+        : {}),
+      error: `Failed to route reply to ${channel}: ${message}`,
+      cause: err,
+    };
+  }
+}
+
+export function isRoutableChannel(
+  channel: OriginatingChannelType | undefined,
+): channel is Exclude<OriginatingChannelType, typeof INTERNAL_MESSAGE_CHANNEL> {
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  return normalizeChatChannelId(channel) !== null || normalizeChannelId(channel) !== null;
+}

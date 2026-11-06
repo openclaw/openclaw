@@ -1,0 +1,102 @@
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
+/**
+ * Channel-neutral thread-binding message builders shared by plugins, ACP, and subagent flows.
+ * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prefixSystemMessage } from "../infra/system-message.js";
+
+const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
+  "This conversation is no longer bound to that session.";
+
+export function formatThreadBindingDurationLabel(durationMs: number): string {
+  if (durationMs <= 0) {
+    return "disabled";
+  }
+  if (durationMs < 60_000) {
+    return "<1m";
+  }
+  const totalMinutes = Math.floor(durationMs / 60_000);
+  if (totalMinutes % 60 === 0) {
+    return `${Math.floor(totalMinutes / 60)}h`;
+  }
+  return `${totalMinutes}m`;
+}
+
+export function resolveThreadBindingThreadName(params: {
+  agentId?: string;
+  label?: string;
+}): string {
+  const label = normalizeOptionalString(params.label);
+  const base = label || normalizeOptionalString(params.agentId) || "agent";
+  const raw = `🤖 ${base}`.replace(/\s+/g, " ").trim();
+  // Native channel thread names have tight limits; keep generated names bounded.
+  return truncateUtf16Safe(raw, 100);
+}
+
+export function resolveThreadBindingIntroText(params: {
+  agentId?: string;
+  label?: string;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+  sessionCwd?: string;
+  sessionDetails?: string[];
+}): string {
+  const label = normalizeOptionalString(params.label);
+  const base = label || normalizeOptionalString(params.agentId) || "agent";
+  const normalized = truncateUtf16Safe(base.replace(/\s+/g, " ").trim(), 100) || "agent";
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
+  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
+  const cwd = normalizeOptionalString(params.sessionCwd);
+  const details = normalizeTrimmedStringList(params.sessionDetails);
+  if (cwd) {
+    details.unshift(`cwd: ${cwd}`);
+  }
+
+  const lifecycle: string[] = [];
+  if (idleTimeoutMs > 0) {
+    lifecycle.push(
+      `idle expiry after ${formatThreadBindingDurationLabel(idleTimeoutMs)} inactivity`,
+    );
+  }
+  if (maxAgeMs > 0) {
+    lifecycle.push(`max age ${formatThreadBindingDurationLabel(maxAgeMs)}`);
+  }
+
+  const intro =
+    lifecycle.length > 0
+      ? `${normalized} session active (${lifecycle.join("; ")}). Messages here go directly to this session.`
+      : `${normalized} session active. Messages here go directly to this session.`;
+
+  if (details.length === 0) {
+    return prefixSystemMessage(intro);
+  }
+  return prefixSystemMessage(`${intro}\n${details.join("\n")}`);
+}
+
+export function resolveThreadBindingFarewellText(params: {
+  reason?: string;
+  farewellText?: string;
+  idleTimeoutMs: number;
+  maxAgeMs: number;
+}): string {
+  const custom = normalizeOptionalString(params.farewellText);
+  if (custom) {
+    return prefixSystemMessage(custom);
+  }
+
+  if (params.reason === "idle-expired" || params.reason === "max-age-expired") {
+    const idle = params.reason === "idle-expired";
+    const label = formatThreadBindingDurationLabel(
+      resolveNonNegativeIntegerOption(idle ? params.idleTimeoutMs : params.maxAgeMs, 0),
+    );
+    const expiry = idle ? `after ${label} of inactivity` : `at max age of ${label}`;
+    return prefixSystemMessage(
+      `Conversation binding expired ${expiry}. Messages here will no longer go to that session.`,
+    );
+  }
+
+  return prefixSystemMessage(DEFAULT_THREAD_BINDING_FAREWELL_TEXT);
+}

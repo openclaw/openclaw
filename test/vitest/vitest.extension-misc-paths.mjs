@@ -1,0 +1,30 @@
+// Test routing roots for miscellaneous provider/tool extension suites.
+export const miscExtensionTestRoots = [
+  "extensions/abliteration",
+  "extensions/arcee",
+  "extensions/brave",
+  "extensions/device-pair",
+  "extensions/diagnostics-otel",
+  "extensions/duckduckgo",
+  "extensions/exa",
+  "extensions/firecrawl",
+  "extensions/fireworks",
+  "extensions/kilocode",
+  "extensions/litellm",
+  "extensions/llm-task",
+  "extensions/lobster",
+  "extensions/opencode",
+  "extensions/opencode-go",
+  "extensions/openshell",
+  "extensions/parallel",
+  "extensions/perplexity",
+  "extensions/requesty",
+  "extensions/searxng",
+  "extensions/synthetic",
+  "extensions/tavily",
+  "extensions/vercel-ai-gateway",
+];
+
+export function isMiscExtensionRoot(root) {
+  return miscExtensionTestRoots.includes(root);
+}

@@ -1,0 +1,166 @@
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { UrbitHttpError } from "./errors.js";
+import { urbitFetch } from "./fetch.js";
+
+type UrbitChannelDeps = {
+  baseUrl: string;
+  cookie: string;
+  ship: string;
+  channelId: string;
+  ssrfPolicy?: SsrFPolicy;
+};
+
+export async function putUrbitChannel(
+  deps: UrbitChannelDeps,
+  params: {
+    body: unknown;
+    auditContext: string;
+    timeoutMs?: number;
+    beforeRequest?: () => void;
+  },
+) {
+  return await urbitFetch({
+    baseUrl: deps.baseUrl,
+    path: `/~/channel/${deps.channelId}`,
+    init: {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: deps.cookie,
+      },
+      body: JSON.stringify(params.body),
+    },
+    ssrfPolicy: deps.ssrfPolicy,
+    timeoutMs: params.timeoutMs,
+    auditContext: params.auditContext,
+    beforeRequest: params.beforeRequest,
+  });
+}
+
+const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
+
+export async function pokeUrbitChannel(
+  deps: UrbitChannelDeps,
+  params: {
+    app: string;
+    mark: string;
+    json: unknown;
+    auditContext: string;
+    beforeRequest?: () => void;
+    timeoutMs?: number;
+  },
+): Promise<number> {
+  const pokeId = Date.now();
+  const pokeData = {
+    id: pokeId,
+    action: "poke",
+    ship: deps.ship,
+    app: params.app,
+    mark: params.mark,
+    json: params.json,
+  };
+
+  const { response, release } = await putUrbitChannel(deps, {
+    body: [pokeData],
+    auditContext: params.auditContext,
+    timeoutMs: params.timeoutMs,
+    beforeRequest: params.beforeRequest,
+  });
+
+  try {
+    if (!response.ok && response.status !== 204) {
+      const errorText = await readResponseTextLimited(response, TLON_ERROR_BODY_LIMIT_BYTES).catch(
+        () => "",
+      );
+      throw new UrbitHttpError({
+        operation: "Poke",
+        status: response.status,
+        bodyText: errorText || undefined,
+      });
+    }
+    return pokeId;
+  } finally {
+    await release();
+  }
+}
+
+export async function scryUrbitPath(
+  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy"> & {
+    beforeRequest?: () => void;
+  },
+  params: { path: string; auditContext: string },
+): Promise<unknown> {
+  const scryPath = `/~/scry${params.path}`;
+  const { response, release } = await urbitFetch({
+    baseUrl: deps.baseUrl,
+    path: scryPath,
+    init: {
+      method: "GET",
+      headers: { Cookie: deps.cookie },
+    },
+    ssrfPolicy: deps.ssrfPolicy,
+    beforeRequest: deps.beforeRequest,
+    timeoutMs: 30_000,
+    auditContext: params.auditContext,
+  });
+
+  try {
+    if (!response.ok) {
+      throw new UrbitHttpError({
+        operation: `Scry for path ${params.path}`,
+        status: response.status,
+      });
+    }
+    // Successful scry bodies come from a remote Urbit and have no protocol size bound.
+    // Keep the shared JSON ceiling while retaining the path needed to identify the endpoint.
+    return await readProviderJsonResponse(response, `Tlon scry response for path ${params.path}`);
+  } finally {
+    await release();
+  }
+}
+
+async function openUrbitChannelStep(
+  deps: UrbitChannelDeps,
+  params: { body: unknown; auditContext: string; operation: string; beforeRequest?: () => void },
+): Promise<void> {
+  const { response, release } = await putUrbitChannel(deps, { ...params, timeoutMs: 30_000 });
+
+  try {
+    if (!response.ok && response.status !== 204) {
+      throw new UrbitHttpError({ operation: params.operation, status: response.status });
+    }
+  } finally {
+    await release();
+  }
+}
+
+export async function ensureUrbitChannelOpen(
+  deps: UrbitChannelDeps,
+  params: { createBody: unknown; createAuditContext: string; beforeRequest?: () => void },
+): Promise<void> {
+  await openUrbitChannelStep(deps, {
+    body: params.createBody,
+    auditContext: params.createAuditContext,
+    operation: "Channel creation",
+    beforeRequest: params.beforeRequest,
+  });
+  await openUrbitChannelStep(deps, {
+    body: [
+      {
+        id: Date.now(),
+        action: "poke",
+        ship: deps.ship,
+        app: "hood",
+        mark: "helm-hi",
+        json: "Opening API channel",
+      },
+    ],
+    auditContext: "tlon-urbit-channel-wake",
+    operation: "Channel activation",
+    beforeRequest: params.beforeRequest,
+  });
+}

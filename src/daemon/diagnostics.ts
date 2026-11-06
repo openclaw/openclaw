@@ -1,0 +1,98 @@
+import fs, { type FileHandle } from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+
+const GATEWAY_OWNERSHIP_REFUSAL = /cannot verify Gateway ownership/i;
+const GATEWAY_LOG_ERROR_PATTERNS = [
+  GATEWAY_OWNERSHIP_REFUSAL,
+  /\bENOSPC\b/i,
+  /no space left on device/i,
+  /refusing to bind gateway/i,
+  /gateway auth mode/i,
+  /gateway start blocked/i,
+  /gateway failed to start:/i,
+  /failed to bind gateway socket/i,
+  /tailscale .* requires/i,
+];
+
+const GATEWAY_DIAGNOSTIC_LOG_TAIL_BYTES = 256 * 1024;
+
+async function readTailWindow(handle: FileHandle, size: number) {
+  const length = Math.min(size, GATEWAY_DIAGNOSTIC_LOG_TAIL_BYTES);
+  const readStart = size - length;
+  const buffer = Buffer.alloc(length);
+  const bytesRead = await readFileWindowFully(handle, buffer, readStart);
+  return { buffer, bytesRead, readStart };
+}
+
+/** Reads complete lines from a bounded gateway log tail. */
+export async function readGatewayLogTailLines(filePath: string): Promise<string[]> {
+  // Reach descriptor admission even when a diagnostic path is a FIFO with no writer.
+  // Preserve intentional log symlinks; the existing fstat owns file-type admission.
+  const handle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= 0) {
+      return [];
+    }
+    let window = await readTailWindow(handle, stat.size);
+    if (window.bytesRead < window.buffer.length) {
+      const refreshedStat = await handle.stat();
+      if (!refreshedStat.isFile() || refreshedStat.size <= 0) {
+        return [];
+      }
+      if (refreshedStat.size !== stat.size) {
+        window = await readTailWindow(handle, refreshedStat.size);
+      }
+    }
+    const { buffer, bytesRead, readStart } = window;
+    let textStart = 0;
+    if (readStart > 0) {
+      const precedingByte = Buffer.alloc(1);
+      const precedingRead = await handle.read(precedingByte, 0, 1, readStart - 1);
+      if (precedingRead.bytesRead !== 1 || precedingByte[0] !== 0x0a) {
+        // A byte-bound tail can start inside a line or UTF-8 sequence. Drop that
+        // fragment so diagnostics never report a stale, corrupted partial line.
+        const firstNewline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+        if (firstNewline === -1) {
+          return [];
+        }
+        textStart = firstNewline + 1;
+      }
+    }
+    const lines = buffer.subarray(textStart, bytesRead).toString("utf8").split(/\r?\n/u);
+    if (lines.at(-1) === "") {
+      lines.pop();
+    }
+    return lines;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Matching log evidence only; it is not bound to the current process generation. */
+export async function readLastGatewayErrorLine(
+  env: NodeJS.ProcessEnv,
+  options?: { platform?: NodeJS.Platform },
+): Promise<string | null> {
+  const platform = options?.platform ?? process.platform;
+  const readStderr = platform !== "darwin";
+  // launchd combines child stderr into stdout only because the plist points both
+  // handles at one file (buildLaunchAgentPlist); break that and darwin startup
+  // crashes stop reaching this reader. Other platforms keep stderr separate.
+  const { stdoutPath, stderrPath } =
+    platform === "darwin" ? resolveGatewaySupervisorLogPaths(env) : resolveGatewayLogPaths(env);
+  const stderrLines = readStderr ? await readGatewayLogTailLines(stderrPath).catch(() => []) : [];
+  const stdoutLines = await readGatewayLogTailLines(stdoutPath).catch(() => []);
+  // stderr is the strongest failure signal on non-darwin platforms, so place it
+  // last and scan from the end: the most recent stderr error line then wins over
+  // any (possibly stale) stdout match. Neither file proves the current generation.
+  const lines = [...stdoutLines, ...stderrLines].map((line) => line.trim());
+  const match = lines.findLast((line) =>
+    GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line)),
+  );
+  if (match && GATEWAY_OWNERSHIP_REFUSAL.test(match)) {
+    return "Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it.";
+  }
+  return match ?? null;
+}

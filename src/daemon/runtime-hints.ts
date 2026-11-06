@@ -1,0 +1,104 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
+import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
+
+export function buildPlatformRuntimeLogHints(params: {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  systemdServiceName: string;
+  systemd?: GatewayServiceRuntime["systemd"];
+  windowsTaskName: string;
+}): string[] {
+  const platform = params.platform ?? process.platform;
+  const env = { ...process.env, ...params.env };
+  if (platform === "darwin") {
+    const logs = resolveGatewaySupervisorLogPaths(env);
+    // Keep path spelling intact apart from terminal-control escaping.
+    return [
+      terminalText`Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,
+      terminalText`Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
+    ];
+  }
+  if (platform === "linux") {
+    const scope = params.systemd?.scope === "system" ? "--system" : "--user";
+    const unit = params.systemd?.unit ?? `${params.systemdServiceName}.service`;
+    return [
+      terminalText`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`,
+      terminalText`Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
+    ];
+  }
+  if (platform === "win32") {
+    return [
+      terminalText`Logs: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`,
+      terminalText`Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
+    ];
+  }
+  return [];
+}
+
+/** Build recovery details after the caller selects its applicable runtime state. */
+export function buildGatewayRuntimeRecoveryHints(params: {
+  kind: "gui-session" | "stopped" | "disabled-task";
+  restartCommand: string;
+  logFile?: string | null;
+  platform?: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  systemd?: GatewayServiceRuntime["systemd"];
+}): string[] {
+  const windowsTaskName =
+    params.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+    resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE);
+  const hints =
+    params.kind === "gui-session"
+      ? [
+          "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+          terminalText`Sign in to the macOS desktop as this user, then run: ${params.restartCommand}`,
+          "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
+        ]
+      : [];
+  if (params.kind === "disabled-task") {
+    hints.push(
+      terminalText`Scheduled Task '${windowsTaskName}' is registered but DISABLED; run \`${formatCliCommand("openclaw gateway start", params.env)}\` (or \`${formatCliCommand("openclaw doctor --fix", params.env)}\`) to re-enable it.`,
+    );
+  }
+  if (params.logFile) {
+    hints.push(terminalText`File logs: ${params.logFile}`);
+  }
+  if (params.kind !== "gui-session") {
+    hints.push(
+      ...buildPlatformRuntimeLogHints({
+        platform: params.platform,
+        env: params.env,
+        systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
+        systemd: params.systemd,
+        windowsTaskName,
+      }),
+    );
+  }
+  return hints;
+}
+
+export function buildPlatformServiceStartHints(params: {
+  installHint: string;
+  startCommand: string;
+  launchAgentPlistPath: string;
+  systemdServiceName: string;
+  windowsTaskName: string;
+}): string[] {
+  const base = [params.installHint, params.startCommand];
+  // Install guidance and the OpenClaw start command stay first; native manager
+  // commands are supplemental because they do not resolve profile/env paths.
+  switch (process.platform) {
+    case "darwin":
+      return [...base, `launchctl bootstrap gui/$UID ${params.launchAgentPlistPath}`];
+    case "linux":
+      return [...base, `systemctl --user start ${params.systemdServiceName}.service`];
+    case "win32":
+      return [...base, `schtasks /Run /TN "${params.windowsTaskName}"`];
+    default:
+      return base;
+  }
+}

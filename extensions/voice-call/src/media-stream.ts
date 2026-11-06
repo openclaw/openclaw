@@ -1,0 +1,747 @@
+import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+} from "openclaw/plugin-sdk/realtime-transcription";
+import {
+  createTalkSessionController,
+  recordTalkObservabilityEvent,
+  type TalkEventInput,
+  type TalkSessionController,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket, WebSocketServer, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
+import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
+import { decodeTwilioMediaMessage, type TwilioMediaMessage } from "./media-message.js";
+
+export interface MediaStreamConfig {
+  transcriptionProvider: RealtimeTranscriptionProviderPlugin;
+  /** Provider-owned config blob passed into the transcription session. */
+  providerConfig: RealtimeTranscriptionProviderConfig;
+  /** Full runtime config, used by providers that can resolve OAuth profiles. */
+  cfg?: OpenClawConfig;
+  /** Close sockets that never send a valid `start` frame within this window. */
+  preStartTimeoutMs: number;
+  /** Max concurrent pre-start sockets. */
+  maxPendingConnections: number;
+  /** Max concurrent pre-start sockets from a single source IP. */
+  maxPendingConnectionsPerIp: number;
+  /** Max total open sockets (pending + active sessions). */
+  maxConnections: number;
+  /** Optional trusted resolver for the source IP used by pending-connection guards. */
+  resolveClientIp?: (request: IncomingMessage) => string | undefined;
+  /** Validate whether to accept a media stream for the given call ID. Missing validator rejects. */
+  shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
+  onTranscript?: (callId: string, transcript: string, streamSid: string) => void;
+  onPartialTranscript?: (callId: string, partial: string, streamSid: string) => void;
+  onConnect?: (callId: string, streamSid: string) => void;
+  onTranscriptionReady?: (callId: string, streamSid: string) => void;
+  onSpeechStart?: (callId: string, streamSid: string) => void;
+  onDisconnect?: (callId: string, streamSid: string) => void;
+}
+
+interface StreamSession {
+  callId: string;
+  streamSid: string;
+  ws: WebSocket;
+  sttSession: RealtimeTranscriptionSession;
+  talk: TalkSessionController;
+}
+
+type TtsPlaybackQueue = {
+  permits: ReturnType<typeof createPermitPool>;
+  controllers: Set<AbortController>;
+};
+
+type PendingPlaybackMark = (error?: Error) => void;
+
+type PendingConnection = {
+  ip: string;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
+const MAX_PENDING_TTS_OPERATIONS_PER_STREAM = 8;
+const PLAYBACK_MARK_TIMEOUT_GRACE_MS = 2_000;
+const CLOSE_REASON_LOG_MAX_CHARS = 120;
+
+function sanitizeLogText(value: string, maxChars: number): string {
+  const sanitized = value
+    .replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (sanitized.length <= maxChars) {
+    return sanitized;
+  }
+  return `${truncateUtf16Safe(sanitized, maxChars)}...`;
+}
+
+function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage | null {
+  const raw = rawDataToString(data);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (cause) {
+    throw new Error("Twilio media stream message was malformed JSON", { cause });
+  }
+  return decodeTwilioMediaMessage(parsed);
+}
+
+export class MediaStreamHandler {
+  private wss: WebSocketServer | null = null;
+  private closePromise: Promise<void> | null = null;
+  private closing = false;
+  private sessions = new Map<string, StreamSession>();
+  /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
+  private pendingConnections = new Map<WebSocket, PendingConnection>();
+  private pendingByIp = new Map<string, number>();
+  private preStartTimeoutMs: number;
+  private inflightUpgrades = 0;
+  private ttsQueues = new Map<string, TtsPlaybackQueue>();
+  private pendingPlaybackMarks = new Map<string, Map<string, PendingPlaybackMark>>();
+
+  constructor(private readonly config: MediaStreamConfig) {
+    this.preStartTimeoutMs = Math.min(config.preStartTimeoutMs, MAX_TIMER_TIMEOUT_MS);
+  }
+
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.closing) {
+      this.rejectUpgrade(socket, "Media stream handler is shutting down");
+      return;
+    }
+
+    if (!this.wss) {
+      this.wss = new WebSocketServer({
+        noServer: true,
+        // Reject oversized frames before app-level parsing runs on unauthenticated sockets.
+        maxPayload: MAX_INBOUND_MESSAGE_BYTES,
+      });
+      this.wss.on("connection", (ws, req) => {
+        void this.handleConnection(ws, req);
+      });
+    }
+
+    const currentConnections = this.wss.clients.size + this.inflightUpgrades;
+    if (currentConnections >= this.config.maxConnections) {
+      this.rejectUpgrade(socket, "Too many media stream connections");
+      return;
+    }
+
+    this.inflightUpgrades += 1;
+    let released = false;
+    const releaseUpgradeReservation = () => {
+      socket.removeListener("error", releaseUpgradeReservation);
+      socket.removeListener("close", releaseUpgradeReservation);
+      if (released) {
+        return;
+      }
+      released = true;
+      this.inflightUpgrades = Math.max(0, this.inflightUpgrades - 1);
+    };
+    socket.once("error", releaseUpgradeReservation);
+    socket.once("close", releaseUpgradeReservation);
+
+    try {
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        releaseUpgradeReservation();
+        this.wss?.emit("connection", ws, request);
+      });
+    } catch (error) {
+      releaseUpgradeReservation();
+      throw error;
+    }
+  }
+
+  close(shutdownBarrier: Promise<unknown> = Promise.resolve()): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+
+    this.closing = true;
+    const wss = this.wss;
+    this.wss = null;
+    this.closePromise = (async () => {
+      if (wss) {
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+          for (const ws of wss.clients) {
+            ws.terminate();
+          }
+        });
+      }
+      await shutdownBarrier;
+    })().finally(() => {
+      this.closing = false;
+      this.closePromise = null;
+    });
+    return this.closePromise;
+  }
+
+  private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
+    let session: StreamSession | null = null;
+    const streamToken = this.getStreamToken(_request);
+    const ip = this.getClientIp(_request);
+
+    if (!this.registerPendingConnection(ws, ip)) {
+      ws.close(1013, "Too many pending media stream connections");
+      return;
+    }
+
+    ws.on("message", (data: RawData) => {
+      try {
+        const message = parseTwilioMediaMessage(data);
+        if (!message) {
+          return;
+        }
+
+        switch (message.event) {
+          case "connected":
+            console.log("[MediaStream] Twilio connected");
+            break;
+
+          case "start":
+            if (session) {
+              console.warn("[MediaStream] Rejecting duplicate start frame for active connection");
+              ws.close(1008, "Duplicate start");
+              break;
+            }
+            session = this.handleStart(ws, message, streamToken);
+            if (session) {
+              this.clearPendingConnection(ws);
+            }
+            break;
+
+          case "media":
+            if (session && message.payload) {
+              const canonicalPayload = canonicalizeVoiceCallMediaBase64(message.payload);
+              if (!canonicalPayload) {
+                break;
+              }
+              const audioBuffer = Buffer.from(canonicalPayload, "base64");
+              const turnId = this.ensureActiveTurn(session);
+              this.emitTalkEvent(session, {
+                type: "input.audio.delta",
+                turnId,
+                payload: { bytes: audioBuffer.byteLength },
+              });
+              session.sttSession.sendAudio(audioBuffer);
+            }
+            break;
+
+          case "stop":
+            if (session) {
+              this.handleStop(session);
+              session = null;
+            }
+            break;
+
+          case "mark":
+            if (session && message.name) {
+              this.acknowledgePlaybackMark(session.streamSid, message.name);
+            }
+            break;
+
+          case "clear":
+            break;
+        }
+      } catch (error) {
+        console.error("[MediaStream] Error processing message:", error);
+      }
+    });
+
+    ws.on("close", (code, reason) => {
+      const rawReason = Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || "");
+      const reasonText = sanitizeLogText(rawReason, CLOSE_REASON_LOG_MAX_CHARS);
+      console.log(
+        `[MediaStream] WebSocket closed (code: ${code}, reason: ${reasonText || "none"})`,
+      );
+      this.clearPendingConnection(ws);
+      if (session) {
+        this.handleStop(session);
+      }
+    });
+
+    ws.on("error", (error) => {
+      console.error("[MediaStream] WebSocket error:", error);
+    });
+  }
+
+  private handleStart(
+    ws: WebSocket,
+    message: Extract<TwilioMediaMessage, { event: "start" }>,
+    streamToken?: string,
+  ): StreamSession | null {
+    const streamSid = message.streamSid;
+    const callSid = message.callSid;
+
+    // Prefer token from start message customParameters (set via TwiML <Parameter>),
+    // falling back to query string token. Twilio strips query params from WebSocket
+    // URLs but reliably delivers <Parameter> values in customParameters.
+    const effectiveToken = message.token ?? streamToken;
+
+    console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
+    if (!callSid) {
+      console.warn("[MediaStream] Missing callSid; closing stream");
+      ws.close(1008, "Missing callSid");
+      return null;
+    }
+    if (!this.config.shouldAcceptStream) {
+      console.warn("[MediaStream] Rejecting stream without an acceptance validator");
+      ws.close(1008, "Unauthorized stream");
+      return null;
+    }
+
+    if (!this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })) {
+      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
+      ws.close(1008, "Unknown call");
+      return null;
+    }
+
+    const onTranscript = (text: string, isFinal: boolean) => {
+      const session = this.sessions.get(streamSid);
+      if (session) {
+        const turnId = this.ensureActiveTurn(session);
+        if (isFinal) {
+          this.emitTalkEvent(session, {
+            type: "input.audio.committed",
+            turnId,
+            final: true,
+            payload: { callId: callSid },
+          });
+        }
+        this.emitTalkEvent(session, {
+          type: isFinal ? "transcript.done" : "transcript.delta",
+          turnId,
+          ...(isFinal ? { final: true } : {}),
+          payload: { callId: callSid, text, role: "user" },
+        });
+      }
+      if (isFinal) {
+        this.config.onTranscript?.(callSid, text, streamSid);
+      } else {
+        this.config.onPartialTranscript?.(callSid, text, streamSid);
+      }
+    };
+    const sttSession = this.config.transcriptionProvider.createSession({
+      cfg: this.config.cfg,
+      providerConfig: this.config.providerConfig,
+      onPartial: (text) => onTranscript(text, false),
+      onTranscript: (text) => onTranscript(text, true),
+      onSpeechStart: () => {
+        const session = this.sessions.get(streamSid);
+        if (session) {
+          this.ensureActiveTurn(session);
+        }
+        this.config.onSpeechStart?.(callSid, streamSid);
+      },
+      onError: (error) => {
+        console.warn("[MediaStream] Transcription session error:", error.message);
+        const session = this.sessions.get(streamSid);
+        if (session) {
+          this.emitTalkEvent(session, {
+            type: "session.error",
+            final: true,
+            payload: { callId: callSid, error: error.message },
+          });
+        }
+      },
+    });
+
+    const session: StreamSession = {
+      callId: callSid,
+      streamSid,
+      ws,
+      sttSession,
+      talk: createTalkSessionController(
+        {
+          sessionId: `voice-call:${callSid}:${streamSid}`,
+          mode: "stt-tts",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          provider: this.config.transcriptionProvider.id,
+          turnIdPrefix: `${streamSid}:turn`,
+        },
+        {
+          onEvent: recordTalkObservabilityEvent,
+        },
+      ),
+    };
+
+    this.sessions.set(streamSid, session);
+    this.config.onConnect?.(callSid, streamSid);
+    this.emitTalkEvent(session, {
+      type: "session.started",
+      payload: { provider: this.config.transcriptionProvider.id },
+    });
+    void this.connectTranscriptionAndNotify(session);
+
+    return session;
+  }
+
+  private async connectTranscriptionAndNotify(session: StreamSession): Promise<void> {
+    try {
+      await session.sttSession.connect();
+    } catch (error) {
+      console.warn(
+        "[MediaStream] STT connection failed; closing media stream:",
+        error instanceof Error ? error.message : String(error),
+      );
+      this.emitTalkEvent(session, {
+        type: "session.error",
+        final: true,
+        payload: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      if (
+        this.sessions.get(session.streamSid) === session &&
+        session.ws.readyState === WebSocket.OPEN
+      ) {
+        session.ws.close(1011, "STT connection failed");
+      } else {
+        session.sttSession.close();
+      }
+      return;
+    }
+
+    if (
+      this.sessions.get(session.streamSid) !== session ||
+      session.ws.readyState !== WebSocket.OPEN
+    ) {
+      session.sttSession.close();
+      return;
+    }
+
+    this.emitTalkEvent(session, {
+      type: "session.ready",
+    });
+    this.config.onTranscriptionReady?.(session.callId, session.streamSid);
+  }
+
+  private handleStop(session: StreamSession): void {
+    console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
+
+    this.clearTtsState(session.streamSid);
+    session.sttSession.close();
+    this.sessions.delete(session.streamSid);
+    this.emitTalkEvent(session, {
+      type: "session.closed",
+      final: true,
+    });
+    this.config.onDisconnect?.(session.callId, session.streamSid);
+  }
+
+  private getStreamToken(request: IncomingMessage): string | undefined {
+    if (!request.url || !request.headers.host) {
+      return undefined;
+    }
+    try {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      return url.searchParams.get("token") ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private getClientIp(request: IncomingMessage): string {
+    const resolvedIp = this.config.resolveClientIp?.(request)?.trim();
+    if (resolvedIp) {
+      return resolvedIp;
+    }
+    return request.socket.remoteAddress || "unknown";
+  }
+
+  private registerPendingConnection(ws: WebSocket, ip: string): boolean {
+    if (this.pendingConnections.size >= this.config.maxPendingConnections) {
+      console.warn("[MediaStream] Rejecting connection: pending connection limit reached");
+      return false;
+    }
+
+    const pendingForIp = this.pendingByIp.get(ip) ?? 0;
+    if (pendingForIp >= this.config.maxPendingConnectionsPerIp) {
+      console.warn(`[MediaStream] Rejecting connection: pending per-IP limit reached (${ip})`);
+      return false;
+    }
+
+    const timeout = setTimeout(() => {
+      if (!this.pendingConnections.has(ws)) {
+        return;
+      }
+      console.warn(
+        `[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`,
+      );
+      ws.close(1008, "Start timeout");
+    }, this.preStartTimeoutMs).unref();
+    this.pendingConnections.set(ws, { ip, timeout });
+    this.pendingByIp.set(ip, pendingForIp + 1);
+    return true;
+  }
+
+  private clearPendingConnection(ws: WebSocket): void {
+    const pending = this.pendingConnections.get(ws);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingConnections.delete(ws);
+
+    const current = this.pendingByIp.get(pending.ip) ?? 0;
+    if (current <= 1) {
+      this.pendingByIp.delete(pending.ip);
+      return;
+    }
+    this.pendingByIp.set(pending.ip, current - 1);
+  }
+
+  private rejectUpgrade(socket: Duplex, message: string): void {
+    const body = `${message}\n`;
+    socket.write(
+      "HTTP/1.1 503 Service Unavailable\r\n" +
+        "Connection: close\r\n" +
+        "Content-Type: text/plain; charset=utf-8\r\n" +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        "\r\n" +
+        body,
+    );
+    socket.destroy();
+  }
+
+  private getOpenSession(streamSid: string): StreamSession | undefined {
+    const session = this.sessions.get(streamSid);
+    return session?.ws.readyState === WebSocket.OPEN ? session : undefined;
+  }
+
+  private sendToStream(streamSid: string, message: unknown): boolean {
+    const session = this.getOpenSession(streamSid);
+    if (!session) {
+      return false;
+    }
+    if (session.ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+      session.ws.close(1013, "Backpressure: send buffer exceeded");
+      return false;
+    }
+
+    try {
+      session.ws.send(JSON.stringify(message));
+      if (session.ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+        session.ws.close(1013, "Backpressure: send buffer exceeded");
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Send audio to a specific stream (for TTS playback).
+   * Audio should be mu-law encoded at 8kHz mono.
+   */
+  sendAudio(streamSid: string, muLawAudio: Buffer): boolean {
+    const session = this.getOpenSession(streamSid);
+    if (session) {
+      this.emitTalkEvent(session, {
+        type: "output.audio.delta",
+        turnId: this.ensureActiveTurn(session),
+        payload: { bytes: muLawAudio.byteLength },
+      });
+    }
+    return this.sendToStream(streamSid, {
+      event: "media",
+      streamSid,
+      media: { payload: muLawAudio.toString("base64") },
+    });
+  }
+
+  sendMark(streamSid: string, name: string): boolean {
+    return this.sendToStream(streamSid, {
+      event: "mark",
+      streamSid,
+      mark: { name },
+    });
+  }
+
+  /** Send a completion mark and wait until Twilio reports that buffered playback reached it. */
+  async sendMarkAndWait(
+    streamSid: string,
+    name: string,
+    audioDurationMs: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    const marks =
+      this.pendingPlaybackMarks.get(streamSid) ?? new Map<string, PendingPlaybackMark>();
+    this.pendingPlaybackMarks.set(streamSid, marks);
+    if (marks.has(name)) {
+      throw new Error(`Telephony playback mark is already pending: ${name}`);
+    }
+
+    let pending!: PendingPlaybackMark;
+    const acknowledgement = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => {
+          console.warn(`[MediaStream] Playback mark timed out; continuing stream=${streamSid}`);
+          pending();
+        },
+        Math.max(1, audioDurationMs + PLAYBACK_MARK_TIMEOUT_GRACE_MS),
+      ).unref();
+      const onAbort = () => {
+        const reason =
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Telephony playback mark wait aborted");
+        pending(reason);
+      };
+      pending = (error) => {
+        if (marks.get(name) !== pending) {
+          return;
+        }
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        marks.delete(name);
+        if (marks.size === 0) {
+          this.pendingPlaybackMarks.delete(streamSid);
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      marks.set(name, pending);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+
+    if (!this.sendMark(streamSid, name)) {
+      pending(new Error("Telephony stream playback failed: completion mark not delivered"));
+    }
+    return acknowledgement;
+  }
+
+  clearAudio(streamSid: string): boolean {
+    this.invalidatePlaybackMarks(streamSid);
+    return this.sendToStream(streamSid, { event: "clear", streamSid });
+  }
+
+  /**
+   * Queue a TTS operation for sequential playback.
+   * Only one TTS operation plays at a time per stream to prevent overlap.
+   */
+  async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    const queue = this.ttsQueues.get(streamSid) ?? {
+      permits: createPermitPool(1),
+      controllers: new Set<AbortController>(),
+    };
+    this.ttsQueues.set(streamSid, queue);
+    if (queue.permits.pendingCount >= MAX_PENDING_TTS_OPERATIONS_PER_STREAM) {
+      throw new Error(
+        `Telephony TTS queue is full for stream; maxPending=${MAX_PENDING_TTS_OPERATIONS_PER_STREAM}`,
+      );
+    }
+
+    const controller = new AbortController();
+    queue.controllers.add(controller);
+    // Start idle streams synchronously; queued callers use the SDK's cancellable FIFO.
+    const release =
+      queue.permits.tryAcquire() ?? (await queue.permits.acquire({ signal: controller.signal }));
+    const session = this.sessions.get(streamSid);
+    try {
+      if (!release || controller.signal.aborted) {
+        return;
+      }
+      let playbackTurnId: string | undefined;
+      if (session) {
+        playbackTurnId = this.ensureActiveTurn(session);
+        this.emitTalkEvent(session, {
+          type: "output.audio.started",
+          turnId: playbackTurnId,
+        });
+      }
+      await playFn(controller.signal);
+      if (session && !controller.signal.aborted) {
+        this.emitTalkEvent(session, {
+          type: "output.audio.done",
+          turnId: playbackTurnId,
+          final: true,
+        });
+        if (session.talk.activeTurnId) {
+          session.talk.endTurn({ payload: { callId: session.callId, streamSid } });
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error("[MediaStream] TTS playback error:", error);
+        throw error;
+      }
+    } finally {
+      queue.controllers.delete(controller);
+      release?.();
+      if (queue.controllers.size === 0 && this.ttsQueues.get(streamSid) === queue) {
+        this.ttsQueues.delete(streamSid);
+      }
+    }
+  }
+
+  clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
+    this.abortTtsPlayback(streamSid);
+    const session = this.sessions.get(streamSid);
+    if (session?.talk.activeTurnId) {
+      session.talk.cancelTurn({
+        payload: { callId: session.callId, streamSid, reason: _reason },
+      });
+    }
+    this.clearAudio(streamSid);
+  }
+
+  private acknowledgePlaybackMark(streamSid: string, name: string): void {
+    // TTS marks are unique; cleared playback leaves no waiter for a late carrier echo.
+    this.pendingPlaybackMarks.get(streamSid)?.get(name)?.();
+  }
+
+  private invalidatePlaybackMarks(streamSid: string): void {
+    const marks = this.pendingPlaybackMarks.get(streamSid);
+    if (!marks) {
+      return;
+    }
+    // Map iteration tolerates settlement deleting entries mid-walk.
+    for (const pending of marks.values()) {
+      pending(new Error("Telephony playback cleared before completion"));
+    }
+  }
+
+  private emitTalkEvent(
+    session: StreamSession,
+    input: Omit<TalkEventInput, "payload"> & { payload?: Record<string, unknown> },
+  ): void {
+    session.talk.emit({
+      ...input,
+      payload: { callId: session.callId, streamSid: session.streamSid, ...input.payload },
+    });
+  }
+
+  private ensureActiveTurn(session: StreamSession): string {
+    return session.talk.ensureTurn({
+      payload: { callId: session.callId, streamSid: session.streamSid },
+    }).turnId;
+  }
+
+  private clearTtsState(streamSid: string): void {
+    this.abortTtsPlayback(streamSid);
+    this.ttsQueues.delete(streamSid);
+    this.invalidatePlaybackMarks(streamSid);
+  }
+
+  private abortTtsPlayback(streamSid: string): void {
+    for (const controller of this.ttsQueues.get(streamSid)?.controllers ?? []) {
+      controller.abort();
+    }
+  }
+}

@@ -1,0 +1,332 @@
+import { ComponentType, MessageFlags, StickerFormatType } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
+import { ChannelType, DiscordError, type Client } from "../internal/discord.js";
+import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
+import { resolveDiscordThreadStarter } from "./threading.js";
+import type { DiscordThreadStarterRestMessage } from "./threading.types.js";
+
+type ThreadStarterRestMessage = DiscordThreadStarterRestMessage & { flags?: number };
+let threadIdIndex = 0;
+const STARTER_AUTHOR = { id: "u1", username: "Alice", discriminator: "0" };
+
+function createForwardedSnapshot(message: ThreadStarterRestMessage = {}) {
+  return { message: { content: "", attachments: [], embeds: [], ...message } };
+}
+
+function createStarterMessage(overrides: ThreadStarterRestMessage = {}): ThreadStarterRestMessage {
+  return {
+    content: "",
+    embeds: [],
+    author: { ...STARTER_AUTHOR },
+    ...overrides,
+  };
+}
+
+const COMPONENTS_V2_STARTER_BODY = [
+  {
+    type: ComponentType.Container,
+    components: [
+      { type: ComponentType.TextDisplay, content: "Deploy failed" },
+      {
+        type: ComponentType.Section,
+        components: [{ type: ComponentType.TextDisplay, content: "staging pipeline exited 1" }],
+        accessory: { type: ComponentType.Thumbnail, media: { url: "attachment://log.png" } },
+      },
+    ],
+  },
+];
+
+function createDiscordError(status: number): DiscordError {
+  return new DiscordError(new Response(null, { status }), {});
+}
+
+function cacheStarter(key: string, text: string, now: number) {
+  setCachedThreadStarter(key, { kind: "hit", starter: { text, author: "Alice" } }, now);
+}
+
+async function resolveStarter(
+  message: ThreadStarterRestMessage,
+  overrides: Partial<Parameters<typeof resolveDiscordThreadStarter>[0]> = {},
+) {
+  const lookup = starterLookup(vi.fn().mockResolvedValue(createStarterMessage(message)), overrides);
+  return { result: await resolveDiscordThreadStarter(lookup) };
+}
+
+function starterLookup(
+  get: Client["rest"]["get"],
+  overrides: Partial<Parameters<typeof resolveDiscordThreadStarter>[0]> = {},
+): Parameters<typeof resolveDiscordThreadStarter>[0] {
+  return {
+    channel: { id: String(++threadIdIndex) },
+    client: { rest: { get } } as unknown as Client,
+    accountId: "test-account",
+    parentId: "parent-1",
+    parentType: ChannelType.GuildText,
+    resolveTimestampMs: () => undefined,
+    ...overrides,
+  };
+}
+
+describe("resolveDiscordThreadStarter", () => {
+  it("refreshes edited starter content in threads that stay active for a full day", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = new Date("2026-08-23T00:00:00.000Z");
+      vi.setSystemTime(startedAt);
+      let content = "Original assignment";
+      const get = vi.fn(async () => createStarterMessage({ content }));
+      const params = starterLookup(get);
+
+      expect((await resolveDiscordThreadStarter(params))?.text).toBe("Original assignment");
+      content = "Updated assignment";
+
+      for (let minute = 4; minute <= 24 * 60; minute += 4) {
+        vi.setSystemTime(startedAt.getTime() + minute * 60_000);
+        await resolveDiscordThreadStarter(params);
+      }
+
+      expect((await resolveDiscordThreadStarter(params))?.text).toBe("Updated assignment");
+      expect(get.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates cached thread starters after a clock rollback", () => {
+    const key = `expired-thread-${++threadIdIndex}`;
+    cacheStarter(key, "stale", 1_000_000);
+
+    expect(getCachedThreadStarter(key, 999_999)).toBeUndefined();
+  });
+
+  it("retains recently used thread starters when the 500-entry cache reaches capacity", () => {
+    const prefix = `lru-thread-${++threadIdIndex}-`;
+    for (let index = 0; index < 500; index += 1) {
+      cacheStarter(`${prefix}${index}`, `starter-${index}`, 1_000_000);
+    }
+
+    expect(getCachedThreadStarter(`${prefix}0`, 1_000_001)).toMatchObject({
+      kind: "hit",
+      starter: { text: "starter-0" },
+    });
+    cacheStarter(`${prefix}500`, "new starter", 1_000_002);
+
+    expect(getCachedThreadStarter(`${prefix}0`, 1_000_003)).toMatchObject({
+      kind: "hit",
+      starter: { text: "starter-0" },
+    });
+    expect(getCachedThreadStarter(`${prefix}1`, 1_000_003)).toBeUndefined();
+    expect(getCachedThreadStarter(`${prefix}500`, 1_000_003)).toMatchObject({
+      kind: "hit",
+      starter: { text: "new starter" },
+    });
+  });
+
+  it("negative-caches an inaccessible starter for 30 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date("2026-08-24T00:00:00.000Z");
+      vi.setSystemTime(now);
+      const get = vi.fn().mockRejectedValue(createDiscordError(403));
+      const params = starterLookup(get);
+
+      await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+      await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+      expect(get).toHaveBeenCalledOnce();
+
+      vi.setSystemTime(now.getTime() + 30_000);
+      await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+      expect(get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces concurrent starter lookups for the same account and thread", async () => {
+    const response = createDeferred<ThreadStarterRestMessage | null>();
+    const get = vi.fn(() => response.promise);
+    const params = starterLookup(get);
+
+    const first = resolveDiscordThreadStarter(params);
+    const second = resolveDiscordThreadStarter(params);
+    expect(get).toHaveBeenCalledOnce();
+
+    response.resolve(null);
+    await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+    expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("does not coalesce missing metadata with a lookup that has a parent id", async () => {
+    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "resolved" }));
+    const params = starterLookup(get, { parentId: undefined });
+
+    const missingMetadata = resolveDiscordThreadStarter(params);
+    const completeMetadata = resolveDiscordThreadStarter({ ...params, parentId: "parent-1" });
+
+    await expect(missingMetadata).resolves.toBeNull();
+    await expect(completeMetadata).resolves.toMatchObject({ text: "resolved" });
+    expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("does not negative-cache transient REST failures", async () => {
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary network failure"))
+      .mockResolvedValue(createStarterMessage({ content: "recovered starter" }));
+    const params = starterLookup(get);
+
+    await expect(resolveDiscordThreadStarter(params)).resolves.toBeNull();
+    await expect(resolveDiscordThreadStarter(params)).resolves.toMatchObject({
+      text: "recovered starter",
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("scopes negative cache entries to the Discord account", async () => {
+    const deniedGet = vi.fn().mockRejectedValue(createDiscordError(403));
+    const allowedGet = vi.fn().mockResolvedValue(createStarterMessage({ content: "visible" }));
+    const baseParams = starterLookup(deniedGet);
+
+    await expect(
+      resolveDiscordThreadStarter({
+        ...baseParams,
+        client: { rest: { get: deniedGet } } as unknown as Client,
+        accountId: "account-a",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveDiscordThreadStarter({
+        ...baseParams,
+        client: { rest: { get: allowedGet } } as unknown as Client,
+        accountId: "account-b",
+      }),
+    ).resolves.toMatchObject({ text: "visible" });
+    expect(deniedGet).toHaveBeenCalledOnce();
+    expect(allowedGet).toHaveBeenCalledOnce();
+  });
+
+  it("keeps parent-route misses separate when forum metadata recovers", async () => {
+    const threadId = String(++threadIdIndex);
+    const get = vi.fn(async (path: string) =>
+      path === `/channels/${threadId}/messages/${threadId}`
+        ? createStarterMessage({ content: "recovered forum starter" })
+        : null,
+    );
+    const params = starterLookup(get, { channel: { id: threadId } });
+
+    await expect(
+      resolveDiscordThreadStarter({ ...params, parentType: undefined }),
+    ).resolves.toBeNull();
+    expect(get).toHaveBeenCalledExactlyOnceWith(`/channels/parent-1/messages/${threadId}`);
+
+    await expect(
+      resolveDiscordThreadStarter({ ...params, parentType: ChannelType.GuildForum }),
+    ).resolves.toMatchObject({ text: "recovered forum starter" });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenNthCalledWith(2, `/channels/${threadId}/messages/${threadId}`);
+  });
+
+  it("falls back to joined embed title and description when content is empty", async () => {
+    const { result } = await resolveStarter(
+      {
+        content: "   ",
+        embeds: [{}, { title: "Alert", description: "Details" }, { description: "Follow-up" }],
+        timestamp: "2026-02-24T12:00:00.000Z",
+      },
+      { resolveTimestampMs: () => 123 },
+    );
+
+    expect(result).toEqual({
+      text: "Alert\nDetails\nFollow-up",
+      author: "Alice",
+      authorId: "u1",
+      authorName: "Alice",
+      authorTag: "Alice",
+      memberRoleIds: undefined,
+      timestamp: 123,
+    });
+  });
+
+  it("prefers Components v2 text over a forwarded snapshot when a starter carries both", async () => {
+    const { result } = await resolveStarter({
+      components: COMPONENTS_V2_STARTER_BODY,
+      flags: MessageFlags.IsComponentsV2 | MessageFlags.HasSnapshot,
+      message_snapshots: [createForwardedSnapshot({ content: "forwarded content" })],
+    });
+
+    expect(result?.text).toBe("Deploy failed\nstaging pipeline exited 1");
+  });
+
+  it("renders the sticker placeholder for every REST sticker shape", async () => {
+    const sticker = { id: "s1", name: "party", format_type: StickerFormatType.PNG };
+    const shapes: Record<string, ThreadStarterRestMessage> = {
+      stickerItemsOnly: { sticker_items: [sticker] },
+      stickersOnly: { stickers: [sticker] },
+      emptyStickersBesideStickerItems: { stickers: [], sticker_items: [sticker] },
+    };
+
+    const texts: Record<string, string | null> = {};
+    for (const [name, message] of Object.entries(shapes)) {
+      const { result } = await resolveStarter(message);
+      texts[name] = result?.text ?? null;
+    }
+
+    expect(texts).toEqual({
+      stickerItemsOnly: "<media:sticker>",
+      stickersOnly: "<media:sticker>",
+      emptyStickersBesideStickerItems: "<media:sticker>",
+    });
+  });
+
+  it("preserves username, tag, and role metadata for downstream visibility checks", async () => {
+    const { result } = await resolveStarter({
+      content: "starter content",
+      author: { ...STARTER_AUTHOR, discriminator: "1234" },
+      member: { roles: ["role-1", "role-2"] },
+    });
+
+    expect(result).toEqual({
+      text: "starter content",
+      author: "Alice#1234",
+      authorId: "u1",
+      authorName: "Alice",
+      authorTag: "Alice#1234",
+      memberRoleIds: ["role-1", "role-2"],
+      timestamp: undefined,
+    });
+  });
+
+  it("preserves forwarded attachment placeholders in thread starter context", async () => {
+    const { result } = await resolveStarter({
+      message_snapshots: [
+        createForwardedSnapshot({
+          attachments: [
+            {
+              id: "a1",
+              filename: "forwarded.png",
+              content_type: "image/png",
+              url: "https://cdn.discordapp.com/forwarded.png",
+              proxy_url: "https://cdn.discordapp.com/forwarded.png",
+              size: 1,
+            },
+          ],
+        }),
+      ],
+      author: { ...STARTER_AUTHOR, id: "u6", username: "Frank" },
+    });
+
+    expect(result?.text).toContain("[Forwarded message]");
+    expect(result?.text).toContain("<media:image>");
+    expect(result?.text).not.toContain("(1 image)");
+  });
+
+  it("returns null when content, embeds, and snapshots are all empty", async () => {
+    const { result } = await resolveStarter({
+      message_snapshots: [],
+      author: { ...STARTER_AUTHOR, id: "u4", username: "Dave" },
+    });
+
+    expect(result).toBeNull();
+  });
+});

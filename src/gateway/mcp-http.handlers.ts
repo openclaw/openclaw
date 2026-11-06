@@ -1,0 +1,271 @@
+// Implements initialize, tools/list, tools/call, and notification handling.
+import crypto from "node:crypto";
+import type { ContentBlock } from "@modelcontextprotocol/client";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
+import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
+import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
+import { extractToolErrorMessage } from "../agents/embedded-agent-tool-results.js";
+import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
+import { runAgentHarnessAfterToolCallHook } from "../agents/harness/hook-helpers.js";
+import {
+  formatToolExecutionErrorMessage,
+  protectNetworkToolExecutionError,
+  resolveToolExecutionErrorKind,
+} from "../agents/tool-execution-error.js";
+import { resolveToolResultFailureKind } from "../agents/tool-result-error.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
+import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
+import {
+  MCP_LOOPBACK_SERVER_NAME,
+  MCP_LOOPBACK_SERVER_VERSION,
+  MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS,
+  jsonRpcError,
+  jsonRpcResult,
+  type JsonRpcRequest,
+} from "./mcp-http.protocol.js";
+import {
+  readMcpLoopbackToolName,
+  type McpLoopbackTool,
+  type McpToolSchemaEntry,
+} from "./mcp-http.schema.js";
+
+function stringifyMcpContent(value: unknown): string {
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+}
+
+const MCP_LOOPBACK_CONTENT_TYPES = new Set<ContentBlock["type"]>(["text", "image", "resource"]);
+
+// Tool implementations may return MCP content blocks, plain strings, or
+// arbitrary JSON. Preserve the valid block types shared by every protocol revision
+// this server advertises; newer and malformed shapes remain visible as text.
+function normalizeToolCallContent(result: unknown): ContentBlock[] {
+  const content = (result as { content?: unknown })?.content;
+  if (Array.isArray(content)) {
+    return content.map((block) => {
+      const parsed = ContentBlockSchema.safeParse(block);
+      if (parsed.success && MCP_LOOPBACK_CONTENT_TYPES.has(parsed.data.type)) {
+        return parsed.data;
+      }
+      return {
+        type: "text" as const,
+        text: stringifyMcpContent(block),
+      };
+    });
+  }
+  return [
+    {
+      type: "text",
+      text: stringifyMcpContent(result),
+    },
+  ];
+}
+
+/** Handles one MCP loopback JSON-RPC message and returns a response or notification null. */
+export async function handleMcpJsonRpc(params: {
+  message: JsonRpcRequest;
+  tools: McpLoopbackTool[];
+  toolSchema: McpToolSchemaEntry[];
+  /** Upstream guidance for bridged configured MCP servers, sent on initialize. */
+  serverInstructions?: string;
+  hookContext?: HookContext;
+  signal?: AbortSignal;
+  /** Revalidate short-lived client authority immediately before side effects. */
+  authorizeToolCall?: () => boolean;
+  onToolCallResult?: (
+    call: {
+      toolName: string;
+      args: Record<string, unknown>;
+    } & McpLoopbackToolCallOutcome,
+  ) => void;
+  onToolCallPrepared?: (call: { toolName: string; args: Record<string, unknown> }) => void;
+}): Promise<object | null> {
+  const { id, method, params: methodParams } = params.message;
+  const toolError = (text: string) =>
+    jsonRpcResult(id, { content: [{ type: "text", text }], isError: true });
+
+  switch (method) {
+    case "initialize": {
+      const clientVersion = (methodParams?.protocolVersion as string) ?? "";
+      // Prefer the client-requested protocol when supported, otherwise fall
+      // back to the newest/first supported version advertised by this server.
+      const negotiated =
+        MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS.find((version) => version === clientVersion) ??
+        MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS[0];
+      return jsonRpcResult(id, {
+        protocolVersion: negotiated,
+        capabilities: { tools: {} },
+        serverInfo: {
+          name: MCP_LOOPBACK_SERVER_NAME,
+          version: MCP_LOOPBACK_SERVER_VERSION,
+        },
+        ...(params.serverInstructions ? { instructions: params.serverInstructions } : {}),
+      });
+    }
+    case "notifications/initialized":
+    case "notifications/cancelled":
+      return null;
+    case "tools/list":
+      return jsonRpcResult(id, { tools: params.toolSchema });
+    case "tools/call": {
+      const requestedToolName =
+        typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      // "cron" is a permanently accepted inbound alias for the scheduler tool
+      // (owner decision, RFC 0026; same contract as bash -> exec). Resolve it to
+      // the published canonical tool without re-advertising it in tools/list.
+      const toolName =
+        !params.toolSchema.some((tool) => tool.name === requestedToolName) &&
+        isAutomationsToolName(requestedToolName)
+          ? (params.toolSchema.find((tool) => isAutomationsToolName(tool.name))?.name ??
+            requestedToolName)
+          : requestedToolName;
+      const rawToolArgs = methodParams?.arguments;
+      if (rawToolArgs !== undefined && !isRecord(rawToolArgs)) {
+        return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
+      }
+      const toolArgs = rawToolArgs ?? {};
+      const tool =
+        toolName && params.toolSchema.some((entry) => entry.name === toolName)
+          ? params.tools.find((candidate) => readMcpLoopbackToolName(candidate) === toolName)
+          : undefined;
+      if (!tool) {
+        return toolError(`Tool not available: ${toolName || "unknown"}`);
+      }
+      const assertGatewayToolPolicy = createGatewayToolPolicyAssertion(
+        tool,
+        params.hookContext?.config,
+      );
+      const toolCallId = `mcp-${crypto.randomUUID()}`;
+      const startedAt = Date.now();
+      let executedToolArgs = toolArgs;
+      const reportToolCallResult = (
+        outcome: McpLoopbackToolCallOutcome,
+        result: unknown,
+        error?: string,
+      ) => {
+        void runAgentHarnessAfterToolCallHook({
+          toolName,
+          toolCallId,
+          runId: params.hookContext?.runId,
+          agentId: params.hookContext?.agentId,
+          sessionId: params.hookContext?.sessionId,
+          sessionKey: params.hookContext?.sessionKey,
+          channelId: params.hookContext?.channelId,
+          startArgs: executedToolArgs,
+          result,
+          error,
+          startedAt,
+        }).catch(() => {});
+        try {
+          params.onToolCallResult?.({
+            toolName,
+            args: executedToolArgs,
+            ...outcome,
+          });
+        } catch {
+          // Observability callbacks must never alter the tool result returned to the MCP client.
+        }
+      };
+      try {
+        const preparedToolArgs = tool.prepareBeforeToolCallParams
+          ? await tool.prepareBeforeToolCallParams(toolArgs, {
+              toolCallId,
+              hookContext: params.hookContext,
+              signal: params.signal,
+            })
+          : toolArgs;
+        executedToolArgs = preparedToolArgs as Record<string, unknown>;
+        // Gateway before-tool hooks still run for loopback MCP calls so policy
+        // and audit behavior matches native tool calls from normal chat runs.
+        // Preserve prepared params so exec can restore private workdir/env state after hooks.
+        const hookResult = await runBeforeToolCallHook({
+          toolName,
+          params: preparedToolArgs,
+          toolCallId,
+          ctx: params.hookContext,
+          signal: params.signal,
+        });
+        if (hookResult.blocked) {
+          const disposition = hookResult.kind === "failure" ? hookResult.disposition : "blocked";
+          reportToolCallResult(
+            disposition === "blocked"
+              ? {
+                  outcome: disposition,
+                  deniedReason: hookResult.deniedReason ?? "plugin-before-tool-call",
+                }
+              : { outcome: disposition },
+            hookResult.reason,
+            hookResult.reason,
+          );
+          return toolError(hookResult.reason);
+        }
+        const finalizedToolArgs =
+          tool.finalizeBeforeToolCallParams?.(hookResult.params, preparedToolArgs) ??
+          hookResult.params;
+        executedToolArgs = finalizedToolArgs as Record<string, unknown>;
+        try {
+          params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
+        } catch {
+          // Observability callbacks must never alter the tool result returned to the MCP client.
+        }
+        if (params.authorizeToolCall && !params.authorizeToolCall()) {
+          reportToolCallResult(
+            { outcome: "blocked", deniedReason: "client-grant-revoked" },
+            undefined,
+            "Tool call authorization expired",
+          );
+          return toolError("Tool call authorization expired");
+        }
+        assertGatewayToolPolicy(finalizedToolArgs);
+        let result: Awaited<ReturnType<typeof tool.execute>>;
+        try {
+          const { authorizeToolCall } = params;
+          result = await runWithSessionMcpToolCallAuthority(
+            authorizeToolCall &&
+              (() => {
+                if (!authorizeToolCall()) {
+                  throw new Error("Tool call authorization expired");
+                }
+              }),
+            () => tool.execute(toolCallId, finalizedToolArgs, params.signal),
+          );
+        } catch (error) {
+          throw tool.resultContentSource === "network"
+            ? protectNetworkToolExecutionError(error, "tool execution failed", params.signal)
+            : error;
+        }
+        const failureKind = resolveToolResultFailureKind(result);
+        reportToolCallResult(
+          failureKind === "blocked"
+            ? { outcome: "blocked", deniedReason: "tool_result_blocked" }
+            : { outcome: failureKind ?? "completed", result },
+          result,
+          failureKind ? (extractToolErrorMessage(result) ?? "Tool execution failed") : undefined,
+        );
+        return copyInternalToolResultState(
+          result,
+          jsonRpcResult(id, {
+            content: normalizeToolCallContent(result),
+            isError: failureKind !== undefined,
+          }),
+        );
+      } catch (error) {
+        // A disconnected request does not identify the enclosing run outcome,
+        // but its payload may prove partial delivery and prevent a duplicate send.
+        const message = formatToolExecutionErrorMessage(error, "tool execution failed");
+        reportToolCallResult(
+          {
+            outcome: params.signal?.aborted ? "unknown" : resolveToolExecutionErrorKind(error),
+            result: error,
+          },
+          error,
+          message,
+        );
+        return toolError(message || "tool execution failed");
+      }
+    }
+    default:
+      return jsonRpcError(id, -32601, `Method not found: ${method}`);
+  }
+}

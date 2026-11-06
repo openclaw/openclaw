@@ -1,0 +1,369 @@
+import { createHash } from "node:crypto";
+import type {
+  SessionCatalogHost,
+  SessionCatalogShareRoute,
+  SessionsCatalogArchiveParams,
+  SessionsCatalogContinueParams,
+  SessionsCatalogReadParams,
+  SessionsCatalogReadResult,
+} from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
+import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
+
+export type {
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+} from "./session-catalog-upstream.types.js";
+
+export type SessionCatalogListProviderParams = {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
+  /** False when Gateway-local scans must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
+  /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
+  search?: string;
+  limitPerHost?: number;
+  hostIds?: string[];
+  cursors?: Record<string, string>;
+  /** Never mutate these entries; release after `list` settles or the list operation closes. */
+  sessionEntries?: SessionCatalogEntrySnapshot;
+  /** Lazily lists nodes once; release after `list` settles or the list operation closes. */
+  listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
+  /** Publishes completed hosts without waiting for slower machines in the same list. */
+  onHost?: (host: SessionCatalogHost) => void;
+  /** True when the caller accepts retained/pending hosts and later authoritative onHost updates. */
+  allowPartialResults?: boolean;
+  /** Register host publication before the logical list settles; includes the onHost callback. */
+  waitUntil?: (completion: Promise<void>) => void;
+  /** Catalog owner retirement, independent of the requesting connection's lifetime. */
+  signal?: AbortSignal;
+};
+export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
+  /** False when Gateway-local reads must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
+};
+export type SessionCatalogContinueProviderParams = Omit<
+  SessionsCatalogContinueParams,
+  "catalogId"
+> & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
+  /** False when Gateway-local continuation must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
+  /** Caller's gateway scopes so providers can gate high-authority continues up front. */
+  clientScopes?: readonly string[];
+  /** Host-bound source authority, retained only for this continuation request. */
+  assertCurrent?: () => void;
+};
+export type SessionCatalogArchiveProviderParams = Omit<
+  SessionsCatalogArchiveParams,
+  "catalogId"
+> & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
+  /** False when Gateway-local archive must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
+};
+
+export type SessionCatalogStartTerminalProviderParams = {
+  /** False when Gateway-local terminal start must not inherit process HOME. */
+  allowProcessHomeFallback?: boolean;
+  agentId: string;
+  cwd: string;
+  initialMessage?: string;
+  /** Present only when the caller selected a catalog host backed by this node. */
+  nodeId?: string;
+  /** Selected local catalog source; node ownership is carried by nodeId. */
+  hostId?: string;
+};
+
+export type SessionCatalogTerminalPlan =
+  | {
+      kind: "local";
+      argv: string[];
+      cwd?: string;
+      title?: string;
+      /** Bounded command-specific environment overrides. */
+      env?: Record<string, string>;
+      /** PATH that resolved argv[0], needed by env-based script interpreters. */
+      pathEnv?: string;
+    }
+  | {
+      kind: "node";
+      nodeId: string;
+      command: string;
+      paramsJSON: string;
+      cwd?: string;
+      title?: string;
+      /** Opt in only for native CLI text input, never for a shell receiver. */
+      uploadPathStyle?: TerminalUploadPathStyle;
+    };
+
+export type SessionCatalogCreateTarget = {
+  model: string;
+  /** Concrete runtime pinned onto the created session so config reloads cannot retarget it. */
+  agentRuntime: string;
+};
+
+export interface SessionCatalogEntrySummary {
+  sessionKey: string;
+  entry: SessionEntry;
+}
+
+/** Shared, logically frozen store state for one request; copy locally before mutating. */
+export type SessionCatalogEntrySnapshot = {
+  /** Opaque immutable-entry revision, including config and selection scope. Cache only derived
+   * facts by this token; release entry references when the list closes. Not live authority. */
+  revision?: object;
+  entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
+  /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
+  entriesForCatalog?: () => SessionCatalogAgentEntry[];
+};
+
+type SessionCatalogAgentEntry = SessionCatalogEntrySummary & { agentId: string };
+
+export type SessionUpstreamProbe = {
+  sessionKey: string;
+  agentId: string;
+  threadId: string;
+  hostId: string;
+  upstreamKind: SessionUpstreamKind;
+  upstreamRef: SessionUpstreamJsonValue;
+  marker: SessionUpstreamJsonValue | null;
+  ownRecentUserTexts: string[];
+};
+
+export function normalizeUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+export function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
+  const normalized = text === undefined ? "" : normalizeUserText(text);
+  return !probe.ownRecentUserTexts.includes(normalized);
+}
+
+export type SessionUpstreamActivity =
+  | {
+      kind: "activity";
+      sessionKey: string;
+      humanTurns: number;
+      nextMarker: SessionUpstreamJsonValue;
+      occurredAt?: number;
+      dedupeId?: string;
+    }
+  | { kind: "missing"; sessionKey: string };
+
+export type SessionCatalogContinueProviderResult = {
+  sessionKey: string;
+  /** Plugin binding installed for this authenticated Control UI session. */
+  conversationBinding?: {
+    summary?: string;
+    detachHint?: string;
+    data?: Record<string, unknown>;
+  };
+  /** Publishes provider state only after the requested binding is durable. */
+  afterConversationBound?: () => Promise<void>;
+  /** Upstream link seed so the monitor can detect direct external activity. */
+  upstream?: {
+    kind: SessionUpstreamKind;
+    ref: SessionUpstreamJsonValue;
+    marker: SessionUpstreamJsonValue;
+  };
+};
+
+export type SessionCatalogProvider = {
+  id: string;
+  label: string;
+  /** Gateway artifacts are shared with all operators; remote publications follow session-viewing roles. */
+  audience?: "gateway-operators" | "session-viewers";
+  /** Source authorization must be refreshed before reusing a previous list snapshot. */
+  requiresFreshList?: true;
+  /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
+  shareRoute?: SessionCatalogShareRoute;
+  /** Declares that every HOME-sensitive action honors the host isolation policy. */
+  supportsProcessHomeIsolation?: true;
+  /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
+  resolveCreateSession?: (params: {
+    /** Agent whose model/runtime policy must authorize the catalog target. */
+    agentId?: string;
+  }) => SessionCatalogCreateTarget | undefined;
+  list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
+  /** Optional inert factory; each settled step leaves no foreground work running. */
+  createListOperation?: (params: SessionCatalogListProviderParams) => {
+    next: () => Promise<{ done: false } | { done: true; hosts: SessionCatalogHost[] }>;
+    /** Synchronous cleanup, called once after the last active step settles. */
+    close: () => void;
+  };
+  /** Items are newest-first by source order; nextCursor continues to older items. */
+  read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
+  /** Read-only discovery of an existing receiver-owned logical conversation. Never creates or binds. */
+  resolveGatewayConversation?: (params: SessionCatalogContinueProviderParams) => Promise<
+    | {
+        id: string;
+        sessionKey: string;
+        agentId: string;
+        assertCurrent: () => void;
+        release: () => void;
+      }
+    | undefined
+  >;
+  continueSession?: (
+    params: SessionCatalogContinueProviderParams,
+  ) => Promise<SessionCatalogContinueProviderResult>;
+  /** Copy catalog history into a new ordinary Gateway-owned session. */
+  copyToGatewaySession?: (params: SessionCatalogContinueProviderParams) => Promise<{
+    displayName?: string;
+    preferredModel?: string;
+    /** Receiver-owned logical identity. Reuse never imports history a second time. */
+    continuation?: {
+      id: string;
+      sessionKey: string;
+      agentId: string;
+      reservedNow: boolean;
+      assertCurrent: () => void;
+      release: () => void;
+      beginCreate: (assertDestinationCurrent: () => void) => Promise<boolean>;
+      rollback: () => Promise<void>;
+      complete: (assertDestinationCurrent: () => void) => Promise<void>;
+      read: SessionCatalogProvider["read"];
+    };
+  }>;
+  checkUpstreamActivity?: (
+    probes: SessionUpstreamProbe[],
+    policy?: { allowProcessHomeFallback?: boolean },
+  ) => Promise<SessionUpstreamActivity[]>;
+  archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
+  openTerminal?: (request: {
+    allowProcessHomeFallback?: boolean;
+    /** Gateway always supplies this; optional only for pre-existing external provider types. */
+    agentId?: string;
+    hostId: string;
+    threadId: string;
+    sourceHomeId?: string;
+  }) => Promise<SessionCatalogTerminalPlan>;
+  startTerminalSession?: (
+    request: SessionCatalogStartTerminalProviderParams,
+  ) => Promise<SessionCatalogTerminalPlan>;
+};
+
+export function listSessionCatalogEntries(params: {
+  agentId?: string;
+  config: OpenClawConfig;
+  runtime: PluginRuntime;
+  sessionEntries?: SessionCatalogEntrySnapshot;
+}): SessionCatalogAgentEntry[] {
+  const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
+  const requestedAgentId = resolveCatalogAgentId(params);
+  const requestEntries = params.sessionEntries?.entriesForCatalog?.();
+  if (requestEntries) {
+    // Keep the shipped SDK helper as the compatibility entry point while the
+    // Gateway snapshot owns the one request-wide flatten.
+    return requiresExplicitOwner && requestedAgentId
+      ? requestEntries.filter((entry) => entry.agentId === requestedAgentId)
+      : requestEntries;
+  }
+  const defaultAgentId =
+    requestedAgentId ?? resolveSessionAgentIds({ config: params.config }).defaultAgentId;
+  const agentIds = requiresExplicitOwner
+    ? [defaultAgentId]
+    : [
+        defaultAgentId,
+        ...listAgentIds(params.config).filter((agentId) => agentId !== defaultAgentId),
+      ];
+  return agentIds.flatMap((agentId) => {
+    const entries = params.sessionEntries
+      ? params.sessionEntries.entriesForAgent(agentId)
+      : params.runtime.agent.session.listSessionEntries({
+          agentId,
+          readOnly: true,
+          projection: "list",
+        });
+    return entries.map((entry) => Object.assign({}, entry, { agentId }));
+  });
+}
+
+function resolveCatalogAgentId(params: { agentId?: string; config: OpenClawConfig }) {
+  return params.agentId || params.config.agents?.ownership === "explicit"
+    ? resolveSessionAgentIds({ config: params.config, agentId: params.agentId }).sessionAgentId
+    : undefined;
+}
+
+export function sessionCatalogAdoptedSourceKey(hostId: string, threadId: string): string {
+  return `${hostId}\0${threadId}`;
+}
+
+export function sessionCatalogAdoptedSessionKey(prefix: string, source: string): string {
+  return `${prefix}${createHash("sha256").update(source).digest("hex")}`;
+}
+
+export function listAdoptedSessionCatalogSessions(params: {
+  agentId?: string;
+  config: OpenClawConfig;
+  pluginId: string;
+  runtime: PluginRuntime;
+  sessionEntries?: SessionCatalogEntrySnapshot;
+  sourceFromEntry: (entry: SessionEntry) => { hostId: string; threadId: string } | undefined;
+}): Map<string, string> {
+  const adopted = new Map<string, string>();
+  const requestedAgentId = resolveCatalogAgentId(params);
+  const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
+  // Avoid both an agent-wide filtered copy and iterator allocations on the frozen snapshot.
+  const entries = params.sessionEntries?.entriesForCatalog?.() ?? listSessionCatalogEntries(params);
+  // oxlint-disable-next-line typescript/prefer-for-of -- Frozen-array iterators allocate per row.
+  for (let index = 0; index < entries.length; index++) {
+    const { sessionKey, entry, agentId } = entries[index]!;
+    if (
+      (requiresExplicitOwner && agentId !== requestedAgentId) ||
+      entry.pluginOwnerId !== params.pluginId ||
+      entry.initializationPending === true
+    ) {
+      continue;
+    }
+    const source = params.sourceFromEntry(entry);
+    if (source) {
+      adopted.set(sessionCatalogAdoptedSourceKey(source.hostId, source.threadId), sessionKey);
+    }
+  }
+  return adopted;
+}
+
+// Adoption and its upstream baseline share one single-flight operation.
+export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
+  const operations = new Map<string, Promise<TResult>>();
+  return async (params: {
+    sourceKey: string;
+    findExisting: () => string | undefined | Promise<string | undefined>;
+    create: () => Promise<{ sessionKey: string }>;
+    complete: (continued: { sessionKey: string }) => Promise<TResult>;
+  }): Promise<TResult> => {
+    return await getOrCreatePromise(
+      operations,
+      params.sourceKey,
+      async () => {
+        const existing = await params.findExisting();
+        // Completion preserves an existing link's marker, or supplies a baseline after removal.
+        const continued = existing
+          ? { sessionKey: existing }
+          : await params.create().catch(async (error: unknown) => {
+              const raced = await params.findExisting();
+              if (raced) {
+                return { sessionKey: raced };
+              }
+              throw error;
+            });
+        return await params.complete(continued);
+      },
+      { evictOnSettled: true },
+    );
+  };
+}

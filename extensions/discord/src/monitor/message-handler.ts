@@ -1,0 +1,48 @@
+import type { Client } from "../internal/discord.js";
+import { createDiscordIngressMonitor } from "./ingress.js";
+import type { DiscordMessageHandler } from "./listeners.js";
+import { createDiscordMessageDispatcher } from "./message-dispatcher.js";
+
+type DiscordMessageHandlerParams = Parameters<typeof createDiscordMessageDispatcher>[0];
+
+type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+  deactivate: () => Promise<void>;
+};
+
+export function createDiscordMessageHandler(
+  params: DiscordMessageHandlerParams & { client: Client },
+): DiscordMessageHandlerWithLifecycle {
+  const dispatcher = createDiscordMessageDispatcher(params);
+  const ingress = createDiscordIngressMonitor({
+    ...params,
+    dispatch: (event, lifecycle) =>
+      dispatcher(event, params.client, {
+        abortSignal: lifecycle.abortSignal,
+        turnAdoptionLifecycle: lifecycle,
+      }),
+    onDeadLetter: (event, signal) => dispatcher.notifyDeadLetter(event, params.client, signal),
+  });
+  ingress.start();
+  const activeAdmissions = new Set<Promise<void>>();
+  let accepting = true;
+
+  const handler: DiscordMessageHandlerWithLifecycle = async (rawMessage) => {
+    if (!accepting) {
+      return;
+    }
+    const admission = ingress.accept(rawMessage);
+    activeAdmissions.add(admission);
+    try {
+      await admission;
+    } finally {
+      activeAdmissions.delete(admission);
+    }
+  };
+  handler.deactivate = async () => {
+    accepting = false;
+    await Promise.allSettled(activeAdmissions);
+    await dispatcher.deactivate();
+    await ingress.stop();
+  };
+  return handler;
+}

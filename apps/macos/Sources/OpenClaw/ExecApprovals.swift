@@ -1,0 +1,217 @@
+import Foundation
+import OpenClawKit
+
+typealias ExecSecurity = ExecApprovalsSecurity
+typealias ExecAsk = ExecApprovalsAsk
+typealias ExecAllowlistEntry = ExecApprovalsAllowlistEntry
+typealias ExecApprovalsDefaults = ExecApprovalsDefaultsDocument
+typealias ExecApprovalsAgent = ExecApprovalsAgentDocument
+typealias ExecApprovalsSocketConfig = ExecApprovalsSocketDocument
+typealias ExecApprovalsFile = ExecApprovalsDocument
+
+extension ExecApprovalsSecurity {
+    static func narrower(_ lhs: ExecSecurity, _ rhs: ExecSecurity) -> ExecSecurity {
+        if lhs == .deny || rhs == .deny {
+            return .deny
+        }
+        if lhs == .allowlist || rhs == .allowlist {
+            return .allowlist
+        }
+        return .full
+    }
+}
+
+enum ExecApprovalDecision: String, Codable, Equatable {
+    case allowOnce = "allow-once"
+    case allowAlways = "allow-always"
+    case deny
+}
+
+struct ExecAllowlistUse: Sendable {
+    let match: ExecAllowlistEntry
+    let resolvedPath: String?
+}
+
+struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
+    let pattern: Data
+    let argPattern: Data
+
+    init(pattern: String, argPattern: String?) {
+        self.pattern = Data(pattern.utf8)
+        self.argPattern = Data((argPattern ?? "").utf8)
+    }
+}
+
+enum ExecApprovalsMutationError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
+}
+
+enum ExecApprovalsReadError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
+}
+
+struct ExecApprovalsResolved: Sendable {
+    let socketPath: String
+    let token: String
+    let agent: ExecApprovalsResolvedDefaults
+    let allowlist: [ExecAllowlistEntry]
+    var file: ExecApprovalsFile
+    var unavailableReason: String?
+}
+
+struct ExecApprovalsResolvedDefaults: Codable, Sendable {
+    var security: ExecSecurity
+    var ask: ExecAsk
+    var askFallback: ExecSecurity
+    var autoAllowSkills: Bool
+}
+
+enum ExecApprovalHelpers {
+    static func requiresAsk(
+        ask: ExecAsk,
+        security: ExecSecurity,
+        allowlistMatch: ExecAllowlistEntry?,
+        skillAllow: Bool) -> Bool
+    {
+        ask == .always || (ask == .onMiss && security == .allowlist && allowlistMatch == nil && !skillAllow)
+    }
+
+    static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {
+        let pattern = resolution?.resolvedRealPath ?? resolution?.resolvedPath ?? resolution?.rawExecutable ??
+            command.first ?? ""
+        return pattern.isEmpty ? nil : pattern
+    }
+
+    static func patternHasPathSelector(_ pattern: String) -> Bool {
+        pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
+    }
+}
+
+actor SkillBinsCache {
+    static let shared = SkillBinsCache()
+
+    nonisolated let gateway: GatewayConnection
+
+    init(gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
+    }
+
+    struct Snapshot: Sendable {
+        let gateway: GatewayConnection
+        let source: GatewayConnection.ServerLease
+        let revision: UInt64?
+        let refreshedAt: Date
+        let index: SkillBinTrustIndex
+
+        /// Approval contexts, execution commits and Settings can outlive the supplying read.
+        var isCurrent: Bool {
+            self.revision == self.gateway.selectedEndpointRevision &&
+                self.gateway.serverLeaseMatchesCurrentRoute(self.source)
+        }
+
+        var bins: Set<String> {
+            self.isCurrent ? self.index.names : []
+        }
+
+        var trustByName: [String: Set<String>] {
+            self.isCurrent ? self.index.pathsByName : [:]
+        }
+    }
+
+    private var cached: Snapshot?
+    private let refreshInterval: TimeInterval = 90
+
+    func current(force: Bool = false) async -> Snapshot? {
+        let previous = self.cached
+        if let previous, previous.isCurrent, !force,
+           Date().timeIntervalSince(previous.refreshedAt) <= self.refreshInterval
+        {
+            return previous
+        }
+        let revision = self.gateway.selectedEndpointRevision
+        if let source = try? await self.gateway.acquireServerLease(),
+           let report = try? await JSONDecoder().decode(SkillsStatusReport.self, from: self.gateway.request(
+               method: GatewayConnection.Method.skillsStatus.rawValue, params: nil, ifCurrentServerLease: source))
+        {
+            guard !Task.isCancelled else { return nil }
+            if revision == self.gateway.selectedEndpointRevision,
+               self.gateway.serverLeaseMatchesCurrentState(source)
+            {
+                let snapshot = Snapshot(
+                    gateway: self.gateway,
+                    source: source,
+                    revision: revision,
+                    refreshedAt: Date(),
+                    index: Self.buildTrustIndex(report: report, searchPaths: CommandResolver.preferredPaths()))
+                self.cached = snapshot
+                return snapshot
+            }
+        }
+        // Failed or retired refreshes keep only their captured, current-route trust.
+        // An old read must not inherit a newer route's cache after suspension.
+        return previous?.isCurrent == true ? previous : nil
+    }
+
+    static func normalizeSkillBinName(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func normalizeResolvedPath(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return URL(fileURLWithPath: trimmed).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    static func buildTrustIndex(
+        report: SkillsStatusReport,
+        searchPaths: [String]) -> SkillBinTrustIndex
+    {
+        var names = Set<String>()
+        var pathsByName: [String: Set<String>] = [:]
+
+        for skill in report.skills {
+            for bin in skill.requirements.bins {
+                let trimmed = bin.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                names.insert(trimmed)
+
+                guard let name = normalizeSkillBinName(trimmed),
+                      let resolvedPath = resolveSkillBinPath(trimmed, searchPaths: searchPaths),
+                      let normalizedPath = normalizeResolvedPath(resolvedPath)
+                else {
+                    continue
+                }
+
+                pathsByName[name, default: []].insert(normalizedPath)
+            }
+        }
+
+        return SkillBinTrustIndex(names: names, pathsByName: pathsByName)
+    }
+
+    private static func resolveSkillBinPath(_ bin: String, searchPaths: [String]) -> String? {
+        let expanded = bin.hasPrefix("~") ? (bin as NSString).expandingTildeInPath : bin
+        if expanded.contains("/") || expanded.contains("\\") {
+            return FileManager().isExecutableFile(atPath: expanded) ? expanded : nil
+        }
+        return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
+    }
+}
+
+struct SkillBinTrustIndex: Sendable {
+    let names: Set<String>
+    let pathsByName: [String: Set<String>]
+}

@@ -1,0 +1,14 @@
+name: Shared OpenClawKit Periphery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  scan:
+    uses: ./.github/workflows/macos-periphery.yml
+    with:
+      shared_only: true

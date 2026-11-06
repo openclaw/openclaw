@@ -1,0 +1,40 @@
+import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+
+/**
+ * In-memory cache of Discord user presence data.
+ * Populated by GUILD_CREATE snapshots and PRESENCE_UPDATE when GuildPresences is enabled.
+ * Per-account maps are capped to prevent unbounded growth (#4948).
+ */
+const MAX_PRESENCE_PER_ACCOUNT = 5000;
+const presenceCache = new Map<string, Map<string, GatewayPresenceUpdate>>();
+
+export function setPresence(
+  accountId: string | undefined,
+  userId: string,
+  data: GatewayPresenceUpdate,
+): void {
+  const accountKey = accountId ?? "default";
+  let accountCache = presenceCache.get(accountKey);
+  if (!accountCache) {
+    accountCache = new Map();
+    presenceCache.set(accountKey, accountCache);
+  }
+  accountCache.set(userId, data);
+  pruneMapToMaxSize(accountCache, MAX_PRESENCE_PER_ACCOUNT);
+}
+
+export function getPresence(
+  accountId: string | undefined,
+  userId: string,
+): GatewayPresenceUpdate | undefined {
+  return presenceCache.get(accountId ?? "default")?.get(userId);
+}
+
+export function clearPresences(accountId?: string): void {
+  if (accountId) {
+    presenceCache.delete(accountId);
+    return;
+  }
+  presenceCache.clear();
+}

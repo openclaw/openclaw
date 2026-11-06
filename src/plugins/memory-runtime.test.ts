@@ -1,0 +1,598 @@
+/** Covers non-activating memory registry handles and requesting-agent workspace ownership. */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import { closeCliResources } from "../cli/runtime-cleanup.js";
+import type {
+  LegacyMemoryReadResult,
+  MemoryReadResult,
+  MemorySearchResult,
+} from "../memory-host-sdk/host/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createPluginRecord } from "./loader-records.js";
+import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
+import { PluginInstance } from "./plugin-instance.js";
+import type {
+  MemoryPluginRuntime,
+  RegisteredMemorySearchManager,
+} from "./registry-contribution-types.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  getPluginLoaderCacheState,
+  isPluginRegistryRetired,
+  markPluginRegistryRetired,
+} from "./registry-lifecycle.js";
+import {
+  getPluginRuntimeGatewayRequestScope as currentScope,
+  withPluginRuntimeRegistryScope as inRegistry,
+} from "./runtime/gateway-request-scope.js";
+
+type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
+type ClassifyWorkspaceMemoryPaths = NonNullable<
+  MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]
+>;
+
+const mocks = vi.hoisted(() => ({
+  getMemoryRuntime: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
+  resolveAgentWorkspaceDir: vi.fn(),
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+}));
+
+vi.mock("./loader.js", () => ({
+  loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
+}));
+
+vi.mock("./manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest-registry.js")>()),
+  loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
+}));
+
+vi.mock("./memory-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./memory-state.js")>();
+  return { ...actual, getMemoryRuntime: mocks.getMemoryRuntime };
+});
+
+import {
+  authorizeActiveMemorySearchHits as authorizeHits,
+  classifyActiveMemoryWorkspacePaths as classifyPaths,
+  closeActiveMemorySearchManagerCore as closeAgent,
+  closeActiveMemorySearchManagersCore as closeAll,
+  getActiveMemorySearchManagerCore as getManager,
+  resolveActiveMemoryBackendConfig as resolveBackend,
+} from "./memory-runtime.js";
+import { resetStandaloneMemoryRegistrySlot } from "./memory-runtime.test-support.js";
+import { hasMemoryRuntime } from "./memory-state.js";
+
+function createRuntime() {
+  return {
+    authorizeSearchHits: vi.fn<AuthorizeSearchHits>(async ({ hits }) => hits),
+    classifyWorkspaceMemoryPaths: vi.fn<ClassifyWorkspaceMemoryPaths>(async ({ relativePaths }) =>
+      relativePaths.map((relativePath) => ({ relativePath, originClass: "agent" as const })),
+    ),
+    getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+    resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+    closeMemorySearchManager: vi.fn(async () => {}),
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+  } satisfies MemoryPluginRuntime;
+}
+
+function createSearchHits(): MemorySearchResult[] {
+  const location = { startLine: 1, endLine: 1, score: 1 };
+  return [
+    { ...location, source: "memory", path: "memory.md", snippet: "memory" },
+    { ...location, source: "sessions", path: "sessions/private.jsonl", snippet: "private" },
+  ];
+}
+
+type TestRegistry<T extends MemoryPluginRuntime> = {
+  registry: ReturnType<typeof createEmptyPluginRegistry>;
+  runtime: T;
+  instance: PluginInstance;
+};
+
+const instances: PluginInstance[] = [];
+afterEach(async () => {
+  await Promise.all(instances.splice(0).map((instance) => instance.dispose()));
+});
+
+function createRegistry(): TestRegistry<ReturnType<typeof createRuntime>>;
+function createRegistry<T extends MemoryPluginRuntime>(runtime: T): TestRegistry<T>;
+function createRegistry(
+  runtime: MemoryPluginRuntime = createRuntime(),
+): TestRegistry<MemoryPluginRuntime> {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: "memory-core",
+    source: "/plugins/memory-core/index.js",
+    origin: "config",
+    enabled: true,
+    configSchema: false,
+  });
+  record.kind = "memory";
+  record.memorySlotSelected = true;
+  const instance = new PluginInstance(record.id, { record, registry });
+  instances.push(instance);
+  registry.plugins.push(record);
+  registry.memoryCapabilities.push({
+    pluginId: record.id,
+    capability: instance.wrap({ runtime }),
+    memorySlotSelected: true,
+  });
+  return { registry, runtime, instance };
+}
+
+const memoryConfig = {
+  plugins: { slots: { memory: "memory-core" } },
+} as never;
+
+const managerParams = (agentId = "main") => ({ cfg: memoryConfig, agentId });
+const acquire = (agentId = "main") => getManager(managerParams(agentId));
+
+function loadRegistry<T extends MemoryPluginRuntime>(owner: TestRegistry<T>) {
+  mocks.loadPluginRegistryHandle.mockReturnValue(owner.registry);
+  return owner;
+}
+
+describe("memory runtime handles", () => {
+  beforeEach(() => {
+    resetStandaloneMemoryRegistrySlot();
+    mocks.getMemoryRuntime.mockReset().mockReturnValue(undefined);
+    mocks.loadPluginRegistryHandle.mockReset();
+    mocks.resolveAgentWorkspaceDir
+      .mockReset()
+      .mockImplementation((_cfg, agentId: string) =>
+        agentId === "research" ? "/workspace/research" : "/workspace/main",
+      );
+  });
+
+  it.each([
+    ["all", "retired"],
+    ["agent", "quiesced"],
+  ] as const)(
+    "closes %s managers through a %s owner without reviving disposal",
+    async (scope, state) => {
+      const { registry, runtime, instance } = loadRegistry(createRegistry());
+      await acquire();
+      const releaseClose = createDeferredCore();
+      const closeCallback =
+        scope === "all" ? runtime.closeAllMemorySearchManagers : runtime.closeMemorySearchManager;
+      closeCallback.mockImplementationOnce(async () => {
+        await releaseClose.promise;
+      });
+      const close = () => (scope === "all" ? closeAll() : closeAgent(managerParams()));
+      if (state === "retired") {
+        markPluginRegistryRetired(registry);
+      } else {
+        instance.quiesce();
+      }
+      const closing = close();
+      void closing.catch(() => {});
+      try {
+        expect(closeCallback).toHaveBeenCalledTimes(1);
+        const disposal = instance.dispose();
+        expect(instance.lifecycle.signal.aborted).toBe(false);
+        releaseClose.resolve();
+        await Promise.all([closing, disposal]);
+        expect(instance.lifecycle.signal.aborted).toBe(true);
+        await expect(close()).resolves.toBeUndefined();
+        expect(closeCallback).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseClose.resolve();
+        await Promise.allSettled([closing, instance.dispose()]);
+      }
+    },
+  );
+
+  it("closes memory after the CLI retires its acquired harness registry", async () => {
+    const { registry, runtime, instance } = loadRegistry(createRegistry());
+    const disposeHarness = vi.fn(async () => {});
+    registry.agentHarnesses.push({
+      pluginId: "memory-core",
+      source: "/plugins/memory-core/index.js",
+      harness: instance.wrap({
+        id: "memory-fixture",
+        label: "Memory fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("catalog-only fixture");
+        },
+        dispose: disposeHarness,
+      }),
+    });
+    runtime.closeAllMemorySearchManagers.mockImplementationOnce(async () => {
+      expect(isPluginRegistryRetired(registry)).toBe(true);
+      expect(instance.lifecycle.signal.aborted).toBe(false);
+    });
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async (cleanup) => {
+        await acquire();
+        inRegistry(registry, listRegisteredAgentHarnesses);
+        await closeCliResources(cleanup);
+      }),
+    );
+    expect(disposeHarness).toHaveBeenCalledTimes(1);
+    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["registered", "standalone"] as const)(
+    "resolves the %s memory runtime without activating unrelated plugins",
+    async (selection) => {
+      const runtime = createRuntime();
+      if (selection === "registered") {
+        mocks.getMemoryRuntime.mockReturnValue(runtime);
+        expect(resolveBackend({ cfg: memoryConfig, agentId: "main" })).toEqual({
+          backend: "builtin",
+        });
+        expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+        return;
+      }
+      const main = createRegistry(runtime);
+      const research = createRegistry();
+      runtime.getMemorySearchManager.mockImplementationOnce(async () => {
+        expect(currentScope()?.pluginRegistry).toBe(main.registry);
+        return { manager: null, error: "no index" };
+      });
+      runtime.resolveMemoryBackendConfig.mockImplementationOnce(() => {
+        expect(currentScope()?.pluginRegistry).toBe(main.registry);
+        return { backend: "builtin" };
+      });
+      mocks.loadPluginRegistryHandle.mockImplementation(({ workspaceDir }) =>
+        workspaceDir === "/workspace/research" ? research.registry : main.registry,
+      );
+      await expect(getManager({ cfg: memoryConfig, agentId: "main" })).resolves.toMatchObject({
+        manager: null,
+        error: "no index",
+      });
+      expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activate: false,
+          onlyPluginIds: ["memory-core"],
+          workspaceDir: "/workspace/main",
+        }),
+      );
+      for (const agentId of ["main", "main", "research"]) {
+        expect(resolveBackend({ cfg: memoryConfig, agentId })).toEqual({
+          backend: "builtin",
+        });
+      }
+      expect(runtime.resolveMemoryBackendConfig).toHaveBeenCalledTimes(2);
+      expect(research.runtime.resolveMemoryBackendConfig).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["present", "missing"] as const)(
+    "reloads the same memory selection after its %s capability owner retires",
+    async (capability) => {
+      const first = createRegistry();
+      const replacement = createRegistry();
+      if (capability === "missing") {
+        first.registry.memoryCapabilities = [];
+      }
+      const cache = createPluginCache();
+      getPluginLoaderCacheState(cache).set("memory-fixture", first.registry);
+      mocks.loadPluginRegistryHandle
+        .mockReturnValueOnce(first.registry)
+        .mockReturnValue(replacement.registry);
+
+      await expect(acquire()).resolves.toMatchObject({
+        manager: null,
+        error: capability === "missing" ? "memory plugin unavailable" : "no index",
+      });
+      await retirePluginCache(cache);
+      expect(first.instance.lifecycle.signal.aborted).toBe(true);
+
+      for (let query = 0; query < 2; query += 1) {
+        await expect(acquire()).resolves.toMatchObject({ manager: null, error: "no index" });
+      }
+      expect(replacement.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
+      expect(replacement.instance.lifecycle.signal.aborted).toBe(false);
+      await closeAll();
+      expect(replacement.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("prunes disposed memory owners across selection resets and fresh wrappers", async () => {
+    const first = createRegistry();
+    const second = createRegistry();
+    mocks.loadPluginRegistryHandle.mockImplementation(({ workspaceDir }) =>
+      workspaceDir === "/workspace/research" ? second.registry : first.registry,
+    );
+    const alternate = async () => {
+      for (const agentId of ["main", "research", "main"]) {
+        await acquire(agentId);
+      }
+    };
+    await alternate();
+    await closeAll();
+    resetStandaloneMemoryRegistrySlot();
+    await alternate();
+
+    await second.instance.dispose();
+    await closeAll();
+    expect(first.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
+    expect(second.runtime.closeAllMemorySearchManagers).toHaveBeenCalledOnce();
+    await first.instance.dispose();
+    await closeAll();
+    expect(first.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
+
+    const fresh = createRegistry(first.runtime);
+    loadRegistry(fresh);
+    await acquire();
+    await closeAll();
+    expect(first.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(3);
+    await fresh.instance.dispose();
+    await closeAll();
+    expect(first.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains standalone cleanup ownership when manager acquisition or teardown fails", async () => {
+    const { runtime } = loadRegistry(createRegistry());
+    runtime.getMemorySearchManager.mockRejectedValueOnce(
+      new Error("manager initialization failed"),
+    );
+
+    await expect(acquire()).rejects.toThrow("manager initialization failed");
+    expect(hasMemoryRuntime()).toBe(true);
+
+    runtime.closeAllMemorySearchManagers.mockRejectedValueOnce(
+      new Error("manager teardown failed"),
+    );
+    await expect(closeAll()).rejects.toThrow("manager teardown failed");
+    expect(hasMemoryRuntime()).toBe(true);
+
+    await closeAll();
+    expect(hasMemoryRuntime()).toBe(false);
+  });
+
+  it.each([
+    { plugins: { enabled: false } },
+    { plugins: { slots: { memory: "none" } } },
+    { plugins: { slots: { memory: "MeMoRy-Fixture" }, deny: ["memory-fixture"] } },
+    {
+      plugins: {
+        slots: { memory: "MeMoRy-Fixture" },
+        entries: { "memory-fixture": { enabled: false } },
+      },
+    },
+  ])("does not load a disabled memory selection", async (cfg) => {
+    mocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+    await expect(getManager({ cfg: cfg as never, agentId: "main" })).resolves.toEqual({
+      manager: null,
+      error: "memory plugin unavailable",
+    });
+    expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it.each(["unregistered", "non-search", "sidecar", "failed", "missing"] as const)(
+    "diagnoses search support from a %s owner without masking failures",
+    async (state) => {
+      const { registry } = createRegistry();
+      registry.memoryCapabilities = [];
+      if (state === "non-search" || state === "sidecar") {
+        registry.memoryCapabilities.push({
+          pluginId: state === "sidecar" ? "dreaming-sidecar" : "memory-core",
+          memorySlotSelected: state !== "sidecar",
+          capability: { publicArtifacts: { listArtifacts: async () => [] } },
+        });
+      }
+      if (state === "failed") {
+        for (const record of registry.plugins) {
+          record.status = "error";
+          record.error = "memory plugin import failed";
+        }
+      } else if (state === "missing") {
+        registry.plugins = [];
+      }
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+      const result = await acquire();
+      expect(result.manager).toBeNull();
+      expect(result.searchRuntimeRegistered).toBe(
+        state === "failed" || state === "missing" ? undefined : false,
+      );
+      expect(result.error).toBe(
+        state === "failed" ? "memory plugin import failed" : "memory plugin unavailable",
+      );
+    },
+  );
+
+  it("adapts legacy reads and every method of a frozen registered class", async () => {
+    const legacyReads = [
+      { text: "", path: "memory/legacy-bare-empty.md" },
+      { text: "", path: "memory/legacy-ranged-empty.md", from: 1, lines: 0 },
+      { text: "legacy", path: "memory/legacy-nonempty.md" },
+    ] satisfies LegacyMemoryReadResult[];
+    const canonicalReads = [
+      { status: "ok", text: "", path: "memory/canonical-empty.md" },
+      { status: "not_found", text: "", path: "memory/canonical-missing.md" },
+    ] satisfies MemoryReadResult[];
+
+    class RegisteredReadManager implements RegisteredMemorySearchManager {
+      #closed = false;
+      #probed = false;
+      #reads = new Map([...legacyReads, ...canonicalReads].map((read) => [read.path, read]));
+
+      search = async (): Promise<MemorySearchResult[]> => [];
+
+      readFile = async ({
+        relPath,
+      }: {
+        relPath: string;
+      }): Promise<LegacyMemoryReadResult | MemoryReadResult> => {
+        return this.#reads.get(relPath)!;
+      };
+
+      status = () => ({ backend: "builtin" as const, provider: this.#probed ? "ready" : "frozen" });
+      probeEmbeddingAvailability = async () => {
+        this.#probed = true;
+        return { ok: true };
+      };
+      probeVectorAvailability = async () => true;
+
+      async close() {
+        this.#closed = true;
+      }
+
+      isClosed() {
+        return this.#closed;
+      }
+    }
+    const manager = Object.freeze(new RegisteredReadManager());
+    mocks.getMemoryRuntime.mockReturnValue({
+      ...createRuntime(),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    } satisfies MemoryPluginRuntime);
+
+    const first = await acquire();
+    const second = await acquire();
+
+    expect(second.manager).toBe(first.manager);
+    expect(Reflect.get(second.manager ?? {}, "readFile")).toBe(
+      Reflect.get(first.manager ?? {}, "readFile"),
+    );
+    await expect(first.manager?.search("frozen manager")).resolves.toEqual([]);
+    expect(first.manager?.status()).toEqual({ backend: "builtin", provider: "frozen" });
+    await expect(first.manager?.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(first.manager?.status()).toEqual({ backend: "builtin", provider: "ready" });
+    await expect(first.manager?.probeVectorAvailability()).resolves.toBe(true);
+    for (const read of legacyReads) {
+      await expect(first.manager?.readFile({ relPath: read.path })).resolves.toEqual({
+        status: "ok",
+        ...read,
+      });
+    }
+    for (const read of canonicalReads) {
+      await expect(first.manager?.readFile({ relPath: read.path })).resolves.toBe(read);
+    }
+    await first.manager?.close?.();
+    expect(manager.isClosed()).toBe(true);
+  });
+
+  it.each([true, false])(
+    "authorizes raw hits with a selected plugin authorizer=%s and fails closed without one",
+    async (authorizer) => {
+      const runtime = createRuntime();
+      const { registry } = createRegistry(
+        authorizer
+          ? runtime
+          : {
+              getMemorySearchManager: runtime.getMemorySearchManager,
+              resolveMemoryBackendConfig: runtime.resolveMemoryBackendConfig,
+              closeMemorySearchManager: runtime.closeMemorySearchManager,
+              closeAllMemorySearchManagers: runtime.closeAllMemorySearchManagers,
+            },
+      );
+      runtime.authorizeSearchHits.mockImplementationOnce(async ({ hits }) => {
+        expect(currentScope()?.pluginRegistry).toBe(registry);
+        return hits.filter((hit) => hit.source === "memory");
+      });
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+      const hits = createSearchHits();
+      await expect(
+        authorizeHits({
+          cfg: memoryConfig,
+          agentId: "main",
+          requesterSessionKey: "agent:main:voice:15550001234",
+          sandboxed: false,
+          hits,
+        }),
+      ).resolves.toEqual([hits[0]]);
+    },
+  );
+
+  it.each(["local", "pinned-remote"] as const)(
+    "classifies workspace paths through the selected runtime with %s provenance support",
+    async (support) => {
+      const runtime = createRuntime();
+      const { registry } = createRegistry({
+        ...runtime,
+        ...(support === "pinned-remote"
+          ? { supportsWorkspaceMemoryReadSources: true as const }
+          : {}),
+      });
+      if (support === "local") {
+        runtime.classifyWorkspaceMemoryPaths.mockImplementationOnce(async ({ relativePaths }) => {
+          expect(currentScope()?.pluginRegistry).toBe(registry);
+          return relativePaths.map((relativePath) => ({
+            relativePath,
+            originClass: relativePath === "MEMORY.md" ? "untrusted" : "owner",
+          }));
+        });
+      }
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+      const remote = support === "pinned-remote";
+      const params = {
+        cfg: memoryConfig,
+        agentId: "main",
+        workspaceDir: remote ? "/gateway/workspace" : "/workspace/main",
+        relativePaths: remote ? ["USER.md"] : ["MEMORY.md", "USER.md"],
+        ...(remote
+          ? {
+              readSources: [
+                {
+                  relativePath: "USER.md",
+                  canonicalRelativePath: "memory/profile.md",
+                },
+              ],
+            }
+          : {}),
+      };
+      const result = await classifyPaths(params);
+      if (support === "local") {
+        expect(result).toEqual({
+          status: "classified",
+          classifications: [
+            { relativePath: "MEMORY.md", originClass: "untrusted" },
+            { relativePath: "USER.md", originClass: "owner" },
+          ],
+        });
+      } else {
+        expect(result).toMatchObject({ status: "classified" });
+        expect(runtime.classifyWorkspaceMemoryPaths).toHaveBeenCalledExactlyOnceWith(params);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "closes current and retired workspace managers without reloading (acquired=%s)",
+    async (acquired) => {
+      const main = createRegistry();
+      const research = createRegistry();
+      for (const owner of [main, research]) {
+        owner.runtime.closeMemorySearchManager.mockImplementationOnce(async () => {
+          expect(currentScope()?.pluginRegistry).toBe(owner.registry);
+        });
+        owner.runtime.closeAllMemorySearchManagers.mockImplementationOnce(async () => {
+          expect(currentScope()?.pluginRegistry).toBe(owner.registry);
+        });
+      }
+      mocks.loadPluginRegistryHandle
+        .mockReturnValueOnce(main.registry)
+        .mockReturnValueOnce(research.registry);
+      for (const agentId of ["main", "research"]) {
+        if (acquired) {
+          await acquire(agentId);
+        } else {
+          resolveBackend(managerParams(agentId));
+        }
+      }
+      expect(hasMemoryRuntime()).toBe(acquired);
+      mocks.loadPluginRegistryHandle.mockClear();
+
+      await closeAgent(managerParams());
+      expect(hasMemoryRuntime()).toBe(acquired);
+      await closeAll(memoryConfig);
+
+      for (const { runtime } of [main, research]) {
+        expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith(managerParams());
+        expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+      }
+      expect(hasMemoryRuntime()).toBe(false);
+      expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -1,0 +1,189 @@
+import Foundation
+import OpenClawKit
+
+enum GatewayRemoteConfig {
+    static let directGatewayUrlValidationMessage =
+        "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, private/LAN, " +
+        "link-local, .local, and Tailnet hosts."
+
+    enum TransportSource: Equatable {
+        case explicit
+        case inferredRemoteURL
+        case legacySSH
+    }
+
+    struct TransportResolution: Equatable {
+        let transport: AppState.RemoteTransport
+        let source: TransportSource
+        let directURL: URL?
+    }
+
+    enum TokenValue: Equatable {
+        case missing
+        case plaintext(String)
+        case unsupportedNonString
+
+        var textFieldValue: String {
+            switch self {
+            case let .plaintext(token):
+                token
+            case .missing, .unsupportedNonString:
+                ""
+            }
+        }
+
+        var isUnsupportedNonString: Bool {
+            if case .unsupportedNonString = self {
+                return true
+            }
+            return false
+        }
+    }
+
+    static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
+        self.resolveTransportResolution(root: root).transport
+    }
+
+    static func resolveTransportResolution(root: [String: Any]) -> TransportResolution {
+        if let explicit = self.resolveExplicitTransport(root: root) {
+            return TransportResolution(
+                transport: explicit,
+                source: .explicit,
+                directURL: explicit == .direct ? self.resolveGatewayUrl(root: root) : nil)
+        }
+
+        if let url = self.resolveGatewayUrl(root: root),
+           let host = url.host,
+           !LoopbackHost.isLoopbackHost(host)
+        {
+            return TransportResolution(transport: .direct, source: .inferredRemoteURL, directURL: url)
+        }
+
+        return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+    }
+
+    private static func resolveExplicitTransport(root: [String: Any]) -> AppState.RemoteTransport? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["transport"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return AppState.RemoteTransport(rawValue: trimmed) ?? .ssh
+    }
+
+    static func resolveUrlString(root: [String: Any]) -> String? {
+        self.remoteString("url", root: root)
+    }
+
+    private static func remoteString(_ key: String, root: [String: Any]) -> String? {
+        let gateway = root["gateway"] as? [String: Any]
+        let remote = gateway?["remote"] as? [String: Any]
+        return (remote?[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+    }
+
+    static func resolveTokenValue(root: [String: Any]) -> TokenValue {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let tokenRaw = remote["token"]
+        else {
+            return .missing
+        }
+        guard let tokenString = tokenRaw as? String else {
+            return .unsupportedNonString
+        }
+        let trimmed = tokenString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? .missing : .plaintext(trimmed)
+    }
+
+    static func resolveTokenString(root: [String: Any]) -> String? {
+        self.remoteString("token", root: root)
+    }
+
+    static func resolvePasswordString(root: [String: Any]) -> String? {
+        self.remoteString("password", root: root)
+    }
+
+    static func resolveTLSFingerprint(root: [String: Any]) -> String? {
+        self.remoteString("tlsFingerprint", root: root)
+    }
+
+    static func resolveGatewayUrl(root: [String: Any]) -> URL? {
+        guard let raw = self.resolveUrlString(root: root) else { return nil }
+        return self.normalizeGatewayUrl(raw)
+    }
+
+    static func resolveRemotePort(root: [String: Any]) -> Int? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any]
+        else {
+            return nil
+        }
+        let value = remote["remotePort"]
+        let port: Int? = switch value {
+        case let raw as NSNumber:
+            raw.intValue
+        case let raw as String:
+            Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            nil
+        }
+        guard let port, port > 0, port <= 65535 else { return nil }
+        return port
+    }
+
+    static func normalizeGatewayUrlString(_ raw: String) -> String? {
+        self.normalizeGatewayUrl(raw)?.absoluteString
+    }
+
+    static func normalizeGatewayUrl(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard scheme == "ws" || scheme == "wss" else { return nil }
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !host.isEmpty else { return nil }
+        if scheme == "ws", !self.allowsPlaintextGatewayHost(host) {
+            return nil
+        }
+        if scheme == "ws", url.port == nil {
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                return url
+            }
+            components.port = 18789
+            return components.url
+        }
+        return url
+    }
+
+    static func allowsPlaintextGatewayHost(_ host: String) -> Bool {
+        LoopbackHost.isLoopbackHost(host) || self.isTrustedPlaintextRemoteHost(host)
+    }
+
+    static func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
+        let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return false }
+        if lower == "localhost" || lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
+            return true
+        }
+        let ipv6Literal = lower.hasPrefix("[") && lower.hasSuffix("]")
+            ? String(lower.dropFirst().dropLast())
+            : lower
+        return LoopbackHost.isPrivateIPv6Literal(ipv6Literal) ||
+            LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
+    }
+
+    static func defaultPort(for url: URL) -> Int? {
+        if let port = url.port { return port }
+        let scheme = url.scheme?.lowercased() ?? ""
+        switch scheme {
+        case "wss":
+            return 443
+        case "ws":
+            return 18789
+        default:
+            return nil
+        }
+    }
+}

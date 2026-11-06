@@ -1,0 +1,388 @@
+import { spawnSync } from "node:child_process";
+import { describe, expect, it } from "vitest";
+import {
+  parseExtendedStableGuardBypass,
+  resolveNpmPreflightSdkSelectors,
+  validateFullReleaseValidationManifest,
+  validateNpmPreflightDistTag,
+  validateNpmPublishBoundary,
+  validateExtendedStableNpmReleaseRequest,
+  validateExtendedStableRunIdentity,
+} from "../../scripts/openclaw-npm-extended-stable-release.mjs";
+import { encodePluginSdkApiArtifact } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+
+const sha = "a".repeat(40);
+const branch = "extended-stable/2026.6.33";
+
+describe("npm preflight publication channels", () => {
+  it("allows only qualified regular releases with both SDK receipts to cross beta/latest", () => {
+    const receipt = { schema: "openclaw.plugin-sdk-api-release-evidence/v1" };
+    const manifest = {
+      version: 3,
+      packageVersion: "2026.8.1",
+      npmDistTag: "beta",
+      pluginSdkApi: {
+        schema: "openclaw.plugin-sdk-api-release-evidence-set/v1",
+        selectors: { beta: receipt, latest: receipt },
+      },
+    };
+    expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "latest" })).not.toThrow();
+    expect(() =>
+      validateNpmPreflightDistTag({
+        manifest: {
+          ...manifest,
+          pluginSdkApi: {
+            ...manifest.pluginSdkApi,
+            schema: "openclaw.plugin-sdk-api-release-evidence-set/v2",
+          },
+        },
+        npmDistTag: "latest",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateNpmPreflightDistTag({
+        manifest: { ...manifest, pluginSdkApi: encodePluginSdkApiArtifact(manifest.pluginSdkApi) },
+        npmDistTag: "latest",
+      }),
+    ).not.toThrow();
+    for (const changed of [
+      { ...manifest, version: 2 },
+      { ...manifest, version: 1 },
+      { ...manifest, pluginSdkApi: receipt },
+      { ...manifest, packageVersion: "2026.8.1-beta.1" },
+      { ...manifest, packageVersion: "2026.6.33", npmDistTag: "extended-stable" },
+      { ...manifest, pluginSdkApi: { ...manifest.pluginSdkApi, selectors: { beta: receipt } } },
+    ]) {
+      expect(() =>
+        validateNpmPreflightDistTag({ manifest: changed, npmDistTag: "latest" }),
+      ).toThrow("dist-tag mismatch");
+    }
+    expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "alpha" })).toThrow(
+      "Alpha releases are retired;",
+    );
+    expect(() =>
+      validateNpmPreflightDistTag({
+        manifest: { version: 1, npmDistTag: "beta" },
+        npmDistTag: "beta",
+      }),
+    ).not.toThrow();
+
+    const command = spawnSync(
+      process.execPath,
+      ["scripts/openclaw-npm-extended-stable-release.mjs", "verify-preflight-channel"],
+      {
+        encoding: "utf8",
+        input: JSON.stringify(manifest),
+        env: { ...process.env, RELEASE_NPM_DIST_TAG: "latest" },
+      },
+    );
+    expect(command.status, command.stderr).toBe(0);
+  });
+});
+
+describe("npm extended-stable publication boundary", () => {
+  it("parses only explicit boolean extended-stable guard values", () => {
+    expect(parseExtendedStableGuardBypass()).toBe(false);
+    expect(parseExtendedStableGuardBypass("")).toBe(false);
+    expect(parseExtendedStableGuardBypass("false")).toBe(false);
+    expect(parseExtendedStableGuardBypass("true")).toBe(true);
+    expect(() => parseExtendedStableGuardBypass("1")).toThrow(/must be "true" or "false"/u);
+  });
+
+  it.each<[string, string, boolean]>([
+    ["2026.6.11-beta.1", "beta", false],
+    ["2026.6.11-1", "latest", false],
+  ])("accepts %s on %s (bypass=%s)", (version, distTag, bypassExtendedStableGuard) => {
+    expect(() =>
+      validateNpmPublishBoundary(version, distTag, { bypassExtendedStableGuard }),
+    ).not.toThrow();
+  });
+
+  it.each<[string, string, boolean, (string | RegExp)?]>([
+    ["2026.6.11-beta.1", "latest", false],
+    ["2026.6.33-1", "latest", false],
+    ["2026.6.33", "nightly", false],
+  ])("rejects %s on %s (bypass=%s)", (version, distTag, bypassExtendedStableGuard, error) => {
+    expect(() =>
+      validateNpmPublishBoundary(version, distTag, { bypassExtendedStableGuard }),
+    ).toThrow(error);
+  });
+
+  it.each([["2026.6.11-alpha.1", "beta"]])(
+    "rejects retired alpha version or selector %s/%s",
+    (version, tag) => {
+      expect(() => validateNpmPublishBoundary(version, tag)).toThrow("Alpha releases are retired;");
+      expect(() => resolveNpmPreflightSdkSelectors(version, tag)).toThrow(
+        "Alpha releases are retired;",
+      );
+    },
+  );
+});
+
+describe("extended-stable npm release request", () => {
+  const valid = {
+    npmDistTag: "extended-stable",
+    releaseTag: "v2026.6.33",
+    npmWorkflowRef: `refs/heads/${branch}`,
+    checkoutSha: sha,
+    tagSha: sha,
+    extendedStableBranchSha: sha,
+    packageVersion: "2026.6.33",
+    mainPackageVersion: "2026.7.2",
+  };
+  const expected = {
+    extendedStable: true,
+    releaseVersion: "2026.6.33",
+    extendedStableBranch: branch,
+  };
+  const preflight = {
+    preflightOnly: true,
+    releaseTag: sha,
+    npmWorkflowRef: "refs/heads/main",
+    extendedStableBranchSha: "",
+  };
+  type RequestChanges = Partial<typeof valid> & {
+    preflightOnly?: boolean;
+    bypassExtendedStableGuard?: boolean;
+  };
+  type Result = Partial<typeof expected> & { bypassExtendedStableGuard?: boolean };
+
+  it.each<[string, RequestChanges, Result?, (string | RegExp)?]>([
+    [
+      "explicit stale-line bypass",
+      { mainPackageVersion: "2027.1.1", bypassExtendedStableGuard: true },
+      { ...expected, bypassExtendedStableGuard: true },
+    ],
+    ["regular SHA preflight", { npmDistTag: "beta", releaseTag: sha }, { extendedStable: false }],
+    ["extended-stable SHA preflight", preflight, expected],
+    ["patch below 33", { releaseTag: "v2026.6.32", packageVersion: "2026.6.32" }],
+    ["beta prerelease", { releaseTag: "v2026.6.33-beta.1", packageVersion: "2026.6.33-beta.1" }],
+    ["correction suffix", { releaseTag: "v2026.6.33-1", packageVersion: "2026.6.33-1" }],
+    ["wrong branch", { npmWorkflowRef: "refs/heads/extended-stable/2026.6.34" }],
+    ["tag mismatch", { tagSha: "b".repeat(40) }],
+    ["package mismatch", { packageVersion: "2026.6.34" }],
+    ["main patch at monthly boundary", { mainPackageVersion: "2026.7.33" }],
+    [
+      "main two months ahead",
+      { mainPackageVersion: "2026.8.1" },
+      undefined,
+      "Extended-stable publishes only the trailing completed month: protected main 2026.8.1 allows 2026.7.PATCH, not 2026.6.33. Retire the older line; publishing a retired line requires an explicit maintainer decision.",
+    ],
+    [
+      "main crosses year boundary",
+      { mainPackageVersion: "2027.1.1" },
+      undefined,
+      "Extended-stable publishes only the trailing completed month: protected main 2027.1.1 allows 2026.12.PATCH, not 2026.6.33. Retire the older line; publishing a retired line requires an explicit maintainer decision.",
+    ],
+    [
+      "SHA preflight mismatch",
+      {
+        ...preflight,
+        releaseTag: "b".repeat(40),
+        npmWorkflowRef: "refs/heads/dev/preflight-candidate",
+      },
+      undefined,
+      /must match the checked-out commit/u,
+    ],
+    [
+      "SHA preflight without checkout",
+      { preflightOnly: true, releaseTag: sha, checkoutSha: "" },
+      undefined,
+      /requires the full checked-out commit SHA/u,
+    ],
+    [
+      "regular release bypass",
+      { bypassExtendedStableGuard: true, npmDistTag: "beta", releaseTag: sha },
+      undefined,
+      /only be used with the extended-stable npm dist-tag/u,
+    ],
+  ])("validates %s", (_label, changes, result, error) => {
+    const request = { ...valid, ...changes };
+    if (result) {
+      expect(validateExtendedStableNpmReleaseRequest(request)).toEqual(result);
+    } else {
+      expect(() => validateExtendedStableNpmReleaseRequest(request)).toThrow(error);
+    }
+  });
+});
+
+describe("extended-stable npm run identity", () => {
+  const toolingSha = "b".repeat(40);
+  const orchestratorSha = "c".repeat(40);
+  const toolingRef = `release-publish/${orchestratorSha.slice(0, 12)}-123`;
+  const valid = {
+    run: {
+      workflowName: "OpenClaw NPM Release",
+      event: "workflow_dispatch",
+      conclusion: "success",
+      headBranch: branch,
+      headSha: sha,
+    },
+    kind: "preflight",
+    npmDistTag: "extended-stable",
+    expectedBranch: branch,
+    expectedSha: sha,
+  };
+  const pluginRun = {
+    workflowName: "Plugin NPM Release",
+    displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+    status: "completed",
+  };
+  type Run = Omit<typeof valid.run, "headBranch" | "headSha"> & {
+    headBranch: string | undefined;
+    headSha: string | undefined;
+    status?: string;
+    displayTitle?: string;
+    databaseId?: number;
+    attempt?: number;
+  };
+  type Change = Partial<Omit<typeof valid, "run">> & {
+    run?: Partial<Run>;
+    preflightRunId?: string;
+    preflightRunAttempt?: string;
+    fullReleaseRunId?: string;
+    fullReleaseRunAttempt?: string;
+    workflowPath?: string;
+    expectedOrchestratorBranch?: string;
+    expectedOrchestratorSha?: string;
+    trustedPluginWorkflowSha?: string;
+  };
+  type Scenario = { name: string; changes: Change; rejects?: Change[]; error?: RegExp };
+
+  it.each<Scenario>([
+    {
+      name: "exact FRV tooling identity separated from source identity",
+      changes: {
+        run: {
+          workflowName: "Full Release Validation",
+          databaseId: 123,
+          attempt: 2,
+          status: "completed",
+          headBranch: `release-ci/${toolingSha.slice(0, 12)}-123`,
+          headSha: toolingSha,
+        },
+        preflightRunId: "123",
+        preflightRunAttempt: "2",
+        fullReleaseRunId: "123",
+        fullReleaseRunAttempt: "2",
+        workflowPath: ".github/workflows/full-release-validation.yml",
+      },
+      rejects: [
+        { fullReleaseRunId: "124" },
+        { fullReleaseRunAttempt: "1" },
+        { workflowPath: ".github/workflows/ci.yml" },
+        { run: { attempt: 1 } },
+        { run: { status: "in_progress" } },
+        { run: { conclusion: "failure" } },
+        { kind: "validation" },
+        { kind: "plugin" },
+      ],
+    },
+    {
+      name: "direct preflight identity",
+      changes: {},
+      rejects: [
+        { run: { headBranch: "main" } },
+        { run: { headBranch: undefined } },
+        { run: { headSha: toolingSha } },
+        { run: { headSha: undefined } },
+      ],
+      error: /headBranch=.*headSha=/u,
+    },
+    {
+      name: "completed successful plugin run at the exact branch and SHA",
+      changes: { kind: "plugin", run: pluginRun },
+      rejects: [
+        { run: { workflowName: "OpenClaw NPM Release" } },
+        { run: { displayTitle: `Plugin NPM Release [default] ${sha}` } },
+        { run: { displayTitle: `Plugin NPM Release [extended-stable] ${toolingSha}` } },
+        { run: { status: "in_progress" } },
+        { run: { conclusion: "failure" } },
+        { run: { headBranch: "main" } },
+        { run: { headSha: toolingSha } },
+      ],
+    },
+    {
+      name: "trusted protected-tag orchestrator for the exact target",
+      changes: {
+        kind: "plugin",
+        run: { ...pluginRun, headBranch: toolingRef, headSha: orchestratorSha },
+        expectedOrchestratorBranch: toolingRef,
+        expectedOrchestratorSha: orchestratorSha,
+      },
+      rejects: [
+        { run: { headBranch: "release/2026.6.35" } },
+        { run: { headSha: "not-a-sha" } },
+        { run: { displayTitle: `Plugin NPM Release [extended-stable] ${toolingSha}` } },
+      ],
+    },
+    {
+      name: "authenticated main recovery tooling with exact source identity",
+      changes: {
+        kind: "plugin",
+        run: { ...pluginRun, headBranch: "main", headSha: toolingSha },
+        workflowPath: ".github/workflows/plugin-npm-release.yml",
+        trustedPluginWorkflowSha: toolingSha,
+      },
+      rejects: [
+        { trustedPluginWorkflowSha: "" },
+        { trustedPluginWorkflowSha: orchestratorSha },
+        { workflowPath: ".github/workflows/ci.yml" },
+        { expectedBranch: "extended-stable/2026.6.34" },
+        { expectedSha: orchestratorSha },
+        { kind: "preflight" },
+        { kind: "validation" },
+        { run: { headBranch: "feature/recovery" } },
+        { run: { event: "push" } },
+        { run: { status: "in_progress" } },
+        { run: { conclusion: "failure" } },
+        { run: { displayTitle: `Plugin NPM Release [default] ${sha}` } },
+      ],
+    },
+  ])("accepts only $name", ({ changes, rejects = [], error }) => {
+    const request = { ...valid, ...changes, run: { ...valid.run, ...changes.run } };
+    expect(validateExtendedStableRunIdentity(request)).toBe(request.run);
+    for (const change of rejects) {
+      expect(() =>
+        validateExtendedStableRunIdentity({
+          ...request,
+          ...change,
+          run: { ...request.run, ...change.run },
+        }),
+      ).toThrow(error);
+    }
+  });
+});
+
+describe("Full Validation manifest identity", () => {
+  const valid = {
+    workflowName: "Full Release Validation",
+    workflowRef: branch,
+    targetSha: sha,
+    runId: "123",
+    runAttempt: "2",
+  };
+
+  it.each<[string, Partial<typeof valid>, boolean?]>([
+    ["exact branch and target SHA", {}, true],
+    ["missing workflow ref", { workflowRef: undefined }],
+    ["missing target SHA", { targetSha: undefined }],
+    ["wrong run ID", { runId: "124" }],
+    ["wrong run attempt", { runAttempt: "1" }],
+  ])("validates %s", (_label, changes, accepted) => {
+    const manifest = { ...valid, ...changes };
+    const request = {
+      manifest,
+      npmDistTag: "extended-stable",
+      expectedWorkflowRef: branch,
+      expectedSha: sha,
+      expectedRunId: "123",
+      expectedRunAttempt: "2",
+    };
+    if (accepted) {
+      expect(validateFullReleaseValidationManifest(request)).toBe(manifest);
+    } else {
+      expect(() => validateFullReleaseValidationManifest(request)).toThrow();
+    }
+  });
+});

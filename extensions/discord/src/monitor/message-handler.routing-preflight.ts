@@ -1,0 +1,77 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveDiscordRuntimeBindingConversationId } from "../conversation-identity.js";
+import type { User } from "../internal/discord.js";
+import { resolveDiscordConversationBindingRouteAsync } from "./conversation-binding-route.js";
+import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import {
+  buildDiscordRoutePeer,
+  resolveDiscordConversationRoute,
+  resolveDiscordEffectiveRoute,
+} from "./route-resolution.js";
+
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/conversation-binding-runtime"),
+);
+
+export async function resolveDiscordPreflightRoute(params: {
+  preflight: DiscordMessagePreflightParams;
+  author: User;
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  messageChannelId: string;
+  memberRoleIds: string[];
+  earlyThreadParentId?: string;
+}) {
+  const conversationRuntime = await loadConversationRuntime();
+  const route = ({ boundAgentId }: { boundAgentId?: string }) =>
+    resolveDiscordConversationRoute({
+      cfg: params.preflight.cfg,
+      defaultAgentId: boundAgentId,
+      accountId: params.preflight.accountId,
+      guildId: params.preflight.data.guild_id ?? undefined,
+      memberRoleIds: params.memberRoleIds,
+      peer: buildDiscordRoutePeer({
+        isDirectMessage: params.isDirectMessage,
+        isGroupDm: params.isGroupDm,
+        directUserId: params.author.id,
+        conversationId: params.messageChannelId,
+      }),
+      parentConversationId: params.earlyThreadParentId,
+    });
+  const bindingConversationId = resolveDiscordRuntimeBindingConversationId({
+    isDirectMessage: params.isDirectMessage,
+    isGroupDm: params.isGroupDm,
+    userId: params.author.id,
+    channelId: params.messageChannelId,
+  });
+  const { runtimeRoute, configuredRoute } = await resolveDiscordConversationBindingRouteAsync({
+    cfg: params.preflight.cfg,
+    resolveRoute: route,
+    accountId: params.preflight.accountId,
+    runtimeConversationId: bindingConversationId,
+    configuredConversationId: params.messageChannelId,
+    parentConversationId: params.earlyThreadParentId,
+  });
+  const configuredBinding = configuredRoute?.bindingResolution ?? null;
+  const threadBinding = runtimeRoute.bindingRecord ?? configuredBinding?.record;
+  const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
+    ? ""
+    : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+  const effectiveRoute = runtimeRoute.boundSessionKey
+    ? runtimeRoute.route
+    : resolveDiscordEffectiveRoute({
+        route: configuredRoute?.route ?? runtimeRoute.route,
+        boundSessionKey,
+        configuredRoute,
+        matchedBy: "binding.channel",
+      });
+
+  return {
+    conversationRuntime,
+    threadBinding,
+    configuredBinding,
+    boundSessionKey,
+    effectiveRoute,
+    baseSessionKey: effectiveRoute.sessionKey,
+  };
+}

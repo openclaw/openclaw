@@ -1,0 +1,42 @@
+type SynologyChatConfigFields = {
+  enabled?: boolean;
+  token?: string;
+  incomingUrl?: string;
+  webhookUrl?: string;
+  nasHost?: string;
+  webhookPath?: string;
+  dangerouslyAllowNameMatching?: boolean;
+  dangerouslyAllowInheritedWebhookPath?: boolean;
+  dmPolicy?: "open" | "allowlist" | "disabled";
+  allowedUserIds?: string | string[];
+  rateLimitPerMinute?: number;
+  botName?: string;
+  allowInsecureSsl?: boolean;
+};
+
+/** Raw channel config from openclaw.json channels.synology-chat */
+export interface SynologyChatChannelConfig extends SynologyChatConfigFields {
+  /** Raw per-account config (overrides base config). */
+  accounts?: Record<string, SynologyChatConfigFields>;
+}
+
+export type ResolvedSynologyChatAccount = Required<
+  Omit<SynologyChatConfigFields, "allowedUserIds">
+> & {
+  accountId: string;
+  webhookPathSource: "default" | "inherited-base" | "explicit";
+  allowedUserIds: string[];
+};
+
+/** Payload received from Synology Chat outgoing webhook (form-urlencoded) */
+export interface SynologyWebhookPayload {
+  token: string;
+  channel_id?: string;
+  channel_name?: string;
+  user_id: string;
+  username: string;
+  post_id?: string;
+  timestamp?: string;
+  text: string;
+  trigger_word?: string;
+}

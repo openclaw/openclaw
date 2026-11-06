@@ -1,0 +1,249 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createLocalSqliteSnapshotProvider } from "../../src/snapshot/local-repository.js";
+import {
+  assertSameCompactionPayload,
+  assertSameReliabilityState,
+  type CompactionPayloadProof,
+  type ReliabilityStateProof,
+} from "./sqlite-reliability-contract.js";
+import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
+
+type RestoreCrashPoint = "after-publish" | "before-publish";
+const RESTORE_WORKER_PATH = fileURLToPath(
+  new URL("./sqlite-reliability-restore-worker.ts", import.meta.url),
+);
+const MIN_STAGED_RESTORE_BYTES = 1024 * 1024;
+
+function hashFile(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function assertNoSqliteSidecars(targetPath: string): void {
+  for (const suffix of ["-journal", "-shm", "-wal"]) {
+    if (fs.existsSync(`${targetPath}${suffix}`)) {
+      throw new Error(`restore crash left an unexpected SQLite sidecar: ${targetPath}${suffix}`);
+    }
+  }
+}
+
+function listRestoreStagingEntries(scratchPath: string): string[] {
+  return fs
+    .readdirSync(scratchPath)
+    .filter((entry) => entry.startsWith(".sqlite-publish-") || entry.startsWith(".tmp-restore-"));
+}
+
+function assertCrashPoint(params: {
+  crashPoint: RestoreCrashPoint;
+  scratchPath: string;
+  targetPath: string;
+}): void {
+  const stagingEntries = listRestoreStagingEntries(params.scratchPath);
+  const targetVisible = fs.existsSync(params.targetPath);
+  const publicationStagingVisible = stagingEntries.some((entry) =>
+    entry.startsWith(".sqlite-publish-"),
+  );
+  const barrierValid =
+    stagingEntries.some((entry) => entry.startsWith(".tmp-restore-")) &&
+    (params.crashPoint === "before-publish"
+      ? !targetVisible && publicationStagingVisible
+      : targetVisible && !publicationStagingVisible);
+  if (!barrierValid) {
+    throw new Error(`SQLite restore worker reported an invalid ${params.crashPoint} barrier.`);
+  }
+}
+
+async function assertRepositorySnapshotAvailable(params: {
+  expectedSnapshotBytes: number;
+  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  snapshotPath: string;
+}): Promise<void> {
+  const verification = await params.provider.verify({ path: params.snapshotPath });
+  if (verification.manifest.artifact.sizeBytes !== params.expectedSnapshotBytes) {
+    throw new Error(
+      `SQLite restore source changed: expected ${params.expectedSnapshotBytes} bytes, got ${verification.manifest.artifact.sizeBytes}`,
+    );
+  }
+  const resolvedSnapshotPath = path.resolve(params.snapshotPath);
+  const snapshots = await params.provider.list();
+  if (!snapshots.some((snapshot) => path.resolve(snapshot.ref.path) === resolvedSnapshotPath)) {
+    throw new Error(`SQLite restore source disappeared from repository: ${params.snapshotPath}`);
+  }
+}
+
+async function runCrashPoint(
+  params: Parameters<typeof runRestoreInterruptionProof>[0] & {
+    crashPoint: RestoreCrashPoint;
+    provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
+  },
+) {
+  const targetPath = path.join(params.scratchPath, `${params.crashPoint}.sqlite`);
+  const worker = startReliabilityCrashWorker(
+    RESTORE_WORKER_PATH,
+    [
+      params.crashPoint,
+      params.repositoryPath,
+      params.validationRootPath,
+      params.snapshotPath,
+      targetPath,
+    ],
+    {
+      label: "SQLite restore worker",
+      cwd: process.cwd(),
+    },
+  );
+
+  let crashStagingEntries: string[];
+  try {
+    await worker.waitForReady();
+    await worker.waitForCrashPoint(params.crashPoint);
+    assertCrashPoint({
+      crashPoint: params.crashPoint,
+      scratchPath: params.scratchPath,
+      targetPath,
+    });
+    const exit = await worker.crash(params.crashPoint);
+
+    crashStagingEntries = listRestoreStagingEntries(params.scratchPath);
+    if (!crashStagingEntries.some((entry) => entry.startsWith(".tmp-restore-"))) {
+      throw new Error(`SQLite restore worker left no owned staging at ${params.crashPoint}.`);
+    }
+    await assertRepositorySnapshotAvailable(params);
+
+    const targetVisibleAfterCrash = fs.existsSync(targetPath);
+    let retryRestored = false;
+    let existingTargetPreserved = false;
+    if (params.crashPoint === "before-publish") {
+      if (targetVisibleAfterCrash) {
+        throw new Error("SQLite restore target became visible before publication.");
+      }
+      await params.provider.restoreFresh({ path: params.snapshotPath }, targetPath);
+      retryRestored = true;
+    } else {
+      if (!targetVisibleAfterCrash) {
+        throw new Error("SQLite restore target disappeared after durable publication.");
+      }
+      if (fs.statSync(targetPath).nlink !== 1) {
+        throw new Error("SQLite restore target retained a publication hard link after commit.");
+      }
+      const targetHash = hashFile(targetPath);
+      let retryError: unknown;
+      try {
+        await params.provider.restoreFresh({ path: params.snapshotPath }, targetPath);
+      } catch (error) {
+        retryError = error;
+      }
+      if (
+        !(retryError instanceof Error) ||
+        !/Fresh SQLite restore path already exists/iu.test(retryError.message)
+      ) {
+        throw new Error("SQLite restore retry did not preserve the published target.", {
+          cause: retryError,
+        });
+      }
+      if (hashFile(targetPath) !== targetHash) {
+        throw new Error("SQLite restore retry changed the published target.");
+      }
+      existingTargetPreserved = true;
+    }
+
+    assertNoSqliteSidecars(targetPath);
+    const stateAfterRecovery = params.verifyState(targetPath);
+    assertSameReliabilityState(
+      stateAfterRecovery,
+      params.expectedState,
+      `${params.crashPoint} restore`,
+    );
+    const payloadAfterRecovery = params.verifyPayload(targetPath);
+    assertSameCompactionPayload(
+      payloadAfterRecovery,
+      params.expectedPayload,
+      `${params.crashPoint} restore`,
+    );
+    await assertRepositorySnapshotAvailable(params);
+    for (const entry of crashStagingEntries) {
+      if (!fs.existsSync(path.join(params.scratchPath, entry))) {
+        throw new Error(`SQLite restore retry removed crash staging it did not own: ${entry}`);
+      }
+    }
+
+    return {
+      existingTargetPreserved,
+      exit,
+      payloadAfterRecovery,
+      recoveryVerified: true,
+      repositoryVerified: true,
+      retryRestored,
+      stagingEntries: crashStagingEntries.length,
+      stateAfterRecovery,
+      targetVerifiedAfterCrash: params.crashPoint === "after-publish",
+      targetVisibleAfterCrash,
+    };
+  } finally {
+    await worker.stop();
+    fs.rmSync(targetPath, { force: true });
+    for (const entry of listRestoreStagingEntries(params.scratchPath)) {
+      fs.rmSync(path.join(params.scratchPath, entry), { force: true, recursive: true });
+    }
+  }
+}
+
+export async function runRestoreInterruptionProof(params: {
+  expectedPayload: CompactionPayloadProof;
+  expectedSnapshotBytes: number;
+  expectedState: ReliabilityStateProof;
+  repositoryPath: string;
+  scratchPath: string;
+  snapshotPath: string;
+  validationRootPath: string;
+  verifyPayload: (databasePath: string) => CompactionPayloadProof;
+  verifyState: (databasePath: string) => ReliabilityStateProof;
+}) {
+  if (params.expectedSnapshotBytes < MIN_STAGED_RESTORE_BYTES * 2) {
+    throw new Error(
+      `SQLite restore interruption snapshot is too small: ${params.expectedSnapshotBytes} bytes`,
+    );
+  }
+  fs.mkdirSync(params.scratchPath, { recursive: true, mode: 0o700 });
+  const provider = createLocalSqliteSnapshotProvider({
+    repositoryPath: params.repositoryPath,
+    validationRootPath: params.validationRootPath,
+  });
+  await assertRepositorySnapshotAvailable({ ...params, provider });
+
+  const beforePublish = await runCrashPoint({
+    ...params,
+    crashPoint: "before-publish",
+    provider,
+  });
+  if (
+    beforePublish.targetVisibleAfterCrash ||
+    beforePublish.targetVerifiedAfterCrash ||
+    !beforePublish.retryRestored ||
+    beforePublish.existingTargetPreserved
+  ) {
+    throw new Error("SQLite restore before-publication recovery reported an invalid outcome.");
+  }
+
+  const afterPublish = await runCrashPoint({
+    ...params,
+    crashPoint: "after-publish",
+    provider,
+  });
+  if (
+    !afterPublish.targetVisibleAfterCrash ||
+    !afterPublish.targetVerifiedAfterCrash ||
+    afterPublish.retryRestored ||
+    !afterPublish.existingTargetPreserved
+  ) {
+    throw new Error("SQLite restore after-publication recovery reported an invalid outcome.");
+  }
+
+  return {
+    afterPublish,
+    beforePublish,
+    snapshotBytes: params.expectedSnapshotBytes,
+  };
+}

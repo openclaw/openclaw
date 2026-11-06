@@ -1,0 +1,68 @@
+import { GatewayDispatchEvents, type APIMessage, type APIUser } from "discord-api-types/v10";
+import type { Client } from "./client.js";
+import { Guild, Message, User } from "./structures.js";
+
+export function mapGatewayDispatchData(
+  client: Client,
+  type: GatewayDispatchEvents,
+  data: unknown,
+): unknown {
+  if (type === GatewayDispatchEvents.MessageCreate) {
+    return createMessageDispatchData(client, data as MessageCreatePayload);
+  }
+  if (
+    type === GatewayDispatchEvents.MessageReactionAdd ||
+    type === GatewayDispatchEvents.MessageReactionRemove
+  ) {
+    return createReactionDispatchData(client, data as ReactionPayload);
+  }
+  return data;
+}
+
+type MessageCreatePayload = {
+  id: string;
+  channel_id: string;
+  guild_id?: string;
+  author?: APIUser;
+  member?: { roles?: string[] };
+};
+
+export function createMessageDispatchData(client: Client, data: MessageCreatePayload) {
+  const message = new Message(client, data as APIMessage);
+  return {
+    ...data,
+    id: data.id,
+    channel_id: data.channel_id,
+    channelId: data.channel_id,
+    message,
+    author: message.author ?? (data.author ? new User(client, data.author) : null),
+    member: data.member,
+    rawMember: data.member,
+    guild: data.guild_id ? new Guild<true>(client, data.guild_id) : null,
+  };
+}
+
+type ReactionPayload = {
+  user_id: string;
+  channel_id: string;
+  message_id: string;
+  guild_id?: string;
+  member?: { user?: unknown; roles?: string[] };
+};
+
+function createReactionDispatchData(client: Client, data: ReactionPayload) {
+  const userRaw =
+    data.member?.user && typeof data.member.user === "object"
+      ? ({ id: data.user_id, username: "", ...data.member.user } as APIUser)
+      : ({ id: data.user_id, username: "" } as APIUser);
+  return {
+    ...data,
+    user: new User(client, userRaw),
+    rawMember: data.member,
+    guild: data.guild_id ? new Guild<true>(client, data.guild_id) : null,
+    message: new Message<true>(client, {
+      id: data.message_id,
+      channelId: data.channel_id,
+    }),
+  };
+}

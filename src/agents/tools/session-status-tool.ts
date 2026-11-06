@@ -1,0 +1,746 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../../auto-reply/thinking.js";
+import { resolveSessionStorePathCore, type SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import {
+  buildAgentMainSessionKey,
+  isIncognitoSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import {
+  getSessionStateVersion,
+  listSessionStateEventsSince,
+} from "../../sessions/session-state-events.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  type DeliveryContext,
+} from "../../utils/delivery-context.read.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { resolveThinkingDefault } from "../model-thinking-default.js";
+import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
+import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
+import {
+  describeSessionStatusTool,
+  SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
+import type { AnyAgentTool } from "./common.js";
+import { readNonNegativeIntegerParam, readToolStringParam, textResult } from "./common.js";
+import {
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
+import {
+  callAgentToolGatewayRequest,
+  hasGatewayToolRoutingContext,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
+import {
+  resolveSessionToolTargetAgentId,
+  runWithScopedSessionAccess,
+} from "./scoped-session-access.js";
+import {
+  formatSessionCapabilities,
+  resolveSessionCapabilities,
+} from "./session-status-capabilities.js";
+import { patchSessionStatusModel, withActiveStatusModelIdentity } from "./session-status-model.js";
+import {
+  listImplicitDefaultDirectFallbackKeys,
+  resolveImplicitCurrentSessionFallback,
+  resolveSessionStatusEntry,
+  resolveStoreScopedRequesterKey,
+} from "./session-status-session-resolve.js";
+import {
+  compactSessionStateChanges,
+  formatSessionStateChanges,
+} from "./session-status-state-changes.js";
+import {
+  SessionStatusOutputSchema,
+  SessionStatusToolSchema,
+  type SessionStatusDeliveryContextDetails,
+  type SessionStatusOriginDetails,
+} from "./session-status-tool.schema.js";
+import {
+  formatSessionToolAccessDenial,
+  resolveCurrentSessionClientAlias,
+  resolveSessionReference,
+  resolveSessionToolAccess,
+  resolveSessionToolContext,
+  resolveVisibleSessionReference,
+  shouldResolveSessionIdInput,
+} from "./sessions-helpers.js";
+
+const loadCommandsStatusRuntime = createLazyPromise(() => import("../../status/status-text.js"));
+
+type SessionStatusRouteDetails = {
+  origin?: SessionStatusOriginDetails;
+  active?: SessionStatusDeliveryContextDetails;
+  deliveryContext?: SessionStatusDeliveryContextDetails;
+};
+
+const INTERNAL_SESSION_KEY_ORIGIN_PREFIXES = new Set(["main", "cron", "subagent", "acp"]);
+
+function readRouteThreadId(value: unknown): string | number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : readStringValue(value)?.trim() || undefined;
+}
+
+function compactRouteDetails(
+  params: SessionStatusOriginDetails & SessionStatusDeliveryContextDetails,
+) {
+  const provider = readStringValue(params.provider);
+  const channel = readStringValue(params.channel);
+  const to = readStringValue(params.to);
+  const accountId = readStringValue(params.accountId);
+  const threadId = readRouteThreadId(params.threadId);
+  const details = {
+    ...(provider ? { provider } : {}),
+    ...(channel ? { channel } : {}),
+    ...(to ? { to } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+  return Object.keys(details).length ? details : undefined;
+}
+
+function normalizeActiveDeliveryContext(
+  context?: DeliveryContext,
+): SessionStatusDeliveryContextDetails | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const normalized = normalizeDeliveryContext(context);
+  const rawChannel = readStringValue(normalized?.channel) ?? readStringValue(context.channel);
+  const channel = rawChannel ? (normalizeMessageChannel(rawChannel) ?? rawChannel) : undefined;
+  return compactRouteDetails({
+    channel,
+    to: readStringValue(normalized?.to) ?? readStringValue(context.to),
+    accountId: readStringValue(normalized?.accountId) ?? readStringValue(context.accountId),
+    threadId: normalized?.threadId ?? context.threadId,
+  });
+}
+
+function inferOriginProviderFromSessionKey(sessionKey: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const head = readStringValue(parsed?.rest.split(":")[0]);
+  if (!head || INTERNAL_SESSION_KEY_ORIGIN_PREFIXES.has(head.toLowerCase())) {
+    return undefined;
+  }
+  const channel = normalizeMessageChannel(head);
+  return channel && isDeliverableMessageChannel(channel) ? channel : undefined;
+}
+
+function buildSessionStatusRouteDetails(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  activeDeliveryContext?: DeliveryContext;
+  isLiveRunSession?: boolean;
+}): SessionStatusRouteDetails {
+  const storedOrigin = sessionDeliveryOrigin(params.entry);
+  const origin = compactRouteDetails({
+    provider:
+      readStringValue(storedOrigin?.provider) ??
+      inferOriginProviderFromSessionKey(params.sessionKey),
+    accountId: storedOrigin?.accountId,
+    threadId: storedOrigin?.threadId,
+  });
+  const storedDelivery = deliveryContextFromSession(params.entry);
+  const deliveryContext = compactRouteDetails({
+    channel: storedDelivery?.channel,
+    to: storedDelivery?.to,
+    accountId: storedDelivery?.accountId,
+    threadId: storedDelivery?.threadId,
+  });
+  const active = params.isLiveRunSession
+    ? normalizeActiveDeliveryContext(params.activeDeliveryContext)
+    : undefined;
+
+  return {
+    ...(origin ? { origin } : {}),
+    ...(active ? { active } : {}),
+    ...(deliveryContext ? { deliveryContext } : {}),
+  };
+}
+
+export function createSessionStatusTool(opts?: {
+  agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
+  /**
+   * The actual live run session key. When the tool is constructed with a sandbox/policy
+   * session key (e.g. a Telegram direct peer key), this allows `session_status({sessionKey:
+   * "current"})` to resolve to the live run session instead of the stale sandbox key.
+   */
+  runSessionKey?: string;
+  config?: OpenClawConfig;
+  sandboxed?: boolean;
+  activeModelProvider?: string;
+  activeModelId?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  callGateway?: AgentToolGatewayRequestCaller;
+  /** Active live-run route, kept separate from the persisted/origin delivery route. */
+  activeDeliveryContext?: DeliveryContext;
+}): AnyAgentTool {
+  return {
+    label: "Session Status",
+    name: "session_status",
+    displaySummary: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionStatusTool(),
+    parameters: SessionStatusToolSchema,
+    outputSchema: SessionStatusOutputSchema,
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const operatorSelection = resolveGatewayToolOperatorSelection();
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const gatewayScoped = opts?.callGateway !== undefined || hasGatewayToolRoutingContext();
+      const changesSince = readNonNegativeIntegerParam(params, "changesSince");
+      const includeCapabilities = params.capabilities === true;
+      const {
+        cfg,
+        mainKey,
+        alias,
+        effectiveRequesterKey,
+        mainSessionKey,
+        restrictToSpawned,
+        sessionVisibility,
+        a2aPolicy,
+      } = resolveSessionToolContext(opts);
+      const requesterAgentId = resolveSessionAgentIds({
+        config: cfg,
+        sessionKey: opts?.agentSessionKey ?? effectiveRequesterKey,
+        agentId: opts?.requesterAgentIdOverride,
+      }).sessionAgentId;
+      const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
+      const usesLegacyMainAlias = alias === mainKey;
+      const isLegacyMainVisibilityKey = (sessionKey: string) => {
+        const trimmed = sessionKey.trim();
+        return usesLegacyMainAlias && (trimmed === "main" || trimmed === mainKey);
+      };
+      const resolveVisibilityMainSessionKey = (sessionAgentId: string) => {
+        const requesterParsed = parseAgentSessionKey(visibilityRequesterKey);
+        if (
+          resolveAgentIdFromSessionKey(visibilityRequesterKey, requesterAgentId) ===
+            sessionAgentId &&
+          (requesterParsed?.rest === mainKey || isLegacyMainVisibilityKey(visibilityRequesterKey))
+        ) {
+          return visibilityRequesterKey;
+        }
+        return buildAgentMainSessionKey({
+          agentId: sessionAgentId,
+          mainKey,
+        });
+      };
+      const normalizeVisibilityTargetSessionKey = (sessionKey: string, sessionAgentId: string) => {
+        const trimmed = sessionKey.trim();
+        // Preserve legacy bare main keys for requester tree checks.
+        const isMain = trimmed.startsWith("agent:")
+          ? parseAgentSessionKey(trimmed)?.rest === mainKey
+          : isLegacyMainVisibilityKey(trimmed);
+        return isMain ? resolveVisibilityMainSessionKey(sessionAgentId) : trimmed;
+      };
+      const accessByTarget = new Map<
+        string,
+        Awaited<ReturnType<typeof resolveSessionToolAccess>>
+      >();
+      const requireVisibilityAccess = async (
+        target: {
+          targetSessionKey: string;
+          targetAgentId: string;
+          authorizationTargetSessionKey: string;
+          requesterOwned: boolean;
+        },
+        displayKey = target.targetSessionKey,
+      ) => {
+        const cacheKey = `${target.requesterOwned ? "owned" : "unowned"}:${target.targetAgentId}:${target.targetSessionKey}:${target.authorizationTargetSessionKey}`;
+        const access =
+          accessByTarget.get(cacheKey) ??
+          (await resolveSessionToolAccess({
+            ...target,
+            action: "status",
+            requesterAgentId,
+            requesterSessionKey: visibilityRequesterKey,
+            mainSessionKey,
+            visibility: sessionVisibility,
+            a2aPolicy,
+            callGateway: gatewayCall,
+          }));
+        accessByTarget.set(cacheKey, access);
+        if (!access.allowed) {
+          throw new Error(
+            formatSessionToolAccessDenial(access, {
+              action: "status",
+              targetSessionKey: displayKey,
+            }),
+          );
+        }
+        return access;
+      };
+
+      const requestedKeyParam = readToolStringParam(params, "sessionKey");
+      const isImplicitRunSessionStatus =
+        requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
+      // No-arg status should prefer the live run session when available (#82669).
+      let requestedKeyInput =
+        (isImplicitRunSessionStatus
+          ? opts?.runSessionKey
+          : (requestedKeyParam ?? opts?.agentSessionKey)
+        )?.trim() ?? "";
+
+      // Track whether this is a semantic-current request (literal "current" or a
+      // current-client alias) BEFORE any rewrite, so visibility treats it as self.
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyInput,
+        requesterInternalKey: effectiveRequesterKey,
+      });
+      const isSemanticCurrentRequest =
+        requestedKeyInput === "current" ||
+        isImplicitRunSessionStatus ||
+        Boolean(currentSessionAlias);
+
+      // Resolve semantic "current" to the live run session key for lookup purposes (#76708).
+      // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
+      // key already is the live requester; avoid probing literal "current" through the gateway.
+      if (requestedKeyInput === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
+        requestedKeyInput = (opts.runSessionKey ?? effectiveRequesterKey).trim();
+      }
+
+      if (currentSessionAlias) {
+        requestedKeyInput = (opts?.runSessionKey ?? currentSessionAlias).trim();
+      }
+      const effectiveRequesterLookupKey = effectiveRequesterKey.trim();
+      let resolvedViaSessionId = false;
+      let resolvedViaImplicitCurrentFallback = false;
+      if (!requestedKeyInput) {
+        throw new Error("sessionKey required");
+      }
+      let resolvedRequesterOwned = false;
+
+      const deferTargetOwnerResolution =
+        !isSemanticCurrentRequest && shouldResolveSessionIdInput(requestedKeyInput);
+      let agentId = deferTargetOwnerResolution
+        ? requesterAgentId
+        : resolveSessionToolTargetAgentId({
+            cfg,
+            targetSessionKey: requestedKeyInput,
+            requesterAgentId,
+          });
+      // Semantic current is self for ordinary visibility, but its live-run key can
+      // still be process-only. Preserve that target for the shared guard before storage.
+      const mustCheckRequestedKeyBeforeStore =
+        !isSemanticCurrentRequest || isIncognitoSessionKey(requestedKeyInput);
+      if (mustCheckRequestedKeyBeforeStore && !deferTargetOwnerResolution) {
+        await requireVisibilityAccess({
+          targetSessionKey: requestedKeyInput,
+          targetAgentId: agentId,
+          authorizationTargetSessionKey: normalizeVisibilityTargetSessionKey(
+            requestedKeyInput,
+            agentId,
+          ),
+          requesterOwned: false,
+        });
+      }
+      let storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+      let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
+        requesterKey: effectiveRequesterKey,
+        agentId,
+        mainKey,
+      });
+
+      const readStatusEntry = (keyRaw: string, includeAliasFallback?: boolean) =>
+        resolveSessionStatusEntry({
+          cfg,
+          agentId,
+          keyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: storeScopedRequesterKey,
+          includeAliasFallback,
+        });
+
+      // Resolve against the requester-scoped store first to avoid leaking default agent data.
+      let resolved = deferTargetOwnerResolution
+        ? undefined
+        : await readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
+
+      if (
+        !resolved &&
+        (requestedKeyInput === "current" || shouldResolveSessionIdInput(requestedKeyInput))
+      ) {
+        const resolvedSession = await resolveSessionReference({
+          action: "status",
+          sessionKey: requestedKeyInput,
+          ...(requestedKeyInput === "current" ? { agentId: requesterAgentId } : {}),
+          keyAgentId: requesterAgentId,
+          alias,
+          mainKey,
+          requesterInternalKey: effectiveRequesterKey,
+          restrictToSpawned,
+          callGateway: gatewayCall,
+        });
+        if (resolvedSession.ok) {
+          const visibleSession = await resolveVisibleSessionReference({
+            action: "status",
+            resolvedSession,
+            requesterSessionKey: effectiveRequesterKey,
+            requesterAgentId,
+            restrictToSpawned: opts?.sandboxed === true,
+            visibilitySessionKey: requestedKeyInput,
+            callGateway: gatewayCall,
+          });
+          if (!visibleSession.ok) {
+            // The resolver's copy already names the denying policy (including the
+            // watched-group carve-out); a local string here would drift from it.
+            throw new Error(visibleSession.error);
+          }
+          const visibleAgentId = resolveSessionToolTargetAgentId({
+            cfg,
+            targetSessionKey: visibleSession.key,
+            resolvedAgentId: visibleSession.agentId,
+            requesterAgentId,
+          });
+          if (opts?.sandboxed === true || visibleAgentId !== requesterAgentId) {
+            await requireVisibilityAccess(
+              {
+                targetSessionKey: visibleSession.key,
+                targetAgentId: visibleAgentId,
+                authorizationTargetSessionKey: normalizeVisibilityTargetSessionKey(
+                  visibleSession.key,
+                  visibleAgentId,
+                ),
+                requesterOwned: visibleSession.requesterOwned,
+              },
+              visibleSession.displayKey,
+            );
+          }
+          resolvedRequesterOwned = visibleSession.requesterOwned;
+          resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
+          requestedKeyInput = visibleSession.key.trim();
+          agentId = visibleAgentId;
+          storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+          storeScopedRequesterKey = resolveStoreScopedRequesterKey({
+            requesterKey: effectiveRequesterKey,
+            agentId,
+            mainKey,
+          });
+          resolved = await readStatusEntry(requestedKeyInput);
+        } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
+          throw new Error(resolvedSession.error);
+        }
+      }
+
+      if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
+        resolved = await readStatusEntry(effectiveRequesterLookupKey, false);
+      }
+
+      if (!resolved && requestedKeyInput === "current") {
+        resolved = await readStatusEntry(requestedKeyInput, true);
+      }
+
+      if (!resolved && requestedKeyParam === undefined) {
+        for (const fallbackKey of listImplicitDefaultDirectFallbackKeys({
+          keyRaw: requestedKeyInput,
+          mainKey,
+        })) {
+          resolved = await readStatusEntry(fallbackKey, true);
+          if (resolved) {
+            resolvedViaImplicitCurrentFallback = true;
+            break;
+          }
+        }
+      }
+
+      if (!resolved) {
+        const runSessionFallbackKey = opts?.runSessionKey?.trim();
+        const fallback = resolveImplicitCurrentSessionFallback({
+          agentId,
+          allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
+          cfg,
+          fallbackKey:
+            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && runSessionFallbackKey
+              ? runSessionFallbackKey
+              : isSemanticCurrentRequest
+                ? effectiveRequesterLookupKey
+                : storeScopedRequesterKey,
+        });
+        if (fallback) {
+          resolved = fallback;
+          resolvedViaImplicitCurrentFallback = true;
+        }
+      }
+
+      if (!resolved) {
+        const kind = shouldResolveSessionIdInput(requestedKeyInput) ? "sessionId" : "sessionKey";
+        throw new Error(`Unknown ${kind}: ${requestedKeyInput}`);
+      }
+
+      // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
+      const shouldTreatVisibilityTargetAsSelf =
+        isSemanticCurrentRequest ||
+        resolvedViaImplicitCurrentFallback ||
+        (!resolvedViaSessionId &&
+          (requestedKeyInput === "current" ||
+            (resolved.key === requestedKeyInput && agentId === requesterAgentId)));
+      const visibilityTargetKey =
+        shouldTreatVisibilityTargetAsSelf && !isIncognitoSessionKey(resolved.key)
+          ? visibilityRequesterKey
+          : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
+      const access = await requireVisibilityAccess(
+        {
+          targetSessionKey: resolved.key,
+          targetAgentId: agentId,
+          authorizationTargetSessionKey: visibilityTargetKey,
+          requesterOwned: resolvedRequesterOwned,
+        },
+        requestedKeyInput,
+      );
+      let scopedResolved = resolved;
+      const assertStatusVisible = async () => {
+        operatorSelection.assertCurrent();
+        const currentSessionKey = opts?.runSessionKey?.trim() ?? effectiveRequesterLookupKey;
+        if (
+          !operatorSelection.operatorAuthority ||
+          !scopedResolved.persisted ||
+          (agentId === requesterAgentId &&
+            normalizeVisibilityTargetSessionKey(scopedResolved.key, agentId) ===
+              normalizeVisibilityTargetSessionKey(currentSessionKey, requesterAgentId))
+        ) {
+          return;
+        }
+        const described = await gatewayCall<{ session: { sessionId?: string } | null }>({
+          method: "sessions.describe",
+          params: { key: scopedResolved.key, agentId },
+        });
+        operatorSelection.assertCurrent();
+        if (described.session?.sessionId !== scopedResolved.entry.sessionId) {
+          throw new Error(`Session not visible from session tools: ${requestedKeyInput}`);
+        }
+      };
+      await assertStatusVisible();
+
+      return await runWithScopedSessionAccess({
+        cfg,
+        agentId,
+        expectedSessionId: access.expectedSessionId,
+        targetSessionKey: scopedResolved.key,
+        run: async () => {
+          const configured = resolveDefaultModelForAgent({ cfg, agentId });
+          const selectedAgentDir = resolveAgentDir(cfg, agentId);
+          const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const modelRaw = readToolStringParam(params, "model");
+          let changedModel = false;
+          if (typeof modelRaw === "string") {
+            const patched = await patchSessionStatusModel({
+              cfg,
+              agentId,
+              agentDir: selectedAgentDir,
+              workspaceDir: selectedWorkspaceDir,
+              storePath,
+              raw: modelRaw,
+              resolved: scopedResolved,
+              metadataSnapshot: opts?.metadataSnapshot,
+              gatewayCall: gatewayScoped ? gatewayCall : undefined,
+            });
+            scopedResolved = patched.resolved;
+            changedModel = patched.changedModel;
+          }
+
+          const liveSessionKeys = new Set(
+            [
+              opts?.runSessionKey,
+              storeScopedRequesterKey,
+              effectiveRequesterKey,
+              visibilityRequesterKey,
+            ]
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value)),
+          );
+          const activeModelId = opts?.activeModelId?.trim();
+          const activeModelProvider = opts?.activeModelProvider?.trim();
+          const activeModelIdentity =
+            activeModelId &&
+            modelRaw === undefined &&
+            (isSemanticCurrentRequest || requestedKeyParam === undefined) &&
+            agentId === requesterAgentId &&
+            liveSessionKeys.has(scopedResolved.key.trim())
+              ? {
+                  model: activeModelId,
+                  ...(activeModelProvider ? { provider: activeModelProvider } : {}),
+                }
+              : undefined;
+          const runtimeModelIdentity =
+            activeModelIdentity ??
+            resolveSessionModelIdentityRef(
+              cfg,
+              scopedResolved.entry,
+              agentId,
+              `${configured.provider}/${configured.model}`,
+            );
+          const hasExplicitModelOverride = Boolean(
+            !activeModelIdentity &&
+            (scopedResolved.entry.providerOverride?.trim() ||
+              scopedResolved.entry.modelOverride?.trim()),
+          );
+          const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
+          const runtimeModelForCard = runtimeModelIdentity.model.trim();
+          const defaultProviderForCard = hasExplicitModelOverride
+            ? configured.provider
+            : (runtimeProviderForCard ?? "");
+          const defaultModelForCard = hasExplicitModelOverride
+            ? configured.model
+            : runtimeModelForCard || configured.model;
+          const statusSessionEntry = activeModelIdentity
+            ? withActiveStatusModelIdentity(scopedResolved.entry, activeModelIdentity)
+            : !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
+              ? { ...scopedResolved.entry, providerOverride: "" }
+              : scopedResolved.entry;
+          const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
+          const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
+          const primaryModelLabel =
+            providerForCard && defaultModelForCard
+              ? `${providerForCard}/${defaultModelForCard}`
+              : defaultModelForCard;
+          const isGroup =
+            statusSessionEntry.chatType === "group" ||
+            statusSessionEntry.chatType === "channel" ||
+            scopedResolved.key.includes(":group:") ||
+            scopedResolved.key.includes(":channel:");
+          // Tool status may read persisted/configured facts, but must not start provider discovery.
+          const thinkingCatalog = await loadPublishedPreparedModelCatalog({
+            config: cfg,
+            agentId,
+            agentDir: selectedAgentDir,
+            readOnly: true,
+            ...(statusSessionEntry.spawnedWorkspaceDir
+              ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
+              : {}),
+          });
+          const { buildStatusText } = await loadCommandsStatusRuntime();
+          const statusText = await buildStatusText({
+            cfg,
+            agentId,
+            sessionEntry: statusSessionEntry,
+            sessionKey: scopedResolved.key,
+            parentSessionKey: statusSessionEntry.parentSessionKey,
+            sessionScope: cfg.session?.scope,
+            storePath,
+            statusChannel: sessionDeliveryChannel(statusSessionEntry) ?? "unknown",
+            workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
+            provider: providerForCard,
+            model: defaultModelForCard,
+            thinkingCatalog,
+            resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
+            resolvedFastMode: statusSessionEntry.fastMode,
+            resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
+            resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
+            resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
+            resolveDefaultThinkingLevel: async (selection) =>
+              resolveThinkingDefault({
+                cfg,
+                agentId,
+                provider: selection?.provider ?? providerForCard,
+                model: selection?.model ?? defaultModelForCard,
+                agentRuntime: selection?.agentRuntime,
+                catalog: thinkingCatalog,
+              }),
+            isGroup,
+            defaultGroupActivation: () => "mention",
+            primaryModelLabelOverride: primaryModelLabel,
+            ...(providerForCard ? {} : { modelAuthOverride: undefined }),
+            includeTranscriptUsage: true,
+          });
+          const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
+          const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
+          const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+          const isLiveRouteSession =
+            agentId === requesterAgentId &&
+            (activeRouteRunSessionKey
+              ? scopedResolved.key.trim() === activeRouteRunSessionKey
+              : liveSessionKeys.has(scopedResolved.key.trim()));
+          const routeDetails = buildSessionStatusRouteDetails({
+            entry: statusSessionEntry,
+            sessionKey: scopedResolved.key,
+            activeDeliveryContext: opts?.activeDeliveryContext,
+            isLiveRunSession: isLiveRouteSession,
+          });
+          const routeContextText = Object.keys(routeDetails).length
+            ? `Route context:
+\`\`\`json
+${JSON.stringify(routeDetails, null, 2)}
+\`\`\``
+            : undefined;
+          const stateVersion = await getSessionStateVersion(scopedResolved.key, agentId);
+          const rawStateChanges =
+            changesSince !== undefined
+              ? await listSessionStateEventsSince(scopedResolved.key, agentId, changesSince, 200)
+              : undefined;
+          const stateChanges = rawStateChanges
+            ? compactSessionStateChanges(rawStateChanges)
+            : undefined;
+          const capabilities = includeCapabilities
+            ? await resolveSessionCapabilities({
+                callGateway: gatewayCall,
+                agentId,
+                // The Gateway inventory resolves canonical keys, not legacy bare main aliases.
+                sessionKey: normalizeVisibilityTargetSessionKey(scopedResolved.key, agentId),
+              })
+            : undefined;
+          const extraBlocks = [
+            routeContextText,
+            stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
+            capabilities ? formatSessionCapabilities(capabilities) : undefined,
+          ].filter((block): block is string => Boolean(block));
+          const visibleStatusText = [statusText, ...extraBlocks].join("\n\n");
+          const modelOverrideForResult =
+            modelRaw === undefined
+              ? undefined
+              : resultOverrideModel
+                ? resultOverrideProvider
+                  ? `${resultOverrideProvider}/${resultOverrideModel}`
+                  : resultOverrideModel
+                : null;
+
+          await assertStatusVisible();
+          return textResult(visibleStatusText, {
+            ok: true,
+            sessionKey: scopedResolved.key,
+            agentId,
+            changedModel,
+            stateVersion,
+            ...(stateChanges ? { stateChanges } : {}),
+            ...(modelRaw !== undefined
+              ? {
+                  model: resultOverrideModel ?? defaultModelForCard,
+                  ...((resultOverrideProvider ?? providerForCard)
+                    ? { modelProvider: resultOverrideProvider ?? providerForCard }
+                    : {}),
+                  modelOverride: modelOverrideForResult,
+                }
+              : {}),
+            statusText: visibleStatusText,
+            ...(capabilities ? { capabilities } : {}),
+            ...routeDetails,
+          });
+        },
+      });
+    }),
+  };
+}

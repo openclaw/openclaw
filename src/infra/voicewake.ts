@@ -1,0 +1,55 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  readVoiceWakeMachineState,
+  writeConfigMachineStateAsync,
+} from "../state/config-machine-state-async.js";
+
+// Voice wake config stores trigger words used by local voice integrations.
+type VoiceWakeConfig = {
+  triggers: string[];
+};
+
+const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
+const VOICEWAKE_TRIGGERS_STATE_KEY = "voicewake.triggers";
+
+function sanitizeTriggers(triggers: unknown): string[] {
+  const cleaned = (Array.isArray(triggers) ? triggers : [])
+    .map((w) => normalizeOptionalString(w) ?? "")
+    .filter((w) => w.length > 0);
+  return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
+}
+
+function stateDatabaseOptions(stateDir?: string) {
+  return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
+}
+
+export function defaultVoiceWakeTriggers() {
+  return [...DEFAULT_TRIGGERS];
+}
+
+/** Load persisted voice wake triggers, falling back to defaults. */
+export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
+  const state = await readVoiceWakeMachineState(
+    VOICEWAKE_TRIGGERS_STATE_KEY,
+    stateDatabaseOptions(baseDir),
+  );
+  if (!state) {
+    return { triggers: defaultVoiceWakeTriggers() };
+  }
+  return {
+    triggers: sanitizeTriggers(state.value),
+  };
+}
+
+export async function setVoiceWakeTriggers(
+  triggers: string[],
+  baseDir?: string,
+): Promise<VoiceWakeConfig> {
+  const sanitized = sanitizeTriggers(triggers);
+  await writeConfigMachineStateAsync(
+    VOICEWAKE_TRIGGERS_STATE_KEY,
+    sanitized,
+    stateDatabaseOptions(baseDir),
+  );
+  return { triggers: sanitized };
+}

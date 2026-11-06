@@ -1,0 +1,225 @@
+#!/usr/bin/env node
+import { existsSync } from "node:fs";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
+import {
+  enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
+} from "../node-compile-cache.mjs";
+import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
+import {
+  isForegroundGmailRunArgv,
+  shouldKeepNativeHookRelayInProcess,
+} from "./cli/respawn-policy.js";
+import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayDispatchStartupTrace,
+} from "./cli/startup-trace.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
+import { isMainModule } from "./infra/is-main.js";
+import "./shared/detached-async-context.js";
+
+const isMain = isMainModule({
+  currentFile: fileURLToPath(import.meta.url),
+});
+if (isMain) {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
+}
+const handledAdmission =
+  isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
+const packageRootUrl = new URL("../", import.meta.url);
+if (
+  !handledAdmission &&
+  !existsSync(new URL("entry.ts", import.meta.url)) &&
+  (existsSync(new URL(".openclaw-lifecycle-pending", packageRootUrl)) ||
+    existsSync(new URL("dist/openclaw-install-guard", packageRootUrl)))
+) {
+  const { completePendingPackageLifecycle } = await import("./infra/package-lifecycle.js");
+  try {
+    await completePendingPackageLifecycle({ packageRoot: fileURLToPath(packageRootUrl) });
+  } catch (error) {
+    throw new Error(
+      `OpenClaw package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+type LegacyCliDeps = {
+  runCli: (
+    argv: string[],
+    options?: {
+      retainConsoleRoutingUntilProcessExit?: boolean;
+    },
+  ) => Promise<void>;
+};
+
+type LibraryExports = typeof import("./library.js");
+
+// These bindings are populated only for library consumers. The CLI entry stays
+// on the lean path and must not read them while running as main.
+export let applyTemplate: LibraryExports["applyTemplate"];
+export let createDefaultDeps: LibraryExports["createDefaultDeps"];
+export let deriveSessionKey: LibraryExports["deriveSessionKey"];
+export let describePortOwner: LibraryExports["describePortOwner"];
+export let ensureBinary: LibraryExports["ensureBinary"];
+export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
+export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
+export let handlePortError: LibraryExports["handlePortError"];
+export let loadConfig: LibraryExports["loadConfig"];
+export let monitorWebChannel: LibraryExports["monitorWebChannel"];
+export let normalizeE164: LibraryExports["normalizeE164"];
+export let PortInUseError: LibraryExports["PortInUseError"];
+export let promptYesNo: LibraryExports["promptYesNo"];
+export let resolveSessionKey: LibraryExports["resolveSessionKey"];
+export let resolveStorePath: LibraryExports["resolveStorePath"];
+export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
+export let runExec: LibraryExports["runExec"];
+export let waitForever: LibraryExports["waitForever"];
+
+async function loadLegacyCliDeps(argv: string[]): Promise<LegacyCliDeps> {
+  const startupTrace = createGatewayDispatchStartupTrace(argv, "entry");
+  await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+  const { runCli } = await startupTrace.measure(
+    "run-main-import",
+    () => import("./cli/run-main.js"),
+  );
+  return { runCli };
+}
+
+// Legacy executable bridge, also exported for callers that retain their own process lifecycle.
+export async function runLegacyCliEntry(
+  argv: string[] = process.argv,
+  deps?: LegacyCliDeps,
+  options?: {
+    retainConsoleRoutingUntilProcessExit?: boolean;
+  },
+): Promise<void> {
+  const { runCli } = deps ?? (await loadLegacyCliDeps(argv));
+  await runCli(argv, options);
+}
+
+const handledRootVersion =
+  isMain &&
+  !handledAdmission &&
+  (await import("./entry.version-fast-path.js")).tryHandleRootVersionFastPath(process.argv);
+if (!isMain) {
+  ({
+    applyTemplate,
+    createDefaultDeps,
+    deriveSessionKey,
+    describePortOwner,
+    ensureBinary,
+    ensurePortAvailable,
+    getReplyFromConfig,
+    handlePortError,
+    loadConfig,
+    monitorWebChannel,
+    normalizeE164,
+    PortInUseError,
+    promptYesNo,
+    resolveSessionKey,
+    resolveStorePath,
+    runCommandWithTimeout,
+    runExec,
+    waitForever,
+  } = await import("./library.js"));
+}
+
+const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
+const compileCacheDirectory = shouldRunCli
+  ? resolveOpenClawCompileCacheDirectory({
+      installRoot: fileURLToPath(packageRootUrl),
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+    })
+  : undefined;
+const compileCacheRespawnEnv =
+  shouldRunCli &&
+  !isForegroundGmailRunArgv(process.argv) &&
+  !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
+    ? resolveOpenClawCompileCacheRespawnEnv({
+        directory: compileCacheDirectory,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      })
+    : undefined;
+if (compileCacheRespawnEnv) {
+  const { command, args } = resolveOpenClawCliInvocation({
+    entryPath: fileURLToPath(import.meta.url),
+  });
+  // External supervisors require the serving Gateway to retain its listener PID.
+  if (process.platform !== "win32" && process.execve && isForegroundGatewayRunArgv(process.argv)) {
+    process.execve(command, [command, ...args], compileCacheRespawnEnv);
+  }
+  const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
+  await runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: fileURLToPath(import.meta.url),
+      env: compileCacheRespawnEnv,
+    }),
+  );
+}
+if (shouldRunCli && !compileCacheRespawnEnv) {
+  enableOpenClawCompileCache({
+    directory: compileCacheDirectory,
+    foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+  });
+  const [
+    { formatCliFailureLines, formatCliJsonFailure, handleCliUncaughtException, isExpectedCliError },
+    { isJsonOutputModeActive },
+    { runCliWithExitFinalization },
+    { withCliProcessScope },
+    { runFatalErrorHooks },
+    { installUnhandledRejectionHandler },
+  ] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+    import("./cli/one-shot-exit.js"),
+    import("./cli/runtime-cleanup-scope.js"),
+    import("./infra/fatal-error-hooks.js"),
+    import("./infra/unhandled-rejections.js"),
+  ]);
+
+  const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
+
+  // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
+  installUnhandledRejectionHandler();
+
+  process.on("uncaughtException", (error) => {
+    handleCliUncaughtException(error);
+  });
+
+  void runCliWithExitFinalization({
+    run: () =>
+      withCliProcessScope(() =>
+        runLegacyCliEntry(process.argv, undefined, {
+          // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+          retainConsoleRoutingUntilProcessExit: true,
+        }),
+      ),
+    onError: (err) => {
+      if (isJsonOutputModeActive(process.argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(err));
+      }
+      for (const line of formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: err,
+        argv: process.argv,
+      })) {
+        console.error(line);
+      }
+      if (!isExpectedCliError(err)) {
+        for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+          console.error("[openclaw]", message);
+        }
+      }
+      restoreRuntimeTerminalState("legacy cli failure");
+      process.exitCode = 1;
+    },
+  });
+}

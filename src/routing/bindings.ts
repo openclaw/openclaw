@@ -1,0 +1,78 @@
+import { tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
+import { isRouteBinding, listConfiguredBindings, listRouteBindings } from "../config/bindings.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeRouteBindingChannelId,
+  resolveNormalizedRouteBindingMatch,
+} from "./binding-scope.js";
+import { normalizeAgentId } from "./session-key.js";
+
+export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
+  const normalizedChannel = normalizeRouteBindingChannelId(channelId);
+  if (!normalizedChannel) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const binding of listRouteBindings(cfg)) {
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
+    if (!resolved || resolved.channelId !== normalizedChannel) {
+      continue;
+    }
+    ids.add(resolved.accountId);
+  }
+  return Array.from(ids).toSorted((a, b) => a.localeCompare(b));
+}
+
+export function resolveDefaultAgentBoundAccountId(
+  cfg: OpenClawConfig,
+  channelId: string,
+): string | null {
+  const normalizedChannel = normalizeRouteBindingChannelId(channelId);
+  if (!normalizedChannel) {
+    return null;
+  }
+  const ownerAgentId = tryResolveAgentOperationAgentId(cfg);
+  if (!ownerAgentId) {
+    return null;
+  }
+  const defaultAgentId = normalizeAgentId(ownerAgentId);
+  for (const binding of listConfiguredBindings(cfg)) {
+    if (!isRouteBinding(binding)) {
+      continue;
+    }
+    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    if (
+      !resolved ||
+      resolved.channelId !== normalizedChannel ||
+      resolved.agentId !== defaultAgentId
+    ) {
+      continue;
+    }
+    return resolved.accountId;
+  }
+  return null;
+}
+
+export function buildChannelAccountBindings(cfg: OpenClawConfig) {
+  const map = new Map<string, Map<string, string[]>>();
+  for (const binding of listRouteBindings(cfg)) {
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
+    if (!resolved) {
+      continue;
+    }
+    // Map shape is channel -> agent -> accounts so callers can answer both
+    // "what accounts exist here" and "which accounts are bound to this agent".
+    const byAgent = map.get(resolved.channelId) ?? new Map<string, string[]>();
+    const list = byAgent.get(resolved.agentId) ?? [];
+    if (!list.includes(resolved.accountId)) {
+      list.push(resolved.accountId);
+    }
+    byAgent.set(resolved.agentId, list);
+    map.set(resolved.channelId, byAgent);
+  }
+  return map;
+}

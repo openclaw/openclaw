@@ -1,0 +1,94 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getConfigResolutionFacts } from "./resolution-facts.js";
+import {
+  captureRuntimeConfigWithSource,
+  getPublishedRuntimeConfigSource,
+  getRuntimeConfigCapture,
+} from "./runtime-config-capture-state.js";
+import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
+import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
+import type { OpenClawConfig } from "./types.js";
+
+const immutableCaptures = new WeakMap<OpenClawConfig, OpenClawConfig>();
+
+/** Captures runtime and authored values together for one admitted preparation generation. */
+export function captureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  if (config === getRuntimeConfigSnapshot()) {
+    return getRuntimeConfigSnapshot({ capture: true })!;
+  }
+  if (getRuntimeConfigCapture(config)) {
+    return config;
+  }
+  const source = projectConfigOntoRuntimeSourceSnapshot(config);
+  // Standalone captures can follow immutable inputs. Publications own their capture
+  // separately; memoizing by their live origin would retain retired full config copies.
+  const reusable = config === source && isDeeplyFrozenPlainData(config);
+  const previous = reusable ? immutableCaptures.get(config) : undefined;
+  if (previous && getConfigResolutionFacts(previous) === getConfigResolutionFacts(config)) {
+    return previous;
+  }
+  const captured = captureRuntimeConfigWithSource(config, source);
+  if (reusable) {
+    immutableCaptures.set(config, captured);
+  }
+  return captured;
+}
+
+/** Projects a runtime-derived config back onto the active authored source snapshot. */
+export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  const captured = getRuntimeConfigCapture(config);
+  if (captured) {
+    return captured.source;
+  }
+  const published = getPublishedRuntimeConfigSource(config);
+  if (published) {
+    return published;
+  }
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
+  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
+    return config;
+  }
+  if (config === runtimeConfigSnapshot) {
+    return runtimeConfigSourceSnapshot;
+  }
+  const runtime = runtimeConfigSnapshot as Record<string, unknown>;
+  const candidate = config as Record<string, unknown>;
+  for (const key of Object.keys(runtime)) {
+    if (!Object.hasOwn(candidate, key)) {
+      return config;
+    }
+    const runtimeValue = runtime[key];
+    const candidateValue = candidate[key];
+    if (
+      Array.isArray(runtimeValue) !== Array.isArray(candidateValue) ||
+      (runtimeValue === null) !== (candidateValue === null) ||
+      typeof runtimeValue !== typeof candidateValue
+    ) {
+      return config;
+    }
+  }
+  return projectRuntimeChangesOntoSource(
+    runtimeConfigSourceSnapshot,
+    runtimeConfigSnapshot,
+    config,
+  ) as OpenClawConfig;
+}
+
+/** Projects partial legacy inputs without persisting deleted runtime-only parents. */
+export function projectLegacyRuntimeConfigWrite(
+  config: OpenClawConfig,
+  runtimeSnapshot = getRuntimeConfigSnapshot(),
+  sourceSnapshot = getRuntimeConfigSourceSnapshot(),
+): OpenClawConfig {
+  if (!runtimeSnapshot || !sourceSnapshot) {
+    return config;
+  }
+  // Legacy partial writes alone omit parents created only by removing runtime defaults.
+  return (asOptionalRecord(
+    projectRuntimeChangesOntoSource(sourceSnapshot, runtimeSnapshot, config, {
+      pruneUnauthoredDeletions: true,
+    }),
+  ) ?? {}) as OpenClawConfig;
+}

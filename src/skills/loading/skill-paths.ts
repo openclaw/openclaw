@@ -1,0 +1,160 @@
+import os from "node:os";
+import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentDir } from "../../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOsHomeDir } from "../../infra/home-dir.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import {
+  hasActivePluginInstallRoots,
+  resolveActivePluginInstallRoots,
+} from "../../plugins/install-root-context.js";
+import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
+import type { Skill } from "./skill-contract.js";
+import { resolveSkillSource } from "./source.js";
+import { tryRealpath } from "./symlink-targets.js";
+
+// Same rule as the manifest `agentSkillsDir` field: one folder name.
+const AGENT_SKILLS_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+
+/** One agent's folder for a plugin's learned skills (manifest `agentSkillsDir`). */
+export function resolveAgentSkillsRoot(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  dirName: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  if (!AGENT_SKILLS_DIR_NAME.test(params.dirName)) {
+    throw new Error(`Agent skills directory "${params.dirName}" must be one folder name.`);
+  }
+  return path.join(resolveAgentDir(params.config, params.agentId, params.env), params.dirName);
+}
+
+export function resolvePluginSkillsDir(): string {
+  // Generated links follow the active state scope; managed skill reads keep their source root.
+  const stateDir = hasActivePluginInstallRoots()
+    ? resolveActivePluginInstallRoots().stateDir
+    : CONFIG_DIR;
+  return path.join(stateDir, "plugin-skills");
+}
+
+/** Workspace sync excludes repository internals and installed dependencies at every depth. */
+export function shouldSyncSkillPath(filePath: string): boolean {
+  const name = path.basename(filePath);
+  return name !== ".git" && name !== "node_modules";
+}
+
+export function resolveSkillsUserHomeDir(): string | undefined {
+  return resolveOsHomeDir(process.env, os.homedir);
+}
+
+function resolveNativeUserHomeDir(): string | undefined {
+  try {
+    return path.resolve(os.homedir());
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveCompactHomePrefixes(): string[] {
+  const homes = [resolveSkillsUserHomeDir(), resolveNativeUserHomeDir()].filter(
+    (home): home is string => Boolean(home),
+  );
+  const resolvedHomes = homes.map((home) => path.resolve(home));
+  const realHomes = resolvedHomes
+    .map((home) => tryRealpath(home))
+    .filter((home): home is string => Boolean(home));
+  return uniqueStrings([...resolvedHomes, ...realHomes])
+    .toSorted((a, b) => b.length - a.length)
+    .flatMap(compactHomePrefixesForHome);
+}
+
+/** Compact prompt-facing skill paths while preserving managed paths that `~` cannot reach. */
+export function compactPromptSkills(skills: Skill[]): Skill[] {
+  const prefixes = resolveCompactHomePrefixes();
+  if (prefixes.length === 0) {
+    return skills;
+  }
+  const preservedRoots = resolvePreservedPromptSkillPathRoots();
+  const tildeRoots = resolvePromptTildeRoots();
+  return skills.map((skill) => ({
+    ...skill,
+    // Learned skills live under each agent's state folder, which `~` may not reach.
+    filePath: shouldPreservePromptSkillPath(
+      skill.filePath,
+      resolveSkillSource(skill) === "openclaw-workshop" ||
+        isInsideAny(preservedRoots, skill.filePath),
+      tildeRoots,
+    )
+      ? skill.filePath
+      : compactHomePath(skill.filePath, prefixes),
+  }));
+}
+
+function resolvePreservedPromptSkillPathRoots(): string[] {
+  const configDir = resolveConfigDir();
+  const promptSkillDirs = [
+    path.resolve(configDir, "skills"),
+    path.resolve(configDir, "plugin-skills"),
+  ];
+  const realPromptSkillDirs = promptSkillDirs
+    .map((dir) => tryRealpath(dir))
+    .filter((dir): dir is string => Boolean(dir));
+  return uniqueStrings([...promptSkillDirs, ...realPromptSkillDirs]);
+}
+
+function resolvePromptTildeRoots(): string[] {
+  const nativeHome = resolveNativeUserHomeDir();
+  if (!nativeHome) {
+    return [];
+  }
+  const resolvedNativeHome = path.resolve(nativeHome);
+  if (isContainerStateHomeWherePromptTildeEscapes(resolvedNativeHome)) {
+    return [];
+  }
+  const realNativeHome = tryRealpath(resolvedNativeHome);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
+}
+
+function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
+  const configDir = path.resolve(resolveConfigDir());
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
+}
+
+function isInsideAny(roots: readonly string[], filePath: string): boolean {
+  const resolvedFilePath = path.resolve(filePath);
+  return roots.some((root) => isPathInside(root, resolvedFilePath));
+}
+
+function shouldPreservePromptSkillPath(
+  filePath: string,
+  managed: boolean,
+  tildeRoots: readonly string[],
+): boolean {
+  return managed && !isInsideAny(tildeRoots, filePath);
+}
+
+function compactHomePath(filePath: string, prefixes: readonly string[]): string {
+  for (const prefix of prefixes) {
+    if (filePath.startsWith(prefix)) {
+      const relative = filePath.slice(prefix.length);
+      return "~/" + (prefix.includes("\\") ? relative.replace(/\\/g, "/") : relative);
+    }
+  }
+  return filePath;
+}
+
+function compactHomePrefixesForHome(home: string): string[] {
+  const prefixes = [home.endsWith(path.sep) ? home : home + path.sep];
+  if (home.includes("\\") && !home.endsWith("\\")) {
+    prefixes.push(home + "\\");
+  }
+  return prefixes;
+}
+
+export function compactSkillPath(filePath: string): string {
+  return compactHomePath(filePath, resolveCompactHomePrefixes());
+}

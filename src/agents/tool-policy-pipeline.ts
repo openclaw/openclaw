@@ -1,0 +1,220 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
+/**
+ * Applies layered tool policy in runtime resolution order. Policy diagnostics
+ * stay tied to the layer that introduced them, while plugin groups are
+ * expanded only after unknown core/plugin entries are classified.
+ */
+import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
+import { isKnownCoreToolId, isRunGrantedCoreToolId } from "./core-tool-facts.js";
+import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
+import {
+  analyzeAllowlistByToolType,
+  buildPluginToolGroups,
+  expandPolicyWithPluginGroups,
+  normalizeToolPolicyName,
+  type DeclaredToolAllowlistContext,
+  type ToolPolicyLike,
+} from "./tool-policy.js";
+
+const MAX_TOOL_POLICY_WARNING_CACHE = 256;
+const seenToolPolicyWarnings = new Set<string>();
+
+/** Provenance travels with the decision; consumers never infer it from log labels. */
+type ToolPolicySource = {
+  kind: "profile" | "config" | "session" | "runtime";
+  path?: string;
+  profile?: string;
+  alsoAllowPath?: string;
+};
+
+export type ConfiguredToolPolicySources = Partial<
+  Record<
+    "profile" | "providerProfile" | "global" | "globalProvider" | "agent" | "agentProvider",
+    ToolPolicySource
+  >
+>;
+
+export type ToolPolicyPipelineStep = {
+  policy: ToolPolicyLike | undefined;
+  label: string;
+  source?: ToolPolicySource;
+  stripPluginOnlyAllowlist?: boolean;
+  suppressUnavailableCoreToolWarning?: boolean;
+  suppressUnavailableCoreToolWarningAllowlist?: string[];
+  unavailableCoreToolReason?: string;
+};
+
+/** One policy application, exposed for diagnostics that need exclusion provenance. */
+export type ToolPolicyFilterEvent<TTool extends { name: string } = AnyAgentTool> = {
+  step: ToolPolicyPipelineStep;
+  policy: ToolPolicyLike;
+  before: readonly TTool[];
+  after: readonly TTool[];
+};
+
+/** Builds the default profile, provider, agent, group, and sender policy layers. */
+export function buildDefaultToolPolicyPipelineSteps(params: {
+  profilePolicy?: ToolPolicyLike;
+  profile?: string;
+  profileUnavailableCoreWarningAllowlist?: string[];
+  providerProfilePolicy?: ToolPolicyLike;
+  providerProfile?: string;
+  providerProfileUnavailableCoreWarningAllowlist?: string[];
+  globalPolicy?: ToolPolicyLike;
+  globalProviderPolicy?: ToolPolicyLike;
+  agentPolicy?: ToolPolicyLike;
+  agentProviderPolicy?: ToolPolicyLike;
+  groupPolicy?: ToolPolicyLike;
+  senderPolicy?: ToolPolicyLike;
+  agentId?: string;
+  sources?: ConfiguredToolPolicySources;
+  unavailableCoreToolReason?: string;
+}): ToolPolicyPipelineStep[] {
+  const agentId = params.agentId?.trim();
+  const profile = params.profile?.trim();
+  const providerProfile = params.providerProfile?.trim();
+  const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
+  const steps: ToolPolicyPipelineStep[] = [
+    {
+      policy: params.profilePolicy,
+      source: params.sources?.profile,
+      label: profile ? `tools.profile (${profile})` : "tools.profile",
+      suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
+    },
+    {
+      policy: params.providerProfilePolicy,
+      source: params.sources?.providerProfile,
+      label: providerProfile
+        ? `tools.byProvider.profile (${providerProfile})`
+        : "tools.byProvider.profile",
+      suppressUnavailableCoreToolWarningAllowlist:
+        params.providerProfileUnavailableCoreWarningAllowlist,
+    },
+    ...(
+      [
+        [params.globalPolicy, params.sources?.global, "tools.allow"],
+        [params.globalProviderPolicy, params.sources?.globalProvider, "tools.byProvider.allow"],
+        [
+          params.agentPolicy,
+          params.sources?.agent,
+          agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        ],
+        [
+          params.agentProviderPolicy,
+          params.sources?.agentProvider,
+          agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+        ],
+        [params.groupPolicy, { kind: "session" }, "group tools.allow"],
+        [params.senderPolicy, { kind: "session" }, "tools.toolsBySender"],
+      ] as const
+    ).map(([policy, source, label]) => ({ policy, source, label })),
+  ];
+  for (const step of steps) {
+    step.stripPluginOnlyAllowlist = true;
+    step.unavailableCoreToolReason = unavailableCoreToolReason;
+  }
+  return steps;
+}
+
+/** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */
+export function applyToolPolicyPipeline<TTool extends { name: string }>(params: {
+  tools: TTool[];
+  toolMeta: (tool: TTool) => { pluginId: string } | undefined;
+  warn: (message: string) => void;
+  steps: ToolPolicyPipelineStep[];
+  declaredToolAllowlist?: DeclaredToolAllowlistContext;
+  onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
+}): TTool[] {
+  const coreToolNames = new Set(
+    params.tools
+      .filter((tool) => !params.toolMeta(tool))
+      .map((tool) => normalizeToolPolicyName(tool.name))
+      .filter(Boolean),
+  );
+
+  const pluginGroups = buildPluginToolGroups({
+    tools: params.tools,
+    toolMeta: params.toolMeta,
+  });
+
+  let filtered = params.tools;
+  for (const step of params.steps) {
+    if (!step.policy) {
+      continue;
+    }
+
+    const policy = step.policy;
+    const frozenAllow = isFrozenTemplateToolAllowPolicy(policy);
+    if (step.stripPluginOnlyAllowlist) {
+      // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
+      // Read declarations per layer because callbacks can update the next layer.
+      const resolved = analyzeAllowlistByToolType(
+        policy,
+        pluginGroups,
+        coreToolNames,
+        params.declaredToolAllowlist,
+      );
+      if (resolved.unknownAllowlist.length > 0) {
+        const unavailableCoreWarningAllowlist = new Set(
+          (step.suppressUnavailableCoreToolWarningAllowlist ?? []).map((entry) =>
+            normalizeToolPolicyName(entry),
+          ),
+        );
+        const gatedCoreEntries = resolved.unknownAllowlist.filter(
+          (entry) => isKnownCoreToolId(entry) && !isRunGrantedCoreToolId(entry),
+        );
+        const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
+          ? []
+          : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
+        const otherEntries = resolved.unknownAllowlist.filter(
+          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+        );
+        const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
+        if (warningEntries.length > 0) {
+          const entries = warningEntries.join(", ");
+          const hasGatedCoreEntries = warnableGatedCoreEntries.length > 0;
+          const hasOtherEntries = otherEntries.length > 0;
+          const unavailableCoreToolReason = step.unavailableCoreToolReason?.trim();
+          const unavailableCoreDetail = unavailableCoreToolReason
+            ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
+            : "These entries are shipped core tools but unavailable in the current runtime/provider/model/config.";
+          const mixedUnavailableCoreDetail = unavailableCoreToolReason
+            ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
+            : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
+          const suffix =
+            hasGatedCoreEntries && hasOtherEntries
+              ? mixedUnavailableCoreDetail
+              : hasGatedCoreEntries
+                ? unavailableCoreDetail
+                : "These entries won't match any tool unless the plugin is enabled.";
+          const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
+          if (rememberBoundedKey(seenToolPolicyWarnings, warning, MAX_TOOL_POLICY_WARNING_CACHE)) {
+            params.warn(warning);
+          }
+        }
+      }
+    }
+
+    const expanded = frozenAllow
+      ? {
+          allow: policy.allow,
+          deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+        }
+      : expandPolicyWithPluginGroups(policy, pluginGroups);
+    if (!expanded) {
+      continue;
+    }
+    const before = filtered;
+    filtered = filterToolsByPolicy(before, expanded);
+    params.onFilter?.({ step, policy: expanded, before, after: filtered });
+    auditToolPolicyFilter({
+      stepLabel: step.label,
+      policy: expanded,
+      before,
+      after: filtered,
+    });
+  }
+  return filtered;
+}

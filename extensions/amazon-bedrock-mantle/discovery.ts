@@ -1,0 +1,426 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const log = createSubsystemLogger("bedrock-mantle-discovery");
+
+const DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const DEFAULT_CONTEXT_WINDOW = 32000;
+const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
+const MANTLE_DISCOVERY_TIMEOUT_MS = 30_000;
+const MANTLE_DISCOVERY_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+// Bedrock's introductory Sonnet 5 rate expires at the documented UTC month boundary.
+const SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
+const SONNET_5_PROMOTIONAL_COST = {
+  input: 2,
+  output: 10,
+  cacheRead: 0.2,
+  cacheWrite: 2.5,
+};
+const SONNET_5_STANDARD_COST = {
+  input: 3,
+  output: 15,
+  cacheRead: 0.3,
+  cacheWrite: 3.75,
+};
+/** Config auth marker meaning Mantle should mint runtime bearer tokens from IAM. */
+export const MANTLE_IAM_TOKEN_MARKER = "__amazon_bedrock_mantle_iam__";
+
+export function resolveMantleSonnet5Cost(nowMs: number = Date.now()) {
+  return nowMs >= SONNET_5_STANDARD_PRICING_START_MS
+    ? SONNET_5_STANDARD_COST
+    : SONNET_5_PROMOTIONAL_COST;
+}
+
+const MANTLE_SUPPORTED_REGIONS = [
+  "us-east-1",
+  "us-east-2",
+  "us-west-2",
+  "ap-northeast-1",
+  "ap-south-1",
+  "ap-southeast-3",
+  "eu-central-1",
+  "eu-west-1",
+  "eu-west-2",
+  "eu-south-1",
+  "eu-north-1",
+  "sa-east-1",
+] as const;
+
+function mantleEndpoint(region: string): string {
+  return `https://bedrock-mantle.${region}.api.aws`;
+}
+
+/**
+ * When no explicit token is set, `resolveImplicitMantleProvider` will attempt
+ * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
+ */
+export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.AWS_BEARER_TOKEN_BEDROCK?.trim() || undefined;
+}
+
+/** Token cache for IAM-derived bearer tokens, keyed by region. */
+const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
+/** Last emitted IAM token failure per region, retained until token generation succeeds. */
+const iamTokenFailureDetailByRegion = new Map<string, string>();
+const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
+
+function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
+  return (
+    normalizeOptionalString(env.AWS_REGION) ??
+    normalizeOptionalString(env.AWS_DEFAULT_REGION) ??
+    "us-east-1"
+  );
+}
+
+function getCachedIamTokenEntry(
+  region: string,
+  now: number = Date.now(),
+): { token: string; expiresAt: number } | undefined {
+  const cached = iamTokenCache.get(region);
+  if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
+    return cached;
+  }
+  iamTokenCache.delete(region);
+  return undefined;
+}
+
+/**
+ * Generate a bearer token from IAM credentials using `@aws/bedrock-token-generator`.
+ *
+ * Uses the AWS default credential chain (instance roles, SSO, access keys, EKS IRSA).
+ * Returns undefined if the package is not installed or credentials are unavailable.
+ */
+export async function generateBearerTokenFromIam(params: {
+  region: string;
+}): Promise<string | undefined> {
+  const now = Date.now();
+  const cached = getCachedIamTokenEntry(params.region, now);
+
+  if (cached) {
+    return cached.token;
+  }
+
+  try {
+    const { getTokenProvider } = await import("@aws/bedrock-token-generator");
+    const token = await getTokenProvider({
+      region: params.region,
+      expiresInSeconds: 7200, // 2 hours
+    })();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
+    if (expiresAt !== undefined) {
+      iamTokenCache.set(params.region, { token, expiresAt });
+    }
+    iamTokenFailureDetailByRegion.delete(params.region);
+    return token;
+  } catch (error) {
+    // Keep retrying the credential chain while surfacing each distinct failure cause once.
+    if (log.isEnabled("debug")) {
+      const errorMessage = formatErrorMessage(error);
+      if (iamTokenFailureDetailByRegion.get(params.region) !== errorMessage) {
+        iamTokenFailureDetailByRegion.set(params.region, errorMessage);
+        log.debug("Mantle IAM token generation unavailable", {
+          region: params.region,
+          error: errorMessage,
+        });
+      }
+    }
+    return undefined;
+  }
+}
+
+export async function resolveMantleRuntimeBearerToken(params: {
+  apiKey: string;
+  authMode?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ apiKey: string; expiresAt?: number } | undefined> {
+  if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER && params.authMode !== "aws-sdk") {
+    return { apiKey: params.apiKey };
+  }
+  const now = Date.now();
+  const region = resolveMantleRegion(params.env ?? process.env);
+  const token = await generateBearerTokenFromIam({ region });
+  if (!token) {
+    return undefined;
+  }
+  const refreshed = getCachedIamTokenEntry(region, now);
+  const expiresAt =
+    refreshed?.expiresAt ?? resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
+  return {
+    apiKey: refreshed?.token ?? token,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+  };
+}
+interface OpenAIModelsResponse {
+  data: Array<{ id: string }>;
+}
+
+const REASONING_PATTERNS = [
+  "thinking",
+  "reasoner",
+  "reasoning",
+  "deepseek.r",
+  "gpt-oss-120b", // GPT-OSS 120B supports reasoning
+  "gpt-oss-safeguard-120b",
+];
+
+function inferReasoningSupport(modelId: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
+  return REASONING_PATTERNS.some((p) => lower.includes(p));
+}
+
+async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIModelsResponse> {
+  const body = await readProviderJsonResponse<unknown>(response, "Mantle model discovery", {
+    maxBytes: MANTLE_DISCOVERY_RESPONSE_MAX_BYTES,
+    chunkTimeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(
+        `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
+      ),
+  });
+  if (!body || typeof body !== "object" || !("data" in body) || !Array.isArray(body.data)) {
+    throw new Error("Mantle model discovery response must contain a data array");
+  }
+  return body as OpenAIModelsResponse;
+}
+
+interface MantleCacheEntry {
+  bearerToken: string;
+  models: ModelDefinitionConfig[];
+  fetchedAt: number;
+}
+
+type MantleDiscoveryConfig = {
+  enabled?: boolean;
+};
+
+const discoveryCache = new Map<string, MantleCacheEntry>();
+
+/**
+ * Discover available models from the Mantle `/v1/models` endpoint.
+ *
+ * The response is in standard OpenAI format:
+ * ```json
+ * { "data": [{ "id": "anthropic.claude-sonnet-4-6", "object": "model", "owned_by": "anthropic" }] }
+ * ```
+ *
+ * Results are cached per region and bearer credential for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
+ * Public calls retain advisory results; strict catalog calls propagate acquisition failures.
+ */
+export async function discoverMantleModels(params: {
+  region: string;
+  bearerToken: string;
+  discoveryMode?: "strict";
+}): Promise<ModelDefinitionConfig[]> {
+  const { region, bearerToken } = params;
+
+  const cached = discoveryCache.get(region);
+  if (
+    cached?.bearerToken === bearerToken &&
+    performance.now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
+  ) {
+    return cached.models;
+  }
+  if (cached?.bearerToken !== bearerToken) {
+    discoveryCache.delete(region);
+  }
+
+  const endpoint = `${mantleEndpoint(region)}/v1/models`;
+
+  try {
+    const { response, release } = await fetchWithSsrFGuard({
+      url: endpoint,
+      timeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
+      requireHttps: true,
+      auditContext: "amazon-bedrock-mantle.discovery",
+      init: {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+        },
+      },
+    });
+    try {
+      if (!response.ok) {
+        throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+      }
+
+      const body = await readMantleModelDiscoveryJson(response);
+      const models = body.data
+        .filter((model) => model.id?.trim())
+        .map((model) => {
+          const definition: ModelDefinitionConfig = {
+            id: model.id,
+            name: model.id,
+            reasoning: inferReasoningSupport(model.id),
+            input: ["text"],
+            cost: DEFAULT_COST,
+            contextWindow: DEFAULT_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_MAX_TOKENS,
+          };
+          // Numbered GPT models use Responses; GPT-OSS keeps the generic /v1 route.
+          if (/^openai\.gpt-\d/.test(model.id)) {
+            definition.api = "openai-responses";
+            definition.baseUrl = `${mantleEndpoint(region)}/openai/v1`;
+          }
+          return definition;
+        })
+        .toSorted((left, right) => left.id.localeCompare(right.id));
+
+      discoveryCache.set(region, { bearerToken, models, fetchedAt: performance.now() });
+      return models;
+    } finally {
+      await release();
+    }
+  } catch (error) {
+    if (params.discoveryMode === "strict") {
+      throw error;
+    }
+    return cached?.bearerToken === bearerToken ? cached.models : [];
+  }
+}
+
+/**
+ * Resolve an implicit Bedrock Mantle provider if authentication is available.
+ *
+ * Detection priority:
+ * 1. AWS_BEARER_TOKEN_BEDROCK env var → use directly
+ * 2. IAM credentials → generate bearer token via `@aws/bedrock-token-generator`
+ * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
+ * - Models discovered from `/v1/models`
+ */
+/** Public resolution keeps advisory null results; strict catalog callers retain acquired empties. */
+export async function resolveImplicitMantleProvider(params: {
+  env?: NodeJS.ProcessEnv;
+  discoveryMode?: "strict";
+  pluginConfig?: { discovery?: MantleDiscoveryConfig };
+}): Promise<ModelProviderConfig | null> {
+  const env = params.env ?? process.env;
+  if (params.pluginConfig?.discovery?.enabled === false) {
+    return null;
+  }
+  const region = resolveMantleRegion(env);
+  const explicitBearerToken = resolveMantleBearerToken(env);
+
+  if (!MANTLE_SUPPORTED_REGIONS.some((supported) => supported === region)) {
+    log.debug?.("Mantle not available in region", { region });
+    return null;
+  }
+
+  const bearerToken = explicitBearerToken ?? (await generateBearerTokenFromIam({ region }));
+
+  if (!bearerToken) {
+    return null;
+  }
+
+  const models = await discoverMantleModels({
+    region,
+    bearerToken,
+    discoveryMode: params.discoveryMode,
+  });
+  if (models.length === 0 && params.discoveryMode !== "strict") {
+    return null;
+  }
+
+  log.debug?.("Mantle provider resolved", { region, modelCount: models.length });
+
+  // Append Claude models available on Mantle's Anthropic Messages endpoint.
+  // Opus 4.7 currently needs the provider-owned bearer-auth path here, but we
+  // keep reasoning off until the underlying Anthropic transport learns Opus 4.7
+  // adaptive thinking semantics.
+  const claudeModels = (
+    [
+      {
+        id: "anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-opus-5" },
+        mediaInput: {
+          image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        },
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+      {
+        id: "anthropic.claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-sonnet-5" },
+        mediaInput: {
+          image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        },
+        cost: resolveMantleSonnet5Cost(),
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      },
+      {
+        id: "anthropic.claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        reasoning: false,
+        cost: {
+          input: 5,
+          output: 25,
+          cacheRead: 0.5,
+          cacheWrite: 6.25,
+        },
+      },
+      {
+        id: "anthropic.claude-mythos-5",
+        name: "Claude Mythos 5",
+        reasoning: true,
+        params: { canonicalModelId: "claude-mythos-5" },
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      },
+      {
+        id: "anthropic.claude-mythos-preview",
+        name: "Claude Mythos Preview",
+        reasoning: true,
+        params: { canonicalModelId: "claude-mythos-preview" },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ] satisfies Array<Omit<ModelDefinitionConfig, "api" | "input" | "contextWindow" | "maxTokens">>
+  ).map((model): ModelDefinitionConfig =>
+    Object.assign(model, {
+      api: "anthropic-messages",
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    } satisfies Partial<ModelDefinitionConfig>),
+  );
+  // Replace generic discovery rows so first-match lookup sees exact Claude metadata.
+  const exactClaudeModelIds = new Set(claudeModels.map((model) => model.id));
+  const allModels = [
+    ...models.filter((model) => !exactClaudeModelIds.has(model.id)),
+    ...claudeModels,
+  ];
+
+  return {
+    baseUrl: `${mantleEndpoint(region)}/v1`,
+    api: "openai-completions",
+    auth: "api-key",
+    apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : MANTLE_IAM_TOKEN_MARKER,
+    models: models.length === 0 ? [] : allModels,
+  };
+}

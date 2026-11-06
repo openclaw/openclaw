@@ -1,0 +1,121 @@
+import type { ActiveMemoryMode } from "./types.js";
+
+const RECALL_INTENT_PATTERNS = [
+  /\b(?:previously|earlier|last time|used to)\b/iu,
+  /\b(?:do|can|could|would)\s+you\s+(?:remember|recall)\b/iu,
+  /\b(?:remember|recall)\s+(?:when|what|which|who|where|why|how)\b/iu,
+  /\b(?:we|you|i)\s+(?:discussed|decided|agreed|said|talked about|chose)\b/iu,
+  /\b(?:previous|earlier|past)\s+(?:decision|conversation|chat|discussion)\b/iu,
+  /\b(?:yesterday|the other day|last (?:week|month|year)|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?|years?)\s+ago)\b/iu,
+  /\b(?:what|which)(?:\s+(?!(?:we|you|i)\b)[\p{L}\p{N}'’_-]+){0,4}\s+did\s+(?:we|you|i)(?![\p{L}\p{N}_])/iu,
+  /\bwhat (?:do|did) i usually\b/iu,
+  /\b(?:what|which|when|where|why|how)\s+(?:did|have|had)\s+(?:we|you|i)\s+(?:decide|choose|discuss|agree|say|mention|talk|use|do)\b/iu,
+  /\b(?:did|have|had)\s+(?:we|you|i)\s+(?:decide|choose|discuss|agree|say|mention|talk)\b/iu,
+  /\b(?:conversation|chat|discussion)s?\s+(?:from|in|during)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|\d{4})\b/iu,
+  /\b(?:summarize|review|find|search)\s+(?:my|our|the)?\s*(?:past|previous|earlier)?\s*(?:conversation|chat|discussion)s?\b/iu,
+  /(?:¿?qué\s+(?:decidimos|hablamos)|\b(?:recuerdas|recordar|anteriormente|ayer)\b|(?<![\p{L}\p{N}_])última vez(?![\p{L}\p{N}_]))/iu,
+  /\bremind\s+(?:me|us)\s+(?:what|which|who|where|why|how)\b/iu,
+];
+
+// Future reminders stay quiet unless a completed past discussion or decision
+// shows that its future topic is itself the subject of retrospective recall.
+const LOCALIZED_RECALL_INTENT_PATTERNS = [
+  {
+    intent:
+      /[还還][记記]得|[记記]得(?=.{0,24}(?:[吗嗎]|[?？]))|(?:[之以]前|上(?:次|回)|曾[经經])[\s,，、:：]{0,3}(?:(?:我们|我們|我|你|您)?(?:(?:聊|[说說]|[谈談]|[讨討][论論]|提)(?:[过過](?=[了的这這那什吗嗎么麼?？。，、\s]|$)|[了的])|[决決]定(?:[过過](?=[了的这這那什吗嗎么麼?？。，、\s]|$)|了)|[记記][录錄](?:[过過](?=[了的这這那什吗嗎么麼?？。，、\s]|$)|了))|(?:的)?(?:聊天|[对對][话話])[记記][录錄]|的[资資]料)/u,
+    future:
+      /明(?:天|日|晚|年|早)|今(?:晚|夜|后|後)|[后後](?:天|日)|下(?:周|週|星期|(?:个|個)?月|次|回|礼拜|禮拜)|以(?:后|後)|之(?:后|後)|将来|將來|未来|未來|稍(?:后|後|晚)|待(?:会|會)|等(?:会|會|下)/u,
+    retrospective:
+      /(?:上(?:次|回|周|週|星期|(?:个|個)?月)|曾[经經]|昨(?:天|日))[\s,，、:：]{0,3}(?:我们|我們|我|你|您)?[\s,，、:：]{0,3}(?:聊|[说說]|[谈談]|[讨討][论論]|提|[决決]定|[记記][录錄])/u,
+  },
+  {
+    intent:
+      /覚えて(?:る|ます|い(?:る|ます))(?!ように|状態に|ことに|ままに)|(?:前回|この前|この間|以前)(?!\s*より).{0,24}(?:話(?:した|していた(?!だ)|してた)|言った|伝えた|相談した|決めた)(?![いくが])/u,
+    future:
+      /明(?:日|晩)|今(?:晩|夜)|明後日|来(?:週|月|年)|次(?:回|の)|あとで|後で|後ほど|後日|あした|あす|今後|これから|将来/u,
+    retrospective:
+      /(?:前回|この前|この間|以前|先週|先月|昨日)(?!\s*より).{0,24}(?:話(?:した|していた(?!だ)|してた)|言った|伝えた|相談した|決めた)(?![いくが])/u,
+  },
+  {
+    intent:
+      /기억나(?:요|지(?:요)?|죠|ㅋ+)?(?![\p{L}\p{N}_])|(?:지난\s*번|저번|예전).{0,24}(?:논의했|(?:이야기|얘기|대화)했|말했|언급했|결정했)/u,
+    future: /내(?:일|년)|오늘\s*(?:밤|저녁|오후)|모레|글피|차주|다음|나중|앞으로|미래|이따|곧/u,
+    retrospective:
+      /(?:지난\s*(?:번|주|달)|저번|예전|어제).{0,24}(?:논의했|(?:이야기|얘기|대화)했|말했|언급했|결정했)/u,
+  },
+  {
+    intent:
+      /(?<!\p{L})(?:помнишь|помните|вспоминаешь|вспоминаете|вспомни(?:те)?)(?!\p{L})|(?<!\p{L})напомни(?:те)?[,\s]+(?:(?:мне|нам)\s+)?(?:что|о\s+ч[её]м|как|когда|где|почему)(?!\p{L})|(?<!\p{L})(?:мы|ты|вы|я|в\s+прошлый\s+раз|раньше|вчера)(?!\p{L}).{0,32}(?<!\p{L})(?:обсуждал[аи]?|решил[аи]?|договорились|договорил(?:ся|ась)|говорил[аи]?|упоминали|упомянул[аи]?|выбрал[аи]?)(?!\p{L})/iu,
+    future:
+      /(?<!\p{L})(?:сегодня|завтра|послезавтра|вечером|потом|позже|будет|буду|будем|будешь|будете|будут)(?!\p{L})|в\s+(?:\d{1,2}(?::\d{2})?|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|на\s+следующей\s+неделе|в\s+следующем\s+месяце|в\s+будущем|через\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять)\s+)?(?:минут|час|день|дня|дней|недел|месяц|год)/iu,
+    retrospective:
+      /(?<!\p{L})(?:вчера|позавчера|раньше|прежде|обсуждал[аи]?|решил[аи]?|договорились|договорил(?:ся|ась)|говорил[аи]?|упоминали|упомянул[аи]?|выбрал[аи]?)(?!\p{L})|в\s+прошлый\s+раз|на\s+прошлой\s+неделе|в\s+прошлом\s+месяце/iu,
+  },
+  {
+    // -amos verbs are syncretic (present = past), so intent requires an
+    // adjacent past marker or recall-question construction; "lembra" needs a
+    // retrospective interrogative (o que/do que/quando/...) rather than a
+    // bare question mark, so "lembra de configurar isso?" stays a reminder.
+    intent:
+      /(?<![\p{L}\p{N}_])(?:(?:lembra|recorda)(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b|(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez|hoje)|a\s+gente\s+(?:discutiu|decidiu|conversou|falou|combinou)|o\s+que\s+(?:decidimos|discutimos|conversamos|falamos|combinamos))(?![\p{L}\p{N}_])/iu,
+    future:
+      /(?<![\p{L}\p{N}_])(?:amanh[ãa]|depois\s+de\s+amanh[ãa]|pr[óo]xima\s+semana|pr[óo]ximo\s+(?:m[êe]s|ano)|(?:semana|m[êe]s|ano)\s+que\s+vem|daqui\s+a|no\s+futuro|em\s+breve|mais\s+tarde|hoje\s+[àa]\s+(?:noite|tarde))(?![\p{L}\p{N}_])/iu,
+    retrospective:
+      /(?<![\p{L}\p{N}_])(?:(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos|discutiu|decidiu|conversou|falou|combinou)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|[úu]ltima\s+vez)|(?:lembra|recorda)(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b.{0,30}(?:decidimos|discutimos|conversamos|falamos|combinamos|investigamos))(?![\p{L}\p{N}_])/iu,
+  },
+  {
+    // French: recall questions (tu te souviens / rappelle-moi ce que…) or
+    // completed-discussion context (on en a parlé, je t'ai dit, hier … décidé).
+    // Plain passé composé ("on a décidé d'aller au cinéma") stays quiet: "on"
+    // usually narrates the user's own life. "Tu te souviens de/d' + X" is left
+    // to the recall model: object spelling can't tell a name ("Roger") from a
+    // remember-to verb, and future cues already suppress reminders.
+    // Unaccented spellings and curly apostrophes (iOS autocorrect) are accepted.
+    intent:
+      /(?<![\p{L}\p{N}_])(?:(?:(?:tu\s+te|vous\s+vous)\s+(?:souviens|souvenez|rappelles?|rappelez)|(?:te|vous)\s+(?:souviens|souvenez|rappelles?|rappelez)-(?:tu|vous)|tu\s+t['’]en\s+(?:souviens|rappelles?)|rappelle(?:z)?-(?:moi|nous)\s+(?:ce\s+qu|de\s+quoi|quand|o[ùu]|comment|pourquoi|quel(?:le)?s?|qui))|(?:qu['’]est-ce\s+qu['’](?:on|nous)\s+(?:a|avait|avons|avions)\s+(?:d[ée]j[àa]\s+)?(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])|(?:on|nous)\s+(?:a|avait|avons|avions)\s+(?:d[ée]j[àa]\s+)?(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])(?:\s+de)?\s+quoi|de\s+quoi\s+(?:on\s+(?:a|avait)|avons-nous|avions-nous)\s+(?:d[ée]j[àa]\s+)?(?:parl[ée]|discut[ée])|qu['’](?:avons|avions)-nous\s+(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_]))|(?:(?:on|nous)\s+en\s+(?:a|avait|avons|avions)\s+(?:d[ée]j[àa]\s+)?(?:parl[ée]|discut[ée])|(?:on\s+a|nous\s+avons)\s+d[ée]j[àa]\s+(?:parl[ée]|discut[ée])|comme\s+(?:on|nous)\s+(?:l['’]|en\s+)?(?:avait|avions)\s+(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])|je\s+(?:te\s+l['’]|t['’])(?:ai|avais)\s+(?:d[ée]j[àa]\s+)?(?:dit|parl[ée]|racont[ée]|mentionn[ée]|expliqu[ée])|tu\s+(?:me\s+l['’]|m['’])(?:as|avais)\s+(?:d[ée]j[àa]\s+)?(?:dit|conseill[ée]|sugg[ée]r[ée]|recommand[ée]|propos[ée]|expliqu[ée]|racont[ée])|la\s+derni[èe]re\s+fois\s+(?:qu['’]on|que\s+nous|que\s+tu\s+m['’]|que\s+je\s+t['’]))|(?:(?<![\p{L}\p{N}_])(?:hier|avant-hier|la\s+derni[èe]re\s+fois|l['’]autre\s+(?:jour|fois|soir)|la\s+semaine\s+derni[èe]re|le\s+mois\s+dernier|il\s+y\s+a\s+(?:\d+|une?|deux|trois|quelques|plusieurs)\s+(?:jours?|semaines?|mois|ans|ann[ée]es?))(?![\p{L}\p{N}_]).{0,30}(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])|(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_]).{0,30}(?<![\p{L}\p{N}_])(?:hier|avant-hier|la\s+derni[èe]re\s+fois|l['’]autre\s+(?:jour|fois|soir)|la\s+semaine\s+derni[èe]re|le\s+mois\s+dernier|il\s+y\s+a\s+(?:\d+|une?|deux|trois|quelques|plusieurs)\s+(?:jours?|semaines?|mois|ans|ann[ée]es?))(?![\p{L}\p{N}_])))(?![\p{L}\p{N}_])/iu,
+    future:
+      /(?<![\p{L}\p{N}_])(?:(?:demain|apr[èe]s-demain|ce\s+soir|plus\s+tard|bient[ôo]t|la\s+semaine\s+prochaine|le\s+mois\s+prochain|l['’]an(?:n[ée]e)?\s+prochaine?|dans\s+(?:\d+|une?|deux|trois|quelques)\s+(?:minutes?|heures?|jours?|semaines?|mois|ans)|[àa]\s+l['’]avenir))(?![\p{L}\p{N}_])/iu,
+    retrospective:
+      /(?<![\p{L}\p{N}_])(?:(?:qu['’]est-ce\s+qu['’](?:on|nous)\s+(?:a|avait|avons|avions)\s+(?:d[ée]j[àa]\s+)?(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])|(?:on|nous)\s+(?:a|avait|avons|avions)\s+(?:d[ée]j[àa]\s+)?(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])(?:\s+de)?\s+quoi|de\s+quoi\s+(?:on\s+(?:a|avait)|avons-nous|avions-nous)\s+(?:d[ée]j[àa]\s+)?(?:parl[ée]|discut[ée])|qu['’](?:avons|avions)-nous\s+(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_]))|(?:(?:on|nous)\s+en\s+(?:a|avait|avons|avions)\s+(?:d[ée]j[àa]\s+)?(?:parl[ée]|discut[ée])|(?:on\s+a|nous\s+avons)\s+d[ée]j[àa]\s+(?:parl[ée]|discut[ée])|comme\s+(?:on|nous)\s+(?:l['’]|en\s+)?(?:avait|avions)\s+(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])|je\s+(?:te\s+l['’]|t['’])(?:ai|avais)\s+(?:d[ée]j[àa]\s+)?(?:dit|parl[ée]|racont[ée]|mentionn[ée]|expliqu[ée])|tu\s+(?:me\s+l['’]|m['’])(?:as|avais)\s+(?:d[ée]j[àa]\s+)?(?:dit|conseill[ée]|sugg[ée]r[ée]|recommand[ée]|propos[ée]|expliqu[ée]|racont[ée])|la\s+derni[èe]re\s+fois\s+(?:qu['’]on|que\s+nous|que\s+tu\s+m['’]|que\s+je\s+t['’]))|(?:(?<![\p{L}\p{N}_])(?:hier|avant-hier|la\s+derni[èe]re\s+fois|l['’]autre\s+(?:jour|fois|soir)|la\s+semaine\s+derni[èe]re|le\s+mois\s+dernier|il\s+y\s+a\s+(?:\d+|une?|deux|trois|quelques|plusieurs)\s+(?:jours?|semaines?|mois|ans|ann[ée]es?))(?![\p{L}\p{N}_]).{0,30}(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_])|(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_]).{0,30}(?<![\p{L}\p{N}_])(?:hier|avant-hier|la\s+derni[èe]re\s+fois|l['’]autre\s+(?:jour|fois|soir)|la\s+semaine\s+derni[èe]re|le\s+mois\s+dernier|il\s+y\s+a\s+(?:\d+|une?|deux|trois|quelques|plusieurs)\s+(?:jours?|semaines?|mois|ans|ann[ée]es?))(?![\p{L}\p{N}_]))|(?:(?:tu\s+te|vous\s+vous)\s+(?:souviens|souvenez|rappelles?|rappelez)|(?:te|vous)\s+(?:souviens|souvenez|rappelles?|rappelez)-(?:tu|vous)|tu\s+t['’]en\s+(?:souviens|rappelles?)|rappelle(?:z)?-(?:moi|nous)\s+(?:ce\s+qu|de\s+quoi|quand|o[ùu]|comment|pourquoi|quel(?:le)?s?|qui)).{0,40}(?:on\s+a|nous\s+avons|on\s+avait|nous\s+avions|j['’]ai|tu\s+as|je\s+t['’]ai|tu\s+m['’]as)\s+(?:d[ée]j[àa]\s+)?(?<![\p{L}\p{N}_])(?:parl[ée]|discut[ée]|d[ée]cid[ée]|dit|convenu|choisi)(?![\p{L}\p{N}_]))(?![\p{L}\p{N}_])/iu,
+  },
+  {
+    // German recall questions; completed discussions can refer to future plans.
+    intent:
+      /(?<![\p{L}\p{N}_])(?:wei(?:ß|ss)t\s+du\s+(?:(?:das|es)\s+)?noch(?!\s+(?:mehr|etwas|anderes|weiteres)\b)|erinnerst\s+du\s+dich|erinnern\s+Sie\s+sich|(?:kannst\s+du\s+dich|k(?:ö|oe)nnen\s+Sie\s+sich)\s+(?:noch\s+)?(?:daran\s+)?erinnern|wie\s+(?:war|hie(?:ß|ss))\s+(?:(?:das|der|die|es)\s+[^.!?]{0,40}?)?noch\s*(?:ein)?mal|(?:was|wann|wo|wie|wer|welche[nmrs]?|wor(?:ü|ue)ber|wovon|woran|warum)\s+(?:hab(?:e|en|t)?|(?:hat|woll|soll)te(?:n|st|t)?|hast)\s+(?:wir|ich|du|ihr|Sie)\b.{0,60}?(?<![\p{L}\p{N}_])(?:besprochen|gesprochen|geredet|entschieden|beschlossen|ausgemacht|vereinbart|geplant|gesagt|erz(?:ä|ae)hlt|erw(?:ä|ae)hnt|diskutiert|(?:vor)?gestern|vorhin|neulich|damals|zuletzt|letzte[nrs]?\s+(?:Woche|Wochenende|Monat|Jahr|Mal)))(?![\p{L}\p{N}_])/iu,
+    future:
+      /(?<![\p{L}\p{N}_])(?:(?<!heute\s|gestern\s|vorgestern\s)morgen|(?:ü|ue)bermorgen|n(?:ä|ae)chste[nrs]?\s+(?:Woche|Wochenende|Monat|Jahr|Mal)|sp(?:ä|ae)ter|nachher|demn(?:ä|ae)chst|bald|in\s+Zukunft|heute\s+(?:Abend|Nacht|Nachmittag)|in\s+(?:\d+|ein(?:e[rm]?)?|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun|zehn|ein\s+paar|einigen|mehreren)\s+(?:Minuten?|Stunden?|Tag(?:e|en)?|Wochen?|Monat(?:e|en)?|Jahr(?:e|en)?))(?![\p{L}\p{N}_])/iu,
+    retrospective:
+      /(?<![\p{L}\p{N}_])(?:(?:haben|hatten|hab|habe|hast|habt|hatte|hattest|hattet)\s+(?:wir|ich|du|ihr|Sie)\b.{0,60}?(?<![\p{L}\p{N}_])(?:besprochen|gesprochen|geredet|entschieden|beschlossen|ausgemacht|vereinbart|geplant|gesagt|erz(?:ä|ae)hlt|erw(?:ä|ae)hnt|diskutiert)|(?:wir|ich|du|ihr|Sie)\b.{0,60}?(?<![\p{L}\p{N}_])(?:besprochen|gesprochen|geredet|entschieden|beschlossen|ausgemacht|vereinbart|geplant|gesagt|erz(?:ä|ae)hlt|erw(?:ä|ae)hnt|diskutiert)\s+(?:haben|hatten|hab|habe|hast|habt|hatte|hattest|hattet))(?![\p{L}\p{N}_])/iu,
+  },
+];
+
+export function hasRecallIntent(message: string): boolean {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  return (
+    normalized.length > 0 &&
+    (RECALL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+      LOCALIZED_RECALL_INTENT_PATTERNS.some(
+        ({ intent, future, retrospective }) =>
+          intent.test(normalized) && (!future.test(normalized) || retrospective.test(normalized)),
+      ))
+  );
+}
+
+type RecallEscalationDecision = "recall" | "mode-off" | "strong-lane-one-hit" | "no-recall-intent";
+
+export function resolveRecallEscalationDecision(params: {
+  mode: ActiveMemoryMode;
+  message: string;
+  hasStrongLaneOneHit: boolean;
+}): RecallEscalationDecision {
+  if (params.mode === "off") {
+    return "mode-off";
+  }
+  if (params.mode === "always") {
+    return "recall";
+  }
+  if (params.hasStrongLaneOneHit) {
+    return "strong-lane-one-hit";
+  }
+  return hasRecallIntent(params.message) ? "recall" : "no-recall-intent";
+}

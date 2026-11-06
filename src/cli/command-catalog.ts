@@ -1,0 +1,665 @@
+// Declarative CLI command catalog for startup policy and fast-path routing.
+import { hasFlag } from "./argv.js";
+import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
+
+// These commands own their state boundary; bootstrap must not observe or initialize it first.
+const PASSIVE_STARTUP_POLICY = {
+  configGuard: "skip",
+  loadPlugins: "never",
+  ensureCliPath: false,
+  networkProxy: "bypass",
+} satisfies Partial<CliCommandPathPolicy>;
+
+function hasCliOption(argv: readonly string[], name: string): boolean {
+  for (const arg of argv.slice(2)) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === name || arg.startsWith(`${name}=`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  // Gateway model runs need only non-observing client config validation.
+  configGuard: ({ options }) =>
+    options?.gateway === true && options.local !== true ? "validate" : "run",
+};
+
+const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  configGuard: ({ options }) =>
+    options?.expectedRuntimePin !== undefined || options?.restoreServiceCli !== undefined
+      ? "defer"
+      : "run",
+  networkProxy: "bypass",
+};
+
+/** Command path registry used before Commander registration has loaded all plugins. */
+export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
+  {
+    commandPath: ["setup"],
+    policy: {
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
+      loadPlugins: "never",
+      ensureCliPath: false,
+    },
+  },
+  {
+    commandPath: ["qa"],
+    // Private QA commands create or inspect repo-owned fixtures. They must not
+    // read, validate, migrate, or inherit proxy policy from operator state.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["database"],
+    // Release-local database inspection must not observe default state or load runtime policy.
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["crestodian"], // hidden alias
+    policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
+  },
+  {
+    commandPath: ["agent"],
+    policy: {
+      configGuard: ({ argv }) => (hasFlag(argv, "--local") ? "run" : "skip"),
+      loadPlugins: ({ argv }) => hasFlag(argv, "--local"),
+      pluginRegistry: { scope: "all" },
+      networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
+    },
+  },
+  {
+    commandPath: ["agent", "exec"],
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      hideBanner: true,
+      networkProxy: "default",
+    },
+  },
+  { commandPath: ["infer", "model", "run"], policy: modelRunStartupPolicy },
+  { commandPath: ["capability", "model", "run"], policy: modelRunStartupPolicy },
+  {
+    commandPath: ["transcripts"],
+    // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
+    policy: { ownsProtocolStdout: true, hideBanner: true },
+  },
+  // The message runner selects config preparation from the action's execution mode.
+  { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
+  { commandPath: ["docs"], policy: { configGuard: "skip" } },
+  // Destructive maintenance owns a validity-aware, non-observing config read.
+  // Startup migrations would mutate the SQLite state these commands may refuse to remove.
+  { commandPath: ["reset"], policy: { configGuard: "skip" } },
+  { commandPath: ["uninstall"], policy: { configGuard: "skip" } },
+  {
+    commandPath: ["channels"],
+    policy: {
+      loadPlugins: "always",
+      pluginRegistry: { scope: "configured-channels" },
+    },
+  },
+  { commandPath: ["directory"], policy: { loadPlugins: "always" } },
+  {
+    commandPath: ["sandbox"],
+    policy: {
+      loadPlugins: ({ argv, commandPath }) =>
+        !(
+          (commandPath[1] === "list" || commandPath[1] === "recreate") &&
+          hasFlag(argv, "--browser")
+        ),
+      pluginRegistry: { scope: "sandbox-backends" },
+    },
+  },
+  ...["list", "recreate"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["sandbox", subcommand],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  })),
+  { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
+  {
+    commandPath: ["agents"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    route: { id: "agents-list" },
+  },
+  {
+    commandPath: ["agents", "bind"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["agents", "bindings"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  ...[
+    ["agents", "add"],
+    ["agents", "team", "create"],
+  ].map((commandPath): CliCommandCatalogEntry => ({
+    commandPath,
+    exact: true,
+    policy: { configGuard: "defer", loadPlugins: "never" },
+  })),
+  ...["unbind", "set-identity", "delete"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["agents", subcommand],
+    exact: true,
+    policy: { loadPlugins: "never" },
+  })),
+  {
+    commandPath: ["configure"],
+    policy: { configGuard: "skip", stateStoreGuard: "run", loadPlugins: "never" },
+  },
+  {
+    commandPath: ["config"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  ...["create", "validate", "build", "dev"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["templates", subcommand],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  })),
+  {
+    commandPath: ["migrate"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  ...(["status", "health"] as const).map((command): CliCommandCatalogEntry => ({
+    commandPath: [command],
+    policy: {
+      ...PASSIVE_STARTUP_POLICY,
+      pluginRegistry: { scope: "channels" },
+    },
+    route: { id: command },
+  })),
+  {
+    commandPath: ["telemetry"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["audit"],
+    policy: PASSIVE_STARTUP_POLICY,
+  },
+  {
+    commandPath: ["gateway"],
+    policy: {
+      networkProxy: ({ commandPath }) =>
+        commandPath.length === 1 || commandPath[1] === "run" ? "default" : "bypass",
+    },
+  },
+  {
+    commandPath: ["gateway", "status"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
+    route: { id: "gateway-status" },
+  },
+  {
+    commandPath: ["gateway", "auth-token"],
+    exact: true,
+    // The command owns a non-observing config read; exec SecretRefs still need the CLI PATH.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["gateway", "recover-lock"],
+    exact: true,
+    // Recovery must reach the lock before config preflight can request state ownership.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["gateway", "call"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+  },
+  ...["suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["gateway", subcommand],
+    exact: true,
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+  })),
+  {
+    commandPath: ["gateway", "diagnostics"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "health"],
+    exact: true,
+    // The routed JSON command owns its config read; running the startup guard first
+    // duplicates config/state initialization before the health socket can open.
+    policy: { configGuard: "skip", networkProxy: "bypass" },
+    route: { id: "gateway-health" },
+  },
+  { commandPath: ["gateway", "install"], exact: true, policy: serviceInstallStartupPolicy },
+  ...["probe", "start"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["gateway", subcommand],
+    exact: true,
+    policy: { networkProxy: "bypass" },
+  })),
+  ...["stability", "stop", "restart", "uninstall", "usage-cost"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["gateway", subcommand],
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
+  {
+    commandPath: ["sessions"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      ensureCliPath: false,
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    },
+    route: { id: "sessions" },
+  },
+  {
+    commandPath: ["agents", "list"],
+    // Output combines config with shared-state provenance and optional read-only
+    // channel metadata, so the route should not preload bundled plugin runtimes.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    route: { id: "agents-list" },
+  },
+  {
+    commandPath: ["config", "file"],
+    exact: true,
+    // A path query must work before config validation and must not initialize state.
+    policy: {
+      ...PASSIVE_STARTUP_POLICY,
+      ownsProtocolStdout: true,
+    },
+  },
+  {
+    commandPath: ["config", "get"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+    route: { id: "config-get" },
+  },
+  {
+    commandPath: ["config", "unset"],
+    exact: true,
+    policy: {
+      configGuard: "defer",
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+    route: { id: "config-unset" },
+  },
+  ...["set", "patch"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["config", subcommand],
+    exact: true,
+    // The command acquires state ownership before config validation can write ancillary state.
+    policy: { configGuard: "defer", loadPlugins: "never", networkProxy: "bypass" },
+  })),
+  {
+    commandPath: ["models"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+    route: { id: "models-status" },
+  },
+  // Default-policy children must remain distinct from the passive parent action.
+  ...["refresh", "set", "set-image", "aliases", "fallbacks", "image-fallbacks", "scan"].map(
+    (subcommand): CliCommandCatalogEntry => ({ commandPath: ["models", subcommand] }),
+  ),
+  { commandPath: ["models", "auth"], policy: { stateStoreGuard: "run" } },
+  {
+    commandPath: ["models", "accounts"],
+    // Personal credentials belong to the selected Gateway, not local model state.
+    policy: PASSIVE_STARTUP_POLICY,
+  },
+  {
+    commandPath: ["models", "list"],
+    exact: true,
+    policy: { configGuard: "skip", ensureCliPath: false, networkProxy: "bypass" },
+    route: { id: "models-list" },
+  },
+  {
+    commandPath: ["models", "status"],
+    exact: true,
+    policy: {
+      ensureCliPath: false,
+      configGuard: "skip",
+      loadPlugins: "never",
+      networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
+    },
+    route: { id: "models-status" },
+  },
+  // These unregistered roots are reserved so plugin registration cannot claim them;
+  // the catalog entries preserve their startup policy.
+  ...["tool", "tools"].map((command): CliCommandCatalogEntry => ({
+    commandPath: [command],
+    policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
+  })),
+  { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["acp"],
+    exact: true,
+    policy: { ownsProtocolStdout: true },
+  },
+  { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["approvals", "pending"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  // automations is a commander alias for cron; argv-derived command paths keep the typed token.
+  {
+    commandPath: ["automations"],
+    policy: { configGuard: "skip", networkProxy: "bypass" },
+  },
+  { commandPath: ["backup"], policy: { configGuard: "skip", networkProxy: "bypass" } },
+  // Local TUI aliases run the embedded agent in this process, like `agent --local`.
+  { commandPath: ["chat"], policy: { networkProxy: "default" } },
+  { commandPath: ["config"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
+  { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["daemon", "install"], exact: true, policy: serviceInstallStartupPolicy },
+  ...["status", "stop", "restart", "uninstall"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["daemon", subcommand],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  })),
+  {
+    commandPath: ["devices"],
+    // Every devices subcommand either dispatches to the Gateway or uses the
+    // explicit local pairing fallback. None should observe canonical state
+    // before the Gateway-owned mutation runs.
+    policy: { configGuard: "validate", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["worktrees"],
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["doctor"],
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      // Local maintenance must acquire ownership before config-health observation
+      // can open the canonical database.
+      networkProxy: ({ argv }) =>
+        hasCliOption(argv, "--state-sqlite") || hasCliOption(argv, "--client-credentials")
+          ? "bypass"
+          : "default",
+    },
+  },
+  {
+    commandPath: ["triage"],
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
+  ...[["hooks"], ["hooks", "list"], ["hooks", "info"], ["hooks", "check"]].map(
+    (commandPath): CliCommandCatalogEntry => ({
+      commandPath,
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
+  { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["mcp", "serve"],
+    exact: true,
+    policy: { ownsProtocolStdout: true },
+  },
+  {
+    commandPath: ["browser", "extension"],
+    // Desktop browser helpers validate config without Gateway Doctor or state migrations.
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["browser", "extension", "native-host"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  },
+  {
+    commandPath: ["node"],
+    policy: { networkProxy: "bypass" },
+  },
+  // Controllers can target an older live node; its process owns state preparation.
+  ...["install", "uninstall", "start", "stop", "restart"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["node", subcommand],
+      exact: true,
+      policy: { configGuard: "validate", loadPlugins: "never" },
+    }),
+  ),
+  // Remote pairing verification owns a read-only identity lookup, including before its action.
+  { commandPath: ["node", "identity"], exact: true, policy: PASSIVE_STARTUP_POLICY },
+  { commandPath: ["node", "status"], exact: true, policy: PASSIVE_STARTUP_POLICY },
+  {
+    commandPath: ["node", "worker"],
+    exact: true,
+    policy: {
+      // The app worker owns node startup, not Gateway channel schemas or Doctor preflight.
+      configGuard: "validate",
+      hideBanner: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    },
+  },
+  {
+    commandPath: ["node", "run"],
+    exact: true,
+    policy: { networkProxy: "default" },
+  },
+  {
+    commandPath: ["connect"],
+    exact: true,
+    policy: { networkProxy: "default" },
+  },
+  {
+    commandPath: ["worker"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      hideBanner: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    },
+  },
+  { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["nodes", "status"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["nodes", "list"], exact: true, policy: { configGuard: "skip" } },
+  // Built-in node commands are Gateway RPCs. Keep their CLI processes off the
+  // writable canonical state database, including commands whose RPC mutates
+  // Gateway-owned pairing state. Bare and plugin-provided node commands retain
+  // the config guard because plugin discovery still needs validated config.
+  ...[
+    "describe",
+    "pending",
+    "approve",
+    "reject",
+    "remove",
+    "rename",
+    "invoke",
+    "notify",
+    "push",
+    "camera",
+    "screen",
+    "location",
+  ].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["nodes", subcommand],
+    policy: { configGuard: "validate" },
+  })),
+  { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["proxy"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["qr"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["reset"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["completion"],
+    policy: {
+      configGuard: "skip",
+      hideBanner: true,
+      networkProxy: "bypass",
+    },
+  },
+  { commandPath: ["secrets"], policy: { configGuard: "skip", networkProxy: "bypass" } },
+  { commandPath: ["security"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["system"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["resume"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["terminal"], policy: { networkProxy: "default" } },
+  {
+    commandPath: ["tui"],
+    policy: { networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass") },
+  },
+  { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
+  // Update commands retain their own config, state, and protocol admission boundaries.
+  ...["migrate", "restore", "finish"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  })),
+  {
+    commandPath: ["update", "adopt-immutable"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["update", "cleanup"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["update"],
+    policy: { configGuard: "skip", hideBanner: true },
+  },
+  ...["admit", "preflight"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
+    // Malformed internal argv must keep protocol stdout and read-only startup policy too.
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  })),
+  {
+    commandPath: ["config", "validate"],
+    exact: true,
+    policy: { configGuard: "skip", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["config", "schema"],
+    exact: true,
+    policy: { configGuard: "skip", ownsProtocolStdout: true, networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["plugins", "update"],
+    exact: true,
+    policy: { hideBanner: true },
+  },
+  {
+    commandPath: ["plugins", "list"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+    route: { id: "plugins-list" },
+  },
+  {
+    commandPath: ["plugins", "lint"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+  },
+  // Authoring commands operate on a target package, not operator config, and a
+  // scaffolded plugin build can run through an older CLI; the startup guard
+  // would abort them on a host config they never read.
+  ...["build", "validate", "init"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["plugins", subcommand],
+    exact: true,
+    policy: { configGuard: "skip" },
+  })),
+  {
+    commandPath: ["onboard"],
+    exact: true,
+    policy: {
+      loadPlugins: "never",
+      configGuard: ({ argv, options }) =>
+        options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "run",
+    },
+  },
+  ...[["recommendations"], ["recommendations", "acknowledge"], ["recommendations", "refresh"]].map(
+    (path): CliCommandCatalogEntry => ({
+      commandPath: ["onboard", ...path],
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
+  {
+    commandPath: ["channels", "add"],
+    exact: true,
+    policy: { stateStoreGuard: "run", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  { commandPath: ["channels", "login"], exact: true, policy: { stateStoreGuard: "run" } },
+  {
+    commandPath: ["channels", "logs"],
+    exact: true,
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  ...["remove", "resolve"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["channels", subcommand],
+    exact: true,
+    policy: {
+      pluginRegistry: { scope: "configured-channels" },
+      networkProxy: "bypass",
+    },
+  })),
+  {
+    commandPath: ["channels", "status"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      networkProxy: ({ argv }) => (hasFlag(argv, "--probe") ? "default" : "bypass"),
+    },
+    route: { id: "channels-status" },
+  },
+  {
+    commandPath: ["channels", "list"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    route: { id: "channels-list" },
+  },
+  ...[["skills"], ["skills", "check"], ["skills", "info"], ["skills", "list"]].map(
+    (commandPath): CliCommandCatalogEntry => ({
+      commandPath,
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
+  { commandPath: ["skills", "install"], exact: true },
+  {
+    commandPath: ["skills", "search"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
+  {
+    commandPath: ["memory"],
+    // The action owns state admission; pre-action validation must not observe config health.
+    policy: { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+  },
+  {
+    commandPath: ["memory", "search"],
+    exact: true,
+    policy: { configGuard: "skip" },
+  },
+  {
+    commandPath: ["memory", "status"],
+    exact: true,
+    policy: {
+      configGuard: ({ argv }) =>
+        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "validate" : "skip",
+    },
+  },
+  { commandPath: ["skills", "update"], exact: true },
+  { commandPath: ["skills", "verify"], exact: true },
+];

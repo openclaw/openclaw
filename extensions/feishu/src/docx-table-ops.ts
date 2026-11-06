@@ -1,0 +1,219 @@
+import type * as Lark from "@larksuiteoapi/node-sdk";
+import { assertFeishuApiSuccess } from "./api-response.js";
+import type { FeishuDocParams } from "./doc-schema.js";
+import type { FeishuDocxBlock } from "./docx-types.js";
+
+const MIN_COLUMN_WIDTH = 50; // Feishu API minimum
+const MAX_COLUMN_WIDTH = 400; // Reasonable maximum for readability
+const DEFAULT_TABLE_WIDTH = 730; // Approximate Feishu page content width
+
+function normalizeChildBlockIds(children: string[] | string | undefined): string[] {
+  if (Array.isArray(children)) {
+    return children;
+  }
+  return typeof children === "string" ? [children] : [];
+}
+
+function calculateAdaptiveColumnWidths(
+  tableBlock: FeishuDocxBlock,
+  getBlockMap: () => ReadonlyMap<string, FeishuDocxBlock>,
+): number[] {
+  if (!tableBlock.table?.property) {
+    return [];
+  }
+
+  const { row_size, column_size, column_width: originalWidths } = tableBlock.table.property;
+  if (!row_size || !column_size) {
+    return [];
+  }
+
+  const totalWidth =
+    originalWidths && originalWidths.length > 0
+      ? originalWidths.reduce((a: number, b: number) => a + b, 0)
+      : DEFAULT_TABLE_WIDTH;
+  const cellIds = normalizeChildBlockIds(tableBlock.children);
+
+  const blockMap = getBlockMap();
+
+  function getCellText(cellId: string): string {
+    return normalizeChildBlockIds(blockMap.get(cellId)?.children)
+      .flatMap((childId) => blockMap.get(childId)?.text?.elements ?? [])
+      .map((element) => element.text_run?.content ?? "")
+      .join("");
+  }
+
+  // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
+  function getWeightedLength(text: string): number {
+    let length = 0;
+    for (const character of text) {
+      length += character.charCodeAt(0) > 255 ? 2 : 1;
+    }
+    return length;
+  }
+
+  const maxLengths = Array.from({ length: column_size }, () => 0);
+
+  for (const [index, cellId] of cellIds.slice(0, row_size * column_size).entries()) {
+    if (cellId) {
+      const col = index % column_size;
+      maxLengths[col] = Math.max(maxLengths[col] ?? 0, getWeightedLength(getCellText(cellId)));
+    }
+  }
+
+  // Handle empty table: distribute width equally, clamped to [MIN, MAX] so
+  // wide tables (e.g. 15+ columns) don't produce sub-50 widths that Feishu
+  // rejects as invalid column_width values.
+  const totalLength = maxLengths.reduce((a, b) => a + b, 0);
+  if (totalLength === 0) {
+    const equalWidth = Math.max(
+      MIN_COLUMN_WIDTH,
+      Math.min(MAX_COLUMN_WIDTH, Math.floor(totalWidth / column_size)),
+    );
+    return Array.from({ length: column_size }, () => equalWidth);
+  }
+
+  const widths = maxLengths.map((length) =>
+    Math.max(
+      MIN_COLUMN_WIDTH,
+      Math.min(MAX_COLUMN_WIDTH, Math.round((length / totalLength) * totalWidth)),
+    ),
+  );
+
+  let remaining = totalWidth - widths.reduce((a, b) => a + b, 0);
+  while (remaining > 0) {
+    const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
+    if (growable.length === 0) {
+      break;
+    }
+
+    const perColumn = Math.floor(remaining / growable.length);
+    if (perColumn === 0) {
+      break;
+    }
+
+    for (const i of growable) {
+      const width = widths[i];
+      if (width === undefined) {
+        continue;
+      }
+      const add = Math.min(perColumn, MAX_COLUMN_WIDTH - width);
+      widths[i] = width + add;
+      remaining -= add;
+    }
+  }
+
+  return widths;
+}
+
+// Descendant creation rejects parent/merge metadata and needs normalized cell children.
+export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxBlock[] {
+  // Each batch owns its lookup; later conversions may reuse IDs with different content.
+  let blockMap: Map<string, FeishuDocxBlock> | undefined;
+  const getBlockMap = () => {
+    if (!blockMap) {
+      blockMap = new Map();
+      for (const block of blocks) {
+        if (block.block_id) {
+          blockMap.set(block.block_id, block);
+        }
+      }
+    }
+    return blockMap;
+  };
+  return blocks.map((block) => {
+    const cleanBlock = { ...block };
+    delete cleanBlock.parent_id;
+
+    // Fix: Convert API sometimes returns children as string for TableCell
+    if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
+      cleanBlock.children = [cleanBlock.children];
+    }
+
+    if (cleanBlock.block_type === 31 && cleanBlock.table) {
+      const adaptiveWidths = block.block_id
+        ? calculateAdaptiveColumnWidths(block, getBlockMap)
+        : undefined;
+      const { row_size, column_size } = cleanBlock.table.property || {};
+      cleanBlock.table = {
+        property: {
+          row_size,
+          column_size,
+          ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
+        },
+      };
+    }
+
+    return cleanBlock;
+  });
+}
+
+type TableAction = Extract<
+  FeishuDocParams,
+  {
+    action:
+      | "insert_table_row"
+      | "insert_table_column"
+      | "delete_table_rows"
+      | "delete_table_columns"
+      | "merge_table_cells";
+  }
+>;
+type TablePatchData = NonNullable<
+  NonNullable<Parameters<Lark.Client["docx"]["documentBlock"]["patch"]>[0]>["data"]
+>;
+
+export async function patchTable(client: Lark.Client, params: TableAction) {
+  const { doc_token, block_id } = params;
+  let data: TablePatchData;
+  const counts: { rows_deleted?: number; columns_deleted?: number } = {};
+  // Capture result counts before the request; defaults apply only to undefined inputs.
+  switch (params.action) {
+    case "insert_table_row": {
+      const { row_index = -1 } = params;
+      data = { insert_table_row: { row_index } };
+      break;
+    }
+    case "insert_table_column": {
+      const { column_index = -1 } = params;
+      data = { insert_table_column: { column_index } };
+      break;
+    }
+    case "delete_table_rows": {
+      const { row_start, row_count = 1 } = params;
+      data = {
+        delete_table_rows: { row_start_index: row_start, row_end_index: row_start + row_count },
+      };
+      counts.rows_deleted = row_count;
+      break;
+    }
+    case "delete_table_columns": {
+      const { column_start, column_count = 1 } = params;
+      data = {
+        delete_table_columns: {
+          column_start_index: column_start,
+          column_end_index: column_start + column_count,
+        },
+      };
+      counts.columns_deleted = column_count;
+      break;
+    }
+    case "merge_table_cells": {
+      const { row_start, row_end, column_start, column_end } = params;
+      data = {
+        merge_table_cells: {
+          row_start_index: row_start,
+          row_end_index: row_end,
+          column_start_index: column_start,
+          column_end_index: column_end,
+        },
+      };
+      break;
+    }
+  }
+  const res = await client.docx.documentBlock.patch({
+    path: { document_id: doc_token, block_id },
+    data,
+  });
+  assertFeishuApiSuccess(res);
+  return { success: true, ...counts, block: res.data?.block };
+}

@@ -1,0 +1,678 @@
+import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isPlainObject } from "../infra/plain-object.js";
+import {
+  containsEnvVarReference,
+  resolveConfigEnvVars,
+  scanEnvTemplateTokens,
+  type EnvTemplateToken,
+} from "./env-substitution.js";
+
+function containsAuthoredEnvTemplate(value: unknown, matches: (value: string) => boolean): boolean {
+  if (typeof value === "string") {
+    return matches(value);
+  }
+  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : [];
+  return children.some((item) => containsAuthoredEnvTemplate(item, matches));
+}
+
+function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
+  return containsAuthoredEnvTemplate(value, containsEnvVarReference);
+}
+
+function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
+  return containsAuthoredEnvTemplate(value, (text) =>
+    scanEnvTemplateTokens(text).some((ref) => ref.kind === "escaped"),
+  );
+}
+
+function addEnvRefCounts(
+  countsByName: Map<string, Map<string, number>>,
+  value: string,
+  kind: EnvTemplateToken["kind"],
+  path: string[],
+): void {
+  for (const ref of scanEnvTemplateTokens(value)) {
+    if (ref.kind === kind) {
+      const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
+      const pathKey = JSON.stringify(path);
+      pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
+      countsByName.set(ref.name, pathCounts);
+    }
+  }
+}
+
+/**
+ * Keyed by bare variable name: `${VAR}` and `${VAR:-x}` are one identity, so changing
+ * an authored `$${VAR}` literal into either active reference is rejected.
+ */
+function countAuthoredEnvRefsByPath(
+  value: unknown,
+  kind: EnvTemplateToken["kind"],
+): Map<string, Map<string, number>> {
+  const countsByName = new Map<string, Map<string, number>>();
+  const visit = (item: unknown, path: string[]) => {
+    if (typeof item === "string") {
+      addEnvRefCounts(countsByName, item, kind, path);
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach((child, index) => visit(child, [...path, String(index)]));
+      return;
+    }
+    if (isPlainObject(item)) {
+      Object.entries(item).forEach(([key, child]) => visit(child, [...path, key]));
+    }
+  };
+  visit(value, []);
+  return countsByName;
+}
+
+function containsUnaccountedActiveEscapedEnvRef(
+  incoming: unknown,
+  escapedParsed: unknown,
+  matchedIncoming: unknown,
+  matchedParsed: unknown,
+  matchedResolved: unknown,
+  explicitSetPaths?: readonly (readonly string[])[],
+): boolean {
+  const escapedCounts = countAuthoredEnvRefsByPath(escapedParsed, "escaped");
+  const incomingActiveCounts = countAuthoredEnvRefsByPath(incoming, "substitution");
+  const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
+  const matchedActiveCounts = new Map<string, Map<string, number>>();
+  const visit = (
+    incomingItem: unknown,
+    parsedItem: unknown,
+    resolvedItem: unknown,
+    path: string[],
+  ) => {
+    if (typeof incomingItem === "string" && typeof parsedItem === "string") {
+      if (!isDeepStrictEqual(incomingItem, resolvedItem)) {
+        return;
+      }
+      addEnvRefCounts(matchedActiveCounts, parsedItem, "substitution", path);
+      return;
+    }
+    if (Array.isArray(incomingItem) && Array.isArray(parsedItem) && Array.isArray(resolvedItem)) {
+      parsedItem.forEach((child, index) =>
+        visit(incomingItem[index], child, resolvedItem[index], [...path, String(index)]),
+      );
+      return;
+    }
+    if (isPlainObject(incomingItem) && isPlainObject(parsedItem) && isPlainObject(resolvedItem)) {
+      Object.entries(parsedItem).forEach(([key, child]) =>
+        visit(incomingItem[key], child, resolvedItem[key], [...path, key]),
+      );
+    }
+  };
+  visit(matchedIncoming, matchedParsed, matchedResolved, []);
+  const matchedEscapedCounts = countAuthoredEnvRefsByPath(matchedParsed, "escaped");
+  return [...escapedCounts].some(([name, escapedPathCounts]) => {
+    const isExplicitActivation = (path: string) => {
+      if (!escapedPathCounts.has(path) || !explicitSetPaths?.length) {
+        return false;
+      }
+      const segments: string[] = JSON.parse(path);
+      return explicitSetPaths.some((supplied) =>
+        supplied.every((segment, index) => segments[index] === segment),
+      );
+    };
+    return (
+      [...(incomingActiveCounts.get(name) ?? new Map())].some(
+        ([path, count]) =>
+          !isExplicitActivation(path) && count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
+      ) ||
+      [...escapedPathCounts.keys()].some((path) => {
+        const incomingActiveCount = incomingActiveCounts.get(name)?.get(path) ?? 0;
+        return (
+          !isExplicitActivation(path) &&
+          incomingActiveCount > 0 &&
+          (incomingEscapedCounts.get(name)?.get(path) ?? 0) <
+            (matchedEscapedCounts.get(name)?.get(path) ?? 0)
+        );
+      })
+    );
+  });
+}
+
+function preservesAuthoredEscapedEnvRefs(incoming: unknown, parsed: unknown): boolean {
+  const parsedEscapedCounts = countAuthoredEnvRefsByPath(parsed, "escaped");
+  const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
+  return [...parsedEscapedCounts].every(([name, parsedPathCounts]) =>
+    [...parsedPathCounts].every(
+      ([path, count]) => (incomingEscapedCounts.get(name)?.get(path) ?? 0) >= count,
+    ),
+  );
+}
+
+class EnvRefArrayMutationError extends Error {
+  constructor() {
+    super("Config write would reorder or modify an array containing environment references.");
+    this.name = "EnvRefArrayMutationError";
+  }
+}
+
+// Escaped references also change under substitution and must retain their authored text.
+function hasEnvVarRef(value: string): boolean {
+  return scanEnvTemplateTokens(value).length > 0;
+}
+
+type ArrayIdentityPath = string[];
+type EnvRefArrays = { incoming: unknown[]; parsed: unknown[]; resolved: unknown[] };
+
+function getArrayIdentityPathValue(value: unknown, path: ArrayIdentityPath): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (!isPlainObject(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function resolveStableArrayIdentityMatch(params: {
+  incoming: unknown[];
+  parsed: unknown[];
+  parsedIndex: number;
+}): { kind: "none" } | { kind: "invalid" } | { kind: "match"; incomingIndex: number } {
+  const parsedItem = params.parsed[params.parsedIndex];
+  if (!isPlainObject(parsedItem)) {
+    return { kind: "none" };
+  }
+  const identityKey = ["id", "agentId"].find(
+    (key) => typeof parsedItem[key] === "string" && !hasEnvVarRef(parsedItem[key]),
+  );
+  if (!identityKey) {
+    return { kind: "none" };
+  }
+  const identityValue = parsedItem[identityKey];
+  const matchesIdentity = (item: unknown) =>
+    isPlainObject(item) && isDeepStrictEqual(item[identityKey], identityValue);
+  if (params.parsed.filter(matchesIdentity).length !== 1) {
+    return { kind: "none" };
+  }
+  const incomingMatches = params.incoming.flatMap((item, index) =>
+    matchesIdentity(item) ? [index] : [],
+  );
+  return incomingMatches.length === 1
+    ? {
+        kind: "match",
+        incomingIndex: expectDefined(incomingMatches[0], "env preserve identity match"),
+      }
+    : { kind: "invalid" };
+}
+
+function collectLiteralArrayIdentityPaths(
+  value: unknown,
+  path: ArrayIdentityPath = [],
+): ArrayIdentityPath[] {
+  if (typeof value === "string") {
+    return hasEnvVarRef(value) ? [] : [path];
+  }
+  if (!isPlainObject(value)) {
+    return [];
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    collectLiteralArrayIdentityPaths(child, [...path, key]),
+  );
+}
+
+function hasStableSameIndexLiteralShape(params: {
+  incoming: unknown[];
+  parsed: unknown[];
+  parsedIndex: number;
+}): boolean {
+  const parsedItem = params.parsed[params.parsedIndex];
+  const literalPaths = collectLiteralArrayIdentityPaths(parsedItem);
+  if (
+    literalPaths.length === 0 ||
+    literalPaths.some((identityPath) => {
+      const identityValue = getArrayIdentityPathValue(parsedItem, identityPath);
+      return !isDeepStrictEqual(
+        getArrayIdentityPathValue(params.incoming[params.parsedIndex], identityPath),
+        identityValue,
+      );
+    })
+  ) {
+    return false;
+  }
+  return literalPaths.some((identityPath) => {
+    const identityValue = getArrayIdentityPathValue(parsedItem, identityPath);
+    const authoredCount = params.parsed.filter((item) =>
+      isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue),
+    ).length;
+    const incomingCount = params.incoming.filter((item) =>
+      isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue),
+    ).length;
+    return authoredCount === 1 && incomingCount === 1;
+  });
+}
+
+function matchesArrayElementAtSameIndex(
+  incoming: unknown,
+  parsed: unknown,
+  resolved: unknown,
+): boolean {
+  return isDeepStrictEqual(incoming, parsed) || isDeepStrictEqual(incoming, resolved);
+}
+
+function matchesRetainedArrayItem(
+  params: EnvRefArrays & { incomingIndex: number; parsedIndex: number },
+): boolean {
+  if (
+    matchesArrayElementAtSameIndex(
+      params.incoming[params.incomingIndex],
+      params.parsed[params.parsedIndex],
+      params.resolved[params.parsedIndex],
+    )
+  ) {
+    return true;
+  }
+  const stableIdentity = resolveStableArrayIdentityMatch(params);
+  return stableIdentity.kind === "match" && stableIdentity.incomingIndex === params.incomingIndex;
+}
+
+function canMatchEditedArrayItemAtSameIndex(
+  params: EnvRefArrays & { parsedIndex: number },
+): boolean {
+  if (params.incoming.length !== params.parsed.length) {
+    return false;
+  }
+  return (
+    params.incoming.length === 1 ||
+    hasStableSameIndexLiteralShape(params) ||
+    params.parsed.every(
+      (item, index) =>
+        index === params.parsedIndex ||
+        matchesArrayElementAtSameIndex(params.incoming[index], item, params.resolved[index]),
+    )
+  );
+}
+
+function matchUniqueRetainedArrayItems(params: EnvRefArrays): Map<number, number> | undefined {
+  if (params.incoming.length >= params.parsed.length) {
+    return undefined;
+  }
+
+  const matchIndexes = (direction: 1 | -1): number[] | undefined => {
+    const indexes: number[] = [];
+    let parsedIndex = direction === 1 ? 0 : params.parsed.length - 1;
+    for (
+      let incomingIndex = direction === 1 ? 0 : params.incoming.length - 1;
+      incomingIndex >= 0 && incomingIndex < params.incoming.length;
+      incomingIndex += direction
+    ) {
+      while (
+        parsedIndex >= 0 &&
+        parsedIndex < params.parsed.length &&
+        !matchesRetainedArrayItem({ ...params, incomingIndex, parsedIndex })
+      ) {
+        parsedIndex += direction;
+      }
+      if (parsedIndex < 0 || parsedIndex >= params.parsed.length) {
+        return undefined;
+      }
+      indexes[incomingIndex] = parsedIndex;
+      parsedIndex += direction;
+    }
+    return indexes;
+  };
+  const earliestParsedIndexes = matchIndexes(1);
+  if (!earliestParsedIndexes || !isDeepStrictEqual(earliestParsedIndexes, matchIndexes(-1))) {
+    return undefined;
+  }
+  return new Map(
+    earliestParsedIndexes.map((parsedIndex, incomingIndex) => [parsedIndex, incomingIndex]),
+  );
+}
+
+function matchUneditedTemplateArrayItems(
+  params: EnvRefArrays,
+  templateIndexes: number[],
+  usedIncomingIndexes?: ReadonlySet<number>,
+): Map<number, number> | undefined {
+  if (
+    params.incoming.length === params.parsed.length &&
+    params.incoming.every((item, index) =>
+      matchesArrayElementAtSameIndex(item, params.parsed[index], params.resolved[index]),
+    )
+  ) {
+    return new Map(templateIndexes.map((index) => [index, index]));
+  }
+  const retainedDeletionMatches = matchUniqueRetainedArrayItems(params);
+  if (retainedDeletionMatches) {
+    return new Map(
+      templateIndexes.flatMap((parsedIndex) => {
+        const incomingIndex = retainedDeletionMatches.get(parsedIndex);
+        if (incomingIndex === undefined) {
+          return [];
+        }
+        if (usedIncomingIndexes?.has(incomingIndex)) {
+          throw new EnvRefArrayMutationError();
+        }
+        return [[parsedIndex, incomingIndex]];
+      }),
+    );
+  }
+  return undefined;
+}
+
+function matchAuthoredTemplateArrayItems(
+  params: EnvRefArrays,
+  kind: "substitution" | "escaped",
+  claimedIncomingIndexes?: ReadonlySet<number>,
+): Map<number, number> {
+  const templateIndexes = params.parsed.flatMap((item, index) =>
+    (
+      kind === "substitution"
+        ? containsAuthoredUnescapedEnvTemplate(item)
+        : containsAuthoredEscapedEnvTemplate(item) && !containsAuthoredUnescapedEnvTemplate(item)
+    )
+      ? [index]
+      : [],
+  );
+  const uneditedMatches = matchUneditedTemplateArrayItems(
+    params,
+    templateIndexes,
+    claimedIncomingIndexes,
+  );
+  if (uneditedMatches) {
+    return uneditedMatches;
+  }
+
+  const matches = new Map<number, number>();
+  const usedIncomingIndexes = new Set(claimedIncomingIndexes);
+  const addMatch = (parsedIndex: number, incomingIndex: number) => {
+    if (usedIncomingIndexes.has(incomingIndex)) {
+      throw new EnvRefArrayMutationError();
+    }
+    matches.set(parsedIndex, incomingIndex);
+    usedIncomingIndexes.add(incomingIndex);
+  };
+  for (const parsedIndex of templateIndexes) {
+    const parsedItem = params.parsed[parsedIndex];
+    const stableIdentity = resolveStableArrayIdentityMatch({ ...params, parsedIndex });
+    if (stableIdentity.kind === "match") {
+      addMatch(parsedIndex, stableIdentity.incomingIndex);
+      continue;
+    }
+    if (kind === "escaped") {
+      const resolvedItem = params.resolved[parsedIndex];
+      const incomingMatches = params.incoming.flatMap((item, incomingIndex) =>
+        !usedIncomingIndexes.has(incomingIndex) && isDeepStrictEqual(item, resolvedItem)
+          ? [incomingIndex]
+          : [],
+      );
+      const authoredMatches = templateIndexes.filter((index) =>
+        isDeepStrictEqual(params.resolved[index], resolvedItem),
+      );
+      const authoredRepresentationsAreIdentical = authoredMatches.every((index) =>
+        isDeepStrictEqual(params.parsed[index], parsedItem),
+      );
+      if (
+        incomingMatches.length > 0 &&
+        incomingMatches.length <= authoredMatches.length &&
+        authoredRepresentationsAreIdentical
+      ) {
+        const sameIndexMatch = incomingMatches.includes(parsedIndex)
+          ? parsedIndex
+          : incomingMatches[0];
+        addMatch(parsedIndex, expectDefined(sameIndexMatch, "env preserve same index match"));
+        continue;
+      }
+      if (incomingMatches.length > 0) {
+        throw new EnvRefArrayMutationError();
+      }
+
+      if (
+        (isPlainObject(parsedItem) || Array.isArray(parsedItem)) &&
+        stableIdentity.kind === "none" &&
+        parsedIndex < params.incoming.length &&
+        !usedIncomingIndexes.has(parsedIndex) &&
+        canMatchEditedArrayItemAtSameIndex({ ...params, parsedIndex })
+      ) {
+        addMatch(parsedIndex, parsedIndex);
+      }
+      continue;
+    }
+    if (stableIdentity.kind === "invalid") {
+      throw new EnvRefArrayMutationError();
+    }
+
+    if (
+      parsedIndex < params.incoming.length &&
+      matchesArrayElementAtSameIndex(
+        params.incoming[parsedIndex],
+        parsedItem,
+        params.resolved[parsedIndex],
+      )
+    ) {
+      const precedingItemsRemainAligned = params.parsed
+        .slice(0, parsedIndex)
+        .every((item, index) =>
+          matchesArrayElementAtSameIndex(params.incoming[index], item, params.resolved[index]),
+        );
+      const duplicateAuthoredMatch = params.parsed.some(
+        (item, index) =>
+          index !== parsedIndex &&
+          matchesArrayElementAtSameIndex(
+            params.incoming[parsedIndex],
+            item,
+            params.resolved[index],
+          ),
+      );
+      const duplicateIncomingMatch = params.incoming.some(
+        (item, index) =>
+          index !== parsedIndex &&
+          matchesArrayElementAtSameIndex(item, parsedItem, params.resolved[parsedIndex]),
+      );
+      const positionRemainsStable =
+        params.incoming.length === params.parsed.length || precedingItemsRemainAligned;
+      if (!positionRemainsStable || duplicateAuthoredMatch || duplicateIncomingMatch) {
+        throw new EnvRefArrayMutationError();
+      }
+      addMatch(parsedIndex, parsedIndex);
+      continue;
+    }
+
+    if (isPlainObject(parsedItem) || Array.isArray(parsedItem)) {
+      if (!canMatchEditedArrayItemAtSameIndex({ ...params, parsedIndex })) {
+        throw new EnvRefArrayMutationError();
+      }
+      addMatch(parsedIndex, parsedIndex);
+      continue;
+    }
+    const crossIndexMatches = params.incoming.some(
+      (item, incomingIndex) =>
+        incomingIndex !== parsedIndex &&
+        matchesArrayElementAtSameIndex(item, parsedItem, params.resolved[parsedIndex]),
+    );
+    if (crossIndexMatches) {
+      throw new EnvRefArrayMutationError();
+    }
+    if (parsedIndex < params.incoming.length) {
+      addMatch(parsedIndex, parsedIndex);
+    }
+  }
+  return matches;
+}
+
+function resolveEnvVarRefsForComparison(value: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (typeof value === "string") {
+    return hasEnvVarRef(value) ? resolveConfigEnvVars(value, env, { onMissing: () => {} }) : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => resolveEnvVarRefsForComparison(item, env));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, resolveEnvVarRefsForComparison(item, env)]),
+    );
+  }
+  return value;
+}
+
+/** Restore authored references wherever their resolved values match the incoming config. */
+export function restoreEnvVarRefs(
+  incoming: unknown,
+  parsed: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): unknown {
+  return restoreEnvVarRefsFromResolved(
+    incoming,
+    parsed,
+    resolveEnvVarRefsForComparison(parsed, env),
+  );
+}
+
+/** Restore only references owned by the matching authored/resolved planning read. */
+export function restoreEnvVarRefsFromResolved(
+  incoming: unknown,
+  parsed: unknown,
+  resolved: unknown,
+  explicitSetPaths?: readonly (readonly string[])[],
+): unknown {
+  if (typeof incoming === "string" && typeof parsed === "string") {
+    // An explicitly authored template is intent, even when an old escaped
+    // template resolved to the same string. Literal descendants still restore.
+    if (hasEnvVarRef(incoming) && explicitSetPaths?.some((path) => path.length === 0)) {
+      return incoming;
+    }
+    return hasEnvVarRef(parsed) && resolved === incoming ? parsed : incoming;
+  }
+
+  const childExplicitPaths = (key: string) =>
+    explicitSetPaths?.flatMap((path) =>
+      path.length === 0 ? [path] : path[0] === key ? [path.slice(1)] : [],
+    );
+
+  // Array template entries must retain a unique identity before authored refs
+  // can be restored; ambiguous moves would attach secrets or activate escaped
+  // literals on the wrong entry.
+  if (Array.isArray(incoming) && Array.isArray(parsed) && Array.isArray(resolved)) {
+    if (
+      !containsAuthoredUnescapedEnvTemplate(parsed) &&
+      !containsAuthoredEscapedEnvTemplate(parsed)
+    ) {
+      return incoming.map((item, index) =>
+        index < parsed.length
+          ? restoreEnvVarRefsFromResolved(
+              item,
+              parsed[index],
+              resolved[index],
+              childExplicitPaths(String(index)),
+            )
+          : item,
+      );
+    }
+    // Keep same-name real/escaped scalar reorders fail-closed: a raw `${VAR}`
+    // is indistinguishable from a moved escaped literal or a newly active ref.
+    const arrays = { incoming, parsed, resolved };
+    const unescapedMatches = matchAuthoredTemplateArrayItems(arrays, "substitution");
+    const escapedMatches = matchAuthoredTemplateArrayItems(
+      arrays,
+      "escaped",
+      new Set(unescapedMatches.values()),
+    );
+    const matches = new Map([...unescapedMatches, ...escapedMatches]);
+    const next = [...incoming];
+    const matchedIncomingIndexes = new Set(matches.values());
+    for (const [parsedIndex, incomingIndex] of matches) {
+      next[incomingIndex] = restoreEnvVarRefsFromResolved(
+        incoming[incomingIndex],
+        parsed[parsedIndex],
+        resolved[parsedIndex],
+        childExplicitPaths(String(incomingIndex)),
+      );
+    }
+    for (let index = 0; index < incoming.length && index < parsed.length; index += 1) {
+      if (
+        !matchedIncomingIndexes.has(index) &&
+        !containsAuthoredUnescapedEnvTemplate(parsed[index]) &&
+        !containsAuthoredEscapedEnvTemplate(parsed[index])
+      ) {
+        next[index] = restoreEnvVarRefsFromResolved(
+          incoming[index],
+          parsed[index],
+          resolved[index],
+          childExplicitPaths(String(index)),
+        );
+      }
+    }
+    const matchedParsedIndexByIncoming = new Map(
+      [...matches].map(([parsedIndex, incomingIndex]) => [incomingIndex, parsedIndex]),
+    );
+    for (const [escapedParsedIndex, escapedParsedItem] of parsed.entries()) {
+      if (!containsAuthoredEscapedEnvTemplate(escapedParsedItem)) {
+        continue;
+      }
+      const matchedIncomingIndex = matches.get(escapedParsedIndex);
+      if (
+        matchedIncomingIndex !== undefined &&
+        preservesAuthoredEscapedEnvRefs(next[matchedIncomingIndex], escapedParsedItem)
+      ) {
+        continue;
+      }
+      const stableIdentity = resolveStableArrayIdentityMatch({
+        incoming,
+        parsed,
+        parsedIndex: escapedParsedIndex,
+      });
+      const hasUnaccountedActiveReference = next.some((item, incomingIndex) => {
+        const matchedParsedIndex = matchedParsedIndexByIncoming.get(incomingIndex);
+        return containsUnaccountedActiveEscapedEnvRef(
+          item,
+          escapedParsedItem,
+          incoming[incomingIndex],
+          matchedParsedIndex === undefined ? undefined : parsed[matchedParsedIndex],
+          matchedParsedIndex === undefined ? undefined : resolved[matchedParsedIndex],
+          // Explicit intent may activate only the same escaped leaf on its
+          // uniquely retained owner, never a scalar move or another owner.
+          matchedParsedIndex === escapedParsedIndex &&
+            stableIdentity.kind === "match" &&
+            stableIdentity.incomingIndex === incomingIndex
+            ? childExplicitPaths(String(incomingIndex))
+            : undefined,
+        );
+      });
+      if (hasUnaccountedActiveReference) {
+        throw new EnvRefArrayMutationError();
+      }
+    }
+    return next;
+  }
+
+  if (isPlainObject(incoming) && isPlainObject(parsed) && isPlainObject(resolved)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(incoming)) {
+      if (Object.hasOwn(parsed, key)) {
+        result[key] = restoreEnvVarRefsFromResolved(
+          value,
+          parsed[key],
+          resolved[key],
+          childExplicitPaths(key),
+        );
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  return incoming;
+}
+
+export function resolveWriteEnvSnapshotForPath(params: {
+  actualConfigPath: string;
+  expectedConfigPath?: string;
+  envSnapshotForRestore?: Record<string, string | undefined>;
+}): Record<string, string | undefined> | undefined {
+  if (
+    params.expectedConfigPath === undefined ||
+    params.expectedConfigPath === params.actualConfigPath
+  ) {
+    return params.envSnapshotForRestore;
+  }
+  return undefined;
+}

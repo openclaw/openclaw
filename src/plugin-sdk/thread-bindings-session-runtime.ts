@@ -1,0 +1,23 @@
+export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
+export { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+export {
+  resolveThreadBindingLifecycle,
+  resolveThreadBindingExpiry,
+  type ThreadBindingLifecycleRecord,
+} from "../shared/thread-binding-lifecycle.js";
+export {
+  registerSessionBindingAdapter,
+  registerSessionBindingAdapterV2,
+  unregisterSessionBindingAdapter,
+  type BindingTargetKind,
+  type SessionBindingAdapter,
+  type SessionBindingAdapterV2,
+  type SessionBindingSelectionSnapshot,
+  type SessionBindingRecord,
+} from "../infra/outbound/session-binding-service.js";
+export {
+  createAccountScopedBindingAdapterV2,
+  projectThreadBindingRecord,
+} from "../infra/outbound/session-binding-adapter.js";
+export type { AccountScopedConversationBindingRecord } from "../infra/outbound/account-scoped-conversation-bindings.js";
+export { resolveThreadBindingTargetKind } from "./thread-bindings/target-kind.js";

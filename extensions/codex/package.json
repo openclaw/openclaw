@@ -1,0 +1,61 @@
+{
+  "name": "@openclaw/codex",
+  "version": "2026.11.1",
+  "description": "OpenClaw Codex app-server harness and native session supervision plugin.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@openai/codex": "0.164.0",
+    "@openclaw/fs-safe": "0.27.1",
+    "acorn": "8.19.0",
+    "semver": "7.8.5",
+    "smol-toml": "1.9.1",
+    "typebox": "1.4.3",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/codex",
+      "npmSpec": "@openclaw/codex",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.1-beta.1",
+      "requiredPlatformPackages": [
+        "@openai/codex-linux-x64",
+        "@openai/codex-linux-arm64",
+        "@openai/codex-darwin-x64",
+        "@openai/codex-darwin-arm64",
+        "@openai/codex-win32-x64",
+        "@openai/codex-win32-arm64"
+      ]
+    },
+    "compat": {
+      "pluginApi": ">=2026.11.1"
+    },
+    "build": {
+      "openclawVersion": "2026.11.1",
+      "workerEntries": [
+        "./stdio.worker.ts",
+        "./catalog-page.worker.ts",
+        "./session-history.worker.ts"
+      ]
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true,
+      "requireLatestDependencies": [
+        "@openai/codex"
+      ],
+      "bundleRuntimeDependencies": false
+    }
+  }
+}

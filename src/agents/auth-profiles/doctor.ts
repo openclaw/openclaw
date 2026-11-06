@@ -1,0 +1,51 @@
+/**
+ * Provider-specific auth doctor hints.
+ * Adds local migration guidance for known legacy profiles before falling back
+ * to provider plugin doctor copy.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AuthProfileStore } from "./types.js";
+
+const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
+  "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current Qwen API key: openclaw onboard --auth-choice qwen-api-key.";
+
+// Qwen Portal OAuth changed credential behavior; old profiles need an explicit
+// local hint before falling back to provider plugin doctor hints.
+function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: string): boolean {
+  const profiles = profileId ? [store.profiles[profileId]] : Object.values(store.profiles);
+  return profiles.some(
+    (profile) =>
+      profile?.type === "oauth" && normalizeProviderId(profile.provider) === "qwen-portal",
+  );
+}
+
+type FormatAuthDoctorHintParams = {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId?: string;
+};
+
+/** Formats provider-specific auth doctor guidance for a profile/store. */
+export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (
+    normalizedProvider === "qwen-portal" &&
+    hasLegacyQwenPortalOAuthProfile(params.store, params.profileId)
+  ) {
+    return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
+  }
+  const { withProviderRuntimePlugin } = await import("../../plugins/provider-hook-runtime.js");
+  const pluginHint = await withProviderRuntimePlugin(
+    { config: params.cfg, provider: normalizedProvider },
+    async (provider) =>
+      await provider?.buildAuthDoctorHint?.({
+        config: params.cfg,
+        store: params.store,
+        provider: normalizedProvider,
+        profileId: params.profileId,
+      }),
+  );
+  return typeof pluginHint === "string" && pluginHint.trim() ? pluginHint : "";
+}

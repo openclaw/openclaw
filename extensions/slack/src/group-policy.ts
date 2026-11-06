@@ -1,0 +1,142 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
+import {
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  type GroupToolPolicyBySenderConfig,
+  type GroupToolPolicyConfig,
+  type ScopeNode,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
+import { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";
+import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
+import {
+  mergeSlackAccountConfig,
+  resolveDefaultSlackAccountId,
+  type ResolvedSlackAccount,
+} from "./accounts.js";
+import { getSlackChannelPolicyKeys } from "./channel-policy-state.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
+
+type SlackChannelPolicyEntry = {
+  requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
+
+export function hasPotentialSlackNamedPolicy(params: {
+  channels: ResolvedSlackAccount["config"]["channels"];
+  allowNameMatching?: boolean;
+  decision: "allow" | "deny";
+}): boolean {
+  if (params.allowNameMatching !== true) {
+    return false;
+  }
+  return Object.entries(params.channels ?? {}).some(([key, entry]) => {
+    if (entry == null || key === "*") {
+      return false;
+    }
+    const named = !/^(?:channel:)?[CDG][A-Z0-9]+$/i.test(key);
+    const entryAllows = entry.enabled !== false;
+    return named && (params.decision === "allow" ? entryAllows : !entryAllows);
+  });
+}
+
+export function buildSlackChannelIdCandidates(
+  channelId: string | null | undefined,
+  teamId?: string | null,
+  options?: { allowUnscoped?: boolean },
+): string[] {
+  const trimmedId = channelId?.trim();
+  if (!trimmedId) {
+    return [];
+  }
+  const lowercaseId = trimmedId.toLowerCase();
+  const uppercaseId = trimmedId.toUpperCase();
+  const exactTeamId = teamId || undefined;
+  const lowercaseTeamId = exactTeamId?.toLowerCase();
+  const uppercaseTeamId = exactTeamId?.toUpperCase();
+  // Inbound Slack IDs are uppercase, but persisted session group IDs are lowercase.
+  const scopedCandidates = buildChannelKeyCandidates(
+    exactTeamId ? `team:${exactTeamId}:channel:${trimmedId}` : undefined,
+    lowercaseTeamId ? `team:${lowercaseTeamId}:channel:${lowercaseId}` : undefined,
+    uppercaseTeamId ? `team:${uppercaseTeamId}:channel:${uppercaseId}` : undefined,
+  );
+  if (exactTeamId && options?.allowUnscoped !== true) {
+    return scopedCandidates;
+  }
+  return buildChannelKeyCandidates(
+    ...scopedCandidates,
+    trimmedId,
+    lowercaseId,
+    uppercaseId,
+    `channel:${trimmedId}`,
+    `channel:${lowercaseId}`,
+    `channel:${uppercaseId}`,
+  );
+}
+
+export function buildSlackChannelPolicyScope<T extends ScopeNode>(params: {
+  channels?: Record<string, T>;
+  candidates: readonly string[];
+}) {
+  // Whole-entry selection: an exact channel hides every wildcard field.
+  // The wildcard is a normal scope selected only after all candidates miss.
+  const channels: Record<string, T> = params.channels ?? {};
+  const tree: ScopeTree = { scopes: channels };
+  const matchKey =
+    params.candidates.find(
+      (candidate) => candidate !== "*" && Object.hasOwn(tree.scopes, candidate),
+    ) ?? (Object.hasOwn(tree.scopes, "*") ? "*" : undefined);
+  const matchSource: "direct" | "wildcard" | undefined =
+    matchKey === undefined ? undefined : matchKey === "*" ? "wildcard" : "direct";
+  return {
+    tree,
+    path: matchKey ? [matchKey] : [],
+    entry: matchKey ? channels[matchKey] : undefined,
+    wildcardEntry: channels["*"],
+    matchKey,
+    matchSource,
+  };
+}
+
+function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const slack = mergeSlackAccountConfig(params.cfg, accountId);
+  const channels = slack.channels as Record<string, SlackChannelPolicyEntry> | undefined;
+  const channelName =
+    slack.dangerouslyAllowNameMatching === true
+      ? params.groupChannel?.replace(/^#/, "")
+      : undefined;
+  const allowUnscoped = getSlackInstallationKind(accountId) !== "enterprise";
+  const candidates = buildChannelKeyCandidates(
+    ...buildSlackChannelIdCandidates(params.groupId, params.groupSpace, { allowUnscoped }),
+    ...getSlackChannelPolicyKeys(accountId, params.groupId),
+    channelName ? `#${channelName}` : undefined,
+    channelName,
+    normalizeHyphenSlug(channelName),
+  );
+  return buildSlackChannelPolicyScope({ channels, candidates });
+}
+
+export function resolveSlackGroupRequireMention(params: ChannelGroupContext): boolean {
+  // The adapter intentionally ignores root requireMention; the monitor resolves that default.
+  return resolveScopeRequireMention(resolveSlackGroupPolicyScope(params));
+}
+
+export function resolveSlackGroupToolPolicy(
+  params: ChannelGroupContext,
+): GroupToolPolicyConfig | undefined {
+  const scope = resolveSlackGroupPolicyScope(params);
+  // No messageProvider: this path historically never matched channel-prefixed sender keys.
+  return resolveScopeToolsPolicy({
+    ...scope,
+    senderPolicyMode: params.senderPolicyMode,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+}

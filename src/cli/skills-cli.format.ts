@@ -1,0 +1,366 @@
+import {
+  decorativeEmoji,
+  decorativePrefix,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import {
+  hasMissingSkillRequirements,
+  resolveSkillStatusEntry,
+  type SkillStatusEntry,
+  type SkillStatusReport,
+} from "../skills/discovery/status.js";
+import { displayPath } from "../utils.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
+import {
+  formatCliRequirements,
+  formatCliStatusTable,
+  sanitizeCliDescriptorText,
+} from "./skills-hooks-cli.format.js";
+
+type SkillsListOptions = {
+  json?: boolean;
+  eligible?: boolean;
+  verbose?: boolean;
+};
+
+type SkillsCheckOptions = {
+  json?: boolean;
+  agent?: string;
+};
+
+function appendClawHubHint(output: string): string {
+  const command = formatCliCommand("openclaw skills");
+  return `${output}\n\nTip: use \`${command} search\`, \`${command} install\`, and \`${command} update\` for ClawHub-backed skills.`;
+}
+
+function formatSkillStatus(skill: SkillStatusEntry, detailed = false): string {
+  if (skill.disabled) {
+    return theme.warn(decorativePrefix("⏸", detailed ? "Disabled" : "disabled"));
+  }
+  if (skill.blockedByAllowlist) {
+    return theme.warn(decorativePrefix("🚫", detailed ? "Blocked by allowlist" : "blocked"));
+  }
+  if (skill.blockedByAgentFilter) {
+    return theme.warn(
+      decorativePrefix("🚫", detailed ? "Excluded by agent allowlist" : "excluded"),
+    );
+  }
+  if (skill.eligible) {
+    return theme.success(detailed ? "✓ Ready" : "✓ ready");
+  }
+  return theme.warn(detailed ? "△ Needs setup" : "△ needs setup");
+}
+
+function normalizeSkillEmoji(emoji?: string): string {
+  if (emoji) {
+    return terminalText`${emoji}`.replaceAll("\uFE0E", "\uFE0F");
+  }
+  return decorativeEmoji("📦");
+}
+
+function formatSkillsJson(value: unknown): string {
+  return JSON.stringify(
+    value,
+    (_key, entry: unknown) =>
+      typeof entry === "string" ? sanitizeCliDescriptorText(entry) : entry,
+    2,
+  );
+}
+const SKILL_REQUIREMENT_GROUPS = [
+  ["bins", "Binaries"],
+  ["anyBins", "Any binaries"],
+  ["env", "Environment"],
+  ["config", "Config"],
+  ["os", "OS"],
+] as const;
+
+function formatSkillMissingSummary(skill: SkillStatusEntry): string {
+  return SKILL_REQUIREMENT_GROUPS.filter(([key]) => skill.missing[key].length > 0)
+    .map(([key]) => terminalText`${key}: ${skill.missing[key].join(", ")}`)
+    .join("; ");
+}
+
+function formatSkillCheckSection(
+  title: string,
+  skills: SkillStatusEntry[],
+  reason?: (skill: SkillStatusEntry) => string,
+): string[] {
+  return skills.length === 0
+    ? []
+    : [
+        "",
+        theme.heading(title),
+        ...skills.map((skill) => {
+          const emoji = normalizeSkillEmoji(skill.emoji);
+          const suffix = reason ? ` ${theme.muted(terminalText`(${reason(skill)})`)}` : "";
+          return `${terminalText`  ${emoji ? `${emoji} ` : ""}${skill.name}`}${suffix}`;
+        }),
+      ];
+}
+
+export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
+  const isReadyForAgent = (skill: SkillStatusEntry) =>
+    skill.eligible && !skill.blockedByAgentFilter;
+  const skills = opts.eligible ? report.skills.filter(isReadyForAgent) : report.skills;
+
+  if (opts.json) {
+    return formatSkillsJson({
+      workspaceDir: report.workspaceDir,
+      managedSkillsDir: report.managedSkillsDir,
+      skills: skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        emoji: s.emoji,
+        eligible: s.eligible,
+        disabled: s.disabled,
+        blockedByAllowlist: s.blockedByAllowlist,
+        blockedByAgentFilter: s.blockedByAgentFilter,
+        modelVisible: s.modelVisible,
+        userInvocable: s.userInvocable,
+        commandVisible: s.commandVisible,
+        source: s.source,
+        bundled: s.bundled,
+        primaryEnv: s.primaryEnv,
+        homepage: s.homepage,
+        missing: s.missing,
+      })),
+    });
+  }
+
+  if (skills.length === 0) {
+    const message = opts.eligible
+      ? `No eligible skills found. Run \`${formatCliCommand("openclaw skills list")}\` to see all skills.`
+      : "No skills found.";
+    return appendClawHubHint(message);
+  }
+
+  return appendClawHubHint(
+    formatCliStatusTable({
+      title: "Skills",
+      ready: skills.filter(isReadyForAgent).length,
+      nameColumn: { key: "Skill", header: "Skill", minWidth: 22 },
+      sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
+      verbose: opts.verbose,
+      rows: skills.map((skill) => {
+        const emoji = normalizeSkillEmoji(skill.emoji);
+        const name = theme.command(terminalText`${skill.name}`);
+        return {
+          Status: formatSkillStatus(skill),
+          Skill: emoji ? `${emoji} ${name}` : name,
+          Description: theme.muted(terminalText`${skill.description}`),
+          Source: terminalText`${skill.source}`,
+          Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+        };
+      }),
+    }),
+  );
+}
+
+export function formatSkillInfo(
+  report: SkillStatusReport,
+  skillName: string,
+  opts: { json?: boolean },
+): string {
+  const requestedName = skillName.trim();
+  const skill = resolveSkillStatusEntry(report.skills, requestedName);
+
+  if (!skill) {
+    if (opts.json) {
+      return formatSkillsJson({
+        ...formatCliJsonFailure(`Skill "${requestedName}" not found.`),
+        skill: requestedName,
+      });
+    }
+    return appendClawHubHint(
+      terminalText`Skill "${requestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+    );
+  }
+
+  if (opts.json) {
+    return formatSkillsJson(skill);
+  }
+
+  const emoji = normalizeSkillEmoji(skill.emoji);
+  const safeName = terminalText`${skill.name}`;
+  const safeHomepage = skill.homepage ? terminalText`${skill.homepage}` : undefined;
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${formatSkillStatus(skill, true)}`,
+    "",
+    terminalText`${skill.description}`,
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${terminalText`${skill.source}`}`,
+    `${theme.muted("  Path:")} ${displayPath(skill.filePath)}`,
+  ];
+  if (safeHomepage) {
+    lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
+  }
+  lines.push(
+    `${theme.muted("  Visible to model:")} ${skill.modelVisible ? theme.success("yes") : theme.warn("no")}`,
+  );
+  lines.push(
+    `${theme.muted("  Available as command:")} ${skill.commandVisible ? theme.success("yes") : theme.warn("no")}`,
+  );
+  if (skill.blockedByAgentFilter) {
+    lines.push(`${theme.muted("  Agent allowlist:")} excludes this skill`);
+  }
+  if (skill.primaryEnv) {
+    lines.push(`${theme.muted("  Primary env:")} ${terminalText`${skill.primaryEnv}`}`);
+  }
+
+  lines.push(...formatCliRequirements(skill, SKILL_REQUIREMENT_GROUPS));
+
+  if (skill.install.length > 0 && !skill.eligible) {
+    lines.push("");
+    lines.push(theme.heading("Install options:"));
+    for (const inst of skill.install) {
+      lines.push(`  ${theme.warn("→")} ${terminalText`${inst.label}`}`);
+    }
+  }
+
+  if (skill.primaryEnv && skill.missing.env.includes(skill.primaryEnv)) {
+    const apiKeyPath = quoteCliArg(
+      formatConcreteConfigPath(["skills", "entries", skill.skillKey, "apiKey"]),
+    );
+    lines.push("");
+    lines.push(theme.heading("API key setup:"));
+    if (safeHomepage) {
+      lines.push(`  Get your key: ${safeHomepage}`);
+    }
+    lines.push(
+      `  Save via UI: ${theme.muted("Control UI → Skills → ")}${safeName}${theme.muted(" → Save key")}`,
+    );
+    lines.push(
+      `  Save via CLI: ${formatCliCommand(terminalText`openclaw config set ${apiKeyPath} YOUR_KEY`)}`,
+    );
+    lines.push(
+      `  Stored in: ${theme.muted("$OPENCLAW_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
+    );
+  }
+
+  return appendClawHubHint(lines.join("\n"));
+}
+
+export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
+  const eligible = report.skills.filter((s) => s.eligible);
+  const modelVisible = report.skills.filter((s) => s.modelVisible);
+  const commandVisible = report.skills.filter((s) => s.commandVisible);
+  const disabled = report.skills.filter((s) => s.disabled);
+  const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
+  // Agent exclusion is independent of readiness; report both when a skill needs setup.
+  const agentFiltered = report.skills.filter((s) => s.blockedByAgentFilter);
+  const promptHidden = report.skills.filter(
+    (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
+  );
+  const missingReqs = report.skills.filter(hasMissingSkillRequirements);
+  const agentId = report.agentId ?? opts.agent;
+
+  if (opts.json) {
+    return formatSkillsJson({
+      agentId,
+      agentSkillFilter: report.agentSkillFilter,
+      workspaceDir: report.workspaceDir,
+      managedSkillsDir: report.managedSkillsDir,
+      summary: {
+        total: report.skills.length,
+        eligible: eligible.length,
+        modelVisible: modelVisible.length,
+        commandVisible: commandVisible.length,
+        disabled: disabled.length,
+        blocked: blocked.length,
+        agentFiltered: agentFiltered.length,
+        notInjected: promptHidden.length,
+        missingRequirements: missingReqs.length,
+      },
+      eligible: eligible.map((s) => s.name),
+      modelVisible: modelVisible.map((s) => s.name),
+      commandVisible: commandVisible.map((s) => s.name),
+      disabled: disabled.map((s) => s.name),
+      blocked: blocked.map((s) => s.name),
+      agentFiltered: agentFiltered.map((s) => s.name),
+      notInjected: promptHidden.map((s) => ({
+        name: s.name,
+        reason: "disable-model-invocation",
+      })),
+      missingRequirements: missingReqs.map((s) => ({
+        name: s.name,
+        missing: s.missing,
+        install: s.install,
+      })),
+    });
+  }
+
+  const lines: string[] = [];
+  lines.push(theme.heading("Skills Status Check"));
+  if (agentId) {
+    lines.push(`${theme.muted("Agent:")} ${terminalText`${agentId}`}`);
+  }
+  lines.push("");
+  lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
+  lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
+  lines.push(`${theme.success("✓")} ${theme.muted("Visible to model:")} ${modelVisible.length}`);
+  lines.push(
+    `${theme.success("✓")} ${theme.muted("Available as command:")} ${commandVisible.length}`,
+  );
+  lines.push(
+    `${theme.warn(decorativePrefix("⏸", "Disabled:"))} ${theme.muted(String(disabled.length))}`,
+  );
+  lines.push(
+    `${theme.warn(decorativePrefix("🚫", "Blocked by allowlist:"))} ${theme.muted(String(blocked.length))}`,
+  );
+  if (agentId || agentFiltered.length > 0) {
+    lines.push(
+      `${theme.warn(decorativePrefix("🚫", "Excluded by agent allowlist:"))} ${theme.muted(String(agentFiltered.length))}`,
+    );
+  }
+  if (promptHidden.length > 0) {
+    lines.push(
+      `${theme.warn("△")} ${theme.muted("Ready but hidden from model prompt:")} ${promptHidden.length}`,
+    );
+  }
+  lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
+
+  if (modelVisible.length > 0 || commandVisible.length > 0 || promptHidden.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("What this means:"));
+    lines.push(
+      `  ${theme.muted("Eligible:")} installed and requirements pass; the agent may still exclude it.`,
+    );
+    if (modelVisible.length > 0) {
+      lines.push(
+        `  ${theme.muted("Visible to model:")} the agent can see the skill instructions during normal chat.`,
+      );
+    }
+    if (commandVisible.length > 0) {
+      lines.push(
+        `  ${theme.muted("Available as command:")} people, scripts, or automations can call the skill explicitly.`,
+      );
+    }
+    if (promptHidden.length > 0) {
+      lines.push(
+        `  ${theme.muted("Hidden from model prompt:")} installed and ready, but kept out of normal chat.`,
+      );
+    }
+  }
+
+  lines.push(
+    ...formatSkillCheckSection("Ready and visible to model:", modelVisible),
+    ...formatSkillCheckSection("Ready but hidden from model prompt:", promptHidden, (skill) =>
+      skill.commandVisible
+        ? "skill hides its instructions from the model; commands/cron may still use it"
+        : "skill hides its instructions from the model and is not exposed as a command",
+    ),
+    ...formatSkillCheckSection(
+      "Excluded by agent allowlist:",
+      agentFiltered,
+      () => "loaded, but this agent is not allowed to see/use it",
+    ),
+    ...formatSkillCheckSection("Missing requirements:", missingReqs, formatSkillMissingSummary),
+  );
+
+  return appendClawHubHint(lines.join("\n"));
+}

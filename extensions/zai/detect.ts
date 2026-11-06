@@ -1,0 +1,225 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  ZAI_CN_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_DEFAULT_MODEL_ID,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_DEFAULT_MODEL_ID,
+  ZAI_GLOBAL_BASE_URL,
+} from "./model-definitions.js";
+
+export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
+
+export type ZaiDetectedEndpoint = {
+  endpoint: ZaiEndpointId;
+  baseUrl: string;
+  modelId: string;
+  note: string;
+};
+
+type ProbeResult =
+  | { ok: true }
+  | {
+      ok: false;
+      status?: number;
+      errorCode?: string;
+      errorMessage?: string;
+    };
+
+type ProbeCandidate = ZaiDetectedEndpoint & {
+  fallback?: boolean;
+};
+
+const PROBE_ENDPOINTS = [
+  { endpoint: "global", baseUrl: ZAI_GLOBAL_BASE_URL, codingBaseUrl: ZAI_CODING_GLOBAL_BASE_URL },
+  { endpoint: "cn", baseUrl: ZAI_CN_BASE_URL, codingBaseUrl: ZAI_CODING_CN_BASE_URL },
+] as const;
+
+const UNSUPPORTED_MODEL_ERROR_CODES = new Set(["1211", "1311"]);
+
+/** Cap for the Z.AI probe error body; bounds untrusted error responses to avoid unbounded buffering/OOM. */
+const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
+function isUnsupportedModelResult(result: ProbeResult): boolean {
+  if (result.ok) {
+    return false;
+  }
+  if (result.status === 404) {
+    return true;
+  }
+  if (result.errorCode && UNSUPPORTED_MODEL_ERROR_CODES.has(result.errorCode)) {
+    return true;
+  }
+  if (result.status !== 400) {
+    return false;
+  }
+  const detail = `${result.errorCode ?? ""} ${result.errorMessage ?? ""}`.toLowerCase();
+  return (
+    /\bmodel\b.*\b(not found|unavailable|unsupported|does not exist)\b/.test(detail) ||
+    /模型.*(不存在|不支持|不可用)/.test(detail)
+  );
+}
+
+export async function detectZaiEndpoint(params: {
+  apiKey: string;
+  endpoint?: ZaiEndpointId;
+  timeoutMs?: number;
+  fetchFn?: typeof fetch;
+}): Promise<ZaiDetectedEndpoint | null> {
+  // Never auto-probe in vitest; it would create flaky network behavior.
+  if (process.env.VITEST && !params.fetchFn) {
+    return null;
+  }
+
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 5_000);
+  async function probeZaiChatCompletions(baseUrl: string, modelId: string): Promise<ProbeResult> {
+    const { apiKey, fetchFn: providedFetchFn } = params;
+    const deadline = createProviderOperationDeadline({
+      timeoutMs,
+      label: "Z.AI endpoint check",
+    });
+    const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: timeoutMs,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+    let res: Response | undefined;
+    try {
+      const fetchFn = providedFetchFn ?? globalThis.fetch;
+      res = await fetchFn(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          stream: false,
+          max_tokens: 1,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+        signal: controller.signal,
+      });
+
+      if (res.ok) {
+        return { ok: true };
+      }
+
+      let errorCode: string | undefined;
+      let errorMessage: string | undefined;
+      try {
+        // Invalid UTF-8 must not become an endpoint-classification signal.
+        const json = await readProviderJsonResponse<{
+          error?: { code?: unknown; message?: unknown };
+          code?: unknown;
+          msg?: unknown;
+          message?: unknown;
+        }>(res, "Z.AI endpoint check", {
+          maxBytes: ZAI_DETECT_ERROR_BODY_MAX_BYTES,
+          // Resolve immediately before body consumption so headers and every
+          // body shape share one operation budget, including slow-drip streams.
+          timeoutMs: resolveTimeoutMs,
+          // The probe's deadline owns the budget, including caller timeouts over 30s.
+          chunkTimeoutMs: 0,
+          onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+            new Error(`Z.AI check error body timed out after ${bodyTimeoutMs}ms`),
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Z.AI check error body exceeded size limit (${maxBytes} bytes)`),
+        });
+        const code = json?.error?.code ?? json?.code;
+        const msg = json?.error?.message ?? json?.msg ?? json?.message;
+        if (typeof code === "string") {
+          errorCode = code;
+        } else if (typeof code === "number") {
+          errorCode = String(code);
+        }
+        if (typeof msg === "string") {
+          errorMessage = msg;
+        }
+      } catch {
+        // ignore malformed / stalled / oversized error bodies
+      }
+
+      return { ok: false, status: res.status, errorCode, errorMessage };
+    } catch {
+      return { ok: false };
+    } finally {
+      clearTimeout(timeout);
+      if (res?.bodyUsed !== true) {
+        await res?.body?.cancel().catch(() => undefined);
+      }
+    }
+  }
+
+  const probeCandidates = (() => {
+    const general = PROBE_ENDPOINTS.map<ProbeCandidate>(({ endpoint, baseUrl }) => ({
+      endpoint,
+      baseUrl,
+      modelId: ZAI_DEFAULT_MODEL_ID,
+      note: `Verified GLM-5.2 on ${endpoint} endpoint.`,
+    }));
+    const codingModels = PROBE_ENDPOINTS.flatMap<ProbeCandidate>(({ endpoint, codingBaseUrl }) => [
+      {
+        endpoint: `coding-${endpoint}`,
+        baseUrl: codingBaseUrl,
+        modelId: ZAI_CODING_DEFAULT_MODEL_ID,
+        note: `Verified GLM-5.3 on coding-${endpoint} endpoint.`,
+      },
+      {
+        endpoint: `coding-${endpoint}`,
+        baseUrl: codingBaseUrl,
+        modelId: "glm-5.1",
+        note: `Verified GLM-5.1 on coding-${endpoint} endpoint; GLM-5.3 is unavailable.`,
+        fallback: true,
+      },
+    ]);
+    const codingFallback = PROBE_ENDPOINTS.map<ProbeCandidate>(({ endpoint, codingBaseUrl }) => ({
+      endpoint: `coding-${endpoint}`,
+      baseUrl: codingBaseUrl,
+      modelId: "glm-4.7",
+      note: `Coding Plan${endpoint === "cn" ? " CN" : ""} endpoint verified, but this key/plan does not expose GLM-5.3 or GLM-5.1 there. Defaulting to GLM-4.7.`,
+      fallback: true,
+    }));
+
+    const candidates = [...general, ...codingModels, ...codingFallback];
+    switch (params.endpoint) {
+      case "global":
+      case "cn":
+      case "coding-global":
+      case "coding-cn":
+        return candidates.filter((candidate) => candidate.endpoint === params.endpoint);
+      default:
+        return candidates;
+    }
+  })();
+
+  const resultsByEndpoint = new Map<ZaiEndpointId, ProbeResult[]>();
+  for (const candidate of probeCandidates) {
+    const priorResults = resultsByEndpoint.get(candidate.endpoint) ?? [];
+    if (
+      candidate.fallback &&
+      (priorResults.length === 0 || !priorResults.every(isUnsupportedModelResult))
+    ) {
+      continue;
+    }
+    const result = await probeZaiChatCompletions(candidate.baseUrl, candidate.modelId);
+    if (result.ok) {
+      return {
+        endpoint: candidate.endpoint,
+        baseUrl: candidate.baseUrl,
+        modelId: candidate.modelId,
+        note: candidate.note,
+      };
+    }
+    resultsByEndpoint.set(candidate.endpoint, [...priorResults, result]);
+  }
+
+  return null;
+}

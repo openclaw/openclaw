@@ -1,0 +1,117 @@
+/* @vitest-environment jsdom */
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { DiffViewerPayload } from "./types.js";
+
+const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+(globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey] = true;
+
+const VIEWER_CLIENT_SRC = readFileSync(
+  path.join(process.cwd(), "extensions/diffs/src/viewer-client.ts"),
+  "utf8",
+);
+
+const { fileDiffHydrateMock, fileDiffRerenderMock, fileDiffSetOptionsMock } = vi.hoisted(() => ({
+  fileDiffHydrateMock: vi.fn(),
+  fileDiffRerenderMock: vi.fn(),
+  fileDiffSetOptionsMock: vi.fn(),
+}));
+
+vi.mock("@pierre/diffs", () => ({
+  FileDiff: class {
+    hydrate = fileDiffHydrateMock;
+    rerender = fileDiffRerenderMock;
+    setOptions = fileDiffSetOptionsMock;
+  },
+  preloadHighlighter: vi.fn(async () => undefined),
+}));
+
+const viewerPayload: DiffViewerPayload = {
+  prerenderedHTML: "<div>diff</div>",
+  options: {
+    theme: { light: "pierre-light", dark: "pierre-dark" },
+    diffStyle: "unified",
+    diffIndicators: "bars",
+    disableLineNumbers: false,
+    expandUnchanged: false,
+    themeType: "dark",
+    backgroundEnabled: true,
+    overflow: "wrap",
+    unsafeCSS: "",
+  },
+  langs: ["text"],
+  oldFile: { name: "a.ts", lang: "text", contents: "old" },
+  newFile: { name: "a.ts", lang: "text", contents: "new" },
+};
+
+function addCard(payload = JSON.stringify(viewerPayload)) {
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `<section class="oc-diff-card"><div data-openclaw-diff-host></div>
+      <script type="application/json" data-openclaw-diff-payload>${payload}</script></section>`,
+  );
+}
+
+async function hydrateOptions() {
+  addCard();
+  const { hydrateViewer } = await import("./viewer-client.js");
+  await hydrateViewer();
+  return fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  document.body.innerHTML = "";
+  delete document.body.dataset.theme;
+  vi.clearAllMocks();
+});
+afterEach(() => vi.restoreAllMocks());
+
+it("restricts toolbar innerHTML to static SVG without XSS patterns", () => {
+  expect(VIEWER_CLIENT_SRC).toContain("button.innerHTML = toolbarIconSvg[params.icon]");
+  expect(VIEWER_CLIENT_SRC).not.toMatch(/onerror|<script|onclick|javascript:|onload/);
+});
+
+it.each([
+  ["layout", 0, "diffStyle", "unified", "split"],
+  ["theme", 3, "themeType", "dark", "light"],
+  ["wrap", 1, "overflow", "wrap", "scroll"],
+  ["background", 2, "disableBackground", false, true],
+] as const)("%s toggle updates viewer options", async (name, index, key, before, after) => {
+  const initial = await hydrateOptions();
+  expect(initial[key]).toBe(before);
+  const renderHeaderMetadata = initial.renderHeaderMetadata as () => HTMLElement;
+  const buttons = renderHeaderMetadata().querySelectorAll("button");
+  expectDefined(buttons[index], `${name} toggle`).click();
+
+  const updated = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  expect(updated[key]).toBe(after);
+  if (name === "layout") {
+    expect(fileDiffRerenderMock).toHaveBeenCalled();
+  }
+  if (name === "theme") {
+    expect(document.body.dataset.theme).toBe("light");
+  }
+});
+
+it("drops the interactive toolbar in image render mode", async () => {
+  document.body.innerHTML = '<main class="oc-frame" data-render-mode="image"></main>';
+  const options = await hydrateOptions();
+  const renderHeaderMetadata = options.renderHeaderMetadata as () => HTMLElement | null;
+  expect(renderHeaderMetadata()).toBeNull();
+});
+
+it("skips nav cards and invalid JSON while hydrating valid sibling cards", async () => {
+  document.body.innerHTML = '<nav class="oc-diff-card oc-diff-nav"><ol></ol></nav>';
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  addCard("{not-json");
+  await hydrateOptions();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "Skipping invalid diff payload",
+    new Error("Diff payload is not valid JSON."),
+  );
+  expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
+});

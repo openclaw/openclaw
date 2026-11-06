@@ -1,0 +1,60 @@
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createWebSearchProviderContractFields,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
+
+const KIMI_CREDENTIAL_PATH = "plugins.entries.moonshot.config.webSearch.apiKey";
+
+const loadKimiWebSearchProviderRuntime = createLazyRuntimeModule(
+  () => import("./kimi-web-search-provider.runtime.js"),
+);
+
+const KimiSearchSchema = {
+  type: "object",
+  properties: {
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
+    country: { type: "string", description: "Not supported by Kimi." },
+    language: { type: "string", description: "Not supported by Kimi." },
+    freshness: { type: "string", description: "Not supported by Kimi." },
+    date_after: { type: "string", description: "Not supported by Kimi." },
+    date_before: { type: "string", description: "Not supported by Kimi." },
+  },
+} satisfies Record<string, unknown>;
+
+export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
+  return {
+    id: "kimi",
+    label: "Kimi (Moonshot)",
+    hint: "Requires Moonshot / Kimi API key · Moonshot web search",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "Moonshot / Kimi API key",
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    placeholder: "sk-...",
+    signupUrl: "https://platform.moonshot.cn/",
+    docsUrl: "https://docs.openclaw.ai/tools/web",
+    autoDetectOrder: 40,
+    credentialPath: KIMI_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: KIMI_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "kimi" },
+      configuredCredential: { pluginId: "moonshot" },
+    }),
+    runSetup: createLazyRuntimeMethod(
+      loadKimiWebSearchProviderRuntime,
+      (runtime) => runtime.runKimiSearchProviderSetup,
+    ),
+    createTool: (ctx) => ({
+      description:
+        "Search the web using Kimi by Moonshot. Returns structured results with titles, URLs, and descriptions.",
+      parameters: KimiSearchSchema,
+      execute: async (args, context) => {
+        const { executeKimiWebSearchProviderTool } = await loadKimiWebSearchProviderRuntime();
+        return await executeKimiWebSearchProviderTool(ctx, args, {
+          signal: context?.signal,
+        });
+      },
+    }),
+  };
+}

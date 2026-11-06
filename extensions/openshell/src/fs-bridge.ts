@@ -1,0 +1,468 @@
+import fsPromises from "node:fs/promises";
+import path from "node:path";
+import {
+  assertNoSymlinkParents,
+  isPathInside,
+  root as fsRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
+import type {
+  DirectoryEntry,
+  SandboxFsBridge,
+  SandboxFsStat,
+  SandboxResolvedPath,
+} from "openclaw/plugin-sdk/sandbox";
+import {
+  createWritableRenameTargetResolver,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "openclaw/plugin-sdk/sandbox";
+import { extractErrorCode, FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
+import {
+  isOpenShellRemotePathInside,
+  resolveOpenShellWorkspaceRoot,
+  type OpenShellWorkspaceRoot,
+} from "./workspace-roots.js";
+
+type ResolvedMountPath = SandboxResolvedPath & {
+  hostPath: string;
+  mountHostRoot: string;
+  writable: boolean;
+};
+
+export class OpenShellFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action, true),
+  );
+
+  constructor(
+    private readonly sandbox: OpenShellFsBridgeContext,
+    private readonly backend: OpenShellMirrorBackend,
+  ) {}
+
+  resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
+    const target = this.resolveTarget(params);
+    return {
+      hostPath: target.hostPath,
+      relativePath: target.relativePath,
+      containerPath: target.containerPath,
+    };
+  }
+
+  async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
+    const target = this.resolveTarget(params);
+    const hostPath = target.hostPath;
+    try {
+      const root = await fsRoot(target.mountHostRoot);
+      return (
+        await root.read(relativeToRoot(target, hostPath), {
+          hardlinks: "reject",
+          maxBytes: params.maxBytes ?? Infinity,
+        })
+      ).buffer;
+    } catch (err) {
+      throw new Error(
+        `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
+        { cause: err },
+      );
+    }
+  }
+
+  async readDirectory(
+    params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
+  ): Promise<DirectoryEntry[]> {
+    const target = this.resolveTarget(params);
+    const hostPath = target.hostPath;
+    const root = await fsRoot(target.mountHostRoot);
+    const entries: DirectoryEntry[] = [];
+    for await (const { name, isDirectory } of root.entries(relativeToRoot(target, hostPath), {
+      order: "sorted",
+    })) {
+      entries.push({ name, isDirectory });
+    }
+    return entries;
+  }
+
+  async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
+    await this.writeLocalFile(params, "write");
+  }
+
+  async createFileExclusive(
+    params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
+  ): Promise<"created" | "exists"> {
+    return this.writeLocalFile(params, "create");
+  }
+
+  private async writeLocalFile(
+    params: Parameters<SandboxFsBridge["writeFile"]>[0],
+    method: "write" | "create",
+  ): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    const hostPath = target.hostPath;
+    this.ensureWritable(target, method === "create" ? "create files" : "write files");
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const root = await fsRoot(target.mountHostRoot);
+    try {
+      await root[method](relativeToRoot(target, hostPath), buffer, {
+        mkdir: method === "create" ? params.mkdir !== false : params.mkdir,
+        mutationSymlinks: "reject",
+      });
+    } catch (error) {
+      if (method === "create" && error instanceof FsSafeError && error.code === "already-exists") {
+        return "exists";
+      }
+      throw error;
+    }
+    // Mirror mode treats local state as canonical. Syncing may fail, but must
+    // never downgrade the exclusive local create to an overwriting write.
+    await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
+    return "created";
+  }
+
+  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+    const target = this.resolveTarget(params);
+    this.ensureWritable(target, "create directories");
+    await assertLocalPathSafety({
+      target,
+      allowFinalSymlinkForUnlink: false,
+    });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
+    const relativePath = relativeToRoot(target, target.hostPath);
+    if (relativePath) {
+      await (await fsRoot(target.mountHostRoot)).mkdir(relativePath);
+    }
+  }
+
+  async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
+    const target = this.resolveTarget(params);
+    this.ensureWritable(target, "remove files", params.recursive);
+    await assertLocalPathSafety({
+      target,
+      allowFinalSymlinkForUnlink: true,
+    });
+    await this.backend.removeRemotePath(target.containerPath, {
+      recursive: params.recursive ?? false,
+      signal: params.signal,
+      ignoreMissing: params.force !== false,
+    });
+    await removeLocalRootPath({
+      force: params.force,
+      recursive: params.recursive,
+      target,
+    });
+  }
+
+  async rename(params: Parameters<SandboxFsBridge["rename"]>[0]): Promise<void> {
+    const { from, to } = this.resolveRenameTargets(params);
+    await assertLocalPathSafety({
+      target: from,
+      allowFinalSymlinkForUnlink: true,
+    });
+    await assertLocalPathSafety({
+      target: to,
+      allowFinalSymlinkForUnlink: false,
+    });
+    await assertRenameSupported(from, to);
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
+    const root = await fsRoot(from.mountHostRoot);
+    const fromRelativePath = relativeToRoot(from, from.hostPath);
+    const toRelativePath = relativeToRoot(to, to.hostPath);
+    const parentPath = path.dirname(toRelativePath);
+    if (parentPath !== "." && parentPath !== "") {
+      await root.mkdir(parentPath);
+    }
+    await root.move(fromRelativePath, toRelativePath, { overwrite: true });
+  }
+
+  async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
+    const target = this.resolveTarget(params);
+    const hostPath = target.hostPath;
+    const stats = await lstatIfExists(hostPath, "ENOENT");
+    if (!stats) {
+      return null;
+    }
+    await assertLocalPathSafety({
+      target,
+      allowFinalSymlinkForUnlink: false,
+    });
+    return {
+      type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+    };
+  }
+
+  private ensureWritable(target: ResolvedMountPath, action: string, includeDescendants = false) {
+    if (
+      this.sandbox.workspaceAccess === "ro" ||
+      !target.writable ||
+      (includeDescendants &&
+        this.readOnlyMounts().some((mount) =>
+          isOpenShellRemotePathInside(target.containerPath, mount.containerPath),
+        ))
+    ) {
+      throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+    }
+  }
+
+  private readOnlyMounts() {
+    const workdirs = [this.sandbox.containerWorkdir];
+    if (
+      this.sandbox.workspaceAccess !== "none" &&
+      path.resolve(this.sandbox.workspaceDir) !== path.resolve(this.sandbox.agentWorkspaceDir)
+    ) {
+      workdirs.push(this.backend.remoteAgentWorkspaceDir || "/agent");
+    }
+    return [
+      ...workdirs.flatMap((workdir) =>
+        resolveReadOnlyWorkspaceSkillMounts({ ...this.sandbox, workdir }),
+      ),
+      ...(this.sandbox.readOnlyResourceMounts ?? []),
+    ];
+  }
+
+  private containerMounts() {
+    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
+    const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
+    const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
+    const agentContainerRoot = (this.backend.remoteAgentWorkspaceDir || "/agent").replace(
+      /\\/g,
+      "/",
+    );
+    const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
+    const containerMounts: OpenShellWorkspaceRoot<{
+      hostRoot: string;
+      writable: boolean;
+    }>[] = [
+      {
+        remote: workspaceContainerRoot,
+        owner: "workspace",
+        value: {
+          hostRoot: workspaceRoot,
+          writable: this.sandbox.workspaceAccess !== "ro",
+        },
+      },
+      ...(hasAgentMount
+        ? [
+            {
+              remote: agentContainerRoot,
+              owner: "agent" as const,
+              value: {
+                hostRoot: agentRoot,
+                writable: this.sandbox.workspaceAccess === "rw",
+              },
+            },
+          ]
+        : []),
+    ];
+    containerMounts.unshift(
+      ...this.readOnlyMounts().map((mount) => ({
+        remote: mount.containerPath,
+        owner:
+          resolveOpenShellWorkspaceRoot(containerMounts, mount.containerPath)?.owner ?? "workspace",
+        value: { hostRoot: path.resolve(mount.hostPath), writable: false },
+      })),
+    );
+    return containerMounts;
+  }
+
+  get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
+    return this.containerMounts()
+      .toSorted((a, b) => Number(a.owner === "agent") - Number(b.owner === "agent"))
+      .map((mount) => ({ hostRoot: mount.value.hostRoot, containerRoot: mount.remote }));
+  }
+
+  private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
+    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
+    const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
+    // The caller's whitespace is part of the filesystem identity; only the
+    // invocation base goes through the trimming resolver.
+    const input = params.filePath;
+
+    const containerMounts = this.containerMounts();
+    const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {
+      const containerMount = resolveOpenShellWorkspaceRoot(containerMounts, containerPath);
+      if (!containerMount) {
+        return undefined;
+      }
+      const relative = path.posix.relative(containerMount.remote, containerPath) || "";
+      const hostPath = relative
+        ? path.resolve(containerMount.value.hostRoot, ...relative.split("/"))
+        : containerMount.value.hostRoot;
+      if (!isPathInside(containerMount.value.hostRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
+      return {
+        hostPath,
+        relativePath:
+          containerMount.owner === "agent"
+            ? relative
+              ? containerMount.remote + "/" + relative
+              : containerMount.remote
+            : path.posix.relative(workspaceContainerRoot, containerPath),
+        containerPath: relative
+          ? path.posix.join(containerMount.remote, relative)
+          : containerMount.remote,
+        mountHostRoot: containerMount.value.hostRoot,
+        writable: containerMount.value.writable,
+      };
+    };
+    const containerCwd = params.cwd?.replace(/\\/g, "/");
+    const cwdMount = containerCwd
+      ? resolveOpenShellWorkspaceRoot(containerMounts, containerCwd)
+      : undefined;
+    const containerInput = path.posix.isAbsolute(input)
+      ? input
+      : cwdMount || !params.cwd
+        ? path.posix.resolve(containerCwd ?? workspaceContainerRoot, input)
+        : undefined;
+    if (containerInput) {
+      const target = resolveContainerTarget(containerInput);
+      if (target) {
+        return target;
+      }
+      if (
+        cwdMount ||
+        containerMounts.some(
+          (mount) => input === mount.remote || input.startsWith(`${mount.remote}/`),
+        )
+      ) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
+    }
+
+    const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
+    const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
+
+    // Resolve protected host aliases before the writable workspace that contains
+    // them; virtual mount shadows still resolve through the container table below.
+    for (const mount of containerMounts) {
+      if (isPathInside(mount.value.hostRoot, hostPath)) {
+        const relative = path
+          .relative(mount.value.hostRoot, hostPath)
+          .split(path.sep)
+          .join(path.posix.sep);
+        const target = resolveContainerTarget(path.posix.join(mount.remote, relative));
+        if (!target) {
+          throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+        }
+        return target;
+      }
+    }
+
+    throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
+  }
+}
+
+async function removeLocalRootPath(params: {
+  target: ResolvedMountPath;
+  recursive?: boolean;
+  force?: boolean;
+}): Promise<void> {
+  const root = await fsRoot(params.target.mountHostRoot);
+  const relativePath = relativeToRoot(params.target, params.target.hostPath);
+  try {
+    if (params.force === false) {
+      await fsPromises.lstat(params.target.hostPath);
+    }
+    // Clearing a mounted root removes its contents while retaining the mount directory.
+    const targets =
+      params.recursive && !relativePath
+        ? (await root.list("")).map((name) =>
+            relativeToRoot(params.target, path.join(params.target.hostPath, name)),
+          )
+        : [relativePath];
+    for (const target of targets) {
+      await root.remove(target, {
+        force: params.force !== false,
+        ...(params.recursive
+          ? { recursive: true, order: "sorted" as const, maxEntries: Infinity, maxDepth: Infinity }
+          : {}),
+      });
+    }
+  } catch (err) {
+    if (params.force !== false && isNotFoundError(err)) {
+      return;
+    }
+    throw err;
+  }
+}
+
+function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {
+  const relativePath = path.relative(target.mountHostRoot, hostPath);
+  // Computed relative names must not trigger home expansion.
+  return relativePath ? `.${path.sep}${relativePath}` : "";
+}
+
+async function assertRenameSupported(
+  from: ResolvedMountPath,
+  to: ResolvedMountPath,
+): Promise<void> {
+  const stats = await fsPromises.lstat(from.hostPath);
+  if (stats.isSymbolicLink()) {
+    throw new Error("Sandbox symlink rename sources are not supported by the local mirror bridge");
+  }
+  if (stats.isFile() && stats.nlink > 1) {
+    throw new Error(
+      "Sandbox hardlinked rename sources are not supported by the local mirror bridge",
+    );
+  }
+  if (from.mountHostRoot !== to.mountHostRoot) {
+    throw new Error("OpenShell cross-root mirror renames require pinned fs-safe support");
+  }
+  const destinationParentStats = await nearestExistingDirectoryStats({
+    root: from.mountHostRoot,
+    targetPath: path.dirname(to.hostPath),
+  });
+  if (stats.dev !== destinationParentStats.dev) {
+    throw new Error("OpenShell cross-device mirror renames require pinned fs-safe support");
+  }
+}
+
+async function nearestExistingDirectoryStats(params: {
+  root: string;
+  targetPath: string;
+}): Promise<Awaited<ReturnType<typeof fsPromises.lstat>>> {
+  const rootPath = path.resolve(params.root);
+  let cursor = path.resolve(params.targetPath);
+  while (isPathInside(rootPath, cursor)) {
+    const stats = await lstatIfExists(cursor, "ENOENT");
+    if (stats) {
+      if (!stats.isDirectory()) {
+        throw new Error(`Sandbox rename destination parent is not a directory: ${cursor}`);
+      }
+      return stats;
+    }
+    const next = path.dirname(cursor);
+    if (next === cursor) {
+      break;
+    }
+    cursor = next;
+  }
+  return await fsPromises.lstat(rootPath);
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return (
+    (err instanceof FsSafeError && err.code === "not-found") || extractErrorCode(err) === "ENOENT"
+  );
+}
+
+async function assertLocalPathSafety(params: {
+  target: ResolvedMountPath;
+  allowFinalSymlinkForUnlink: boolean;
+}): Promise<void> {
+  const { hostPath, mountHostRoot } = params.target;
+  const unlinkSymlink =
+    params.allowFinalSymlinkForUnlink &&
+    hostPath !== mountHostRoot &&
+    (await lstatIfExists(hostPath, "ENOENT"))?.isSymbolicLink();
+  await assertNoSymlinkParents({
+    rootDir: mountHostRoot,
+    targetPath: unlinkSymlink ? path.dirname(hostPath) : hostPath,
+    messagePrefix: `Sandbox boundary checks failed: ${params.target.containerPath}`,
+  });
+}

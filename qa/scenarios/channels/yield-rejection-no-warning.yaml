@@ -1,0 +1,117 @@
+title: Rejected sessions_yield does not post a failure notice
+
+scenario:
+  id: yield-rejection-no-warning
+  surface: channel
+  coverage:
+    primary:
+      - channels.message-final-reply
+    secondary:
+      - media-generation.background-task-creation
+      - agent-runtime.failure-recovery-evidence
+  objective: Under message_tool visible replies (messages.visibleReplies and messages.groupChat.visibleReplies), a group turn that starts detached image generation, calls sessions_yield (which cannot wait for detached media), sends a progress ack with message(final=false), and ends empty must not post a "⚠️ Yield failed" warning or any other failure notice to the group; the image arrives later.
+  gatewayConfigPatch:
+    messages:
+      visibleReplies: message_tool
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - The mock turn calls image_generate, then sessions_yield while the delayed image is still pending, then message(action=send, final=false), then ends with empty text.
+    - The group receives the progress ack marker exactly once.
+    - No outbound message in the group is failure-marked (no ⚠️ tool warning, no empty-reply notice).
+    - The generated image is delivered to the group after the ack.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/tools/image-generation.md
+  codeRefs:
+    - src/agents/tools/sessions-yield-tool.ts
+    - src/agents/embedded-agent-runner/run/attempt-terminal-evidence.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Drive image_generate -> sessions_yield -> message(final=false) -> empty final in a message_tool_only group and verify no failure notice reaches the group before the image.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-yield-rejection-group
+      promptSnippet: yield rejection qa check
+      prompt: "@openclaw yield rejection qa check: generate a QA lighthouse image and let me know when it is ready."
+      ackMarker: QA-YIELD-REJECTION-ACK
+      settleMs: 10000
+
+flow:
+  steps:
+    - name: keeps a rejected yield out of group-visible failure notices
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: ensureImageGenerationConfigured
+          args:
+            - ref: env
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: group
+            senderId: qa-yield-operator
+            senderName: QA Yield Operator
+            text:
+              expr: config.prompt
+        # Poll the snapshot directly: transport waits abort on any failure-marked
+        # outbound, and this scenario must observe (not throw on) such messages.
+        - set: ackMessage
+          value:
+            expr: "(async () => { const deadline = Date.now() + liveTurnTimeoutMs(env, 60000); do { const message = state.getSnapshot().messages.find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && String(candidate.text ?? '').includes(config.ackMarker)); if (message) { return message; } await sleep(100); } while (Date.now() < deadline); throw new Error(`timed out waiting for the progress ack; group outbound=${JSON.stringify(state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId).map((candidate) => ({ text: candidate.text, isError: candidate.isError ?? false })))}`); })()"
+        - call: sleep
+          args:
+            - expr: config.settleMs
+        - set: groupOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId)"
+        - set: outboundSummary
+          value:
+            expr: "JSON.stringify(groupOutbound.map((message) => ({ text: message.text, isError: message.isError ?? false, attachments: message.attachments?.length ?? 0, msAfterAck: message.timestamp - ackMessage.timestamp })))"
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: yieldResultRequest
+          value:
+            expr: "scenarioRequests.find((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.message === config.ackMarker)"
+        - set: yieldResultStatus
+          value:
+            expr: "(/\"status\":\\s*\"([a-z_]+)\"/.exec(String(yieldResultRequest?.toolOutput ?? '')) ?? [])[1] ?? 'unknown'"
+        - set: ackOutbound
+          value:
+            expr: "groupOutbound.filter((message) => String(message.text ?? '').includes(config.ackMarker))"
+        - set: failureOutbound
+          value:
+            expr: "groupOutbound.filter((message) => message.isError === true || /⚠️|yield failed/i.test(String(message.text ?? '')))"
+        - set: mediaOutbound
+          value:
+            expr: "groupOutbound.filter((message) => (message.attachments?.length ?? 0) > 0)"
+        - assert:
+            expr: "scenarioRequests.some((request) => request.plannedToolName === 'image_generate')"
+            message: expected the mock turn to start image_generate
+        - assert:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'sessions_yield').length === 1"
+            message: expected exactly one sessions_yield call
+        - assert:
+            expr: "yieldResultRequest?.plannedToolArgs?.final === false"
+            message: expected the progress ack message(action=send, final=false) to follow the sessions_yield result
+        - assert:
+            expr: "ackOutbound.length === 1"
+            message:
+              expr: "`expected exactly one progress ack in the group; outbound=${outboundSummary}`"
+        - assert:
+            expr: "failureOutbound.length === 0"
+            message:
+              expr: "`an acknowledged detached handoff must not post a failure notice; sessions_yield status=${yieldResultStatus}; outbound=${outboundSummary}`"
+        - assert:
+            expr: "mediaOutbound.length === 1 && mediaOutbound[0].timestamp > ackMessage.timestamp"
+            message:
+              expr: "`expected the generated image once after the ack; outbound=${outboundSummary}`"
+      detailsExpr: "`sessions_yield status=${yieldResultStatus}; outbound=${outboundSummary}`"

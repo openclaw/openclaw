@@ -1,0 +1,117 @@
+import { resolveBootstrapMode, type BootstrapMode } from "../../agents/bootstrap-mode.js";
+import {
+  buildFullBootstrapPromptLines,
+  buildLimitedBootstrapPromptLines,
+} from "../../agents/bootstrap-prompt.js";
+import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
+import {
+  resolveEffectiveToolInventory,
+  acquireEffectiveToolInventoryRuntimeModelContext,
+} from "../../agents/tools-effective-inventory.js";
+import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
+const BARE_SESSION_RESET_PROMPT_BASE =
+  "A new session was started via /new or /reset. Execute your Session Startup sequence now - read the required files before responding to the user. If BOOTSTRAP.md exists in the provided Project Context, read it and follow its instructions first. Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.";
+
+const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING = [
+  "A new session was started via /new or /reset while bootstrap is still pending for this workspace.",
+  ...buildFullBootstrapPromptLines({
+    readLine:
+      "Please read BOOTSTRAP.md from the workspace now and follow it before replying normally.",
+    firstReplyLine:
+      "Your first user-visible reply must follow BOOTSTRAP.md, not a generic greeting.",
+  }),
+  "If the runtime model differs from default_model in the system prompt, mention the default model only after handling BOOTSTRAP.md.",
+  "Do not mention internal steps, files, tools, or reasoning.",
+].join(" ");
+
+const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED = [
+  "A new session was started via /new or /reset while bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
+  ...buildLimitedBootstrapPromptLines({
+    introLine:
+      "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
+    nextStepLine:
+      "Typical next steps include switching to a primary interactive run with normal workspace access or having the user delete the workspace BOOTSTRAP.md afterward.",
+  }).slice(1),
+  "If the runtime model differs from default_model in the system prompt, mention the default model only after you have handled this limitation.",
+  "Do not mention internal steps, files, tools, or reasoning.",
+].join(" ");
+
+export async function resolveBareResetBootstrapFileAccess(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): Promise<boolean> {
+  const cfg = params.cfg;
+  if (!cfg) {
+    return false;
+  }
+  const runtimeModelParams = {
+    cfg,
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  };
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext(runtimeModelParams);
+  try {
+    return await acquired.run(async (runtimeModelContext) => {
+      const inventory = await resolveEffectiveToolInventory({
+        ...runtimeModelParams,
+        sessionKey: params.sessionKey,
+        modelApi: runtimeModelContext.modelApi,
+        runtimeModel: runtimeModelContext.runtimeModel,
+      });
+      return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
+    });
+  } finally {
+    await acquired[Symbol.asyncDispose]();
+  }
+}
+
+export async function resolveBareSessionResetPromptState(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  isPrimaryRun?: boolean;
+  isCanonicalWorkspace?: boolean;
+  hasBootstrapFileAccess?: boolean | (() => boolean | Promise<boolean>);
+}): Promise<{
+  bootstrapMode: BootstrapMode;
+  prompt: string;
+  shouldPrependStartupContext: boolean;
+}> {
+  const bootstrapPending = params.workspaceDir
+    ? await isWorkspaceBootstrapPending(params.workspaceDir)
+    : false;
+  const hasBootstrapFileAccess = bootstrapPending
+    ? typeof params.hasBootstrapFileAccess === "function"
+      ? await params.hasBootstrapFileAccess()
+      : (params.hasBootstrapFileAccess ?? true)
+    : true;
+  const bootstrapMode = resolveBootstrapMode({
+    bootstrapPending,
+    runKind: "default",
+    isInteractiveUserFacing: true,
+    isPrimaryRun: params.isPrimaryRun ?? true,
+    isCanonicalWorkspace: params.isCanonicalWorkspace ?? true,
+    hasBootstrapFileAccess,
+  });
+  return {
+    bootstrapMode,
+    // Reset turns need today's date to select the daily memory files.
+    prompt: appendCronStyleCurrentTimeLine(
+      bootstrapMode === "full"
+        ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING
+        : bootstrapMode === "limited"
+          ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
+          : BARE_SESSION_RESET_PROMPT_BASE,
+      params.cfg ?? {},
+      Date.now(),
+    ),
+    shouldPrependStartupContext: bootstrapMode === "none",
+  };
+}

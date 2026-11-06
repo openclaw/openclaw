@@ -1,0 +1,118 @@
+import Foundation
+import OpenClawKit
+
+/// Single source of truth for "how we connect" to the current gateway.
+///
+/// The iOS app maintains two WebSocket sessions to the same gateway:
+/// - a `role=node` session for device capabilities (`node.invoke.*`)
+/// - a `role=operator` session for chat/talk/config (`chat.*`, `talk.*`, etc.)
+///
+/// Both sessions derive routing and authentication ownership from the route's
+/// `stableID`. TLS certificate pins prove transport trust but are not gateway identity.
+struct GatewayConnectConfig: Sendable {
+    let url: URL
+    let stableID: String
+    var tls: GatewayTLSParams?
+    let token: String?
+    let bootstrapToken: String?
+    let password: String?
+    var nodeOptions: GatewayConnectOptions
+    var ingressAuthorization: GatewayIngressAuthorization?
+
+    /// Stable, non-empty route identifier used for UI/event ownership.
+    /// If the caller doesn't provide a stableID, fall back to URL identity.
+    var effectiveStableID: String {
+        GatewayStableIdentifier.exact(self.stableID) ?? self.url.absoluteString
+    }
+
+    struct ControlUIInputs: Hashable, Sendable {
+        let ingressRevision: UInt64?
+        let ingressRegistrationID: UUID?
+        let url: URL
+        let stableID: ExactOpaqueIdentifierKey
+        let tlsRequired: Bool?
+        let tlsExpectedFingerprint: String?
+        let tlsAllowTOFU: Bool?
+        let tlsStoreKey: String?
+        let token: String?
+        let password: String?
+        let clientId: String
+        let includeDeviceIdentity: Bool
+        let allowStoredDeviceAuth: Bool
+        let deviceIdentityProfile: String
+        let deviceAuthGatewayID: ExactOpaqueIdentifierKey
+    }
+
+    /// Control UI authentication does not consume node registration metadata.
+    /// Keep bridge authority and WebView replacement on these same inputs.
+    var controlUIInputs: ControlUIInputs {
+        ControlUIInputs(
+            ingressRevision: self.ingressAuthorization?.revision,
+            ingressRegistrationID: self.ingressAuthorization?.registrationID,
+            url: self.url,
+            stableID: ExactOpaqueIdentifierKey(self.effectiveStableID),
+            tlsRequired: self.tls?.required,
+            tlsExpectedFingerprint: self.tls?.expectedFingerprint,
+            tlsAllowTOFU: self.tls?.allowTOFU,
+            tlsStoreKey: self.tls?.storeKey,
+            token: self.token,
+            password: self.password,
+            clientId: self.nodeOptions.clientId,
+            includeDeviceIdentity: self.nodeOptions.includeDeviceIdentity,
+            allowStoredDeviceAuth: self.nodeOptions.allowStoredDeviceAuth,
+            deviceIdentityProfile: self.nodeOptions.deviceIdentityProfile.rawValue,
+            deviceAuthGatewayID: ExactOpaqueIdentifierKey(
+                self.nodeOptions.deviceAuthGatewayID ?? self.effectiveStableID))
+    }
+
+    func hasSameControlUIInputs(as other: GatewayConnectConfig) -> Bool {
+        self.controlUIInputs == other.controlUIInputs
+    }
+
+    func hasSameConnectionInputs(as other: GatewayConnectConfig) -> Bool {
+        self.url == other.url &&
+            ExactOpaqueIdentifierKey(self.effectiveStableID) == ExactOpaqueIdentifierKey(other.effectiveStableID) &&
+            self.tls == other.tls &&
+            self.token == other.token &&
+            self.bootstrapToken == other.bootstrapToken &&
+            self.password == other.password &&
+            self.ingressAuthorization?.origin == other.ingressAuthorization?.origin &&
+            self.ingressAuthorization?.revision == other.ingressAuthorization?.revision &&
+            self.ingressAuthorization?.registrationID == other.ingressAuthorization?.registrationID &&
+            Self.sameOptions(self.nodeOptions, other.nodeOptions)
+    }
+
+    func webSocketSessionBox() -> WebSocketSessionBox? {
+        let params = self.tls ?? (self.ingressAuthorization == nil ? nil : GatewayTLSParams(
+            required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil))
+        return params.map {
+            WebSocketSessionBox(session: GatewayTLSPinningSession(
+                params: $0,
+                allowsRedirects: self.ingressAuthorization == nil,
+                allowsStoredCredentials: self.ingressAuthorization == nil))
+        }
+    }
+
+    private static func sameOptions(_ lhs: GatewayConnectOptions, _ rhs: GatewayConnectOptions) -> Bool {
+        lhs.role == rhs.role &&
+            lhs.scopesAreExplicit == rhs.scopesAreExplicit &&
+            lhs.clientId == rhs.clientId &&
+            lhs.clientMode == rhs.clientMode &&
+            lhs.clientDisplayName == rhs.clientDisplayName &&
+            lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
+            lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
+            lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
+            lhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) ==
+            rhs.deviceAuthGatewayID.map(ExactOpaqueIdentifierKey.init) &&
+            self.normalizedValues(lhs.scopes) == self.normalizedValues(rhs.scopes) &&
+            self.normalizedValues(lhs.caps) == self.normalizedValues(rhs.caps) &&
+            self.normalizedValues(lhs.commands) == self.normalizedValues(rhs.commands) &&
+            lhs.permissions == rhs.permissions
+    }
+
+    private static func normalizedValues(_ values: [String]) -> [String] {
+        values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
+}

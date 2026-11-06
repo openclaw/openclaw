@@ -1,0 +1,472 @@
+// Discord tests cover message handler.process plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ReplyPayload,
+  DispatchReplyWithBufferedBlockDispatcher,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
+
+type SessionRecord = Parameters<
+  typeof import("openclaw/plugin-sdk/conversation-runtime").recordInboundSession
+>[0];
+type DispatchResult = Pick<
+  Awaited<ReturnType<DispatchReplyWithBufferedBlockDispatcher>>,
+  "queuedFinal" | "counts" | "failedCounts" | "settledReceipt"
+>;
+
+const runtimeEnvMocks = vi.hoisted(() => ({
+  logVerbose: vi.fn(),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: runtimeEnvMocks.logVerbose,
+  sleepWithAbort: runtimeEnvMocks.sleepWithAbort,
+}));
+
+const getGlobalHookRunner = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner,
+  };
+});
+
+export const getGlobalHookRunnerForTest = getGlobalHookRunner;
+
+const sendMocks = vi.hoisted(() => ({
+  reactMessageDiscord: vi.fn<
+    (channelId: string, messageId: string, emoji: string, opts?: unknown) => Promise<void>
+  >(async () => {}),
+  removeReactionDiscord: vi.fn<
+    (channelId: string, messageId: string, emoji: string, opts?: unknown) => Promise<void>
+  >(async () => {}),
+}));
+export function createMockDraftStream() {
+  let messageId: string | undefined = "preview-1";
+  let text = "";
+  return {
+    update: vi.fn<(next: string) => void>((next) => {
+      text = next;
+      messageId ??= "preview-next";
+    }),
+    flush: vi.fn(async () => {}),
+    messageId: vi.fn(() => messageId),
+    lastDeliveredText: vi.fn(() => text),
+    isStopped: vi.fn(() => false),
+    clear: vi.fn(async () => {
+      messageId = undefined;
+    }),
+    deleteCurrentMessage: vi.fn(async () => {
+      messageId = undefined;
+    }),
+    discardPending: vi.fn(async () => {}),
+    seal: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    retarget: vi.fn(async () => {}),
+    cleanupPendingMessages: vi.fn(async () => {}),
+    forceNewMessage: vi.fn(() => {
+      messageId = undefined;
+      text = "";
+    }),
+  };
+}
+
+const deliveryMocks = vi.hoisted(() => ({
+  deliverDiscordReply: vi.fn<(params: unknown) => Promise<{ visibleReplySent: boolean }>>(
+    async () => ({
+      visibleReplySent: true,
+    }),
+  ),
+  createDiscordDraftStream: vi.fn<(params: unknown) => ReturnType<typeof createMockDraftStream>>(
+    () => createMockDraftStream(),
+  ),
+}));
+export const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
+export const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
+
+export function createNonTerminalToolWarningPayload(): ReplyPayload {
+  return setReplyPayloadMetadata(
+    {
+      text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      isError: true,
+    },
+    { nonTerminalToolErrorWarning: true },
+  );
+}
+
+vi.mock("../send.js", () => ({
+  reactMessageDiscord: async (
+    channelId: string,
+    messageId: string,
+    emoji: string,
+    opts?: unknown,
+  ) => {
+    await sendMocks.reactMessageDiscord(channelId, messageId, emoji, opts);
+    return { ok: true };
+  },
+  removeReactionDiscord: async (
+    channelId: string,
+    messageId: string,
+    emoji: string,
+    opts?: unknown,
+  ) => {
+    await sendMocks.removeReactionDiscord(channelId, messageId, emoji, opts);
+    return { ok: true };
+  },
+}));
+
+const typingMocks = vi.hoisted(() => ({
+  sendTyping: vi.fn<(params: { rest: unknown; channelId: string }) => Promise<void>>(
+    async () => {},
+  ),
+}));
+
+vi.mock("./typing.js", () => ({
+  sendTyping: typingMocks.sendTyping,
+}));
+
+const discordTargetMocks = vi.hoisted(() => ({
+  resolveDiscordTargetChannelId: vi.fn(async (target: string, _opts?: unknown) => ({
+    channelId: target === "user:u1" ? "dm-u1" : target,
+  })),
+}));
+
+vi.mock("../send.shared.js", () => ({
+  resolveDiscordTargetChannelId: (target: string, opts: unknown) =>
+    discordTargetMocks.resolveDiscordTargetChannelId(target, opts),
+}));
+
+vi.mock("../draft-stream.js", () => ({
+  createDiscordDraftStream: (params: unknown) => deliveryMocks.createDiscordDraftStream(params),
+}));
+
+vi.mock("./reply-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-delivery.js")>()),
+  deliverDiscordReply: (params: unknown) => deliveryMocks.deliverDiscordReply(params),
+}));
+
+export type DispatchInboundParams = {
+  ctx?: MsgContext;
+  dispatcher: {
+    sendBlockReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
+    sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
+    waitForIdle: () => Promise<void>;
+  };
+  replyOptions?: import("openclaw/plugin-sdk/reply-runtime").GetReplyOptions;
+};
+const dispatchInboundMessage = vi.hoisted(() =>
+  vi.fn<(params?: DispatchInboundParams) => Promise<DispatchResult>>(async () => ({
+    queuedFinal: false,
+    counts: { final: 0, tool: 0, block: 0 },
+  })),
+);
+const readAgentRunTerminalOutcome = vi.hoisted(() => vi.fn());
+const recordInboundSession = vi.hoisted(() =>
+  vi.fn<(params: SessionRecord) => Promise<void>>(async () => {}),
+);
+const configSessionsMocks = vi.hoisted(() => ({
+  getSessionEntry: vi.fn<(params?: unknown) => unknown>(() => undefined),
+  readLatestAssistantTextByIdentity: vi.fn<
+    (params?: unknown) => Promise<{ text: string; timestamp?: number } | undefined>
+  >(async () => undefined),
+  readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
+  resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
+    () => "/tmp/openclaw-discord-process-test-sessions.json",
+  ),
+}));
+export const getSessionEntry = configSessionsMocks.getSessionEntry;
+export const readLatestAssistantTextByIdentity =
+  configSessionsMocks.readLatestAssistantTextByIdentity;
+export const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
+const resolveStorePath = configSessionsMocks.resolveStorePath;
+const createDiscordRestClientSpy = vi.hoisted(() =>
+  vi.fn<
+    (params: unknown) => {
+      token: string;
+      rest: object;
+      account: { accountId: string; config: object };
+    }
+  >(() => ({
+    token: "",
+    rest: {},
+    account: { accountId: "default", config: {} },
+  })),
+);
+export const sendMocksForTest = sendMocks;
+export const typingMocksForTest = typingMocks;
+export const dispatchInboundMessageForTest = dispatchInboundMessage;
+export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
+export const recordInboundSessionForTest = recordInboundSession;
+let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
+let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
+let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
+
+const dispatchBufferedReply = vi.hoisted(() =>
+  vi.fn<
+    typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher
+  >(),
+);
+
+export const dispatchBufferedReplyForTest = dispatchBufferedReply;
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
+  dispatchReplyWithBufferedBlockDispatcher: dispatchBufferedReply.mockImplementation(
+    async (params) => {
+      const pendingDeliveries: Promise<void>[] = [];
+      const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+        const transformed = params.dispatcherOptions.transformReplyPayload
+          ? params.dispatcherOptions.transformReplyPayload(payload)
+          : payload;
+        if (!transformed) {
+          return;
+        }
+        const deliverPayload = params.dispatcherOptions.beforeDeliver
+          ? await params.dispatcherOptions.beforeDeliver(transformed, info)
+          : transformed;
+        if (!deliverPayload) {
+          return;
+        }
+        await params.dispatcherOptions.deliver(deliverPayload, info);
+      };
+      const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+        const delivery = Promise.resolve(deliver(payload, info)).catch(async (err: unknown) => {
+          await params.dispatcherOptions.onError?.(err, info);
+        });
+        pendingDeliveries.push(delivery);
+        return true;
+      };
+      const typingCallbacks = params.dispatcherOptions.typingCallbacks;
+      const replyOptions = {
+        ...params.replyOptions,
+        onReplyStart: params.dispatcherOptions.onReplyStart ?? typingCallbacks?.onReplyStart,
+        onTypingCleanup: params.dispatcherOptions.onCleanup ?? typingCallbacks?.onCleanup,
+      };
+      try {
+        return await dispatchInboundMessage({
+          ctx: params.ctx,
+          replyOptions,
+          dispatcher: {
+            sendBlockReply: vi.fn((payload: ReplyPayload) =>
+              queueDelivery(payload, { kind: "block" }),
+            ),
+            sendFinalReply: vi.fn((payload: ReplyPayload) =>
+              queueDelivery(payload, { kind: "final" }),
+            ),
+            waitForIdle: vi.fn(async () => {
+              await Promise.all(pendingDeliveries);
+            }),
+          },
+        });
+      } finally {
+        await params.dispatcherOptions.onSettled?.();
+        await params.dispatcherOptions.onFreshSettledDelivery?.();
+        await params.dispatcherOptions.onIdle?.();
+        typingCallbacks?.onIdle?.();
+      }
+    },
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
+  return {
+    ...actual,
+    readAgentRunTerminalOutcome,
+    dispatchChannelInboundTurn: async (
+      plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
+    ) => {
+      const { cfg, route, delivery, sessionInitRetry, ...prepared } = plan;
+      const runDispatch = async () => {
+        for (let retryIndex = 0; ; retryIndex += 1) {
+          try {
+            return await replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: plan.ctxPayload,
+              cfg,
+              dispatcherOptions: {
+                ...plan.dispatcherOptions,
+                deliver: (payload, info) => {
+                  const providerInfo = {
+                    ...info,
+                    onPlatformSendDispatch: async () => undefined,
+                    assertPlatformSendAuthorized: () => undefined,
+                  };
+                  return delivery.deliverWithProviderMessageSending(payload, providerInfo);
+                },
+                onError: delivery.onError,
+              },
+              toolsAllow: plan.toolsAllow,
+              replyOptions: plan.replyOptions,
+              replyResolver: plan.replyResolver,
+            });
+          } catch (error) {
+            const delayMs = sessionInitRetry?.delaysMs[retryIndex];
+            const message = error instanceof Error ? error.message : String(error);
+            if (
+              delayMs === undefined ||
+              sessionInitRetry?.signal?.aborted === true ||
+              !/^reply session initialization conflicted for \S+$/u.test(message)
+            ) {
+              throw error;
+            }
+            await sessionInitRetry?.sleep?.(delayMs, sessionInitRetry.signal);
+          }
+        }
+      };
+      return await actual.runPreparedInboundReply({
+        ...prepared,
+        routeSessionKey: route.sessionKey,
+        storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+        recordInboundSession,
+        runDispatch,
+      });
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  recordInboundSession: (params: SessionRecord) => recordInboundSession(params),
+  registerSessionBindingAdapterV2: vi.fn(),
+  unregisterSessionBindingAdapter: vi.fn(),
+  resolveThreadBindingConversationIdFromBindingId: (bindingId: string) =>
+    bindingId.split(":").at(-1) ?? bindingId,
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  getSessionEntryAsync: async (params?: unknown) => configSessionsMocks.getSessionEntry(params),
+  readSessionUpdatedAtAsync: async (params?: unknown) =>
+    configSessionsMocks.readSessionUpdatedAt(params),
+  resolveStorePath: (path?: unknown, opts?: unknown) =>
+    configSessionsMocks.resolveStorePath(path, opts),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  readLatestAssistantTextByIdentity: (params?: unknown) =>
+    configSessionsMocks.readLatestAssistantTextByIdentity(params),
+}));
+
+vi.mock("../client.js", () => ({
+  createDiscordRuntimeAccountContext: (params: { cfg: unknown; accountId: string }) => ({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }),
+  createDiscordRestClient: (params: unknown) => createDiscordRestClientSpy(params),
+}));
+
+export const BASE_CHANNEL_ROUTE = {
+  agentId: "main",
+  channel: "discord",
+  accountId: "default",
+  sessionKey: "agent:main:discord:channel:c1",
+  mainSessionKey: "agent:main:main",
+} as const;
+
+export async function createBaseContext(
+  ...args: Parameters<typeof createBaseDiscordMessageContext>
+): Promise<Awaited<ReturnType<typeof createBaseDiscordMessageContext>>> {
+  return await createBaseDiscordMessageContext(...args);
+}
+
+export async function createAutomaticSourceDeliveryContext(
+  overrides: Parameters<typeof createBaseDiscordMessageContext>[0] = {},
+  options: { disableStatusReactions?: boolean } = {},
+): Promise<Awaited<ReturnType<typeof createBaseDiscordMessageContext>>> {
+  const cfg = (overrides.cfg ?? {}) as OpenClawConfig;
+  return await createBaseContext({
+    ...overrides,
+    cfg: {
+      ...cfg,
+      messages: {
+        ...cfg.messages,
+        ...(options.disableStatusReactions ? { statusReactions: { enabled: false } } : {}),
+        ackReaction: cfg.messages?.ackReaction ?? "👀",
+        groupChat: {
+          ...cfg.messages?.groupChat,
+          visibleReplies: "automatic",
+        },
+      },
+    },
+  });
+}
+
+export function createDirectMessageContextOverrides(
+  ...args: Parameters<typeof createDiscordDirectMessageContextOverrides>
+): ReturnType<typeof createDiscordDirectMessageContextOverrides> {
+  return createDiscordDirectMessageContextOverrides(...args);
+}
+
+export function createNoQueuedDispatchResult() {
+  return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+}
+
+export function registerDiscordProcessTestLifecycle() {
+  beforeAll(async () => {
+    vi.useRealTimers();
+    ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
+      await import("./message-handler.test-harness.js"));
+    ({ processDiscordMessage } = await import("./message-handler.process.js"));
+    ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
+  });
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    runtimeEnvMocks.logVerbose.mockReset();
+    runtimeEnvMocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
+    sendMocks.reactMessageDiscord.mockClear();
+    sendMocks.removeReactionDiscord.mockClear();
+    typingMocks.sendTyping.mockClear();
+    typingMocks.sendTyping.mockResolvedValue(undefined);
+    discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
+    deliverDiscordReply.mockClear();
+    createDiscordDraftStream.mockClear();
+    dispatchInboundMessage.mockClear();
+    readAgentRunTerminalOutcome.mockReset().mockReturnValue(undefined);
+    recordInboundSession.mockClear();
+    readSessionUpdatedAt.mockClear();
+    getSessionEntry.mockClear();
+    readLatestAssistantTextByIdentity.mockClear();
+    resolveStorePath.mockClear();
+    createDiscordRestClientSpy.mockClear();
+    getGlobalHookRunner.mockReset();
+    dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
+    recordInboundSession.mockResolvedValue(undefined);
+    readSessionUpdatedAt.mockReturnValue(undefined);
+    getSessionEntry.mockReturnValue(undefined);
+    readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
+    resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+    getGlobalHookRunner.mockReturnValue(null);
+    await resetThreadBindingsForTests();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+  });
+}
+
+export function getLastRouteUpdate() {
+  return recordInboundSession.mock.calls.at(-1)?.[0]?.updateLastRoute;
+}
+
+export function getLastDispatchCtx() {
+  return dispatchInboundMessage.mock.calls.at(-1)?.[0]?.ctx;
+}
+
+export function getLastDispatchReplyOptions() {
+  return dispatchInboundMessage.mock.calls.at(-1)?.[0]?.replyOptions;
+}
+
+export async function runProcessDiscordMessage(ctx: DiscordMessagePreflightContext): Promise<void> {
+  await processDiscordMessage(ctx);
+}

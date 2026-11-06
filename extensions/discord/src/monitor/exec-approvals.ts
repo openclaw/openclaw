@@ -1,0 +1,227 @@
+import { ComponentType } from "discord-api-types/v10";
+import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { PendingApprovalView } from "openclaw/plugin-sdk/approval-handler-runtime";
+import {
+  formatApprovalDecisionLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
+import type {
+  DiscordExecApprovalConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { DISCORD_APPROVAL_DECISIONS, parseExecApprovalData } from "../approval-custom-id.js";
+import {
+  DISCORD_APPROVAL_ALLOWED_MENTIONS,
+  formatDiscordApprovalDisplayValue,
+} from "../approval-message-safety.js";
+import {
+  discordApprovalMessageUpdates,
+  hasDiscordApprovalControl,
+} from "../approval-message-updates.js";
+import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
+import type {
+  BaseMessageInteractiveComponent,
+  BaseComponentInteraction,
+  ComponentData,
+  MessagePayloadObject,
+} from "../internal/discord.js";
+import { replySilently } from "./agent-components-reply.js";
+
+type ExecApprovalButtonContext = {
+  getApprovers: () => string[];
+  resolveApproval: (
+    approvalId: string,
+    approvalKind: PendingApprovalView["approvalKind"],
+    decision: ExecApprovalDecision,
+    senderId: string,
+  ) => Promise<ExecApprovalResolveResult>;
+};
+
+type ExecApprovalResolveResult =
+  | { ok: true; resolution: ApprovalResolveResult }
+  | { ok: false; reason: "error" | "not-found" };
+
+function resolveTerminalLabel(approval: ApprovalResolveResult["approval"]): string {
+  if (approval.status === "allowed" || approval.status === "denied") {
+    return formatApprovalDecisionLabel(approval.decision);
+  }
+  return approval.status === "expired" ? "Expired" : "Cancelled";
+}
+
+function buildTerminalPayload(params: {
+  approval: ApprovalResolveResult["approval"];
+  applied: boolean;
+}): MessagePayloadObject {
+  const { approval } = params;
+  const label = resolveTerminalLabel(approval);
+  const accentColor =
+    approval.status === "denied" ? 0xed4245 : approval.status === "allowed" ? 0x57f287 : 0x99aab5;
+  return {
+    allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS,
+    components: [
+      {
+        type: ComponentType.Container,
+        accent_color: accentColor,
+        components: [
+          {
+            type: ComponentType.TextDisplay,
+            content: params.applied ? "## Approval resolved" : "## Approval already resolved",
+          },
+          { type: ComponentType.TextDisplay, content: `Recorded result: **${label}**` },
+          { type: ComponentType.Separator, divider: false, spacing: 1 },
+          {
+            type: ComponentType.TextDisplay,
+            content: `-# ID: ${formatDiscordApprovalDisplayValue(approval.id)}`,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function isStructuredApprovalNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const record = err as {
+    gatewayCode?: unknown;
+    details?: { reason?: unknown } | null;
+  };
+  if (record.gatewayCode === "APPROVAL_NOT_FOUND") {
+    return true;
+  }
+  return (
+    record.gatewayCode === "INVALID_REQUEST" && record.details?.reason === "APPROVAL_NOT_FOUND"
+  );
+}
+
+export function createExecApprovalButton(
+  ctx: ExecApprovalButtonContext,
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
+    customId: "execapproval:seed=1",
+    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
+      const parsed = parseExecApprovalData(data);
+      if (!parsed) {
+        await replySilently(interaction, {
+          content: "This approval is no longer valid.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const approvers = ctx.getApprovers();
+      const userId = interaction.userId;
+      if (!approvers.some((id) => id === userId)) {
+        await replySilently(interaction, {
+          content: "⛔ You are not authorized to approve requests.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const decisionLabel = DISCORD_APPROVAL_DECISIONS[parsed.action].label;
+
+      try {
+        await interaction.acknowledge();
+      } catch {
+        // A failed Discord acknowledgement must not discard an approval decision.
+      }
+
+      const result = await ctx.resolveApproval(
+        parsed.approvalId,
+        parsed.approvalKind,
+        parsed.action,
+        userId,
+      );
+      if (!result.ok) {
+        try {
+          await interaction.followUp({
+            content:
+              result.reason === "not-found"
+                ? `That approval request is no longer pending. It may have expired or already been resolved.`
+                : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
+            ephemeral: true,
+          });
+        } catch {
+          // The Gateway result is authoritative even if Discord feedback fails.
+        }
+        return;
+      }
+      const terminalLabel = resolveTerminalLabel(result.resolution.approval);
+      let terminalized = false;
+      try {
+        if (interaction.message) {
+          terminalized = await discordApprovalMessageUpdates.enqueue(
+            interaction.message.id,
+            async () => {
+              // A native application update may have finished while resolution was awaited.
+              if (!hasDiscordApprovalControl(await interaction.fetchReply(), parsed)) {
+                return false;
+              }
+              await interaction.editReply(
+                buildTerminalPayload({
+                  approval: result.resolution.approval,
+                  applied: result.resolution.applied,
+                }),
+              );
+              return true;
+            },
+          );
+        }
+      } catch {
+        // The approval is already resolved; fall back to a separate receipt below.
+      }
+      if (!terminalized || !result.resolution.applied) {
+        try {
+          await interaction.followUp({
+            content: result.resolution.applied
+              ? `Approval resolved: ${terminalLabel}.`
+              : `This approval was already resolved: ${terminalLabel}.`,
+            ephemeral: true,
+          });
+        } catch {
+          // Resolving an approval does not depend on delivering its receipt.
+        }
+      }
+    },
+  };
+}
+
+export function createDiscordExecApprovalButtonContext(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  config: DiscordExecApprovalConfig;
+}): ExecApprovalButtonContext {
+  return {
+    getApprovers: () =>
+      getDiscordExecApprovalApprovers({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        configOverride: params.config,
+      }),
+    resolveApproval: async (approvalId, approvalKind, decision, senderId) => {
+      try {
+        const resolution = await resolveApprovalOverGateway({
+          cfg: params.cfg,
+          approvalId,
+          approvalKind,
+          decision,
+          channel: "discord",
+          accountId: params.accountId,
+          senderId,
+        });
+        return { ok: true, resolution };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: isStructuredApprovalNotFoundError(err) ? "not-found" : "error",
+        };
+      }
+    },
+  };
+}

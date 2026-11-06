@@ -1,0 +1,78 @@
+import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
+import type {
+  ConfigFileSnapshot,
+  LegacyConfigIssue,
+  OpenClawConfig,
+} from "../../../config/types.js";
+import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
+import {
+  collectDoctorConfigRepairPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../../../plugins/doctor-contract-registry.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
+
+function collectPluginLegacyConfigRules(
+  raw: unknown,
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+): LegacyConfigRule[] {
+  const channelIds = new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
+  const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
+    (pluginId) => !channelIds.has(pluginId),
+  );
+  if (pluginIds.length === 0) {
+    return [];
+  }
+  return listPluginDoctorLegacyConfigRules({ config: raw as OpenClawConfig, pluginIds });
+}
+
+/** Find legacy config issues using core rules plus relevant channel/plugin doctor contracts. */
+export function findDoctorLegacyConfigIssues(
+  raw: unknown,
+  sourceRaw?: unknown,
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+): LegacyConfigIssue[] {
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
+}
+
+export async function addDoctorLegacyIssues(
+  snapshot: ConfigFileSnapshot,
+  pluginMetadataSnapshot?: PluginMetadataSnapshot,
+): Promise<ConfigFileSnapshot> {
+  if (!snapshot.exists) {
+    return snapshot;
+  }
+  if (!pluginMetadataSnapshot) {
+    // Core-invalid snapshots may skip metadata; diagnostics still need worker-owned policy facts.
+    const activatePluginState = await preparePluginMetadataMachineStateAsync({});
+    activatePluginState();
+  }
+  const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
+  const collect = async () => {
+    await preparePluginDoctorContractModules({
+      config: resolvedRaw,
+      pluginIds: collectDoctorConfigRepairPluginIds(resolvedRaw),
+      surfaces: ["configRepair"],
+    });
+    const sourceRaw = snapshot.parsed ?? resolvedRaw;
+    const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    const ownerIssue = findLegacySystemAgentOwnerIssue(
+      snapshot.sourceConfigBeforeMigrations ?? resolvedRaw,
+    );
+    if (ownerIssue) {
+      legacyIssues.push(ownerIssue);
+    }
+    return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
+  };
+  return pluginMetadataSnapshot
+    ? withPluginMetadataSnapshotScope(pluginMetadataSnapshot, collect, { config: resolvedRaw })
+    : collect();
+}

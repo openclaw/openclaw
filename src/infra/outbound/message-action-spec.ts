@@ -1,0 +1,111 @@
+import {
+  hasNonEmptyString,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
+import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "../../channels/plugins/types.public.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
+
+export type ActionDeliveryTargetAliasSpec = NonNullable<
+  NonNullable<ChannelMessageActionAdapter["messageActionTargetAliases"]>[ChannelMessageActionName]
+>;
+
+type ActionTargetAliasOptions = {
+  channel?: string;
+  /** null preserves a selected adapter's absence; undefined permits bootstrap discovery. */
+  aliasSpec?: ActionDeliveryTargetAliasSpec | null;
+};
+
+function resolvePluginActionTargetAliasSpec(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: ActionTargetAliasOptions,
+): ActionDeliveryTargetAliasSpec | null | undefined {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  // Screen standard params before consulting plugin bootstrap metadata.
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return undefined;
+  }
+  const selected = options?.aliasSpec;
+  return selected !== undefined
+    ? selected
+    : getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
+}
+
+const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
+  unsend: ["messageId"],
+  edit: ["messageId"],
+  react: ["chatGuid", "chatIdentifier", "chatId"],
+  renameGroup: ["chatGuid", "chatIdentifier", "chatId"],
+  setGroupIcon: ["chatGuid", "chatIdentifier", "chatId"],
+  addParticipant: ["chatGuid", "chatIdentifier", "chatId"],
+  removeParticipant: ["chatGuid", "chatIdentifier", "chatId"],
+  leaveGroup: ["chatGuid", "chatIdentifier", "chatId"],
+};
+
+/** Resolves a plugin-declared delivery alias into the shared target contract. */
+export function resolveActionDeliveryTargetAlias(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: ActionTargetAliasOptions,
+): string | undefined {
+  const aliases = resolvePluginActionTargetAliasSpec(action, params, options);
+  if (!aliases) {
+    return undefined;
+  }
+  const resolved = aliases.resolveDeliveryTarget?.({ args: params });
+  if (resolved !== undefined) {
+    return normalizeOptionalString(resolved);
+  }
+  const deliveryAliases = aliases.deliveryTargetAliases ?? [];
+  const targets = deliveryAliases
+    .map((alias) => normalizeOptionalStringifiedId(params[alias]))
+    .filter((value): value is string => Boolean(value));
+  if (new Set(targets).size > 1) {
+    throw new Error(`Action ${action} received conflicting delivery target aliases.`);
+  }
+  return targets[0];
+}
+
+/** Reports whether a plugin alias identifies an existing resource rather than a conversation. */
+export function actionHasResourceReference(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: ActionTargetAliasOptions,
+): boolean {
+  const aliases = resolvePluginActionTargetAliasSpec(action, params, options);
+  // Legacy alias specs do not distinguish conversations from resources.
+  // Do not infer ambient authority unless the owner explicitly partitions them.
+  if (!aliases?.deliveryTargetAliases) {
+    return false;
+  }
+  const deliveryAliases = new Set(aliases.deliveryTargetAliases);
+  return aliases.aliases.some(
+    (alias) =>
+      !deliveryAliases.has(alias) && normalizeOptionalStringifiedId(params[alias]) !== undefined,
+  );
+}
+
+export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
+  return resolveChannelMessageActionFacts(action)?.targetMode !== "none";
+}
+
+export function actionHasTarget(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: ActionTargetAliasOptions,
+): boolean {
+  if (hasNonEmptyString(params.to) || hasNonEmptyString(params.channelId)) {
+    return true;
+  }
+  const pluginAliases = resolvePluginActionTargetAliasSpec(action, params, options)?.aliases;
+  return [...(ACTION_TARGET_ALIASES[action] ?? []), ...(pluginAliases ?? [])].some(
+    (alias) => normalizeOptionalStringifiedId(params[alias]) !== undefined,
+  );
+}

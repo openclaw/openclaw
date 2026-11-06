@@ -1,0 +1,29 @@
+title: Control UI browser screenshot failure
+
+scenario:
+  id: control-ui-browser-screenshot-body-cancel
+  surface: control-ui
+  coverage:
+    secondary:
+      - control-ui.gateway-hosted-ui-control
+  objective: >-
+    Verify the rendered browser panel keeps a failed screenshot visible while
+    authenticating the assistant-media request.
+  successCriteria:
+    - Chromium opens the Control UI and renders the browser panel.
+    - The browser panel displays the screenshot HTTP failure.
+    - Browser tab and screenshot requests retain the expected target and authentication.
+  docsRefs:
+    - docs/web/control-ui.md
+    - docs/tools/browser.md
+  codeRefs:
+    - ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts
+    - ui/src/components/browser/browser-client.ts
+    - ui/src/test-helpers/control-ui-e2e.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts
+    testNamePattern: authenticates screenshot media and presents its HTTP failure
+    summary: >-
+      Real Chromium coverage for screenshot failure visibility and authenticated
+      browser requests.

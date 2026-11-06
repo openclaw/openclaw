@@ -1,0 +1,32 @@
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { invokeNativeHookRelay } from "../../agents/harness/native-hook-relay.js";
+import { respondError } from "./response.js";
+import type { GatewayRequestHandlers } from "./types.js";
+
+export const nativeHookRelayHandlers: GatewayRequestHandlers = {
+  "nativeHook.invoke": async ({ params, respond, client }) => {
+    try {
+      // Relay invocations are one-shot bridges into a live native harness.
+      // Require the current generation so stale clients cannot post into a
+      // newly registered relay with the same id.
+      const result = await invokeNativeHookRelay(
+        {
+          provider: params.provider,
+          relayId: params.relayId,
+          generation: params.generation,
+          event: params.event,
+          rawPayload: params.rawPayload,
+          requireGeneration: true,
+        },
+        client?.connectionSignal,
+      );
+      respond(true, result);
+    } catch (error) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "native hook relay failed",
+      );
+    }
+  },
+};

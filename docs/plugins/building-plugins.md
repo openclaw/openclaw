@@ -1,0 +1,502 @@
+---
+summary: "Create your first OpenClaw plugin in minutes"
+title: "Building plugins"
+sidebarTitle: "Getting Started"
+doc-schema-version: 1
+read_when:
+  - You want to create a new OpenClaw plugin
+  - You need a quick-start for plugin development
+  - You are choosing between channel, provider, CLI backend, tool, or hook docs
+---
+
+Plugins extend OpenClaw without changing core. A plugin can add a messaging
+channel, model provider, local CLI backend, agent tool, hook, media provider,
+or another plugin-owned capability.
+
+You do not need to add an external plugin to the OpenClaw repository. Publish
+the package to [ClawHub](/clawhub) and users install it with:
+
+```bash
+openclaw plugins install <package-name>
+```
+
+Package specs install from ClawHub by default. Use `npm:<package>` to install
+from npm, or `clawhub:<package>` to select ClawHub explicitly.
+
+## Requirements
+
+- All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
+  Pin your OpenClaw host version and test each version you declare compatible.
+- Node 24.22.1+ or Node 26.12.1+, and `npm` or `pnpm`.
+- TypeScript ESM modules.
+- For in-repo bundled plugin work, clone the repository and run `pnpm install`.
+  Source-checkout plugin development is pnpm-only because OpenClaw discovers
+  bundled plugins from `extensions/*` workspace packages.
+
+## Choose the plugin shape
+
+<CardGroup cols={2}>
+  <Card title="Channel plugin" icon="messages-square" href="/plugins/sdk-channel-plugins">
+    Connect OpenClaw to a messaging platform.
+  </Card>
+  <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
+    Add a model, media, search, fetch, speech, or realtime provider.
+  </Card>
+  <Card title="CLI backend plugin" icon="terminal" href="/plugins/cli-backend-plugins">
+    Run a local AI CLI through OpenClaw model fallback.
+  </Card>
+  <Card title="Tool plugin" icon="wrench" href="/plugins/tool-plugins">
+    Register agent tools.
+  </Card>
+  <Card title="Feature plugin" icon="panels-top-left" href="/plugins/feature-plugins">
+    Build typed operations, native pages, and Control UI replacements.
+  </Card>
+</CardGroup>
+
+## Quickstart
+
+Build a minimal tool plugin by registering one required agent tool. This is the
+shortest useful plugin shape and covers the package, manifest, entry point, and
+local proof.
+
+<Steps>
+  <Step title="Create package metadata">
+    <CodeGroup>
+
+```json package.json
+{
+  "name": "@myorg/openclaw-my-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.4.3"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  }
+}
+```
+
+```json openclaw.plugin.json
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "description": "Adds a custom tool to OpenClaw",
+  "categories": ["other"],
+  "contracts": {
+    "tools": ["my_tool"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
+```
+
+    </CodeGroup>
+
+    Published external plugins should point runtime entries at built JavaScript
+    files. See [SDK entry points](/plugins/sdk-entrypoints) for the full entry
+    point contract.
+
+    Choose one [catalog category](/plugins/manifest#catalog-categories) for the
+    plugin's main user purpose. This generic example uses `other`; a calendar
+    plugin would use `scheduling`, a coding helper would use `developer-tools`,
+    and an agent execution backend would use `agent-runtimes`.
+
+    Every plugin needs a manifest, even with no config. Runtime tools must
+    appear in `contracts.tools` so OpenClaw can discover ownership without
+    eagerly loading every plugin runtime. Set `activation.onStartup`
+    intentionally; this example loads on Gateway startup.
+
+    Host-trusted plugin surfaces are manifest-gated too and require explicit
+    declaration for installed plugins: `api.registerAgentToolResultMiddleware(...)`
+    needs each target runtime listed in `contracts.agentToolResultMiddleware`,
+    and `api.registerTrustedToolPolicy(...)` needs each policy id in
+    `contracts.trustedToolPolicies`. These declarations keep install-time
+    inspection and runtime registration aligned.
+
+    For every manifest field, see [Plugin manifest](/plugins/manifest).
+
+  </Step>
+
+  <Step title="Register the tool">
+    ```typescript index.ts
+    import { Type } from "typebox";
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+    export default definePluginEntry({
+      id: "my-plugin",
+      name: "My Plugin",
+      description: "Adds a custom tool to OpenClaw",
+      register(api) {
+        api.registerTool({
+          name: "my_tool",
+          description: "Echo one input value",
+          parameters: Type.Object({ input: Type.String() }),
+          outputSchema: Type.Object(
+            { input: Type.String() },
+            { additionalProperties: false },
+          ),
+          async execute(_id, params) {
+            const details = { input: params.input };
+            return {
+              content: [{ type: "text", text: `Got: ${params.input}` }],
+              details,
+            };
+          },
+        });
+      },
+    });
+    ```
+
+    Use `definePluginEntry` for non-channel plugins. Channel plugins use
+    `defineChannelPluginEntry` from `openclaw/plugin-sdk/core` instead.
+
+  </Step>
+
+  <Step title="Test the runtime">
+    For an installed or external plugin, inspect the loaded runtime:
+
+    ```bash
+    openclaw plugins inspect my-plugin --runtime --json
+    ```
+
+    If the plugin registers a CLI command, run that command too and confirm
+    output, for example `openclaw demo-plugin ping`.
+
+    For a bundled plugin in this repository, OpenClaw discovers source-checkout
+    plugin packages from the `extensions/*` workspace. Run the closest targeted
+    test:
+
+    ```bash
+    pnpm test extensions/my-plugin/
+    pnpm check
+    ```
+
+  </Step>
+
+  <Step title="Test the package install">
+    Before publishing a package-ready plugin, test the same install shape users
+    will get. First add a build step, point runtime entries such as
+    `openclaw.extensions` at built JavaScript like `./dist/index.js`, and make
+    sure `npm pack` includes that `dist/` output. TypeScript source entries are
+    only for source checkouts and local development paths.
+
+    Plugin builds can use TypeScript 7. OpenClaw loads the emitted JavaScript;
+    local TypeScript source entries use OpenClaw's runtime transformer and do
+    not require the plugin to install the TypeScript compiler.
+
+    Then pack the plugin and install the tarball with `npm-pack:`:
+
+    ```bash
+    npm pack --pack-destination /tmp
+    openclaw plugins install npm-pack:/tmp/<plugin-package>.tgz --force
+    openclaw plugins inspect my-plugin --runtime --json
+    ```
+
+    `npm-pack:` uses OpenClaw's managed per-plugin npm project, so it catches
+    runtime dependency mistakes that source checkout testing can hide. It proves
+    the package and dependency shape, not catalog-linked official trust.
+    Runtime imports must be in `dependencies` or `optionalDependencies`;
+    dependencies left only in `devDependencies` will not be installed for the
+    managed runtime project.
+
+    Do not use a raw archive/path install as the final proof for official or
+    privileged plugin behavior. Raw sources are useful for local debugging, but
+    they do not prove the same dependency path as npm or ClawHub installs. If
+    your plugin relies on trusted official plugin status, add a second proof
+    through a catalog-backed official install or a published package path that
+    records official trust. See
+    [Plugin dependency resolution](/plugins/dependency-resolution) for
+    install-root and dependency ownership details.
+
+  </Step>
+
+  <Step title="Publish">
+    Publishing uses the separate `clawhub` CLI. Install and sign in first, then
+    validate the package before publishing:
+
+    ```bash
+    npm i -g clawhub
+    clawhub login
+    clawhub package publish your-org/your-plugin --dry-run
+    clawhub package publish your-org/your-plugin
+    ```
+
+    Shared ClawHub package snippets live in `docs/snippets/plugin-publish/`.
+
+  </Step>
+
+  <Step title="Install">
+    Install the published package through ClawHub:
+
+    ```bash
+    openclaw plugins install your-org/your-plugin
+    ```
+
+  </Step>
+</Steps>
+
+## Add plugin artwork
+
+Ship `assets/icon.png` for plugin identity in catalogs, settings, and install
+cards. Use a separate monochrome `assets/activity.svg` for compact tool calls
+in chat. Check the activity shape at 16 px in both light and dark themes; avoid
+a filled square behind the mark.
+
+One activity icon covers the plugin. Add `assets/activity/<tool-name>.svg` only
+for tools that need a distinct shape, using their exact `tools.effective` IDs.
+Include the assets in your published package and verify their presence with
+`npm pack --dry-run`. See the [activity icon contract](/plugins/manifest/surfaces#inline-activity-icons)
+for supported SVG geometry, size bounds, and fallback behavior.
+
+<a id="registering-agent-tools"></a>
+
+## Registering tools
+
+Tools can be required or optional. Required tools are always available when the
+plugin is enabled. Optional tools need explicit user opt-in before OpenClaw
+loads the owning plugin runtime.
+
+Tool factories receive trusted runtime context, including `deliveryContext`,
+`nativeChannelId` for the active platform conversation when available, and
+`requesterSenderId`. A factory can use
+`toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
+current conversation. The property is unavailable outside an active channel
+turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
+account, thread, and media access policy; the capability expires when the turn
+ends.
+
+Version 2 factories can also receive `toolContext.sandbox` and
+`toolContext.modelExecution`. The sandbox capability executes literal argument
+vectors in the actual prepared sandbox and exposes only selected host-installed
+skill roots protected by its owner. Its working directory is a sandbox path,
+not a host repository mirror. Commands retain invocation, cancellation, and
+process-cleanup ownership. The model capability admits
+a selection through the original caller's current model policy, preserving
+explicit override denial and using the existing permitted-default owner for
+configured preferences. It supplies the effective model, captured agent, abort
+signal, and final-effect assertion; native CLI execution retains configuration
+and credential ownership. Its
+`cliEntryPath` identifies the running host installation through the package-root
+owner; plugins do not infer it from guest paths or package self-resolution.
+`assertCompleteResult(text)` refuses output that would exceed the initiating
+model's direct output budget. The catalog's full-value calls retain Code Mode
+inbox admission instead of the direct text cap.
+Neither capability grants new model, tool, or filesystem permissions. Retained
+capabilities fail after their owning run or plugin closes. The bundled
+[Auto Review tool](/tools/autoreview) is a consumer of these capabilities.
+
+```typescript
+register(api) {
+  api.registerTool(
+    (toolContext) => ({
+      name: "workflow_tool",
+      description: "Run a workflow",
+      parameters: Type.Object({ pipeline: Type.String() }),
+      outputSchema: Type.Object(
+        { pipeline: Type.String() },
+        { additionalProperties: false },
+      ),
+      async execute(_id, params) {
+        await toolContext.delivery?.send({
+          text: `Workflow started: ${params.pipeline}`,
+        });
+        return {
+          content: [{ type: "text", text: params.pipeline }],
+          details: { pipeline: params.pipeline },
+        };
+      },
+    }),
+    { name: "workflow_tool", optional: true },
+  );
+}
+```
+
+`outputSchema` is optional. It describes the structured `details` value used by
+[Code Mode](/tools/code-mode) and [Tool Search](/tools/tool-search). Catalog
+calls reject invalid schemas before execution and validate the final value after
+tool hooks. Omit it for tools without a stable JSON result. See
+[Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
+
+Declare when a tool needs the session workspace with `workspaceAccess` in its
+registration options. Use `true` when the factory reads working files, or omit
+the option to retain that safe default. OpenClaw finishes workspace preparation
+before calling those factories or starting the model. Use `"execute"` when the
+factory only builds a definition and working files are accessed during tool
+preparation or execution. Use `false` only when both factory and execution are
+independent of the session workspace. These explicit declarations let the model
+start while checkout continues. Plain tool objects default to `"execute"` because
+they have no runtime factory. `defineToolPlugin` accepts the same option on each
+tool definition.
+
+To tell the model when and how to use a tool, set `promptGuidance` in the
+registration options. OpenClaw adds that text to the system prompt only while
+one of the registration's named tools is callable in the run, including tools
+found through Tool Search, on every bundled agent harness. A run that denies the
+tool gets no guidance. The registration must name its tools with `name` or
+`names`. Use this instead of a `before_prompt_build` hook for tool guidance:
+that hook adds its text even when the tool is denied.
+
+```typescript
+api.registerTool(createWorkflowTool, {
+  name: "workflow_tool",
+  promptGuidance: "## Workflows\nUse `workflow_tool` for multi-step pipelines.",
+});
+```
+
+Every tool registered with `api.registerTool(...)` must also be declared in the
+plugin manifest:
+
+```json
+{
+  "contracts": {
+    "tools": ["workflow_tool"]
+  },
+  "toolMetadata": {
+    "workflow_tool": {
+      "optional": true
+    }
+  }
+}
+```
+
+Users opt in with `tools.allow`:
+
+```json5
+{
+  tools: { allow: ["workflow_tool"] }, // or ["my-plugin"] for every tool from one plugin
+}
+```
+
+Optional tools control whether a tool is exposed to the model. Use
+[plugin permission requests](/plugins/plugin-permission-requests) when a tool
+or hook should ask for approval after the model selects it and before the
+action runs.
+
+`toolMetadata.<tool>.profiles` adds a plugin tool to named built-in profile
+allowlists. For example, `"profiles": ["coding", "messaging"]` exposes it in
+those profiles without adding a core catalog entry. Explicit operator
+allowlists and deny rules remain authoritative.
+
+Use optional tools for side effects, unusual binaries, or capabilities that
+should not be exposed by default. Tool names must not conflict with core tool
+names; conflicts are skipped and reported in plugin diagnostics. Malformed
+registrations are skipped and reported the same way: a missing non-empty
+`name`, a non-function `execute`, or a tool descriptor without a `parameters`
+object.
+
+Tool factories receive a runtime-supplied context object. Use `ctx.activeModel`
+when a tool needs to log, display, or adapt to the active model for the current
+turn; it can include `provider`, `modelId`, and `modelRef`. Treat it as
+informational runtime metadata, not a security boundary against the local
+operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
+local tools should still require an explicit plugin or operator opt-in and
+refuse to run when active-model metadata is missing or unsuitable.
+
+The manifest declares ownership and discovery; execution still calls the live
+registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
+aligned with `api.registerTool(..., { optional: true })` so OpenClaw can avoid
+loading that plugin runtime until the tool is explicitly allowlisted.
+
+## Import conventions
+
+Import from focused SDK subpaths:
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+```
+
+Within your plugin package, use local barrel files such as `api.ts` and
+`runtime-api.ts` for internal imports. Do not import your own plugin through an
+SDK path. Provider-specific helpers should stay in the provider package unless
+the interface is truly generic.
+
+Custom Gateway RPC methods are an advanced entry point. Keep them on a
+plugin-specific prefix; core admin namespaces such as `config.*`,
+`exec.approvals.*`, `operator.admin.*`, `wizard.*`, and `update.*` stay reserved
+and resolve to `operator.admin`. The
+`openclaw/plugin-sdk/gateway-method-runtime` bridge is reserved for authenticated plugin HTTP routes and registered RPC
+handlers that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
+Nested RPC dispatch retains the original authenticated client, live authority
+check, and request-owned cancellation signal. It still checks the target method's
+required scopes and rechecks caller authority at the mutation commit boundary;
+the contract never supplies a synthetic client or additional scopes.
+
+For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
+
+OpenClaw SDK compatibility fields carry TypeScript `@deprecated` annotations,
+which editors surface as migration warnings. To enforce them at build time,
+enable a type-aware rule such as
+[`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
+Oxlint is not type-aware, so it cannot enforce these annotations.
+
+## Pre-submission checklist
+
+<Check>**package.json** has correct `openclaw` metadata</Check>
+<Check>**openclaw.plugin.json** manifest is present and valid</Check>
+<Check>Manifest declares `reload.turnHandover` if the plugin keeps no per-turn in-memory state ([Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins))</Check>
+<Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
+<Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
+<Check>Internal imports use local modules, not SDK self-imports</Check>
+<Check>Tests pass (`pnpm test extensions/my-plugin/`)</Check>
+<Check>`pnpm check` passes (in-repo plugins)</Check>
+
+## Test against beta releases
+
+1. Watch [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) releases (`Watch` > `Releases`). Beta tags look like `v2026.3.N-beta.1`. You can also follow [@openclaw](https://x.com/openclaw) on X for release announcements.
+2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
+3. Post in your plugin's thread in the `plugin-forum` Discord channel ([OpenClaw Discord](https://openclaw.ai/discord?from=docs-plugins-building-plugins)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
+4. If something breaks, open or update an issue titled `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label. Link the issue in your thread.
+5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway.
+6. Silence means green. Missing the window usually means your fix lands in the next cycle.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Channel Plugins" icon="messages-square" href="/plugins/sdk-channel-plugins">
+    Build a messaging channel plugin
+  </Card>
+  <Card title="Provider Plugins" icon="cpu" href="/plugins/sdk-provider-plugins">
+    Build a model provider plugin
+  </Card>
+  <Card title="CLI Backend Plugins" icon="terminal" href="/plugins/cli-backend-plugins">
+    Register a local AI CLI backend
+  </Card>
+  <Card title="SDK Overview" icon="book-open" href="/plugins/sdk-overview">
+    Import map and registration API reference
+  </Card>
+  <Card title="Runtime Helpers" icon="settings" href="/plugins/sdk-runtime">
+    TTS, search, subagent via api.runtime
+  </Card>
+  <Card title="Testing" icon="test-tubes" href="/plugins/sdk-testing">
+    Test utilities and patterns
+  </Card>
+  <Card title="Plugin Manifest" icon="file-json" href="/plugins/manifest">
+    Full manifest schema reference
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Plugin hooks](/plugins/hooks)
+- [Plugin architecture](/plugins/architecture)
+- [Plugin architecture internals](/plugins/architecture-internals)
+- [Plugin SDK subpaths](/plugins/sdk-subpaths)
+- [Manage plugins](/plugins/manage-plugins)

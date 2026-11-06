@@ -1,0 +1,102 @@
+import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
+import type { AcpRuntimeStatus } from "@openclaw/acp-core/runtime/types";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
+import type {
+  AcpSessionStatus,
+  EnsureManagerRuntimeHandle,
+  ReconcileManagerRuntimeSessionIdentifiers,
+  ResolveManagerSessionAsync,
+} from "./manager.types.js";
+import { assertCurrentAcpActor, requireReadySessionMeta } from "./manager.utils.js";
+import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
+
+export async function runManagerGetSessionStatus(params: {
+  assertActive?: () => void;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  signal?: AbortSignal;
+  throwIfAborted: (signal?: AbortSignal) => void;
+  resolveSession: ResolveManagerSessionAsync;
+  ensureRuntimeHandle: EnsureManagerRuntimeHandle;
+  reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
+  isCurrentActor?: () => boolean;
+}): Promise<AcpSessionStatus> {
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
+  const assertCurrent = () => {
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+    params.assertActive?.();
+    params.throwIfAborted(params.signal);
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    assertCurrent,
+  });
+  assertCurrent();
+  const resolvedMeta = requireReadySessionMeta(resolution);
+  const {
+    runtime,
+    handle,
+    meta: initialMeta,
+  } = await params.ensureRuntimeHandle({
+    assertActive: params.assertActive,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    meta: resolvedMeta,
+    isCurrentActor,
+  });
+  params.assertActive?.();
+  const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+  let runtimeStatus: AcpRuntimeStatus | undefined;
+  if (runtime.getStatus) {
+    runtimeStatus = await withAcpRuntimeErrorBoundary({
+      run: async () => {
+        params.throwIfAborted(params.signal);
+        params.assertActive?.();
+        const status = await runtime.getStatus!({
+          handle,
+          ...(params.signal ? { signal: params.signal } : {}),
+        });
+        params.throwIfAborted(params.signal);
+        return status;
+      },
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "Could not read ACP runtime status.",
+    });
+  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+  const reconciledSession = await params.reconcileRuntimeSessionIdentifiers({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    runtime,
+    handle,
+    meta: initialMeta,
+    runtimeStatus,
+    failOnStatusError: true,
+    isCurrentActor,
+  });
+  const meta = reconciledSession.meta;
+  const identity = resolveSessionIdentityFromMeta(meta);
+  return {
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    backend: reconciledSession.handle.backend || meta.backend,
+    agent: meta.agent,
+    ...(identity ? { identity } : {}),
+    state: meta.state,
+    mode: meta.mode,
+    runtimeOptions: resolveRuntimeOptionsFromMeta(meta),
+    capabilities,
+    runtimeStatus: reconciledSession.runtimeStatus,
+    lastActivityAt: meta.lastActivityAt,
+    lastError: meta.lastError,
+  };
+}

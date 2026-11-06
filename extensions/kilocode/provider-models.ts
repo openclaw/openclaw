@@ -1,0 +1,191 @@
+import {
+  buildLiveModelProviderConfig,
+  readLiveModelCatalogStringField,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const KILOCODE_MANIFEST_CATALOG = manifest.modelCatalog.providers.kilocode;
+const KILOCODE_DEFAULT_MODEL = buildManifestModelProviderConfig({
+  providerId: "kilocode",
+  catalog: KILOCODE_MANIFEST_CATALOG,
+}).models[0]!;
+export const KILOCODE_BASE_URL = KILOCODE_MANIFEST_CATALOG.baseUrl;
+export const KILOCODE_DEFAULT_MODEL_ID = KILOCODE_DEFAULT_MODEL.id;
+export const KILOCODE_DEFAULT_MODEL_REF = `kilocode/${KILOCODE_DEFAULT_MODEL_ID}`;
+export const KILOCODE_DEFAULT_MODEL_NAME = KILOCODE_DEFAULT_MODEL.name;
+
+type KilocodeModelCatalogEntry = Pick<
+  ModelDefinitionConfig,
+  "id" | "name" | "reasoning" | "input"
+> &
+  Partial<Pick<ModelDefinitionConfig, "contextWindow" | "maxTokens">>;
+
+export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
+  {
+    id: KILOCODE_DEFAULT_MODEL_ID,
+    name: KILOCODE_DEFAULT_MODEL_NAME,
+    input: ["text", "image"],
+    reasoning: true,
+  },
+];
+
+export const KILOCODE_DEFAULT_CONTEXT_WINDOW = KILOCODE_DEFAULT_MODEL.contextWindow;
+export const KILOCODE_DEFAULT_MAX_TOKENS = KILOCODE_DEFAULT_MODEL.maxTokens;
+export const KILOCODE_DEFAULT_COST = KILOCODE_DEFAULT_MODEL.cost;
+
+export const KILOCODE_MODELS_URL = `${KILOCODE_BASE_URL}models`;
+
+const DISCOVERY_TIMEOUT_MS = 5000;
+
+interface GatewayModelPricing {
+  prompt: string;
+  completion: string;
+  input_cache_read?: string;
+  input_cache_write?: string;
+}
+
+interface GatewayModelEntry {
+  id: string;
+  name: string;
+  context_length: number;
+  architecture?: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
+  top_provider?: {
+    context_length?: number | null;
+    max_completion_tokens?: number | null;
+  };
+  pricing: GatewayModelPricing;
+  supported_parameters?: string[];
+}
+
+function toPricePerMillion(perToken: string | undefined, fallback = 0): number {
+  const num = Number(perToken);
+  return Number.isFinite(num) && num >= 0 ? num * 1_000_000 : fallback;
+}
+
+function parseModality(entry: GatewayModelEntry): Array<"text" | "image"> {
+  const modalities = entry.architecture?.input_modalities;
+  if (!Array.isArray(modalities)) {
+    return ["text"];
+  }
+  const hasImage = modalities.some(
+    (m) => typeof m === "string" && normalizeLowercaseStringOrEmpty(m) === "image",
+  );
+  return hasImage ? ["text", "image"] : ["text"];
+}
+
+function parseReasoning(entry: GatewayModelEntry): boolean {
+  const params = entry.supported_parameters;
+  if (!Array.isArray(params)) {
+    return false;
+  }
+  return params.includes("reasoning") || params.includes("include_reasoning");
+}
+
+function buildStaticCatalog(): ModelDefinitionConfig[] {
+  return buildManifestModelProviderConfig({
+    providerId: "kilocode",
+    catalog: KILOCODE_MANIFEST_CATALOG,
+  }).models;
+}
+
+function asGatewayModelEntry(value: unknown): GatewayModelEntry {
+  if (!isRecord(value)) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  const entry = value as Partial<GatewayModelEntry>;
+  if (typeof entry.id !== "string" || !isRecord(entry.pricing)) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  return entry as GatewayModelEntry;
+}
+
+export async function discoverKilocodeModels(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
+  const provider = await buildLiveModelProviderConfig({
+    ...options,
+    providerId: "kilocode",
+    endpoint: KILOCODE_MODELS_URL,
+    providerConfig: { baseUrl: KILOCODE_BASE_URL, api: "openai-completions" },
+    models: buildStaticCatalog(),
+    timeoutMs: DISCOVERY_TIMEOUT_MS,
+    ttlMs: 0,
+    readRows(body: unknown): readonly unknown[] {
+      const data = (body as { data?: unknown } | undefined)?.data;
+      if (!Array.isArray(data)) {
+        throw new Error("Kilocode model list: malformed JSON response");
+      }
+      return data;
+    },
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
+    auditContext: "kilocode.model_discovery",
+    projectRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
+      const models: ModelDefinitionConfig[] = [];
+      const discoveredIds = new Set<string>();
+      for (const rawEntry of rows) {
+        const id = readLiveModelCatalogStringField(rawEntry, "id");
+        try {
+          const entry = asGatewayModelEntry(rawEntry);
+          if (
+            !id ||
+            discoveredIds.has(id) ||
+            entry.architecture?.output_modalities?.includes("image")
+          ) {
+            continue;
+          }
+          const fallbackCost =
+            entry.id === KILOCODE_DEFAULT_MODEL_ID ? KILOCODE_DEFAULT_COST : undefined;
+          models.push({
+            id: entry.id,
+            name: entry.name || entry.id,
+            reasoning: parseReasoning(entry),
+            input: parseModality(entry),
+            // Rows without parameter metadata keep the default tool-capable behavior.
+            ...(Array.isArray(entry.supported_parameters)
+              ? { compat: { supportsTools: entry.supported_parameters.includes("tools") } }
+              : {}),
+            cost: {
+              input: toPricePerMillion(entry.pricing.prompt, fallbackCost?.input),
+              output: toPricePerMillion(entry.pricing.completion, fallbackCost?.output),
+              cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
+              cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
+            },
+            // The primary provider window bounds real requests; the catalog-wide value can be larger.
+            contextWindow:
+              asPositiveSafeInteger(entry.top_provider?.context_length) ??
+              asPositiveSafeInteger(entry.context_length) ??
+              KILOCODE_DEFAULT_CONTEXT_WINDOW,
+            maxTokens:
+              asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
+              KILOCODE_DEFAULT_MAX_TOKENS,
+          });
+          discoveredIds.add(id);
+        } catch {
+          // A malformed row must not hide a later valid row with the same id.
+        }
+      }
+      for (const staticModel of models.length > 0 ? buildStaticCatalog() : []) {
+        if (!discoveredIds.has(staticModel.id)) {
+          models.unshift(staticModel);
+        }
+      }
+      return models;
+    },
+  });
+  return provider.models;
+}
+
+export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
+  return KILOCODE_DEFAULT_MODEL;
+}

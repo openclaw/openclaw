@@ -1,0 +1,331 @@
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  filterStringEntries,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
+  type MemoryWikiImportInsightItem,
+} from "./compiled-cache.js";
+import type { WikiPageSummary } from "./markdown.js";
+
+function normalizeStringArray(value: unknown): string[] {
+  return filterStringEntries(value).filter((entry) => entry.trim().length > 0);
+}
+
+function humanizeLabelSuffix(label: string): string {
+  const suffix = label.includes("/") ? label.split("/").slice(1).join("/") : label;
+  return suffix
+    .split(/[/-]/g)
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function resolveTopic(labels: string[]): { key: string; label: string } {
+  const preferred =
+    labels.find((label) => label.startsWith("topic/")) ??
+    labels.find((label) => label.startsWith("area/")) ??
+    labels.find((label) => label.startsWith("domain/")) ??
+    "topic/other";
+  return {
+    key: preferred,
+    label: humanizeLabelSuffix(preferred),
+  };
+}
+
+function extractHeadingSection(body: string, heading: string): string[] {
+  const lines = body.split(/\r?\n/);
+  const headingLine = `## ${heading}`;
+  const startIndex = lines.findIndex((line) => line.trim() === headingLine);
+  if (startIndex < 0) {
+    return [];
+  }
+  const section: string[] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    if (line.startsWith("## ")) {
+      break;
+    }
+    if (line.trim().length > 0) {
+      section.push(line.trimEnd());
+    }
+  }
+  return section;
+}
+
+function extractDigestField(lines: string[], prefix: string): string | undefined {
+  const needle = `- ${prefix}:`;
+  const line = lines.find((entry) => entry.startsWith(needle));
+  if (!line) {
+    return undefined;
+  }
+  const value = line.slice(needle.length).trim();
+  return value.length > 0 ? value : undefined;
+}
+
+function extractIntegerField(lines: string[], prefix: string): number {
+  const match = extractDigestField(lines, prefix)?.match(/\d+/);
+  return match ? resolveNonNegativeIntegerOption(Number(match[0]), 0) : 0;
+}
+
+function extractPreferenceSignals(lines: string[]): string[] {
+  const startIndex = lines.findIndex((line) => line.startsWith("- Preference signals:"));
+  if (startIndex < 0) {
+    return [];
+  }
+  if (lines[startIndex]?.includes("none detected")) {
+    return [];
+  }
+  const signals: string[] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("- ")) {
+      break;
+    }
+    const signal = trimmed.slice(2).trim();
+    if (signal.length > 0) {
+      signals.push(signal);
+    }
+  }
+  return signals;
+}
+
+type TranscriptTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
+function parseTranscriptTurns(body: string): TranscriptTurn[] {
+  const blocks: Array<{ role: TranscriptTurn["role"]; lines: string[] }> = [];
+  for (const line of extractHeadingSection(body, "Active Branch Transcript")) {
+    const heading = line.trim();
+    if (heading === "### User" || heading === "### Assistant") {
+      blocks.push({ role: heading === "### User" ? "user" : "assistant", lines: [] });
+    } else {
+      blocks.at(-1)?.lines.push(line);
+    }
+  }
+  return blocks
+    .map(({ role, lines }) => ({ role, text: lines.join("\n").trim() }))
+    .filter((turn) => turn.text.length > 0);
+}
+
+function firstParagraph(text: string): string | undefined {
+  return text
+    .split(/\n\s*\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0);
+}
+
+function shortenSentence(value: string, maxLength = 180): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return `${truncateUtf16Safe(compact, maxLength - 1).trimEnd()}…`;
+}
+
+function extractCorrectionSignals(turns: TranscriptTurn[]): string[] {
+  const correctionPatterns = [
+    "you're right",
+    "you’re right",
+    "bad assumption",
+    "let's reset",
+    "let’s reset",
+    "does not exist anymore",
+    "that was a bad assumption",
+    "what actually works today",
+  ];
+  return turns
+    .filter((turn) => turn.role === "assistant")
+    .flatMap((turn) => {
+      const first = firstParagraph(turn.text);
+      if (!first) {
+        return [];
+      }
+      const normalized = first.toLowerCase();
+      return correctionPatterns.some((pattern) => normalized.includes(pattern))
+        ? [shortenSentence(first, 160)]
+        : [];
+    })
+    .slice(0, 2);
+}
+
+function normalizeRiskLevel(value: unknown): "low" | "medium" | "high" | "unknown" {
+  if (value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+  return "unknown";
+}
+
+function compareItemsByUpdated(
+  left: MemoryWikiImportInsightItem,
+  right: MemoryWikiImportInsightItem,
+): number {
+  const leftKey = left.updatedAt ?? left.createdAt ?? "";
+  const rightKey = right.updatedAt ?? right.createdAt ?? "";
+  if (rightKey !== leftKey) {
+    return rightKey.localeCompare(leftKey);
+  }
+  return left.title.localeCompare(right.title);
+}
+
+function capStrings(values: string[], maxItems: number, maxChars: number): string[] {
+  return values.slice(0, maxItems).map((value) => shortenSentence(value, maxChars));
+}
+
+function capImportInsightItem(item: MemoryWikiImportInsightItem): MemoryWikiImportInsightItem {
+  return {
+    ...item,
+    title: shortenSentence(item.title, 240),
+    riskReasons: capStrings(item.riskReasons, 8, 120),
+    labels: capStrings(item.labels, 8, 120),
+    topicKey: shortenSentence(item.topicKey, 120),
+    topicLabel: shortenSentence(item.topicLabel, 120),
+    ...(item.firstUserLine ? { firstUserLine: shortenSentence(item.firstUserLine, 240) } : {}),
+    ...(item.lastUserLine ? { lastUserLine: shortenSentence(item.lastUserLine, 240) } : {}),
+    ...(item.assistantOpener
+      ? { assistantOpener: shortenSentence(item.assistantOpener, 240) }
+      : {}),
+    summary: shortenSentence(item.summary, 180),
+    candidateSignals: capStrings(item.candidateSignals, 4, 240),
+    correctionSignals: capStrings(item.correctionSignals, 2, 160),
+    preferenceSignals: capStrings(item.preferenceSignals, 8, 240),
+    ...(item.createdAt ? { createdAt: shortenSentence(item.createdAt, 64) } : {}),
+    ...(item.updatedAt ? { updatedAt: shortenSentence(item.updatedAt, 64) } : {}),
+  };
+}
+
+export function projectMemoryWikiImportInsight(
+  page: WikiPageSummary,
+  parsed: { frontmatter: Record<string, unknown>; body: string },
+) {
+  if (page.pageType !== "source" || parsed.frontmatter.sourceType !== "chatgpt-export") {
+    return null;
+  }
+  const labels = normalizeStringArray(parsed.frontmatter.labels);
+  const topic = resolveTopic(labels);
+  const triageLines = extractHeadingSection(parsed.body, "Auto Triage");
+  const digestLines = extractHeadingSection(parsed.body, "Auto Digest");
+  const transcriptTurns = parseTranscriptTurns(parsed.body);
+  const digestStatus: "withheld" | "available" = digestLines.some((line) =>
+    line.toLowerCase().includes("withheld from durable-candidate generation"),
+  )
+    ? "withheld"
+    : "available";
+  const exposeImportContent = digestStatus === "available";
+  const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
+  const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
+  const assistantOpener = exposeImportContent
+    ? firstParagraph(assistantTurns[0]?.text ?? "")
+    : undefined;
+  const correctionSignals = exposeImportContent ? extractCorrectionSignals(transcriptTurns) : [];
+  const preferenceSignals = exposeImportContent ? extractPreferenceSignals(digestLines) : [];
+  const candidateSignals = exposeImportContent
+    ? [
+        ...new Set([
+          ...preferenceSignals,
+          ...correctionSignals.map((correction) => `Correction detected: ${correction}`),
+        ]),
+      ].slice(0, 4)
+    : [];
+  const firstUserLine = exposeImportContent
+    ? extractDigestField(digestLines, "First user line")
+    : undefined;
+  const lastUserLine = exposeImportContent
+    ? extractDigestField(digestLines, "Last user line")
+    : undefined;
+  const createdAt = normalizeOptionalString(parsed.frontmatter.createdAt);
+  const updatedAt = normalizeOptionalString(parsed.frontmatter.updatedAt);
+  const title = page.title.replace(/^ChatGPT Export:\s*/i, "");
+  const riskReasons = normalizeStringArray(parsed.frontmatter.riskReasons);
+  function deriveSummary(): string {
+    if (digestStatus === "withheld") {
+      if (riskReasons.length > 0) {
+        return `Sensitive ${topic.label.toLowerCase()} chat withheld from durable-memory extraction because it touches ${riskReasons.join(", ")}.`;
+      }
+      return `Sensitive ${topic.label.toLowerCase()} chat withheld from durable-memory extraction pending review.`;
+    }
+    const content = assistantOpener || firstUserLine;
+    return content ? shortenSentence(content) : title;
+  }
+  return {
+    pagePath: page.relativePath,
+    title,
+    riskLevel: normalizeRiskLevel(parsed.frontmatter.riskLevel),
+    riskReasons,
+    labels,
+    topicKey: topic.key,
+    topicLabel: topic.label,
+    digestStatus,
+    activeBranchMessages: extractIntegerField(triageLines, "Active-branch messages"),
+    userMessageCount: Math.max(extractIntegerField(digestLines, "User messages"), userTurns.length),
+    assistantMessageCount: Math.max(
+      extractIntegerField(digestLines, "Assistant messages"),
+      assistantTurns.length,
+    ),
+    ...(firstUserLine ? { firstUserLine } : {}),
+    ...(lastUserLine ? { lastUserLine } : {}),
+    ...(assistantOpener ? { assistantOpener } : {}),
+    summary: deriveSummary(),
+    candidateSignals,
+    correctionSignals,
+    preferenceSignals,
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
+export function buildMemoryWikiImportInsights(input: MemoryWikiImportInsightItem[]) {
+  const allItems = input.map(capImportInsightItem).toSorted(compareItemsByUpdated);
+  const items = allItems.slice(0, MEMORY_WIKI_DASHBOARD_ITEM_LIMIT);
+
+  const clustersByKey = new Map<string, MemoryWikiImportInsightItem[]>();
+  for (const item of items) {
+    const list = clustersByKey.get(item.topicKey) ?? [];
+    list.push(item);
+    clustersByKey.set(item.topicKey, list);
+  }
+
+  const clusters = [...clustersByKey.entries()]
+    .map(([key, clusterItems]) => {
+      const updatedAt = clusterItems
+        .map((item) => item.updatedAt ?? item.createdAt)
+        .find((value): value is string => value !== undefined && value.length > 0);
+      return Object.assign(
+        {
+          key,
+          label: clusterItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
+          itemCount: clusterItems.length,
+          highRiskCount: clusterItems.filter((item) => item.riskLevel === `high`).length,
+          withheldCount: clusterItems.filter((item) => item.digestStatus === `withheld`).length,
+          preferenceSignalCount: clusterItems.reduce(
+            (sum, item) => sum + item.preferenceSignals.length,
+            0,
+          ),
+        },
+        updatedAt ? { updatedAt } : {},
+        { items: clusterItems },
+      );
+    })
+    .toSorted((left, right) => {
+      const leftKey = left.updatedAt ?? "";
+      const rightKey = right.updatedAt ?? "";
+      if (rightKey !== leftKey) {
+        return rightKey.localeCompare(leftKey);
+      }
+      if (right.itemCount !== left.itemCount) {
+        return right.itemCount - left.itemCount;
+      }
+      return left.label.localeCompare(right.label);
+    });
+
+  return {
+    sourceType: "chatgpt" as const,
+    totalItems: allItems.length,
+    totalClusters: new Set(allItems.map((item) => item.topicKey)).size,
+    clusters,
+    truncated: items.length < allItems.length,
+  };
+}

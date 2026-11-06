@@ -1,0 +1,425 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { isLocalProviderBaseUrl } from "../agents/model-provider-local.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { t } from "../wizard/i18n/index.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
+import {
+  applyCustomApiConfig,
+  buildAnthropicVerificationProbeRequest,
+  buildEndpointIdFromUrl,
+  buildOpenAiVerificationProbeRequest,
+  discoverCustomApiModelIds,
+  normalizeEndpointId,
+  normalizeOptionalProviderApiKey,
+  resolveCustomModelAliasError,
+  resolveCustomModelImageInputInference,
+  resolveCustomProviderId,
+  resolveCustomProviderApi,
+  type CustomApiCompatibility,
+  type CustomApiResult,
+} from "./onboard-custom-config.js";
+import type { SecretInputMode } from "./onboard-types.js";
+
+const VERIFY_TIMEOUT_MS = 30_000;
+type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
+
+const COMPATIBILITY_OPTIONS: Array<{
+  value: CustomApiCompatibilityChoice;
+  labelKey: string;
+  hintKey: string;
+}> = [
+  {
+    value: "openai",
+    labelKey: "wizard.customProvider.compatibilityOpenAi",
+    hintKey: "wizard.customProvider.compatibilityOpenAiHint",
+  },
+  {
+    value: "openai-responses",
+    labelKey: "wizard.customProvider.compatibilityOpenAiResponses",
+    hintKey: "wizard.customProvider.compatibilityOpenAiResponsesHint",
+  },
+  {
+    value: "anthropic",
+    labelKey: "wizard.customProvider.compatibilityAnthropic",
+    hintKey: "wizard.customProvider.compatibilityAnthropicHint",
+  },
+  {
+    value: "unknown",
+    labelKey: "wizard.customProvider.compatibilityUnknown",
+    hintKey: "wizard.customProvider.compatibilityUnknownHint",
+  },
+];
+
+type VerificationResult = {
+  ok: boolean;
+  status?: number;
+  error?: unknown;
+};
+
+function isJsonVerificationResponse(res: Response): boolean {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.trim()) {
+    return true;
+  }
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    mediaType === "application/json" || (mediaType !== undefined && mediaType.endsWith("+json"))
+  );
+}
+
+async function requestVerification(
+  params: ReturnType<typeof buildOpenAiVerificationProbeRequest>,
+): Promise<VerificationResult> {
+  let res: Response | undefined;
+  try {
+    res = await fetchWithTimeout(
+      params.endpoint,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...params.headers,
+        },
+        body: JSON.stringify(params.body),
+      },
+      VERIFY_TIMEOUT_MS,
+    );
+    if (res.ok && !isJsonVerificationResponse(res)) {
+      const contentType = res.headers.get("content-type") || "missing content-type";
+      // HTML success often means the user pasted a dashboard/root URL instead
+      // of the API base path; fail before storing a config that cannot run.
+      return {
+        ok: false,
+        error: `Verification returned ${contentType} instead of JSON. Check the provider base URL; OpenAI-compatible endpoints usually need a /v1 path prefix.`,
+      };
+    }
+    return { ok: res.ok, status: res.status };
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    await res?.body?.cancel().catch(() => undefined);
+  }
+}
+
+async function promptBaseUrlAndKey(params: {
+  prompter: WizardPrompter;
+  config: OpenClawConfig;
+  secretInputMode?: SecretInputMode;
+  initialBaseUrl?: string;
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; noAuth: boolean }> {
+  const baseUrlInput = await params.prompter.text({
+    message: t("wizard.customProvider.apiBaseUrl"),
+    initialValue: params.initialBaseUrl,
+    placeholder: "https://api.example.com/v1",
+    validate: (val) => {
+      return isHttpUrl(val) ? undefined : t("wizard.customProvider.validUrl");
+    },
+  });
+  const baseUrl = baseUrlInput.trim();
+  const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
+  for (;;) {
+    let apiKeyInput: SecretInput | undefined;
+    // Keep the persisted key shape from the credential helper while also keeping
+    // the resolved plaintext only for the immediate verification probe.
+    const resolvedApiKey = normalizeSecretInput(
+      await ensureApiKeyFromEnvOrPrompt({
+        config: params.config,
+        provider: providerHint,
+        envLabel: "CUSTOM_API_KEY",
+        promptMessage: t("wizard.customProvider.apiKeyPrompt"),
+        normalize: normalizeSecretInput,
+        validate: () => undefined,
+        prompter: params.prompter,
+        secretInputMode: params.secretInputMode,
+        setCredential: async (apiKey) => {
+          apiKeyInput = apiKey;
+        },
+      }),
+    );
+    if (resolvedApiKey.trim()) {
+      return {
+        baseUrl,
+        apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
+        resolvedApiKey,
+        noAuth: false,
+      };
+    }
+    // Loopback/RFC1918 blanks already resolve through synthetic local auth, so
+    // only ask where a blank key would otherwise produce a broken provider.
+    if (isLocalProviderBaseUrl(baseUrl)) {
+      return { baseUrl, apiKey: undefined, resolvedApiKey: "", noAuth: false };
+    }
+    // A blank key must yield a working configuration for servers that do not
+    // enforce auth, even when hostname checks cannot prove the host is local.
+    const noAuth = await params.prompter.confirm({
+      message: t("wizard.customProvider.noAuthConfirm"),
+      initialValue: true,
+    });
+    if (noAuth) {
+      return { baseUrl, resolvedApiKey: "", noAuth: true };
+    }
+  }
+}
+
+/** Prompts for a custom API provider and prepares its endpoint config without writing it. */
+export async function promptCustomApiConfig(params: {
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  config: OpenClawConfig;
+  target?: OnboardingAgentTarget;
+  secretInputMode?: SecretInputMode;
+  setAsPrimary?: boolean;
+  /** Setup owns its single confirmation turn after saving the credential. */
+  verification?: "immediate" | "deferred";
+}): Promise<CustomApiResult> {
+  const { prompter, runtime, config } = params;
+  const manifestPlugins = loadManifestMetadataSnapshot({
+    config,
+    workspaceDir: params.target?.workspaceDir,
+    env: process.env,
+  }).plugins;
+
+  let { baseUrl, apiKey, resolvedApiKey, noAuth } = await promptBaseUrlAndKey({
+    prompter,
+    config,
+    secretInputMode: params.secretInputMode,
+  });
+
+  const compatibilityChoice = await prompter.select({
+    message: t("wizard.customProvider.compatibility"),
+    options: COMPATIBILITY_OPTIONS.filter(
+      (option) => params.verification !== "deferred" || option.value !== "unknown",
+    ).map((option) => ({
+      value: option.value,
+      label: t(option.labelKey),
+      hint: t(option.hintKey),
+    })),
+  });
+
+  const selectModel = async (): Promise<string> => {
+    if (compatibilityChoice !== "anthropic") {
+      const modelIds = await discoverCustomApiModelIds({ baseUrl, apiKey: resolvedApiKey });
+      if (modelIds.length > 0) {
+        const selected = await prompter.select({
+          message: t("wizard.customProvider.modelId"),
+          options: [
+            ...modelIds.map((id) => ({ value: id, label: id })),
+            { value: "", label: t("wizard.customProvider.modelIdManual") },
+          ],
+        });
+        if (selected) {
+          return selected;
+        }
+      } else {
+        await prompter.note(
+          t("wizard.customProvider.modelDiscoveryUnavailable"),
+          t("wizard.customProvider.modelId"),
+        );
+      }
+    }
+    return (
+      await prompter.text({
+        message: t("wizard.customProvider.modelId"),
+        placeholder: t("wizard.customProvider.modelIdPlaceholder"),
+        validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
+      })
+    ).trim();
+  };
+  let modelId = await selectModel();
+
+  let compatibility: CustomApiCompatibility | null =
+    compatibilityChoice === "unknown" ? null : compatibilityChoice;
+  const verifyCompatibility = async (
+    candidate: CustomApiCompatibility,
+  ): Promise<VerificationResult> => {
+    const probeParams = { baseUrl, apiKey: resolvedApiKey, modelId, compatibility: candidate };
+    return await requestVerification(
+      candidate === "anthropic"
+        ? buildAnthropicVerificationProbeRequest(probeParams)
+        : buildOpenAiVerificationProbeRequest({
+            ...probeParams,
+            responsesApi: candidate === "openai-responses",
+          }),
+    );
+  };
+
+  while (params.verification !== "deferred") {
+    if (!compatibility) {
+      // Probe in a fixed order so unknown endpoints converge to a concrete
+      // config API value before we write provider metadata.
+      const probeSpinner = prompter.progress(t("wizard.customProvider.detectionProgress"));
+      const detectionMessages = {
+        openai: "wizard.customProvider.detectedOpenAi",
+        "openai-responses": "wizard.customProvider.detectedOpenAiResponses",
+        anthropic: "wizard.customProvider.detectedAnthropic",
+      };
+      for (const candidate of ["openai", "openai-responses", "anthropic"] as const) {
+        const result = await verifyCompatibility(candidate);
+        if (result.ok) {
+          probeSpinner.stop(t(detectionMessages[candidate]));
+          compatibility = candidate;
+          break;
+        }
+      }
+      if (compatibility) {
+        break;
+      }
+      probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
+      await prompter.note(
+        t("wizard.customProvider.detectionFailedNote"),
+        t("wizard.customProvider.detectionNoteTitle"),
+      );
+    } else {
+      // Explicit compatibility choices still get a live probe so setup does not
+      // persist endpoints or models that fail the selected protocol.
+      const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
+      const result = await verifyCompatibility(compatibility);
+      if (result.ok) {
+        verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
+        break;
+      }
+      if (result.error !== undefined) {
+        verifySpinner.stop(
+          t("wizard.customProvider.verificationFailedError", {
+            error: formatErrorMessage(result.error),
+          }),
+        );
+      } else {
+        verifySpinner.stop(
+          t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
+        );
+      }
+    }
+    const retryChoice = await prompter.select<"baseUrl" | "model" | "both">({
+      message: t("wizard.customProvider.retryChoice"),
+      options: [
+        { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
+        { value: "model", label: t("wizard.customProvider.changeModel") },
+        { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
+      ],
+    });
+    if (retryChoice === "baseUrl" || retryChoice === "both") {
+      ({ baseUrl, apiKey, resolvedApiKey, noAuth } = await promptBaseUrlAndKey({
+        prompter,
+        config,
+        secretInputMode: params.secretInputMode,
+        initialBaseUrl: baseUrl,
+      }));
+    }
+    if (retryChoice === "model" || retryChoice === "both") {
+      modelId = await selectModel();
+    }
+    if (compatibilityChoice === "unknown") {
+      compatibility = null;
+    }
+  }
+
+  const suggestedId = buildEndpointIdFromUrl(baseUrl);
+  const providerIdInput = await prompter.text({
+    message: t("wizard.customProvider.endpointId"),
+    initialValue: suggestedId,
+    placeholder: "custom",
+    validate: (value) => {
+      const normalized = normalizeEndpointId(value);
+      if (!normalized) {
+        return t("wizard.customProvider.endpointIdRequired");
+      }
+      return undefined;
+    },
+  });
+  const aliasInput = await prompter.text({
+    message: t("wizard.customProvider.modelAlias"),
+    placeholder: t("wizard.customProvider.modelAliasPlaceholder"),
+    initialValue: "",
+    validate: (value) => {
+      const resolvedProvider = resolveCustomProviderId({
+        config,
+        baseUrl,
+        providerId: providerIdInput,
+      });
+      // Alias validation must use the post-collision provider id, otherwise a
+      // renamed endpoint could incorrectly collide with the requested id.
+      return resolveCustomModelAliasError({
+        raw: value,
+        cfg: config,
+        modelRef: { provider: resolvedProvider.providerId, model: modelId },
+        manifestPlugins,
+        agentId: params.target?.agentId,
+      });
+    },
+  });
+  const imageInputInference = resolveCustomModelImageInputInference(modelId);
+  const supportsImageInput =
+    imageInputInference.confidence === "known"
+      ? imageInputInference.supportsImageInput
+      : await prompter.confirm({
+          message: t("wizard.customProvider.imageInput"),
+          initialValue: imageInputInference.supportsImageInput,
+        });
+  const resolvedCompatibility = compatibility ?? "openai";
+  const { providerId } = resolveCustomProviderId({ config, baseUrl, providerId: providerIdInput });
+  const modelApi = config.models?.providers?.[providerId]?.models.find(
+    (model) => model.id === modelId,
+  )?.api;
+  if (
+    noAuth &&
+    resolveCustomProviderApi({ baseUrl, compatibility: resolvedCompatibility, modelApi }) !==
+      "openai-completions"
+  ) {
+    // The no-auth confirmation happens before compatibility is chosen, and only
+    // openai-completions transports can suppress the auth header, so require a
+    // real key instead of persisting an unsupported no-auth combination.
+    noAuth = false;
+    let compatKeyInput: SecretInput | undefined;
+    resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
+      config,
+      provider: buildEndpointIdFromUrl(baseUrl) || "custom",
+      envLabel: "CUSTOM_API_KEY",
+      promptMessage: t("wizard.customProvider.apiKeyPrompt"),
+      normalize: normalizeSecretInput,
+      validate: (value) =>
+        value.trim() ? undefined : t("wizard.customProvider.noAuthCompatKeyRequired"),
+      prompter,
+      secretInputMode: params.secretInputMode,
+      setCredential: async (key) => {
+        compatKeyInput = key;
+      },
+    });
+    apiKey = normalizeOptionalProviderApiKey(compatKeyInput);
+  }
+  const result = applyCustomApiConfig({
+    config,
+    baseUrl,
+    modelId,
+    compatibility: resolvedCompatibility,
+    apiKey,
+    ...(noAuth ? { noAuth: true } : {}),
+    providerId: providerIdInput,
+    alias: aliasInput,
+    manifestPlugins,
+    supportsImageInput,
+    ...(params.target ? { target: params.target } : {}),
+    ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
+  });
+
+  if (result.providerIdRenamedFrom) {
+    await prompter.note(
+      t("wizard.customProvider.endpointIdRenamed", {
+        from: result.providerIdRenamedFrom,
+        to: result.providerId,
+      }),
+      t("wizard.customProvider.endpointIdTitle"),
+    );
+  }
+
+  runtime.log(`Prepared custom provider: ${result.providerId}/${result.modelId}`);
+  return result;
+}

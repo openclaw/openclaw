@@ -1,0 +1,153 @@
+// `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
+
+export type PluginsListOptions = {
+  json?: boolean;
+  enabled?: boolean;
+  verbose?: boolean;
+};
+
+export async function runPluginsListCommand(
+  opts: PluginsListOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
+  // The inventory projector owns plugin metadata validation from the installed index.
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+  const report = buildPluginRegistrySnapshotReport({
+    config: cfg,
+    ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+  });
+  const list = opts.enabled ? report.plugins.filter((p) => p.enabled) : report.plugins;
+
+  if (opts.json) {
+    const payload = {
+      workspaceDir: report.workspaceDir,
+      workspaceScope: report.workspaceScope,
+      registry: {
+        source: report.registrySource,
+        diagnostics: report.registryDiagnostics,
+      },
+      plugins: list.map((plugin) => {
+        // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
+        // Omit the field instead of serializing the registry-compatible empty placeholder.
+        const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
+        return record;
+      }),
+      diagnostics: report.diagnostics,
+    };
+    writeRuntimeJson(runtime, payload);
+    return;
+  }
+
+  const [
+    { formatPluginSourceForTable, resolvePluginSourceRoots },
+    { getTerminalTableWidth, renderTable },
+    { theme },
+    { formatCliCommand },
+    { formatPluginLine, formatPluginStatus, formatPluginTrustLabel },
+  ] = await Promise.all([
+    import("../plugins/source-display.js"),
+    import("../../packages/terminal-core/src/table.js"),
+    import("../../packages/terminal-core/src/theme.js"),
+    import("./command-format.js"),
+    import("./plugins-list-format.js"),
+  ]);
+
+  const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
+    (diagnostic) =>
+      diagnostic.level !== "info" &&
+      (diagnostic.level !== "error" ||
+        !list.some((plugin) => plugin.status === "error" && plugin.error === diagnostic.message)),
+  );
+  for (const { level, message } of diagnostics) {
+    const format = level === "error" ? theme.error : theme.warn;
+    runtime.log(format(terminalText`${level === "error" ? "Error" : "Warning"}: ${message}`));
+  }
+  if (diagnostics.length > 0) {
+    runtime.log("");
+  }
+
+  if (list.length === 0) {
+    const message =
+      opts.enabled && report.plugins.length > 0
+        ? `${
+            cfg.plugins?.enabled === false
+              ? "No enabled plugins found. Plugins are globally disabled."
+              : "No enabled plugins found."
+          } Run ${formatCliCommand("openclaw plugins list")} to inspect installed plugins.`
+        : `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`;
+    runtime.log(theme.muted(message));
+    return;
+  }
+
+  const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
+  runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
+  runtime.log(theme.muted("Trust is provenance, not a code-safety guarantee."));
+
+  if (!opts.verbose) {
+    const tableWidth = getTerminalTableWidth();
+    const sourceRoots = resolvePluginSourceRoots({
+      workspaceDir: report.workspaceDir,
+    });
+    const usedRoots = new Set<keyof typeof sourceRoots>();
+    const rows = list.map((plugin) => {
+      const error = plugin.status === "error" && plugin.error;
+      const desc = error
+        ? theme.error(terminalText`${error}`)
+        : theme.muted(terminalText`${plugin.description ?? ""}`);
+      const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
+      if (formattedSource.rootKey) {
+        usedRoots.add(formattedSource.rootKey);
+      }
+      return {
+        Name: terminalText`${plugin.name || plugin.id}`,
+        ID: plugin.name && plugin.name !== plugin.id ? terminalText`${plugin.id}` : "",
+        Format: terminalText`${plugin.format ?? "openclaw"}`,
+        Status: formatPluginStatus(plugin),
+        Source: desc
+          ? `${terminalText`${formattedSource.value}`}\n${desc}`
+          : terminalText`${formattedSource.value}`,
+        Version: terminalText`${plugin.version ?? ""}`,
+        Trust: formatPluginTrustLabel(plugin),
+      };
+    });
+
+    if (usedRoots.size > 0) {
+      runtime.log(theme.muted("Source roots:"));
+      for (const key of ["stock", "workspace", "global"] as const) {
+        if (!usedRoots.has(key)) {
+          continue;
+        }
+        const dir = sourceRoots[key];
+        if (!dir) {
+          continue;
+        }
+        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(terminalText`${dir}`)}`);
+      }
+      runtime.log("");
+    }
+
+    runtime.log(
+      renderTable({
+        width: tableWidth,
+        columns: [
+          { key: "Name", header: "Name", minWidth: 14, flex: true },
+          { key: "ID", header: "ID", minWidth: 10, flex: true },
+          { key: "Format", header: "Format", minWidth: 9 },
+          { key: "Status", header: "Status", minWidth: 10 },
+          { key: "Source", header: "Source", minWidth: 26, flex: true },
+          { key: "Version", header: "Version", minWidth: 8 },
+          { key: "Trust", header: "Trust", minWidth: 12, flex: true },
+        ],
+        rows,
+      }).trimEnd(),
+    );
+    return;
+  }
+
+  runtime.log(list.map(formatPluginLine).join("\n\n").trim());
+}

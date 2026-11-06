@@ -1,0 +1,63 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import type { MsgContext } from "../templating.js";
+
+export type CommandSessionMetadataChange = {
+  sessionKey: string;
+  agentId?: string;
+  reason: "command-metadata";
+};
+
+const commandSessionMetadataChanges = new WeakMap<object, CommandSessionMetadataChange[]>();
+
+function addChange(target: object, change: CommandSessionMetadataChange): void {
+  const changes = commandSessionMetadataChanges.get(target) ?? [];
+  if (
+    !changes.some(
+      (candidate) =>
+        candidate.sessionKey === change.sessionKey && candidate.agentId === change.agentId,
+    )
+  ) {
+    changes.push(change);
+  }
+  commandSessionMetadataChanges.set(target, changes);
+}
+
+export function markCommandSessionMetadataChanged(params: {
+  agentId: string;
+  ctx: MsgContext;
+  rootCtx?: MsgContext;
+  sessionKey: string;
+}): void {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  const change: CommandSessionMetadataChange = {
+    sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    reason: "command-metadata",
+  };
+  if (params.rootCtx && params.rootCtx !== params.ctx) {
+    addChange(params.rootCtx, change);
+  }
+  addChange(params.ctx, change);
+}
+
+export function takeCommandSessionMetadataChanges(
+  target: object,
+): CommandSessionMetadataChange[] | undefined {
+  const changes = commandSessionMetadataChanges.get(target);
+  commandSessionMetadataChanges.delete(target);
+  return changes && changes.length > 0 ? changes : undefined;
+}
+
+export function takeCommandSessionMetadataChangesFromTargets(
+  targets: Iterable<object>,
+): CommandSessionMetadataChange[] | undefined {
+  const changes = dedupeByKey(
+    [...new Set(targets)].flatMap((target) => takeCommandSessionMetadataChanges(target) ?? []),
+    (change) => JSON.stringify([change.sessionKey, change.agentId ?? null, change.reason]),
+  );
+  return changes.length > 0 ? changes : undefined;
+}

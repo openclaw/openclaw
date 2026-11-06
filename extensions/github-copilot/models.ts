@@ -1,0 +1,410 @@
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/core";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeModelCompat,
+  resolveDefaultModelMaxTokens,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asPositiveSafeInteger,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveCopilotModelCompat,
+  resolveCopilotThinkingLevelMap,
+  resolveCopilotTransportApi,
+  resolveStaticCopilotModelOverride,
+} from "./model-metadata.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
+
+export const PROVIDER_ID = "github-copilot";
+
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+export function resolveCopilotForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  const trimmedModelId = ctx.modelId.trim();
+  if (!trimmedModelId) {
+    return undefined;
+  }
+
+  const lowerModelId = normalizeOptionalLowercaseString(trimmedModelId) ?? "";
+  const existing = ctx.modelRegistry.find(PROVIDER_ID, lowerModelId);
+  if (existing) {
+    return undefined;
+  }
+
+  const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);
+  // Unknown configured IDs remain usable; Copilot enforces account availability.
+  const reasoning = staticOverride
+    ? (staticOverride.reasoning ?? false)
+    : /^o[13](\b|$)/.test(lowerModelId) || /(?:^|[-_.])codex(?:$|[-_.])/.test(lowerModelId);
+  const compat = staticOverride?.compat ?? resolveCopilotModelCompat(trimmedModelId);
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: staticOverride?.name ?? trimmedModelId,
+    provider: PROVIDER_ID,
+    api: staticOverride?.api ?? resolveCopilotTransportApi(trimmedModelId),
+    reasoning,
+    // Optimistic: most Copilot models support images, and the API rejects
+    // image payloads for text-only models rather than failing silently.
+    input: staticOverride?.input ?? ["text", "image"],
+    cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(staticOverride?.family ? { family: staticOverride.family } : {}),
+    contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    // Only the unknown-model estimate is replaceable; curated static sizing stays authoritative.
+    ...(staticOverride?.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
+    ...(staticOverride?.contextTokens !== undefined
+      ? { contextTokens: staticOverride.contextTokens }
+      : {}),
+    maxTokens:
+      staticOverride?.maxTokens ??
+      resolveDefaultModelMaxTokens(staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW),
+    ...(staticOverride?.thinkingLevelMap
+      ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
+      : {}),
+    ...(compat ? { compat } : {}),
+  } as ProviderRuntimeModel);
+}
+
+type CopilotApiModelEntry = {
+  id?: string;
+  name?: string;
+  object?: string;
+  vendor?: string;
+  preview?: boolean;
+  model_picker_enabled?: boolean;
+  model_picker_category?: string;
+  policy?: {
+    state?: string;
+  };
+  supported_endpoints?: unknown;
+  capabilities?: {
+    type?: string;
+    limits?: {
+      max_context_window_tokens?: number;
+      max_output_tokens?: number;
+      max_prompt_tokens?: number;
+    };
+    supports?: {
+      vision?: boolean;
+      tool_calls?: boolean;
+      streaming?: boolean;
+      reasoning_effort?: string[] | null;
+    };
+  };
+};
+
+type CopilotModelSelectionMetadata = {
+  category?: string;
+  pickerEnabled: boolean;
+  policyState?: string;
+  preview: boolean;
+  streaming?: boolean;
+  toolCalls: boolean;
+};
+
+const copilotModelSelectionMetadata = new WeakMap<object, CopilotModelSelectionMetadata>();
+
+export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolean {
+  const metadata = copilotModelSelectionMetadata.get(model);
+  return Boolean(
+    metadata?.pickerEnabled &&
+    metadata.policyState !== "disabled" &&
+    metadata.policyState !== "unconfigured",
+  );
+}
+
+function isCopilotCatalogModelSelectable(model: CopilotCatalogModel): boolean {
+  const metadata = copilotModelSelectionMetadata.get(model);
+  return Boolean(
+    isCopilotCatalogModelVisible(model) && metadata?.streaming !== false && metadata?.toolCalls,
+  );
+}
+
+const COPILOT_STARTER_CATEGORY_RANK = new Map<string, number>([
+  ["versatile", 0],
+  ["lightweight", 1],
+  ["powerful", 2],
+]);
+
+function compareCopilotStarterCandidates(
+  left: CopilotCatalogModel,
+  right: CopilotCatalogModel,
+): number {
+  const leftMetadata = copilotModelSelectionMetadata.get(left);
+  const rightMetadata = copilotModelSelectionMetadata.get(right);
+  const previewDelta =
+    Number(leftMetadata?.preview === true) - Number(rightMetadata?.preview === true);
+  if (previewDelta !== 0) {
+    return previewDelta;
+  }
+  const categoryDelta =
+    (COPILOT_STARTER_CATEGORY_RANK.get(leftMetadata?.category ?? "") ?? Number.MAX_SAFE_INTEGER) -
+    (COPILOT_STARTER_CATEGORY_RANK.get(rightMetadata?.category ?? "") ?? Number.MAX_SAFE_INTEGER);
+  if (categoryDelta !== 0) {
+    return categoryDelta;
+  }
+  const contextDelta =
+    (right.contextWindow ?? Math.max(right.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW)) -
+    (left.contextWindow ?? Math.max(left.contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW));
+  if (contextDelta !== 0) {
+    return contextDelta;
+  }
+  const outputDelta = right.maxTokens - left.maxTokens;
+  if (outputDelta !== 0) {
+    return outputDelta;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+export function selectCopilotStarterModel(
+  models: readonly CopilotCatalogModel[],
+  preferredModelId: string,
+): CopilotCatalogModel | undefined {
+  const selectable = models.filter(isCopilotCatalogModelSelectable);
+  return (
+    selectable.find((model) => model.id === preferredModelId) ??
+    selectable.toSorted(compareCopilotStarterCandidates)[0]
+  );
+}
+
+export const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
+const COPILOT_ROUTER_ID_PREFIX = "accounts/";
+type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+  input: ProviderRuntimeModel["input"];
+};
+
+const COPILOT_TRANSPORT_ENDPOINTS = {
+  "anthropic-messages": "/messages",
+  "openai-completions": "/chat/completions",
+  "openai-responses": "/responses",
+} as const;
+
+function resolveCopilotApi(
+  entry: CopilotApiModelEntry,
+): ReturnType<typeof resolveCopilotTransportApi> {
+  const preferred =
+    entry.vendor?.toLowerCase() === "anthropic"
+      ? "anthropic-messages"
+      : resolveCopilotTransportApi(entry.id ?? "");
+  const endpoints = new Set(
+    Array.isArray(entry.supported_endpoints)
+      ? entry.supported_endpoints
+          .filter((endpoint): endpoint is string => typeof endpoint === "string")
+          .map((endpoint) =>
+            endpoint
+              .trim()
+              .replace(/^\/v1(?=\/)/, "")
+              .replace(/\/+$/, ""),
+          )
+      : [],
+  );
+  // Account discovery owns supported transports; naming is only a preference or missing-data fallback.
+  return (
+    ([preferred, "openai-responses", "openai-completions", "anthropic-messages"] as const).find(
+      (api) => endpoints.has(COPILOT_TRANSPORT_ENDPOINTS[api]),
+    ) ?? preferred
+  );
+}
+
+// Copilot `/models` vendor labels for the developers OpenClaw catalogs. Azure OpenAI
+// serves OpenAI's models. Other labels leave the family to the manifest row, or unknown.
+const COPILOT_VENDOR_FAMILIES = new Map([
+  ["anthropic", "anthropic"],
+  ["azure openai", "openai"],
+  ["google", "google"],
+  ["moonshot ai", "moonshot"],
+  ["openai", "openai"],
+  ["xai", "xai"],
+]);
+
+function resolveCopilotModelFamily(entry: CopilotApiModelEntry, id: string): string | undefined {
+  const vendor = normalizeOptionalLowercaseString(entry.vendor);
+  return (
+    (vendor ? COPILOT_VENDOR_FAMILIES.get(vendor) : undefined) ??
+    resolveStaticCopilotModelOverride(id)?.family
+  );
+}
+
+function mergeCopilotCompat(
+  base: ModelDefinitionConfig["compat"] | undefined,
+  reasoningEfforts: string[] | null | undefined,
+): ModelDefinitionConfig["compat"] | undefined {
+  if (!Array.isArray(reasoningEfforts)) {
+    return base;
+  }
+  return {
+    ...base,
+    supportedReasoningEfforts: [
+      ...new Set(
+        reasoningEfforts
+          .map((effort) => normalizeOptionalLowercaseString(effort))
+          .filter((effort): effort is string => Boolean(effort)),
+      ),
+    ],
+  };
+}
+
+function mapCopilotApiModelToDefinition(
+  entry: CopilotApiModelEntry,
+): CopilotCatalogModel | undefined {
+  const id = entry.id?.trim();
+  if (!id) {
+    return undefined;
+  }
+  // Skip non-chat objects (embeddings, routers, etc.) and internal router ids.
+  if (entry.object && entry.object !== "model") {
+    return undefined;
+  }
+  if (entry.capabilities?.type && entry.capabilities.type !== "chat") {
+    return undefined;
+  }
+  if (id.startsWith(COPILOT_ROUTER_ID_PREFIX)) {
+    return undefined;
+  }
+
+  const limits = entry.capabilities?.limits;
+  const supports = entry.capabilities?.supports;
+  const reasoning = Array.isArray(supports?.reasoning_effort)
+    ? supports.reasoning_effort.length > 0
+    : false;
+  const supportsVision = supports?.vision === true;
+  const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
+
+  const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
+  // Catalogs retain provider facts; runtime construction supplies an estimate for omissions.
+  const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
+  const maxTokens =
+    asPositiveSafeInteger(limits?.max_output_tokens) ??
+    resolveDefaultModelMaxTokens(
+      asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW,
+    );
+  const api = resolveCopilotApi(entry);
+  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
+  // Copilot lists effort levels instead of Anthropic's capability tree. Only
+  // adaptive-thinking Claude models offer xhigh, so a listed Claude id that
+  // OpenClaw does not know yet still gets adaptive thinking, not manual budgets.
+  const efforts = compat?.supportedReasoningEfforts;
+  const params =
+    api === "anthropic-messages" && efforts?.includes("xhigh")
+      ? {
+          claudeCapabilities: {
+            adaptiveThinking: true,
+            xhighEffort: true,
+            maxEffort: efforts.includes("max"),
+          },
+        }
+      : undefined;
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
+  const family = resolveCopilotModelFamily(entry, id);
+
+  const definition: CopilotCatalogModel = {
+    id,
+    name: entry.name?.trim() || id,
+    ...(family ? { family } : {}),
+    api,
+    reasoning,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(nativeContextWindow !== undefined ? { contextWindow: nativeContextWindow } : {}),
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    maxTokens,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    ...(compat ? { compat } : {}),
+    ...(params ? { params } : {}),
+  };
+  copilotModelSelectionMetadata.set(definition, {
+    category: normalizeOptionalLowercaseString(entry.model_picker_category),
+    pickerEnabled: entry.model_picker_enabled === true,
+    policyState: normalizeOptionalLowercaseString(entry.policy?.state),
+    preview: entry.preview === true,
+    streaming: supports?.streaming,
+    toolCalls: supports?.tool_calls === true,
+  });
+  return definition;
+}
+
+function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Copilot /models: malformed JSON response");
+  }
+  return value as CopilotApiModelEntry;
+}
+
+/**
+ * Fetch the live Copilot model catalog from `${baseUrl}/models` and project it
+ * into `ModelDefinitionConfig[]`. Used by the plugin's discovery hook so the
+ * runtime catalog tracks per-account entitlements + accurate context windows
+ * without manifest churn.
+ *
+ * Filters out non-chat objects (embeddings, routers) and internal router ids.
+ * Failures propagate so the catalog owner can publish a truthful outcome.
+ */
+export async function fetchCopilotModelCatalog(params: {
+  /** GitHub source token accepted by the account's Copilot API endpoint. */
+  copilotApiToken: string;
+  /** Resolved baseUrl from the same token-exchange response. */
+  baseUrl: string;
+  headers?: Record<string, string>;
+}): Promise<CopilotCatalogModel[]> {
+  const trimmedBase = params.baseUrl.replace(/\/+$/, "");
+  if (!trimmedBase) {
+    throw new Error("fetchCopilotModelCatalog: baseUrl required");
+  }
+  if (!params.copilotApiToken.trim()) {
+    throw new Error("fetchCopilotModelCatalog: copilotApiToken required");
+  }
+  const url = `${trimmedBase}/models`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
+      signal: controller.signal,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...buildCopilotRuntimeHeaders({ headers: params.headers }),
+          Authorization: `Bearer ${params.copilotApiToken}`,
+        },
+      },
+    });
+    release = guarded.release;
+    const res = guarded.response;
+    if (!res.ok) {
+      // Failed discovery never consumes this body, so release the transport before cleanup.
+      await res.body?.cancel().catch(() => undefined);
+      throw new LiveModelCatalogHttpError(PROVIDER_ID, res.status);
+    }
+    const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
+    const seen = new Set<string>();
+    const out: CopilotCatalogModel[] = [];
+    for (const rawEntry of data) {
+      const entry = asCopilotApiModelEntry(rawEntry);
+      const def = mapCopilotApiModelToDefinition(entry);
+      if (!def || seen.has(def.id)) {
+        continue;
+      }
+      seen.add(def.id);
+      out.push(def);
+    }
+    return out;
+  } finally {
+    clearTimeout(timeoutId);
+    await release?.();
+  }
+}

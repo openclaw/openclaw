@@ -1,0 +1,81 @@
+{
+  "name": "@openclaw/feishu",
+  "version": "2026.11.1",
+  "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "mdast-util-from-markdown": "2.1.0",
+    "mdast-util-gfm-table": "2.0.0",
+    "micromark-extension-gfm-table": "2.1.2",
+    "typebox": "1.4.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.11.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "feishu",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "FEISHU_APP_ID",
+            "FEISHU_APP_SECRET",
+            "FEISHU_VERIFICATION_TOKEN",
+            "FEISHU_ENCRYPT_KEY"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasConfiguredFeishuChannelState"
+      },
+      "label": "Feishu",
+      "selectionLabel": "Feishu/Lark (飞书)",
+      "docsPath": "/channels/feishu",
+      "docsLabel": "feishu",
+      "blurb": "飞书/Lark enterprise messaging with doc/wiki/drive tools.",
+      "aliases": [
+        "lark"
+      ],
+      "order": 35,
+      "quickstartAllowFrom": true,
+      "setup": {
+        "fields": []
+      }
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/feishu",
+      "npmSpec": "@openclaw/feishu",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.29"
+    },
+    "compat": {
+      "pluginApi": ">=2026.11.1"
+    },
+    "build": {
+      "bundledDist": false,
+      "openclawVersion": "2026.11.1"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

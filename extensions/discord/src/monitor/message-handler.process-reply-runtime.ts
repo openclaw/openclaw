@@ -1,0 +1,225 @@
+import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  createChannelMessageReplyPipeline,
+  createTypingCallbacks,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
+import type { RequestClient } from "../internal/discord.js";
+import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
+import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
+import { formatDiscordReplySkip } from "./reply-delivery.js";
+import { sendTyping } from "./typing.js";
+
+type DiscordMessageProcessContext = NonNullable<
+  Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
+>;
+
+export function formatDiscordGroupThreadReply(text: string, participant: { name: string }): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
+
+export function formatDiscordReasoningQuote(quoteText: string): string | undefined {
+  const lines = quoteText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    return undefined;
+  }
+  lines[0] = `🧠 ${lines[0]}`;
+  return lines.map((line) => `> ${line}`).join("\n");
+}
+
+export function createDiscordBeforePayloadDelivery(params: {
+  abortSignal?: AbortSignal;
+  getDeliverTarget: () => string;
+  sessionKey?: string;
+  draftPreview: ReturnType<typeof createDiscordDraftPreviewController>;
+  isFallbackOnlyToolWarningFinal: (payload: ReplyPayload) => boolean;
+}) {
+  return (payload: ReplyPayload, info: { kind: ReplyDispatchKind }): ReplyPayload | null => {
+    if (params.abortSignal?.aborted) {
+      logVerbose(
+        formatDiscordReplySkip({
+          kind: info.kind,
+          reason: "aborted before delivery",
+          target: params.getDeliverTarget(),
+          sessionKey: params.sessionKey,
+        }),
+      );
+      return null;
+    }
+    if (payload.isReasoning || payload.isCommentary || payload.isCompactionNotice) {
+      return payload;
+    }
+    if (
+      params.draftPreview.draftStream &&
+      params.draftPreview.isProgressMode &&
+      info.kind === "block" &&
+      !resolveSendableOutboundReplyParts(payload).hasMedia &&
+      !payload.isError
+    ) {
+      return null;
+    }
+    if (info.kind === "final" && !params.isFallbackOnlyToolWarningFinal(payload)) {
+      params.draftPreview.freezeProgress();
+    }
+    return payload;
+  };
+}
+
+export function createDiscordMessageReplyRuntime(params: {
+  ctx: DiscordMessagePreflightContext;
+  processContext: DiscordMessageProcessContext;
+  replyReference: Pick<DiscordMessageProcessContext["replyPlan"]["replyReference"], "peek">;
+  sourceRepliesAreToolOnly: boolean;
+  shouldDisableCoreTypingKeepalive: boolean;
+  isRoomEvent: boolean;
+  dispatchStartedAt: number;
+  feedbackRest: RequestClient;
+  deliveryRest: RequestClient;
+}) {
+  const { ctx, processContext } = params;
+  const {
+    cfg,
+    discordConfig,
+    accountId,
+    guildHistories,
+    historyLimit,
+    textLimit,
+    messageChannelId,
+    isDirectMessage,
+    route,
+  } = ctx;
+  const { ctxPayload, replyPlan } = processContext;
+  const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
+    ? replyPlan.deliverTarget.slice("channel:".length)
+    : messageChannelId;
+  let typingFeedback: ReturnType<typeof createTypingCallbacks> | undefined;
+  const getTypingFeedback = () =>
+    (typingFeedback ??= createTypingCallbacks({
+      start: () => sendTyping({ rest: params.feedbackRest, channelId: deliverChannelId }),
+      onStartError: (error) => {
+        logTypingFailure({ log: logVerbose, channel: "discord", target: deliverChannelId, error });
+      },
+      keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
+      // Discord can keep long tool-heavy replies alive, but not forever.
+      maxDurationMs: 20 * 60_000,
+    }));
+
+  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+    cfg,
+    agentId: route.agentId,
+    channel: "discord",
+    accountId: route.accountId,
+    // The core lifecycle reaches this callback only after reply admission.
+    // Silent pre-dispatch outcomes therefore never allocate or emit feedback.
+    typingCallbacks: {
+      onReplyStart: () => getTypingFeedback().onReplyStart(),
+      onIdle: () => typingFeedback?.onIdle?.(),
+      onCleanup: () => typingFeedback?.onCleanup?.(),
+    },
+  });
+  const tableMode = resolveMarkdownTableMode({ cfg, channel: "discord", accountId });
+  const maxLinesPerMessage = resolveDiscordMaxLinesPerMessage({
+    cfg,
+    discordConfig,
+    accountId,
+  });
+  const chunkMode = resolveChunkMode(cfg, "discord", accountId);
+  const clearGroupHistory = () => {
+    if (isDirectMessage) {
+      return;
+    }
+    createChannelHistoryWindow({ historyMap: guildHistories }).clear({
+      historyKey: messageChannelId,
+      limit: historyLimit,
+    });
+  };
+  const beginDeliveryCorrelation = () =>
+    params.isRoomEvent
+      ? discordInboundEventDelivery.begin(
+          ctxPayload.SessionKey,
+          {
+            outboundTo: messageChannelId,
+            outboundAccountId: route.accountId,
+            markInboundEventDelivered: clearGroupHistory,
+          },
+          { inboundEventKind: ctxPayload.InboundEventKind },
+        )
+      : () => {};
+  const endDeliveryCorrelation = beginDeliveryCorrelation();
+
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+    const sessionKey = ctxPayload.SessionKey;
+    if (!sessionKey) {
+      return undefined;
+    }
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      const sessionEntry = await getSessionEntryAsync({
+        agentId: route.agentId,
+        sessionKey,
+        storePath,
+      });
+      if (!sessionEntry?.sessionId) {
+        return undefined;
+      }
+      const latest = await readLatestAssistantTextByIdentity({
+        agentId: route.agentId,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        storePath,
+      });
+      if (!latest?.timestamp || latest.timestamp < params.dispatchStartedAt) {
+        return undefined;
+      }
+      return latest.text;
+    } catch (err) {
+      logVerbose(`discord transcript final candidate lookup failed: ${String(err)}`);
+      return undefined;
+    }
+  };
+
+  const draftPreview = createDiscordDraftPreviewController({
+    groupThread: Boolean(ctxPayload.GroupThread),
+    isRoomEvent: params.isRoomEvent,
+    cfg,
+    discordConfig,
+    accountId,
+    abortSignal: ctx.abortSignal,
+    isPolicyCurrent: ctx.isPolicyCurrent,
+    sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
+    textLimit,
+    deliveryRest: params.deliveryRest,
+    deliverChannelId,
+    replyReference: params.replyReference,
+    log: logVerbose,
+  });
+  const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
+
+  return {
+    replyPipeline,
+    onModelSelected,
+    tableMode,
+    maxLinesPerMessage,
+    chunkMode,
+    beginQueuedDeliveryCorrelation: beginDeliveryCorrelation,
+    endDeliveryCorrelation,
+    resolveCurrentTurnTranscriptFinalText,
+    draftPreview,
+    resolvedBlockStreamingEnabled,
+  };
+}

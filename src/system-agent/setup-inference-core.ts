@@ -1,0 +1,537 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import type {
+  SetupInferenceActivationRejection,
+  SetupInferenceFailureStatus,
+} from "../../packages/gateway-protocol/src/schema/setup-inference.js";
+import type { AgentRunResultView } from "../agents/agent-run-result.js";
+import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { describeFailoverError } from "../agents/failover-error.js";
+import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
+import type { InferenceBackendKind } from "../commands/onboard-inference.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { resolveUserPath } from "../utils.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import type {
+  SetupInferenceAuthOption,
+  SetupInferenceManualProvider,
+  SetupInferencePrepareOption,
+} from "./setup-inference-auth-options.js";
+import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+
+export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
+
+/**
+ * Inference is the one required onboarding step (docs/cli/setup.md
+ * "Setup bootstrap"). This module gives structured clients (macOS app) the
+ * same ladder the conversation uses, with one hard guarantee: a candidate is
+ * persisted as the default model only after a real completion round-trips.
+ * A failing candidate must never leave config pointing at a broken model.
+ */
+export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
+/**
+ * A remote API answering a one-word, tool-free prompt either replies well inside this
+ * or is not usable for chat; the setup dialog waits on it, so don't hold it for 90 s.
+ * Local servers, CLI runners and native harnesses keep the full budget for startup.
+ */
+export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
+
+const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
+const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";
+
+export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
+export type SavedAuthSetupInferenceKind = `saved-auth:${string}`;
+
+export type SetupInferenceKind =
+  | InferenceBackendKind
+  | ProviderAutoSetupInferenceKind
+  | SavedAuthSetupInferenceKind;
+
+export type SetupInferenceCandidate = {
+  modelTarget?: "utility";
+  kind: SetupInferenceKind;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
+  label: string;
+  detail: string;
+  modelRef: string;
+  /** Highest-ranked usable primary-model candidate from passive discovery. */
+  recommended: boolean;
+  credentials?: boolean;
+  icon?: string;
+  website?: string;
+};
+
+export type SetupInferenceUnavailableCandidate = {
+  id: string;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
+  label: string;
+  detail: string;
+  reason: string;
+  /** Provider-owned interactive sign-in that can replace the unavailable route. */
+  authOptionId?: string;
+  /** Provider-owned manual secret route that can replace the unavailable route. */
+  manualProviderId?: string;
+  icon?: string;
+  website?: string;
+};
+
+export type SetupInferenceDetection = {
+  /** Effective explicit utility selection, independent of ordinary primary readiness. */
+  utilityModel?: string;
+  /** Explicit utility inference available to setup while no regular primary is configured. */
+  setupModel?: string;
+  candidates: SetupInferenceCandidate[];
+  /** Installed integrations that cannot safely run the tool-free setup probe. */
+  unavailableCandidates: SetupInferenceUnavailableCandidate[];
+  /** Text-inference key/token methods exposed by installed provider manifests. */
+  manualProviders: SetupInferenceManualProvider[];
+  /** Interactive provider-owned browser and device-code sign-in methods. */
+  authOptions: SetupInferenceAuthOption[];
+  /** Provider-owned app-guided local model setup methods. */
+  prepareOptions?: SetupInferencePrepareOption[];
+  /** Curated tools clients can offer when no existing AI access is detected. */
+  recommendedInstalls: SetupRecommendedInstall[];
+  /** Native conversation catalogs available on this Gateway host. */
+  nativeSessionCatalogs?: SetupNativeSessionCatalogOption[];
+  /** True only while the Gateway still needs its first inference route. */
+  nativeSessionCatalogPreferenceRequired?: boolean;
+  /** Resolved workspace the setup apply would use (display + default). */
+  workspace: string;
+  configuredModel?: string;
+  /** The connected Gateway already has a configured default-agent model. */
+  setupComplete: boolean;
+};
+
+export type { SetupInferenceFailureStatus };
+export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
+
+export type ActivateSetupInferenceResult =
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
+      lines: string[];
+      modelName?: string;
+      gatewayRestartRequired?: true;
+    })
+  | (Extract<VerifySetupInferenceResult, { ok: false }> & {
+      disposition?: SetupInferenceActivationRejection["disposition"];
+    });
+
+/**
+ * The config commit may have happened, so callers must verify current setup
+ * instead of treating this like a definitive candidate failure and retrying.
+ */
+export class SetupInferenceActivationIndeterminateError extends Error {
+  override name = "SetupInferenceActivationIndeterminateError";
+}
+
+export class SetupInferenceActivationUnavailableError extends Error {
+  override name = "SetupInferenceActivationUnavailableError";
+}
+
+/**
+ * The live-tested owner no longer matches current config. Activation maps this
+ * to `{ ok: false, status: "auth" }` so the guided-onboarding ladder can move
+ * to its next candidate instead of crashing the CLI.
+ */
+export class SetupInferenceOwnerDriftError extends Error {
+  override name = "SetupInferenceOwnerDriftError";
+}
+
+export type VerifySetupInferenceResult =
+  | {
+      ok: true;
+      modelTarget?: "utility";
+      modelRef: string;
+      latencyMs: number;
+    }
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+    };
+
+export type CompleteSetupInferenceResult =
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & {
+      text: string;
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
+
+export type BoundVerifySetupInferenceResult =
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
+      binding: SystemAgentVerifiedInferenceBinding;
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
+
+export type ActivateSetupInferenceParams = {
+  kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Gateway first-run policy; never inherited by the manual picker. */
+  automaticSetup?: true;
+  /** Enable and verify access without changing the agent's selected model. */
+  selectModel?: boolean;
+  /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
+  modelTarget?: "utility";
+  /** Configured agent that owns the route being tested and persisted. */
+  agentId?: string;
+  /** Exact explicit model to probe and persist instead of the route's starter model. */
+  modelRef?: string;
+  /** Manual step only: provider-auth choice returned by detection. */
+  authChoice?: string;
+  /** Manual step only: the pasted API key or token. Never logged. */
+  apiKey?: string;
+  workspace?: string;
+  surface: "cli" | "gateway";
+  /** Whether interactive provider secrets would be entered away from the Gateway host. */
+  isRemoteProviderAuth?: boolean;
+  /** Fresh-install opt-in for discovering existing native provider conversations. */
+  nativeSessionCatalogsEnabled?: boolean;
+  /** False when an enclosing persistent-operation boundary owns the setup audit. */
+  recordSetupAudit?: boolean;
+  runtime: RuntimeEnv;
+  /** Explicit consent from the CLI command that tests and activates a saved sign-in. */
+  activationConfirmed?: true;
+  /** Interactive provider login transport, required for `provider-auth`. */
+  prompter?: WizardPrompter;
+  /** Cancels provider-owned browser callbacks and device-code polling. */
+  signal?: AbortSignal;
+  /** Session cancellation gate; interactive credentials must never persist after cancel. */
+  isCancelled?: () => boolean;
+  /** Revalidate the caller's live authority before provider I/O or persistent effects. */
+  assertCurrent?: () => void;
+  /** Lock the caller's cancellation boundary before the first durable setup effect. */
+  beforePersistentEffect?: () => void | Promise<void>;
+  /** Preparation effects are complete; the selected route is ready for its live test. */
+  onPreparationComplete?: () => void;
+  /** Present installation and activation separately from the live connection test. */
+  onActivationStarted?: () => void;
+  /** Observe the authored config held by the inference writer before it commits. */
+  onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
+  /** Finish application or recovery only after releasing the Gateway setup queue. */
+  onActivationCompletion?: (complete: () => Promise<boolean>) => void;
+};
+
+export class SetupInferenceCancelledError extends Error {
+  constructor() {
+    super("Provider login was cancelled.");
+  }
+}
+
+export function throwIfSetupInferenceCancelled(
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled" | "assertCurrent">,
+): void {
+  if (params.signal?.aborted || params.isCancelled?.()) {
+    throw new SetupInferenceCancelledError();
+  }
+  params.assertCurrent?.();
+}
+
+export async function waitForProviderAuth<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return await racePromiseWithAbortSignal(
+    promise,
+    signal,
+    () => new SetupInferenceCancelledError(),
+  );
+}
+
+export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {
+  return `${PROVIDER_AUTO_SETUP_KIND_PREFIX}${encodeURIComponent(choiceId)}`;
+}
+
+export function toSavedAuthSetupKind(profileId: string): SavedAuthSetupInferenceKind {
+  return `${SAVED_AUTH_SETUP_KIND_PREFIX}${encodeURIComponent(profileId)}`;
+}
+
+export function parseSavedAuthSetupProfileId(kind: string): string | undefined {
+  return parseEncodedSetupKind(kind, SAVED_AUTH_SETUP_KIND_PREFIX);
+}
+
+export function parseInferenceRef(modelRef: string): { provider: string; model: string } {
+  const slash = modelRef.indexOf("/");
+  return slash === -1
+    ? { provider: modelRef, model: "" }
+    : { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
+}
+
+export function parseProviderAutoSetupChoiceId(kind: string): string | undefined {
+  return parseEncodedSetupKind(kind, PROVIDER_AUTO_SETUP_KIND_PREFIX);
+}
+
+function parseEncodedSetupKind(kind: string, prefix: string): string | undefined {
+  if (!kind.startsWith(prefix)) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(kind.slice(prefix.length)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function invalidSetupConfigError(snapshot: {
+  path: string;
+  issues?: Array<{ path?: string; message: string }>;
+}): string {
+  const issue = snapshot.issues?.[0];
+  const detail = issue ? ` (${issue.path ? `${issue.path}: ` : ""}${issue.message})` : "";
+  return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
+}
+
+export async function redactSetupInferenceError(
+  message: unknown,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
+  const secrets = new Set(
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
+  );
+  let redacted = coerceErrorMessage(message);
+  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  const { redactToolPayloadText } = await import("../logging/redact.js");
+  return redactToolPayloadText(redacted);
+}
+
+export function resolveCandidatePresentation(
+  candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
+  authChoices: readonly ProviderAuthChoiceMetadata[],
+): Pick<SetupInferenceCandidate, "brandId" | "icon" | "website"> {
+  const choice = authChoices.find(
+    (entry) =>
+      entry.choiceId === candidate.kind ||
+      entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
+  );
+  // Built-in CLI detection kinds are runtime identities, not display brands.
+  const brandId =
+    candidate.kind === "claude-cli"
+      ? "claude"
+      : candidate.kind === "codex-cli"
+        ? "openai"
+        : choice?.providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
+  return {
+    ...(brandId ? { brandId } : {}),
+    ...(choice?.icon ? { icon: choice.icon } : {}),
+    ...(choice?.website ? { website: choice.website } : {}),
+  };
+}
+
+export function resolveSetupInferenceWorkspace(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "config">,
+): string {
+  const config =
+    snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : undefined;
+  return resolveUserPath(
+    config?.agents?.defaults?.workspace?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
+}
+
+export function describeSetupInferenceError(
+  error: unknown,
+  route: SystemAgentConfiguredRoute,
+): { status: SetupInferenceFailureStatus; error: string } {
+  const described = describeFailoverError(error);
+  const origin = URL.parse(
+    route.runConfig.models?.providers?.[route.provider]?.baseUrl ?? "",
+  )?.origin;
+  const connectionError = !origin
+    ? undefined
+    : described.code === "ECONNREFUSED"
+      ? `Nothing is listening at ${origin}. Start the server or check the URL, then retry setup.`
+      : described.code === "ENOTFOUND"
+        ? `The server name in ${origin} could not be found. Check the URL and DNS settings, then retry setup.`
+        : described.code === "EHOSTUNREACH" || described.code === "ENETUNREACH"
+          ? `Cannot reach ${origin}. Check the URL and network connection from the Gateway host, then retry setup.`
+          : undefined;
+  return connectionError
+    ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
+    : {
+        status: described.reason ? SETUP_STATUS_BY_FAILOVER_REASON[described.reason] : "unknown",
+        error: described.message,
+      };
+}
+
+export function validateSetupInferenceOwnerEvidence(params: {
+  runner: "cli" | "embedded";
+  configuredHarnessId?: string;
+  auth: AgentExecutionAuthBinding;
+}): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+  let reason: string | undefined;
+  if (
+    !params.auth.authFingerprint &&
+    (!params.auth.runtimeOwnerFingerprint ||
+      !params.auth.runtimeOwnerKind ||
+      !params.auth.runtimeOwnerId?.trim())
+  ) {
+    reason = "its runtime did not report an owner that OpenClaw can safely reuse";
+  } else if (
+    params.runner === "cli" &&
+    (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim())
+  ) {
+    reason = "its CLI executable/package artifact could not be safely reused";
+  } else if (params.runner === "embedded") {
+    const successfulHarnessId = params.auth.agentHarnessId?.trim();
+    const configuredHarnessId = params.configuredHarnessId?.trim();
+    if (
+      !successfulHarnessId ||
+      (configuredHarnessId !== undefined &&
+        configuredHarnessId !== "auto" &&
+        successfulHarnessId !== configuredHarnessId)
+    ) {
+      reason = "its exact agent harness could not be safely reused";
+    } else if (
+      successfulHarnessId !== "openclaw" &&
+      (params.auth.runtimeOwnerKind !== "plugin-harness" ||
+        params.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
+        !params.auth.runtimeArtifactFingerprint ||
+        !params.auth.runtimeArtifactId?.trim())
+    ) {
+      reason = "its agent harness artifact could not be safely reused";
+    }
+  }
+  return reason
+    ? {
+        ok: false,
+        status: "unknown",
+        error: `Inference succeeded, but ${reason}. No default model was changed.`,
+      }
+    : undefined;
+}
+
+/** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
+export async function resolveToolFreeCliSetupError(
+  route: SystemAgentConfiguredRoute,
+): Promise<string | undefined> {
+  if (route.runner !== "cli") {
+    return undefined;
+  }
+  const [{ resolveCliBackendConfig }, { GEMINI_CLI_DEFAULT_MODEL_REF }] = await Promise.all([
+    import("../agents/cli-backends.js"),
+    import("../commands/onboard-inference-ambient.js"),
+  ]);
+  const backend = resolveCliBackendConfig(route.provider, route.runConfig, {
+    agentId: route.agentId,
+  });
+  if (backend?.sideQuestionToolMode === "disabled") {
+    return undefined;
+  }
+  const geminiCliProvider = parseInferenceRef(GEMINI_CLI_DEFAULT_MODEL_REF).provider;
+  if (backend?.nativeToolMode === "none" && route.provider !== geminiCliProvider) {
+    return undefined;
+  }
+  return route.provider === geminiCliProvider
+    ? "Gemini CLI cannot be used for inference-gated setup because it has no hard tool-free mode. Choose Claude Code, Codex, or an API-key provider; normal Gemini CLI agent runs remain available after setup."
+    : `CLI backend ${backend?.id ?? route.provider} cannot be used for inference-gated setup because it has no hard tool-free mode. Choose another inference provider.`;
+}
+
+export async function resolveSetupInferenceWinnerError(
+  route: SystemAgentConfiguredRoute,
+  result: AgentRunResultView,
+): Promise<string | undefined> {
+  const winnerProvider = result.meta?.executionTrace?.winnerProvider?.trim();
+  const winnerModel = result.meta?.executionTrace?.winnerModel?.trim();
+  if (!winnerProvider || !winnerModel) {
+    return "The inference run did not report which provider and model produced its reply.";
+  }
+  if (winnerProvider === route.provider) {
+    if (winnerModel === route.model) {
+      return undefined;
+    }
+    const { resolveDirectBundledProviderPolicySurface } =
+      await import("../plugins/provider-policy-surface.js");
+    const equivalent = resolveDirectBundledProviderPolicySurface(
+      route.provider,
+    )?.isResponseModelEquivalent?.({
+      provider: route.provider,
+      requestedModelId: route.model,
+      responseModelId: winnerModel,
+    });
+    if (equivalent === true) {
+      return undefined;
+    }
+  }
+  return `The inference run answered through ${winnerProvider}/${winnerModel} instead of the requested ${route.provider}/${route.model}. Disable model-routing overrides or choose the working route directly, then retry.`;
+}
+
+export type StagedCandidate = {
+  modelRef: string;
+  modelTarget?: "utility";
+  agentRuntimeId?: string;
+  authProfileId?: string;
+  pluginId?: string;
+  config: OpenClawConfig;
+  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
+};
+export type StageFailure = { error: string };
+export type SaveSetupCredentialParams = {
+  profile: ProviderAuthResult["profiles"][number];
+  config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+  agentDir: string;
+  modelRef: string;
+  authChoice?: string;
+  pluginId?: string;
+  agentRuntimeId?: string;
+  beforePersistentEffect?: () => void | Promise<void>;
+  beforeWrite?: () => void;
+  /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
+  persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
+};
+export function validateSetupModelTarget(
+  expected: "utility" | undefined,
+  requested: "utility" | undefined,
+): StageFailure | undefined {
+  return expected === requested
+    ? undefined
+    : {
+        error:
+          expected === "utility"
+            ? "This model is for setup and utility tasks. Update this client and select utility setup; it cannot be activated as a regular agent model."
+            : "The requested setup model role does not match this provider choice. Refresh setup and choose again.",
+      };
+}
+export type StageContext = {
+  params: ActivateSetupInferenceParams;
+  snapshot: ConfigFileSnapshot;
+  cfg: OpenClawConfig;
+  routeAgentId: string;
+  agentDir: string;
+  workspace: string;
+  /** Caller authority ends once configPersisted is set; saved activation then completes. */
+  effects: { credentialsSaved: boolean; configPersisted: boolean };
+  beforePersistentEffect: (effect?: "credential") => Promise<void>;
+};
+
+export function resolveSetupModel(params: {
+  label: string;
+  providerId: string;
+  defaultModel?: string;
+  modelRef?: string;
+}): string | StageFailure {
+  const selected = params.modelRef?.trim() || params.defaultModel;
+  const modelRef = selected ? normalizeAgentModelRefForConfig(selected) : "";
+  if (!modelRef || !parseInferenceRef(modelRef).model) {
+    return { error: `${params.label} does not expose a starter model for app-guided setup.` };
+  }
+  const provider = params.defaultModel
+    ? parseInferenceRef(normalizeAgentModelRefForConfig(params.defaultModel)).provider
+    : params.providerId;
+  if (normalizeProviderId(parseInferenceRef(modelRef).provider) !== normalizeProviderId(provider)) {
+    return { error: `${modelRef} is not compatible with the ${params.label} inference route.` };
+  }
+  return modelRef;
+}

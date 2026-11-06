@@ -1,0 +1,388 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import { availableParallelism } from "node:os";
+import path from "node:path";
+import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import type { OpenClawPluginService, OpenClawPluginServiceContext } from "../runtime-api.js";
+import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
+import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
+import { resolveAcpxPluginConfig, toAcpMcpServers } from "./config.js";
+import {
+  ACPX_PROBE_LEASE_SESSION_KEY,
+  createAcpxProcessLeaseStore,
+  openAcpxProcessLeaseStateStore,
+  type AcpxProcessLeaseStore,
+} from "./process-lease.js";
+import {
+  cleanupOpenClawOwnedAcpxPendingLease,
+  cleanupOpenClawOwnedAcpxProcessTree,
+  reapStaleOpenClawOwnedAcpxOrphans,
+} from "./process-reaper.js";
+import type { CompleteAcpRuntime } from "./runtime-proxy.js";
+import { AcpxRuntime } from "./runtime.js";
+import { adoptAcpxStateDirectory } from "./session-owner-migration.js";
+import {
+  ACPX_GATEWAY_INSTANCE_KEY,
+  ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  ACPX_GATEWAY_INSTANCE_NAMESPACE,
+  normalizeAcpxGatewayInstanceRecord,
+  type AcpxGatewayInstanceRecord,
+} from "./state.js";
+
+type AcpxRuntimeLike = CompleteAcpRuntime & {
+  isHealthy(): boolean;
+};
+const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
+const MAX_ACPX_TOKIO_WORKER_THREADS = 8;
+
+type AcpxBackendLifecycle = {
+  publish: (backend: { runtime: CompleteAcpRuntime; healthy?: () => boolean }) => void;
+  retract: (runtime: CompleteAcpRuntime) => void;
+};
+
+type CreateAcpxRuntimeServiceParams = {
+  probeAtStartup?: boolean;
+  startupPurpose?: "gateway" | "inspection";
+  assertCurrent?: () => void;
+  backendLifecycle: AcpxBackendLifecycle;
+  pluginConfig?: unknown;
+  getAllowedAgents?: () => readonly string[] | undefined;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+};
+
+function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
+}
+
+function resolveAgentProcessEnv(): Record<string, string> | undefined {
+  if (process.env.TOKIO_WORKER_THREADS?.trim()) {
+    return undefined;
+  }
+  // Each managed ACP child owns a Tokio pool; cap its implicit host-wide default
+  // so concurrent children do not multiply the Gateway's scheduler footprint.
+  return {
+    TOKIO_WORKER_THREADS: String(Math.min(availableParallelism(), MAX_ACPX_TOKIO_WORKER_THREADS)),
+  };
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
+  const detailText = report.details
+    ?.map((detail) => detail.trim())
+    .filter(Boolean)
+    .join("; ");
+  return detailText ? `${report.message} (${detailText})` : report.message;
+}
+
+async function measureAcpxStartup<T>(
+  ctx: OpenClawPluginServiceContext,
+  name: string,
+  run: () => T | Promise<T>,
+): Promise<T> {
+  return ctx.startupTrace ? await ctx.startupTrace.measure(name, run) : await run();
+}
+
+function shouldProbeRuntimeAtStartup(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ENABLE_STARTUP_PROBE_ENV] !== "0" && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
+}
+
+async function resolveGatewayInstanceId(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): Promise<string> {
+  const store = openKeyedStore<AcpxGatewayInstanceRecord>({
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  });
+  const existing = normalizeAcpxGatewayInstanceRecord(
+    await store.lookup(ACPX_GATEWAY_INSTANCE_KEY),
+  );
+  if (existing) {
+    return existing.instanceId;
+  }
+  const next = randomUUID();
+  await store.register(ACPX_GATEWAY_INSTANCE_KEY, {
+    instanceId: next,
+    createdAt: Date.now(),
+  });
+  return next;
+}
+
+async function reapOpenAcpxProcessLeases(params: {
+  gatewayInstanceId: string;
+  leaseStore: AcpxProcessLeaseStore;
+  assertCurrent?: () => void;
+}): Promise<{ terminatedPids: number[] }> {
+  const { assertCurrent } = params;
+  const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
+  const terminatedPids: number[] = [];
+  const legacyWrapperRoots = new Set<string>();
+  for (const lease of leases) {
+    const pending = lease.rootPid <= 0;
+    if (pending) {
+      legacyWrapperRoots.add(lease.wrapperRoot);
+    }
+    await params.leaseStore.markState(lease.leaseId, "closing");
+    const result = pending
+      ? await cleanupOpenClawOwnedAcpxPendingLease({
+          leaseId: lease.leaseId,
+          gatewayInstanceId: lease.gatewayInstanceId,
+          wrapperRoot: lease.wrapperRoot,
+          wrapperPath: lease.wrapperPath,
+          assertCurrent,
+        })
+      : await cleanupOpenClawOwnedAcpxProcessTree({
+          rootPid: lease.rootPid,
+          expectedLeaseId: lease.leaseId,
+          expectedGatewayInstanceId: lease.gatewayInstanceId,
+          wrapperRoot: lease.wrapperRoot,
+          assertCurrent,
+        });
+    terminatedPids.push(...result.terminatedPids);
+    // A missing probe wrapper cannot prove its detached adapter descendants
+    // exited because those descendants do not carry the lease arguments.
+    const retryableEvidenceFailure =
+      result.skippedReason === "process-list-unavailable" ||
+      result.skippedReason === "unsupported-platform" ||
+      (pending &&
+        (result.skippedReason === "ambiguous-root" ||
+          result.skippedReason === "unverified-root" ||
+          (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
+            result.skippedReason === "missing-root")));
+    await params.leaseStore.markState(
+      lease.leaseId,
+      retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
+    );
+  }
+  // Preserve the previous narrow trigger for marker cleanup: a pending lease
+  // proves this Gateway had an uncertain spawn. Keep aggregate results wholly
+  // separate from the state transition of any specific lease.
+  for (const wrapperRoot of legacyWrapperRoots) {
+    const legacyResult = await reapStaleOpenClawOwnedAcpxOrphans({
+      wrapperRoot,
+      assertCurrent,
+    });
+    terminatedPids.push(...legacyResult.terminatedPids);
+  }
+  return { terminatedPids };
+}
+
+export function createAcpxRuntimeService(
+  params: CreateAcpxRuntimeServiceParams,
+): OpenClawPluginService & {
+  promote(ctx: OpenClawPluginServiceContext, assertCurrent?: () => void): Promise<void>;
+} {
+  let runtime: AcpxRuntimeLike | null = null;
+  let recoverProcesses:
+    | ((assertCurrent: () => void) => Promise<{ terminatedPids: number[] }>)
+    | undefined;
+  let recoveryPromise: Promise<void> | undefined;
+  let lifecycleRevision = 0;
+
+  const promote = async (ctx: OpenClawPluginServiceContext, assertOwner = params.assertCurrent) => {
+    const recover = recoverProcesses;
+    if (!recover) {
+      throw new Error("ACPX runtime service is not initialized");
+    }
+    const revision = lifecycleRevision;
+    const assertCurrent = () => {
+      if (revision !== lifecycleRevision || recoverProcesses !== recover) {
+        throw new Error("ACPX runtime service stopped during recovery");
+      }
+      assertOwner?.();
+    };
+    assertCurrent();
+    recoveryPromise ??= measureAcpxStartup(ctx, "process-leases.reap", async () => {
+      const result = await recover(assertCurrent);
+      if (result.terminatedPids.length > 0) {
+        ctx.logger.info(
+          `reaped ${result.terminatedPids.length} stale OpenClaw-owned ACPX processes`,
+        );
+      }
+    });
+    await recoveryPromise;
+  };
+
+  return {
+    id: "acpx-runtime",
+    promote,
+    async start(ctx: OpenClawPluginServiceContext): Promise<void> {
+      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME === "1") {
+        ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
+        return;
+      }
+      const openKeyedStore = params.openKeyedStore;
+
+      const basePluginConfig = await measureAcpxStartup(ctx, "config.resolve", () =>
+        resolveAcpxPluginConfig({
+          rawConfig: params.pluginConfig,
+          workspaceDir: ctx.workspaceDir,
+          stateDir: ctx.stateDir,
+        }),
+      );
+      const adoption = await measureAcpxStartup(ctx, "state.adopt", () =>
+        adoptAcpxStateDirectory({
+          rawConfig: params.pluginConfig,
+          workspaceDir: ctx.workspaceDir,
+          stateDir: basePluginConfig.stateDir,
+          openKeyedStore,
+          assertCurrent: params.assertCurrent,
+        }),
+      );
+      basePluginConfig.stateDir = adoption.stateDir;
+      for (const change of adoption.changes) {
+        ctx.logger.info(change);
+      }
+      for (const warning of adoption.warnings) {
+        ctx.logger.warn(warning);
+      }
+      const pluginConfig = await measureAcpxStartup(ctx, "config.prepare-codex-auth", () =>
+        prepareAcpxCodexAuthConfig({
+          pluginConfig: basePluginConfig,
+          stateDir: ctx.stateDir,
+        }),
+      );
+      const wrapperRoot = path.join(ctx.stateDir, "acpx");
+      await measureAcpxStartup(ctx, "filesystem.prepare", async () => {
+        await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+        await fs.mkdir(wrapperRoot, { recursive: true });
+      });
+      const gatewayInstanceId = await measureAcpxStartup(ctx, "gateway-instance-id", () =>
+        resolveGatewayInstanceId(openKeyedStore),
+      );
+      const processLeaseStore = createAcpxProcessLeaseStore({
+        store: openAcpxProcessLeaseStateStore(openKeyedStore),
+      });
+      recoverProcesses = (assertCurrent) =>
+        reapOpenAcpxProcessLeases({
+          gatewayInstanceId,
+          leaseStore: processLeaseStore,
+          assertCurrent,
+        });
+      if (params.startupPurpose !== "inspection") {
+        await promote(ctx);
+      }
+      const getAllowedAgents = params.getAllowedAgents ?? (() => ctx.config.acp?.allowedAgents);
+      const getProbeAgent = () =>
+        pluginConfig.probeAgent ??
+        getAllowedAgents()?.map(normalizeLowercaseStringOrEmpty).find(Boolean);
+      const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", async () => {
+        // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
+        const names = await fs
+          .readdir(path.join(pluginConfig.stateDir, "sessions"))
+          .catch((error: unknown) => {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+              return [];
+            }
+            throw error;
+          });
+        const legacyBareSessionKeys = new Set<string>();
+        for (const name of names) {
+          if (!name.endsWith(".json")) {
+            continue;
+          }
+          const recordId = decodeURIComponent(name.slice(0, -5));
+          if (
+            !recordId.startsWith("agent:") &&
+            !recordId.startsWith(".openclaw-owner-") &&
+            !recordId.includes(":oneshot:")
+          ) {
+            legacyBareSessionKeys.add(recordId.toLowerCase());
+          }
+        }
+        return new AcpxRuntime({
+          cwd: pluginConfig.cwd,
+          agentProcessEnv: resolveAgentProcessEnv(),
+          agentProcessEnvAllow: pluginConfig.agentProcessEnvAllow,
+          agentProcessEnvBlock: pluginConfig.agentProcessEnvBlock,
+          openclawLegacyBareSessionKeys: legacyBareSessionKeys,
+          openclawGatewayInstanceId: gatewayInstanceId,
+          openclawProcessLeaseStore: processLeaseStore,
+          openclawWrapperRoot: wrapperRoot,
+          sessionStore: createFileSessionStore({ stateDir: pluginConfig.stateDir }),
+          agentRegistry: createAgentRegistry({ overrides: pluginConfig.agents }),
+          getProbeAgent,
+          mcpServers: toAcpMcpServers(pluginConfig.mcpServers),
+          pluginToolsMcpBridgeEnabled: pluginConfig.pluginToolsMcpBridge,
+          openclawToolsMcpBridgeEnabled: pluginConfig.openClawToolsMcpBridge,
+          permissionMode: pluginConfig.permissionMode,
+          nonInteractivePermissions: pluginConfig.nonInteractivePermissions,
+          elicitationModes: ["form", "url"],
+          timeoutMs: resolveAcpxTimerTimeoutMs(pluginConfig.timeoutSeconds),
+        });
+      });
+      runtime = startedRuntime;
+
+      const shouldProbeRuntime = params.probeAtStartup !== false && shouldProbeRuntimeAtStartup();
+      ctx.startupTrace?.detail?.("probe-policy", [
+        ["startupProbeEnabledCount", shouldProbeRuntime ? 1 : 0],
+        ["probeAgent", getProbeAgent() ?? "default"],
+      ]);
+      await measureAcpxStartup(ctx, "backend.register", () => {
+        const backend = {
+          runtime: startedRuntime,
+          ...(shouldProbeRuntime ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
+        };
+        params.backendLifecycle.publish(backend);
+        ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
+      });
+
+      if (!shouldProbeRuntime) {
+        return;
+      }
+
+      try {
+        const timeoutSeconds = pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS;
+        const doctorReport = await measureAcpxStartup(ctx, "probe.availability", () =>
+          raceWithTimeout(
+            startedRuntime.doctor(),
+            resolveAcpxTimerTimeoutMs(timeoutSeconds) ?? 1,
+            () => {
+              throw new Error(
+                `embedded acpx runtime backend startup check timed out after ${timeoutSeconds}s`,
+              );
+            },
+            { ref: false },
+          ),
+        );
+        if (doctorReport.ok) {
+          ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
+          ctx.logger.info("embedded acpx runtime backend ready");
+          return;
+        }
+        ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 0]]);
+        ctx.logger.warn(
+          `embedded acpx runtime backend check failed: ${formatDoctorFailureMessage(doctorReport)}`,
+        );
+      } catch (err) {
+        ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 0]]);
+        ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+      }
+    },
+    async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
+      lifecycleRevision += 1;
+      if (runtime) {
+        params.backendLifecycle.retract(runtime);
+        const [shutdown] = await Promise.allSettled([runtime.shutdown(), recoveryPromise]);
+        if (shutdown.status === "rejected") {
+          throw shutdown.reason;
+        }
+      } else {
+        await recoveryPromise?.catch(() => undefined);
+      }
+      runtime = null;
+      recoverProcesses = undefined;
+      recoveryPromise = undefined;
+    },
+  };
+}

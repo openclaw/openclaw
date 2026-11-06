@@ -1,0 +1,16 @@
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  features: {
+    legacySessionSurfaces: true,
+  },
+  plugin: {
+    specifier: "./setup-plugin-api.js",
+    exportName: "whatsappSetupPlugin",
+  },
+  legacySessionSurface: {
+    specifier: "./legacy-session-surface-api.js",
+    exportName: "whatsappLegacySessionSurface",
+  },
+});

@@ -1,0 +1,400 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
+import { isLocalManagedProfile } from "../config.js";
+import {
+  BrowserProfileUnavailableError,
+  BrowserTabNotFoundError,
+  toBrowserErrorResponse,
+} from "../errors.js";
+import {
+  assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
+} from "../navigation-guard.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { isManagedOnlyBrowserRequest } from "../request-policy.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
+import { resolveBrowserTabOrThrow } from "../target-id.js";
+import {
+  browserNavigationPolicyForProfile,
+  handleRouteError,
+  resolveProfileContext,
+} from "./agent.shared.js";
+import { readRouteNonNegativeInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
+import { jsonError, runProfileRouteOperation, toStringOrEmpty } from "./utils.js";
+
+const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
+const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
+// Each check is a host DNS lookup on the libuv pool (4 threads by default); leave one free.
+const TAB_URL_CHECK_CONCURRENCY = 3;
+
+async function runTabsProfileRoute(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+  mapTabError?: boolean;
+  run: (profileCtx: ProfileContext, signal: AbortSignal) => Promise<unknown>;
+}): Promise<void> {
+  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
+  if (!profileCtx) {
+    return;
+  }
+  let result: unknown;
+  try {
+    result = await runProfileRouteOperation({
+      profileCtx,
+      signal: params.req.signal,
+      assertCurrent: params.req.assertCurrent,
+      run: async (signal) => await params.run(profileCtx, signal),
+    });
+  } catch (err) {
+    return handleRouteError(params.res, err, {
+      formatMessage: String,
+      mapBrowserError: params.mapTabError ?? false,
+    });
+  }
+  if (result) {
+    params.res.json(result);
+  }
+}
+
+async function checkTabReachability(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  signal: AbortSignal,
+) {
+  const timeoutMs = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
+    ? (clampPositiveTimerTimeoutMs(ctx.state().resolved.actionTimeoutMs) ??
+      DEFAULT_TAB_REACHABILITY_TIMEOUT_MS)
+    : DEFAULT_TAB_REACHABILITY_TIMEOUT_MS;
+  return await profileCtx.isReachable(timeoutMs, { signal });
+}
+
+async function ensureBrowserRunning(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  signal: AbortSignal,
+) {
+  let isReachable = await checkTabReachability(ctx, profileCtx, signal);
+  // A running browser can outlive one short CDP probe; retry once before
+  // rejecting a tab mutation and leaving session-owned tabs behind.
+  if (!isReachable && !signal.aborted) {
+    await sleepWithAbort(TAB_REACHABILITY_RETRY_DELAY_MS);
+    signal.throwIfAborted();
+    isReachable = await checkTabReachability(ctx, profileCtx, signal);
+  }
+  if (!isReachable) {
+    throw new BrowserProfileUnavailableError("browser not running");
+  }
+}
+
+function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): string | null {
+  const targetId = toStringOrEmpty(rawTargetId);
+  if (!targetId) {
+    jsonError(res, 400, "targetId is required");
+    return null;
+  }
+  return targetId;
+}
+
+function readOptionalTabLabel(body: unknown): string | undefined {
+  const label = toStringOrEmpty((body as { label?: unknown })?.label);
+  return label || undefined;
+}
+
+function readTabIndex(
+  res: BrowserResponse,
+  body: unknown,
+  opts?: { required?: boolean },
+): number | null | undefined {
+  const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  if (!Object.hasOwn(record, "index")) {
+    if (opts?.required) {
+      jsonError(res, 400, "index is required");
+      return null;
+    }
+    return undefined;
+  }
+  if (record.index == null) {
+    jsonError(res, 400, "index must be a non-negative integer");
+    return null;
+  }
+  try {
+    return readRouteNonNegativeInteger(record.index, "index", {
+      invalidMessage: "index must be a non-negative integer",
+    });
+  } catch (error) {
+    jsonError(res, 400, error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function runTabTargetMutation(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+  targetId: string;
+  mutate: (
+    profileCtx: ProfileContext,
+    targetId: string,
+    signal: AbortSignal,
+  ) => Promise<string | void>;
+}) {
+  await runTabsProfileRoute({
+    req: params.req,
+    res: params.res,
+    ctx: params.ctx,
+    mapTabError: true,
+    run: async (profileCtx, signal) => {
+      await ensureBrowserRunning(params.ctx, profileCtx, signal);
+      const canonicalTargetId = await params.mutate(profileCtx, params.targetId, signal);
+      return {
+        ok: true,
+        ...(canonicalTargetId ? { targetId: canonicalTargetId } : {}),
+      } as const;
+    },
+  });
+}
+
+export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  const listTabs = async (profileCtx: ProfileContext, signal: AbortSignal) => {
+    const running = await checkTabReachability(ctx, profileCtx, signal);
+    if (!running) {
+      return { running: false, tabs: [] };
+    }
+    let tabs = await profileCtx.listTabs({ signal });
+    const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+    if (navigationPolicy.ssrfPolicy) {
+      const { results } = await runTasksWithConcurrency<(typeof tabs)[number]>({
+        limit: TAB_URL_CHECK_CONCURRENCY,
+        tasks: tabs.map((tab) => async () => {
+          try {
+            await assertBrowserNavigationResultAllowed({
+              url: tab.url,
+              ...navigationPolicy,
+              signal,
+            });
+            return tab;
+          } catch (error) {
+            const failure = toBrowserErrorResponse(error);
+            // Preserve safe tab management without turning a DNS failure into a policy denial.
+            return {
+              ...tab,
+              url: "",
+              urlUnavailableReason:
+                failure && "reason" in failure && failure.reason === "navigation_blocked"
+                  ? "navigation_blocked"
+                  : "navigation_check_failed",
+            };
+          }
+        }),
+      });
+      tabs = results;
+    }
+    signal.throwIfAborted();
+    // Only an isolated browser owned by OpenClaw may follow the preview size.
+    // Attached sessions and remote CDP browsers retain their existing viewport.
+    return {
+      running: true,
+      tabs,
+      canAutoResizeViewport: isLocalManagedProfile(profileCtx.profile),
+    };
+  };
+
+  const focusTab = async (
+    req: BrowserRequest,
+    profileCtx: ProfileContext,
+    tab: Awaited<ReturnType<ProfileContext["listTabs"]>>[number],
+    signal: AbortSignal,
+  ) => {
+    const policy = browserNavigationPolicyForProfile(ctx, profileCtx);
+    if (policy.ssrfPolicy) {
+      await assertBrowserNavigationResultAllowed({ url: tab.url, ...policy });
+    }
+    signal.throwIfAborted();
+    const requestAssertCurrent = req.assertCurrent;
+    await profileCtx.focusTab(tab.targetId, {
+      exactTargetId: true,
+      signal,
+      ...(requestAssertCurrent
+        ? { assertCurrent: () => requestAssertCurrent(profileCtx.profile) }
+        : {}),
+    });
+    return tab.targetId;
+  };
+
+  app.get("/tabs", async (req, res) => {
+    await runTabsProfileRoute({
+      req,
+      res,
+      ctx,
+      run: listTabs,
+    });
+  });
+
+  app.post("/tabs/open", async (req, res) => {
+    const body = asNullableRecord(req.body);
+    const url = toStringOrEmpty(body?.url);
+    const label = readOptionalTabLabel(req.body);
+    if (!url) {
+      return jsonError(res, 400, "url is required");
+    }
+    let timeoutMs: number | undefined;
+    try {
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(body?.timeoutMs);
+      timeoutMs =
+        requestedTimeoutMs === undefined
+          ? undefined
+          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+    }
+
+    await runTabsProfileRoute({
+      req,
+      res,
+      ctx,
+      mapTabError: true,
+      run: async (profileCtx, signal) => {
+        await profileCtx.ensureBrowserAvailable({ signal });
+        await assertBrowserNavigationAllowed({
+          url,
+          ...browserNavigationPolicyForProfile(ctx, profileCtx),
+        });
+        await req.assertCurrent?.(profileCtx.profile);
+        const opened = await profileCtx.openTab(url, {
+          label,
+          signal,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          ...(isManagedOnlyBrowserRequest(req) ? { requireDurableOwnership: true } : {}),
+        });
+        return { ...opened, resolvedProfile: profileCtx.profile.name };
+      },
+    });
+  });
+
+  app.post("/tabs/focus", async (req, res) => {
+    const targetId = parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId);
+    if (!targetId) {
+      return;
+    }
+    await runTabTargetMutation({
+      req,
+      res,
+      ctx,
+      targetId,
+      mutate: async (profileCtx, id, signal) => {
+        const tabs = await profileCtx.listTabs({ signal });
+        const tab = resolveBrowserTabOrThrow(id, tabs);
+        return await focusTab(req, profileCtx, tab, signal);
+      },
+    });
+  });
+
+  // Closing never contacts the tab's address, so both close routes skip the URL
+  // navigation policy that guards focus/select. Session cleanup closes tabs by raw
+  // target ID and must still end tabs that later moved to a blocked destination.
+  app.delete("/tabs/:targetId", async (req, res) => {
+    const targetId = parseRequiredTargetId(res, req.params.targetId);
+    if (!targetId) {
+      return;
+    }
+    const targetIdMode = toStringOrEmpty(req.query.targetIdMode);
+    if (targetIdMode && targetIdMode !== "raw") {
+      return jsonError(res, 400, 'targetIdMode must be "raw"');
+    }
+    await runTabTargetMutation({
+      req,
+      res,
+      ctx,
+      targetId,
+      mutate: async (profileCtx, id, signal) => {
+        signal.throwIfAborted();
+        const canonicalTargetId = await profileCtx.closeTab(id, {
+          ...(targetIdMode === "raw" ? { exactTargetId: true } : {}),
+          signal,
+        });
+        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, canonicalTargetId);
+        return canonicalTargetId;
+      },
+    });
+  });
+
+  app.post("/tabs/action", async (req, res) => {
+    const action = toStringOrEmpty((req.body as { action?: unknown })?.action);
+    if (
+      action !== "list" &&
+      action !== "new" &&
+      action !== "label" &&
+      action !== "close" &&
+      action !== "select"
+    ) {
+      return jsonError(res, 400, "unknown tab action");
+    }
+    const targetId =
+      action === "label"
+        ? parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId)
+        : undefined;
+    if (action === "label" && !targetId) {
+      return;
+    }
+    const label =
+      action === "label" || action === "new" ? readOptionalTabLabel(req.body) : undefined;
+    if (action === "label" && !label) {
+      return jsonError(res, 400, "label is required");
+    }
+    const index =
+      action === "close"
+        ? readTabIndex(res, req.body)
+        : action === "select"
+          ? readTabIndex(res, req.body, { required: true })
+          : undefined;
+    if ((action === "close" && index === null) || (action === "select" && index == null)) {
+      return;
+    }
+
+    await runTabsProfileRoute({
+      req,
+      res,
+      ctx,
+      mapTabError: true,
+      run: async (profileCtx, signal) => {
+        if (action === "list") {
+          const { tabs } = await listTabs(profileCtx, signal);
+          return { ok: true, tabs };
+        }
+
+        if (action === "new") {
+          await profileCtx.ensureBrowserAvailable({ signal });
+          const tab = await profileCtx.openTab("about:blank", { label, signal });
+          return { ok: true, tab };
+        }
+
+        if (action === "label") {
+          await ensureBrowserRunning(ctx, profileCtx, signal);
+          const tab = await profileCtx.labelTab(targetId!, label!);
+          return { ok: true, tab };
+        }
+
+        await ensureBrowserRunning(ctx, profileCtx, signal);
+        const tabs = await profileCtx.listTabs({ signal });
+        const target = tabs[index ?? 0];
+        if (!target) {
+          throw new BrowserTabNotFoundError();
+        }
+        if (action === "close") {
+          signal.throwIfAborted();
+          await profileCtx.closeTab(target.targetId, { exactTargetId: true, signal });
+          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, target.targetId);
+        } else {
+          await focusTab(req, profileCtx, target, signal);
+        }
+        return { ok: true, targetId: target.targetId };
+      },
+    });
+  });
+}

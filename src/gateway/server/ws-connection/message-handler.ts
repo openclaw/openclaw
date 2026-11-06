@@ -1,0 +1,741 @@
+import { performance } from "node:perf_hooks";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  type ConnectParams,
+  type ResponseFrame,
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateConnectParams,
+  validateRequestFrame,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../../../packages/gateway-protocol/src/restart-unavailable.js";
+import { getRuntimeConfig } from "../../../config/io.js";
+import {
+  withDevicePairingWaitObservation,
+  type DevicePairingWaitObservation,
+} from "../../../infra/device-pairing-lock.js";
+import {
+  releaseNodePairingCleanupClaim,
+  type NodePairingCleanupClaim,
+  type RequestNodePairingResult,
+} from "../../../infra/device-pairing-node.js";
+import {
+  createDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../../../infra/gateway-suspend-coordinator.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
+import { rawDataByteLength } from "../../../infra/ws.js";
+import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRestartStartupRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
+import { isWebchatClient } from "../../../utils/message-channel.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../ingress-attribution.js";
+import { isLocalishHost, isLoopbackAddress } from "../../net.js";
+import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
+import {
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
+} from "../../server-constants.js";
+import { formatForLog, logWs } from "../../ws-log.js";
+import { truncateCloseReason } from "../close-reason.js";
+import type { GatewayConnectionFrame } from "../connection-transport.js";
+import { resolveGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
+import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
+import { claimsWorkerConnectionIdentity, isStartupNodeConnect } from "./connect-admission.js";
+import { authenticateGatewayConnect } from "./connect-auth.js";
+import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
+import { publishConnectModelCatalog } from "./connect-model-catalog.js";
+import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
+import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
+import type {
+  GatewayConnectAttachTiming,
+  GatewayConnectPhaseContext,
+  GatewayWsMessageHandlerParams,
+} from "./message-handler-types.js";
+import { createGatewayRpcDiagnostics, GatewayRpcDiagnostics } from "./request-diagnostics.js";
+export type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+
+const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
+const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
+export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.upgradeReq);
+  let waitingForPairing = false;
+  const {
+    socket,
+    ingressAttribution,
+    connId,
+    remoteAddr,
+    endpoint,
+    forwardedFor,
+    requestHost,
+    requestOrigin,
+    requestUserAgent,
+    rateLimiter,
+    browserRateLimiter,
+    buildRequestContext,
+    send,
+    close,
+    isClosed,
+    getClient,
+    setHandshakeState,
+    setCloseCause,
+    setLastFrameMeta,
+    logGateway,
+    logWsControl,
+  } = params;
+
+  const sendFrame = async (obj: unknown, uncompressed = false): Promise<number> =>
+    await new Promise<number>((resolve, reject) => {
+      const encoded = JSON.stringify(obj);
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+      const sent = (err?: Error) => (err ? reject(err) : resolve(Buffer.byteLength(encoded)));
+      if (uncompressed && socket.sendUncompressed) {
+        socket.sendUncompressed(encoded, sent);
+      } else {
+        socket.send(encoded, sent);
+      }
+    });
+
+  const configSnapshot = getRuntimeConfig();
+  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+  const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const clientIp = ingressAttribution.clientIp;
+  const peerLabel = endpoint ?? remoteAddr ?? "n/a";
+
+  const hasProxyHeaders =
+    ingressAttribution.kind === "trusted-proxy" ||
+    ingressAttribution.kind === "tailscale-serve" ||
+    ingressAttribution.kind === "tailscale-funnel";
+  const hostIsLocalish = isLocalishHost(requestHost);
+  const isLocalClient = ingressAttribution.kind === "direct-local";
+  const reportedClientIp = isLocalClient
+    ? undefined
+    : clientIp && !isLoopbackAddress(clientIp)
+      ? clientIp
+      : undefined;
+  // A tunnel device's address is synthetic: it names no host to SSH-verify or trust by range.
+  const reportedClientIpSource =
+    ingressAttribution.kind === "openclaw-id-tunnel"
+      ? "none"
+      : resolveNodePairingClientIpSource({
+          reportedClientIp,
+          hasProxyHeaders,
+          remoteIsTrustedProxy: hasProxyHeaders,
+          remoteIsLoopback: isLoopbackAddress(remoteAddr),
+        });
+
+  if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
+    logWsControl.warn(
+      "Loopback connection with non-local Host header. " +
+        "Treating it as remote. If you're behind a reverse proxy, " +
+        "set gateway.trustedProxies and forward X-Forwarded-For/X-Real-IP.",
+    );
+  }
+
+  const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
+  const authenticatedRequestDispatcher = createGatewayAuthenticatedRequestDispatcher({
+    handler: params,
+    isWebchatConnect,
+  });
+  const browserSecurity = resolveHandshakeBrowserSecurityContext({
+    requestOrigin,
+    clientIp: ingressAttribution.rateLimit.subject.key,
+    rateLimiter,
+    browserRateLimiter,
+  });
+  const {
+    hasBrowserOriginHeader,
+    enforceOriginCheckForAnyClient,
+    rateLimitClientIp: browserRateLimitClientIp,
+    authRateLimiter,
+  } = browserSecurity;
+  const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
+    // Connect-triggered mutations outlive hello-ok. Give each tail its own
+    // root lease so suspension cannot report ready while one is still active.
+    void params.connectionWork
+      .track(() =>
+        runWithGatewayIndependentRootWorkAdmission(run, "ws:preauth", params.connectionWork.signal),
+      )
+      .catch(onError);
+  };
+
+  const rejectOversizedPreauthFrame = (data: GatewayConnectionFrame): boolean => {
+    const payloadBytes = rawDataByteLength(data);
+    if (payloadBytes <= MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    logRejectedLargePayload({
+      surface: "gateway.ws.preauth",
+      bytes: payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      reason: "preauth_frame_limit",
+    });
+    setHandshakeState("failed");
+    setCloseCause("preauth-payload-too-large", {
+      payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    close(1009, "preauth payload too large");
+    return true;
+  };
+
+  const handleMessage = async (data: GatewayConnectionFrame, admission?: "continuation") => {
+    if (isClosed()) {
+      return;
+    }
+
+    if (!getClient() && rejectOversizedPreauthFrame(data)) {
+      return;
+    }
+
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(rawDataToString(data));
+    } catch {
+      setHandshakeState("failed");
+      setCloseCause("parse-error", { error: "invalid JSON" });
+      logGateway.error("parse error: invalid JSON");
+      logWs("out", "parse-error", { connId, error: "invalid JSON" });
+      close(1007, "invalid JSON");
+      return;
+    }
+    const parsed = decoded;
+    let helloDelivered = false;
+    let diagnostics: GatewayRpcDiagnostics | undefined;
+    let dispatchOutcome: "returned" | "threw" = "returned";
+    let writeHandshakeResponse: ((response: ResponseFrame) => Promise<void>) | undefined;
+    let rejectionWrite: Promise<void> | undefined;
+    let connectPhase: string | undefined;
+    let connectFailureCause: string | undefined;
+    // Connect phases share cleanup ownership; the outer catch must release
+    // any claim installed before a later phase fails.
+    const pendingNodePairingCleanup: { value?: NodePairingCleanupClaim } = {};
+    const broadcastNodePairingResult = (result: RequestNodePairingResult) => {
+      const context = buildRequestContext();
+      const resolvedAt = Date.now();
+      for (const superseded of result.created ? (result.superseded ?? []) : []) {
+        broadcastRejectedNodePairing(context.broadcast, superseded, resolvedAt);
+      }
+      if (result.created) {
+        context.broadcast("node.pair.requested", result.request, {
+          dropIfSlow: true,
+        });
+      }
+    };
+    const releasePendingNodePairingCleanup = async () => {
+      const claim = pendingNodePairingCleanup.value;
+      pendingNodePairingCleanup.value = undefined;
+      if (!claim) {
+        return;
+      }
+      try {
+        await releaseNodePairingCleanupClaim(claim);
+      } catch (error) {
+        logGateway.warn(
+          `failed to release pending pairing cleanup for ${claim.nodeId}: ${formatForLog(error)}`,
+        );
+      }
+    };
+    const client = getClient();
+    try {
+      const frameRecord = asOptionalObjectRecord(parsed);
+      if (!client && claimsWorkerConnectionIdentity(frameRecord?.params)) {
+        setHandshakeState("failed");
+        setCloseCause("invalid-handshake", { handshakeError: "invalid worker handshake" });
+        logWsControl.warn("worker admission rejected reason=invalid-handshake");
+        close(1008, "invalid-handshake");
+        return;
+      }
+      const frameType = readStringField(frameRecord, "type");
+      const frameMethod = readStringField(frameRecord, "method");
+      const frameId = readStringField(frameRecord, "id");
+      if (frameType || frameMethod || frameId) {
+        setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
+      }
+
+      if (!client) {
+        // Handshake must be a normal request:
+        // { type:"req", method:"connect", params: ConnectParams }.
+        const isRequestFrame = validateRequestFrame(parsed);
+        if (
+          !isRequestFrame ||
+          parsed.method !== "connect" ||
+          !validateConnectParams(parsed.params)
+        ) {
+          const handshakeError = isRequestFrame
+            ? parsed.method === "connect"
+              ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
+              : "invalid handshake: first request must be connect"
+            : "invalid request frame";
+          setHandshakeState("failed");
+          setCloseCause("invalid-handshake", {
+            frameType,
+            frameMethod,
+            frameId,
+            handshakeError,
+          });
+          if (isRequestFrame) {
+            send({
+              type: "res",
+              id: parsed.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, handshakeError),
+            });
+          } else {
+            logWsControl.warn(
+              `invalid handshake conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} fwd=${formatForLog(forwardedFor ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")}`,
+            );
+          }
+          const closeReason = truncateCloseReason(handshakeError || "invalid handshake");
+          if (isRequestFrame) {
+            queueMicrotask(() => close(1008, closeReason));
+          } else {
+            close(1008, closeReason);
+          }
+          return;
+        }
+
+        const frame = parsed;
+        diagnostics = createGatewayRpcDiagnostics(
+          "connect",
+          params.getMethodRegistry,
+          params.extraHandlers,
+        );
+        const startedAt = performance.now();
+        const phaseTimes: Partial<
+          Record<"auth_validated" | "session_attached" | "hello_payload_prepared", number>
+        > = {};
+        const attachTimes: Partial<Record<GatewayConnectAttachTiming, number>> = {};
+        const pairingWait: DevicePairingWaitObservation = {};
+        logWs("in", "req", { connId, id: frame.id, method: "connect" });
+        const recordHandshakeResponse = (ok: boolean, bytes?: number, sendMs?: number) => {
+          diagnostics?.response(ok ? "ok" : "error", bytes);
+          logWs("out", "res", {
+            connId,
+            id: frame.id,
+            method: "connect",
+            ok,
+            bytes,
+            sendMs,
+            ...(!ok ? { failurePhase: connectPhase, failureCause: connectFailureCause } : {}),
+            ...attachTimes,
+            pairingLockWait: pairingWait.longestWait,
+            authMs: phaseTimes.auth_validated,
+            attachMs:
+              phaseTimes.session_attached === undefined
+                ? undefined
+                : phaseTimes.session_attached - (phaseTimes.auth_validated ?? 0),
+            helloMs:
+              phaseTimes.hello_payload_prepared === undefined
+                ? undefined
+                : phaseTimes.hello_payload_prepared - (phaseTimes.session_attached ?? 0),
+          });
+        };
+        writeHandshakeResponse = async (response) => {
+          const sendStartedAt = performance.now();
+          let bytes: number;
+          try {
+            // Hello carries device tokens; compressed length must not leak them.
+            bytes = await sendFrame(response, true);
+          } catch (error) {
+            diagnostics?.response("unavailable");
+            throw error;
+          }
+          recordHandshakeResponse(response.ok, bytes, performance.now() - sendStartedAt);
+        };
+        const connectParams = frame.params as ConnectParams;
+        const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
+        const clientMeta = {
+          client: connectParams.client.id,
+          clientDisplayName: connectParams.client.displayName,
+          mode: connectParams.client.mode,
+          version: connectParams.client.version,
+          buildId: connectParams.client.buildId,
+          platform: connectParams.client.platform,
+          deviceFamily: connectParams.client.deviceFamily,
+          modelIdentifier: connectParams.client.modelIdentifier,
+          instanceId: connectParams.client.instanceId,
+        };
+        const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
+          connectFailureCause = cause;
+          setHandshakeState("failed");
+          setCloseCause(cause, { ...meta, ...clientMeta });
+        };
+        const sendHandshakeErrorResponse = (
+          code: Parameters<typeof errorShape>[0],
+          message: string,
+          options?: Parameters<typeof errorShape>[2],
+        ) => {
+          rejectionWrite = phaseContext
+            .sendFrame({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(code, message, options),
+            })
+            .catch(() => {});
+        };
+
+        const phaseContext = {
+          handler: {
+            ...params,
+            advanceHandshakePhase: (phase) => {
+              if (
+                phase === "auth_validated" ||
+                phase === "session_attached" ||
+                phase === "hello_payload_prepared"
+              ) {
+                phaseTimes[phase] = performance.now() - startedAt;
+              }
+              params.advanceHandshakePhase(phase);
+              if (phase === "session_attached") {
+                connectPhase = "hello";
+              }
+            },
+          },
+          frame,
+          connectParams,
+          configSnapshot,
+          trustedProxies,
+          allowRealIpFallback,
+          peerLabel,
+          hasProxyHeaders,
+          isLocalClient,
+          reportedClientIp,
+          reportedClientIpSource,
+          hasBrowserOriginHeader,
+          browserOrigin: resolveGatewayWsBrowserOrigin({
+            client: connectParams.client,
+            requestHost,
+            origin: requestOrigin,
+            isLocalClient,
+            enforceOriginCheckForAnyClient,
+            remoteControlUiIngress: remoteIngress,
+            openclawIdTunnel: ingressAttribution.kind === "openclaw-id-tunnel",
+          }),
+          browserRateLimitClientIp,
+          authRateLimiter,
+          clientLabel,
+          clientMeta,
+          markHandshakeFailure,
+          sendHandshakeErrorResponse,
+          sendFrame: writeHandshakeResponse,
+          onHelloDelivered: () => {
+            helloDelivered = true;
+            flushQueuedHandshakeFrames();
+          },
+          recordAttachTiming: (phase, phaseStartedAt) => {
+            attachTimes[phase] = performance.now() - phaseStartedAt;
+          },
+          setConnectPhase: (phase) => {
+            connectPhase = phase;
+          },
+          onPairingWait: () => {
+            waitingForPairing = true;
+            params.clearHandshakeTimer();
+          },
+          isWebchatConnect,
+          runDetachedConnectWork,
+          pendingNodePairingCleanup,
+          broadcastNodePairingResult,
+          releasePendingNodePairingCleanup,
+        } satisfies GatewayConnectPhaseContext;
+        await GatewayRpcDiagnostics.runHandler(
+          "connect",
+          () =>
+            withDevicePairingWaitObservation(pairingWait, async () => {
+              try {
+                connectPhase = "auth";
+                const authenticated = await authenticateGatewayConnect(phaseContext);
+                if (!authenticated) {
+                  return;
+                }
+                const deviceStartedAt = performance.now();
+                connectPhase = "device";
+                const deviceAuthorized = await authorizeGatewayConnectDevice(
+                  phaseContext,
+                  authenticated,
+                );
+                phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
+                if (!deviceAuthorized) {
+                  return;
+                }
+                connectPhase = "attach";
+                await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+                runDetachedConnectWork(
+                  () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+                  (error) =>
+                    logGateway.debug(
+                      `connection model catalog unavailable: ${formatForLog(error)}`,
+                    ),
+                );
+              } finally {
+                if (rejectionWrite) {
+                  await rejectionWrite;
+                }
+              }
+            }),
+          diagnostics,
+        );
+        return;
+      }
+      await authenticatedRequestDispatcher.dispatch(
+        parsed,
+        client,
+        rawDataByteLength(data),
+        admission,
+      );
+    } catch (err) {
+      dispatchOutcome = "threw";
+      connectFailureCause ??= "handler-error";
+      await releasePendingNodePairingCleanup();
+      logGateway.error(`frame handler failed conn=${connId}: ${formatForLog(err)}`);
+      logWs("out", "handler-error", {
+        connId,
+        failurePhase: connectPhase,
+        error: formatForLog(err),
+      });
+      if (!helloDelivered && validateRequestFrame(parsed) && !isClosed()) {
+        const response: ResponseFrame = {
+          type: "res",
+          id: parsed.id,
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+        };
+        if (writeHandshakeResponse) {
+          await writeHandshakeResponse(response).catch(() => {});
+        } else {
+          send(response);
+        }
+      }
+    } finally {
+      diagnostics?.finish(dispatchOutcome);
+    }
+  };
+
+  const parsePreauthConnectFrame = (
+    data: GatewayConnectionFrame,
+  ): { id: string; params: ConnectParams } | null => {
+    if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawDataToString(data));
+    } catch {
+      return null;
+    }
+    if (
+      !validateRequestFrame(parsed) ||
+      parsed.method !== "connect" ||
+      !validateConnectParams(parsed.params)
+    ) {
+      return null;
+    }
+    return { id: parsed.id, params: parsed.params };
+  };
+
+  const rejectConnectForClosedAdmission = async (id: string): Promise<void> => {
+    const restartDraining = isGatewayRestartDraining();
+    const reason = restartDraining
+      ? GATEWAY_RESTART_UNAVAILABLE_REASON
+      : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
+    const operation = restartDraining ? "restart" : "suspension";
+    const phase = getGatewaySuspendAdmissionPhase();
+    setLastFrameMeta({ type: "req", method: "connect", id });
+    setHandshakeState("failed");
+    setCloseCause(reason, {
+      method: "connect",
+      phase,
+    });
+    const diagnostics = createGatewayRpcDiagnostics(
+      "connect",
+      params.getMethodRegistry,
+      params.extraHandlers,
+    );
+    logWs("in", "req", { connId, id, method: "connect" });
+    try {
+      const bytes = await sendFrame({
+        type: "res",
+        id,
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `connect unavailable during gateway ${operation}`,
+          {
+            retryable: true,
+            retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
+            details: {
+              method: "connect",
+              reason,
+              phase,
+            },
+          },
+        ),
+      });
+      diagnostics?.response("error", bytes);
+      logWs("out", "res", { connId, id, method: "connect", ok: false, bytes });
+    } catch {
+      diagnostics?.response("unavailable");
+    } finally {
+      diagnostics?.finish("rejected");
+    }
+    queueMicrotask(() =>
+      close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
+    );
+  };
+
+  const handleIncomingMessage = async (
+    data: GatewayConnectionFrame,
+    requestAdmission?: "continuation",
+  ) => {
+    if (getClient()) {
+      await handleMessage(data, requestAdmission);
+      return;
+    }
+    const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
+    if (!admission) {
+      const connect = parsePreauthConnectFrame(data);
+      if (
+        connect &&
+        isGatewayRestartDraining() &&
+        getGatewaySuspendAdmissionPhase() === "accepting" &&
+        params.isStartupPending?.() === true &&
+        isStartupNodeConnect(connect.params)
+      ) {
+        const startupAdmission = tryBeginGatewayRestartStartupRootWorkAdmission();
+        if (startupAdmission) {
+          try {
+            await startupAdmission.run(() => handleMessage(data));
+          } finally {
+            startupAdmission.release();
+          }
+          return;
+        }
+      }
+      if (
+        connect &&
+        isGatewaySuspendControlAvailable() &&
+        connect.params.role !== "node" &&
+        !claimsWorkerConnectionIdentity(connect.params)
+      ) {
+        // Suspension fences work, not authenticated owner recovery. Operators
+        // can reconnect through suspension and its drain; node and worker connects
+        // would attach presence/registry state, so they stay refused.
+        await handleMessage(data);
+        return;
+      }
+      if (connect) {
+        await rejectConnectForClosedAdmission(connect.id);
+        return;
+      }
+      // Malformed pre-auth frames still use the established validation and
+      // close path; only a validated connect can cross into mutable work.
+      await handleMessage(data);
+      return;
+    }
+    try {
+      await admission.run(() => handleMessage(data));
+    } finally {
+      admission.release();
+    }
+  };
+
+  const dispatchIncomingMessage = (data: GatewayConnectionFrame, onSettled?: () => void) => {
+    // Capture receipt before any await: older requests keep their admitted lifetime,
+    // while shutdown frames may only settle an exact pending node owner.
+    const admission = params.connectionWork.isClosing ? "continuation" : undefined;
+    if (admission && getClient()?.connect.role !== "node") {
+      onSettled?.();
+      return;
+    }
+    void params.connectionWork
+      .track(() =>
+        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+          runWithMainThreadTask("gateway:ws:frame", () => handleIncomingMessage(data, admission)),
+        ),
+      )
+      .catch((error: unknown) => {
+        logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`);
+      })
+      .finally(onSettled);
+  };
+
+  let queuedHandshakeFrames: GatewayConnectionFrame[] | undefined;
+  function flushQueuedHandshakeFrames() {
+    const frames = queuedHandshakeFrames?.splice(0) ?? [];
+    queuedHandshakeFrames = undefined;
+    if (isClosed()) {
+      return;
+    }
+    for (const frame of frames) {
+      onMessage(frame);
+    }
+  }
+
+  const onMessage = (data: GatewayConnectionFrame): void => {
+    try {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+    } catch {
+      close(1008, "remote Control UI ingress closed");
+      return;
+    }
+    if (isClosed()) {
+      return;
+    }
+    if (waitingForPairing) {
+      close(1008, "pairing approval pending; reconnect to request again");
+      return;
+    }
+    if (queuedHandshakeFrames) {
+      // Keep the preauth cap authoritative for pipelined frames until this
+      // connection actually owns an admitted client.
+      if (rejectOversizedPreauthFrame(data)) {
+        queuedHandshakeFrames.length = 0;
+        return;
+      }
+      if (queuedHandshakeFrames.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES - 1) {
+        setHandshakeState("failed");
+        setCloseCause("handshake-message-overflow", {
+          queuedFrames: queuedHandshakeFrames.length,
+        });
+        queuedHandshakeFrames.length = 0;
+        close(1008, "too many pending handshake frames");
+        return;
+      }
+      queuedHandshakeFrames.push(data);
+      return;
+    }
+
+    if (getClient()) {
+      dispatchIncomingMessage(data);
+      return;
+    }
+
+    // Reserve the first handshake only. Hello delivery retires pre-auth limits and
+    // replays queued frames; the final settlement callback remains a failure-path drain.
+    queuedHandshakeFrames = [];
+    dispatchIncomingMessage(data, flushQueuedHandshakeFrames);
+  };
+
+  socket.on("message", onMessage);
+  return onMessage;
+}

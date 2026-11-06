@@ -1,0 +1,84 @@
+import type { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChannelGroupEntrySchema } from "../channels/plugins/config-schema.js";
+import type { NativeExecApprovalEnableMode } from "./types.approvals.js";
+import type { ChannelDeliveryStreamingConfig } from "./types.base.js";
+import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channel-health.js";
+import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type {
+  ChannelGroupDmSchema,
+  CommonChannelAccountSchema,
+} from "./zod-schema.channel-messaging-common.js";
+
+type SchemaCommonChannelMessagingConfig = z.input<typeof CommonChannelAccountSchema>;
+
+export type ChannelGroupDmConfig<TGroupChannel = string | number> = Omit<
+  SchemaContract<z.input<typeof ChannelGroupDmSchema>>,
+  "groupChannels"
+> & { groupChannels?: TGroupChannel[] };
+
+/** Root account fields and optional named overrides share the same contract. */
+export type MultiAccountChannelConfig<TAccount> = TAccount & {
+  accounts?: Record<string, TAccount>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
+};
+
+export type CommonChannelGroupConfig = SchemaContract<
+  Omit<z.input<typeof ChannelGroupEntrySchema>, "tools" | "toolsBySender">
+> & {
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
+
+export type CommonChannelMessagingConfig<
+  TCapabilities = string[],
+  TAllowFromEntry = string | number,
+  TDefaultTo = string,
+  TStreaming = ChannelDeliveryStreamingConfig,
+> = Omit<
+  SchemaCommonChannelMessagingConfig,
+  "capabilities" | "allowFrom" | "defaultTo" | "groupAllowFrom" | "dms" | "streaming"
+> & {
+  capabilities?: TCapabilities;
+  allowFrom?: TAllowFromEntry[];
+  defaultTo?: TDefaultTo;
+  groupAllowFrom?: TAllowFromEntry[];
+  dms?: Record<string, DmConfig>;
+  streaming?: TStreaming;
+  /** @deprecated Doctor-only legacy input. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** @deprecated Doctor input only; use automation delivery policy. */
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
+};
+
+export type ChannelExecApprovalConfig<TApprover = string | number> = {
+  enabled?: NativeExecApprovalEnableMode;
+  approvers?: TApprover[];
+  agentFilter?: string[];
+  sessionFilter?: string[];
+  target?: "dm" | "channel" | "both";
+};
+
+export type ChannelBotInteractionConfig<TAllowBots = boolean | "mentions"> = {
+  allowBots?: TAllowBots;
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
+  dangerouslyAllowNameMatching?: boolean;
+};
+
+export type ChannelReadReceiptConfig = {
+  sendReadReceipts?: boolean;
+};
+
+export type ChannelReactionConfig<
+  TNotification = never,
+  TLevel = never,
+  TAckReaction = never,
+  TAllowlist extends boolean = false,
+> = {
+  reactionNotifications?: TNotification;
+  reactionLevel?: TLevel;
+  ackReaction?: TAckReaction;
+} & (TAllowlist extends true ? { reactionAllowlist?: Array<string | number> } : object);

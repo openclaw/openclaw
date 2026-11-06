@@ -1,0 +1,483 @@
+import * as Lark from "@larksuiteoapi/node-sdk";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  createChannelIngressError,
+  createChannelIngressMonitor,
+  DEFAULT_INGRESS_ADOPTION_STALL_MS,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
+  type ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
+import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { getFeishuRuntime } from "./runtime.js";
+
+const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
+const FEISHU_INGRESS_POLL_INTERVAL_MS = 500;
+const FEISHU_DURABLE_EVENT_TYPES = new Set([
+  "drive.notice.comment_add_v1",
+  "im.message.receive_v1",
+]);
+
+export type FeishuIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission"> & {
+  onBeforeAbandon?: () => void | Promise<void>;
+};
+
+type FeishuIngressPayload = {
+  version: 1;
+  receivedAt: number;
+  rawEnvelope: string;
+};
+
+type FeishuIngressFacts = {
+  eventId: string;
+  laneKey: string;
+};
+
+type FeishuIngressOptions = {
+  accountId: string;
+  dispatcher: Pick<Lark.EventDispatcher, "invoke">;
+  encryptKey?: string;
+  runtime: {
+    error?: (message: string) => void;
+    log?: (message: string) => void;
+  };
+  queue?: ChannelIngressQueue<FeishuIngressPayload>;
+  pollIntervalMs?: number;
+  adoptionStallTimeoutMs?: number;
+};
+
+export type FeishuWebhookInvoker = (
+  data: unknown,
+  params?: { needCheck?: boolean },
+) => Promise<{ kind: "durable" | "non-durable"; value: unknown }>;
+
+type FeishuLifecycleSource = {
+  lifecycle?: FeishuIngressLifecycle;
+  replayClaim?: ChannelReplayClaimHandle;
+};
+
+export const FeishuIngressPermanentError = createChannelIngressError<
+  "authentication-failed" | "invalid-event"
+>("FeishuIngressPermanentError", { withReason: true });
+export type FeishuIngressPermanentError = InstanceType<typeof FeishuIngressPermanentError>;
+
+function parseRawEnvelope(rawEnvelope: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawEnvelope);
+  } catch (error) {
+    throw new FeishuIngressPermanentError(
+      "invalid-event",
+      "Feishu ingress envelope contains invalid JSON.",
+      { cause: error },
+    );
+  }
+  if (!isRecord(parsed)) {
+    throw new FeishuIngressPermanentError(
+      "invalid-event",
+      "Feishu ingress envelope must be a JSON object.",
+    );
+  }
+  return parsed;
+}
+
+function decryptEnvelope(
+  envelope: Record<string, unknown>,
+  encryptKey: string | undefined,
+): Record<string, unknown> {
+  const encrypted = normalizeNullableString(envelope.encrypt);
+  if (!encrypted) {
+    return envelope;
+  }
+  const key = encryptKey?.trim();
+  if (!key) {
+    throw new FeishuIngressPermanentError(
+      "authentication-failed",
+      "Feishu encrypted ingress envelope has no configured encrypt key.",
+    );
+  }
+  try {
+    return parseRawEnvelope(new Lark.AESCipher(key).decrypt(encrypted));
+  } catch (error) {
+    if (error instanceof FeishuIngressPermanentError) {
+      throw error;
+    }
+    throw new FeishuIngressPermanentError(
+      "authentication-failed",
+      "Feishu ingress envelope decryption failed.",
+      { cause: error },
+    );
+  }
+}
+
+function inspectFeishuIngressEnvelope(
+  rawEnvelope: string,
+  encryptKey: string | undefined,
+  allowInvalidLane = false,
+): FeishuIngressFacts | null {
+  const envelope = decryptEnvelope(parseRawEnvelope(rawEnvelope), encryptKey);
+  const nestedHeader = isRecord(envelope.header) ? envelope.header : null;
+  const nestedEvent = isRecord(envelope.event) ? envelope.event : null;
+  const eventType =
+    normalizeNullableString(nestedHeader?.event_type) ??
+    normalizeNullableString(envelope.event_type);
+  if (!eventType || !FEISHU_DURABLE_EVENT_TYPES.has(eventType)) {
+    return null;
+  }
+  // Lark v2 carries delivery identity in header.event_id. The flattened shape
+  // is also accepted because EventDispatcher hands that exact shape to handlers.
+  const eventId =
+    normalizeNullableString(nestedHeader?.event_id) ?? normalizeNullableString(envelope.event_id);
+  if (!eventId) {
+    throw new FeishuIngressPermanentError(
+      "invalid-event",
+      `Feishu ${eventType} envelope is missing header.event_id.`,
+    );
+  }
+  const event = nestedEvent ?? envelope;
+  const missingLane = (message: string): FeishuIngressFacts => {
+    if (allowInvalidLane) {
+      return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
+    }
+    throw new FeishuIngressPermanentError("invalid-event", message);
+  };
+  if (eventType === "im.message.receive_v1") {
+    const message = isRecord(event.message) ? event.message : null;
+    const chatId = normalizeNullableString(message?.chat_id);
+    if (!chatId) {
+      return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
+    }
+    return { eventId, laneKey: `chat:${chatId}` };
+  }
+  const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
+  const fileType = normalizeNullableString(noticeMeta?.file_type);
+  const documentId = normalizeNullableString(noticeMeta?.file_token);
+  if (!fileType || !documentId) {
+    return missingLane("Feishu comment ingress envelope is missing its document identity.");
+  }
+  return { eventId, laneKey: `comment-doc:${fileType}:${documentId}` };
+}
+
+function resolveFeishuIngressNonRetryableFailure(error: unknown) {
+  if (error instanceof FeishuIngressPermanentError) {
+    return { reason: error.reason, message: error.message };
+  }
+  for (const candidate of collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.response,
+  ])) {
+    const status = isRecord(candidate) ? candidate.status : undefined;
+    if (status === 401 || status === 403) {
+      return { reason: "authentication-failed", message: formatErrorMessage(error) };
+    }
+  }
+  return null;
+}
+
+/** Fan one merged Feishu turn's adoption across every transport and logical claim. */
+export function buildFeishuFlushIngressLifecycle(
+  sources: readonly FeishuLifecycleSource[],
+  options?: {
+    onReplayCommitError?: (error: unknown) => void;
+    trackTask?: (task: Promise<void>) => void;
+  },
+): {
+  lifecycle: FeishuIngressLifecycle | undefined;
+  settle: () => Promise<void>;
+} {
+  const durableSources = sources.filter(
+    (
+      source,
+    ): source is Required<Pick<FeishuLifecycleSource, "lifecycle">> &
+      Pick<FeishuLifecycleSource, "replayClaim"> => source.lifecycle !== undefined,
+  );
+  const lifecycles = durableSources.map((source) => source.lifecycle);
+  const replayClaims = durableSources
+    .map((source) => source.replayClaim)
+    .filter((claim) => claim !== undefined);
+  const transportLifecycle = fanInChannelIngressLifecycles(lifecycles).lifecycle;
+  if (!transportLifecycle) {
+    return { lifecycle: undefined, settle: async () => {} };
+  }
+  let handedOff = false;
+  let settled = false;
+  const releaseReplayClaims = () => {
+    for (const claim of replayClaims) {
+      claim.release({ error: new Error("feishu-ingress-not-adopted") });
+    }
+  };
+  const abandonAll = async () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    releaseReplayClaims();
+    await transportLifecycle.onAbandoned();
+  };
+  const commitReplayClaims = async () => {
+    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
+    for (const result of results) {
+      if (result.status === "rejected") {
+        options?.onReplayCommitError?.(result.reason);
+      }
+    }
+  };
+  const dropAll = async (
+    reason: Parameters<NonNullable<FeishuIngressLifecycle["onDropped"]>>[0],
+  ) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    try {
+      await transportLifecycle.onDropped?.(reason);
+    } catch (error) {
+      releaseReplayClaims();
+      throw error;
+    }
+    await commitReplayClaims();
+  };
+  const adoptAll = async () => {
+    if (settled) {
+      return;
+    }
+    // A flush chooses adoption or abandonment once. Overlapping callbacks are
+    // best effort; the durable queue remains the recovery owner.
+    settled = true;
+    try {
+      await transportLifecycle.onAdopted();
+    } catch (error) {
+      releaseReplayClaims();
+      await Promise.resolve(transportLifecycle.onAbandoned()).catch(() => undefined);
+      throw error;
+    }
+    // Commit twin suppression only after the durable turn is adopted.
+    await commitReplayClaims();
+  };
+  return {
+    lifecycle: {
+      abortSignal: transportLifecycle.abortSignal,
+      onAdopted: async () => {
+        handedOff = true;
+        const adoption = adoptAll();
+        options?.trackTask?.(adoption);
+        await adoption;
+      },
+      onDeferred: () => {
+        handedOff = true;
+        transportLifecycle.onDeferred();
+      },
+      onDeferredHeartbeat: () => transportLifecycle.onDeferredHeartbeat?.(),
+      deferredHeartbeatIntervalMs: transportLifecycle.deferredHeartbeatIntervalMs,
+      onAdoptionFinalizing: () => {
+        transportLifecycle.onAdoptionFinalizing();
+      },
+      onAbandoned: async () => {
+        handedOff = true;
+        await abandonAll();
+      },
+      onDropped: transportLifecycle.onDropped
+        ? async (reason) => {
+            handedOff = true;
+            await dropAll(reason);
+          }
+        : undefined,
+    },
+    // A gated/no-turn envelope is terminal for transport replay, but its
+    // logical claim releases so a different event_id twin can run the gate.
+    settle: async () => {
+      if (handedOff) {
+        return;
+      }
+      handedOff = true;
+      settled = true;
+      releaseReplayClaims();
+      try {
+        transportLifecycle.onAdoptionFinalizing();
+        await transportLifecycle.onAdopted();
+      } catch (error) {
+        await Promise.resolve(transportLifecycle.onAbandoned()).catch(() => undefined);
+        throw error;
+      }
+    },
+  };
+}
+
+export function createFeishuDurableIngress(options: FeishuIngressOptions) {
+  let socketTerminator: (() => void) | undefined;
+  const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
+
+  const monitor = createChannelIngressMonitor<
+    string,
+    { receivedAt: number; rawEnvelope: string },
+    FeishuIngressPayload
+  >({
+    queue:
+      options.queue ??
+      (() =>
+        getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (rawEnvelope, context) =>
+      inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, context.phase === "admission"),
+    payload: {
+      version: FEISHU_INGRESS_PAYLOAD_VERSION,
+      serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
+      deserialize: (body) => body.rawEnvelope,
+      encode: ({ body }) => ({ version: FEISHU_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload) => ({
+        version: payload.version,
+        body: { receivedAt: payload.receivedAt, rawEnvelope: payload.rawEnvelope },
+      }),
+      createClaimError: (kind, claim) =>
+        new FeishuIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Feishu ingress row ${claim.id} has an unsupported version.`
+            : `Feishu ingress row ${claim.id} has invalid delivery identity.`,
+        ),
+    },
+    deliver: async (rawEnvelope, lifecycle, claim) => {
+      const handoff = createDeferred();
+      // The message debounce owner releases its logical claim before transport abandonment.
+      const wrappedLifecycle: FeishuIngressLifecycle = {
+        ...lifecycle,
+        onDeferred: () => {
+          lifecycle.onDeferred();
+          handoff.resolve();
+        },
+        onAdopted: async () => {
+          try {
+            await lifecycle.onAdopted();
+          } finally {
+            handoff.resolve();
+          }
+        },
+        onAbandoned: async () => {
+          try {
+            await Promise.resolve()
+              .then(() => wrappedLifecycle.onBeforeAbandon?.())
+              .catch(() => undefined);
+            await lifecycle.onAbandoned();
+          } finally {
+            handoff.resolve();
+          }
+        },
+        onDropped: async (reason) => {
+          try {
+            await lifecycle.onDropped?.(reason);
+          } finally {
+            handoff.resolve();
+          }
+        },
+      };
+      activeLifecycles.set(claim.id, wrappedLifecycle);
+      try {
+        const result = await options.dispatcher.invoke(parseRawEnvelope(rawEnvelope), {
+          needCheck: false,
+        });
+        if (!isRecord(result)) {
+          return undefined;
+        }
+        if (result.kind === "deferred") {
+          // Buffering is not reply-lane admission. Keep its chat lane until the
+          // real lifecycle handoff; queued followups then release only the lane.
+          try {
+            await racePromiseWithAbortSignal(handoff.promise, lifecycle.abortSignal);
+          } catch (error) {
+            await wrappedLifecycle.onAbandoned();
+            throw error;
+          }
+          return { kind: "deferred" };
+        }
+        if (result.kind === "completed") {
+          return { kind: "completed" };
+        }
+        if (result.kind === "failed-retryable") {
+          return {
+            kind: "failed-retryable",
+            error: result.error,
+          } satisfies ChannelIngressMonitorDeliveryResult;
+        }
+        return undefined;
+      } finally {
+        if (activeLifecycles.get(claim.id) === wrappedLifecycle) {
+          activeLifecycles.delete(claim.id);
+        }
+      }
+    },
+    deferredClaims: "wait-on-stop",
+    pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
+    retention: "standard",
+    drain: {
+      deferredLaneOccupancy: "release",
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
+      onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),
+    },
+    createStoppedError: () => new Error("Feishu ingress is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(`feishu ingress drain failed: ${formatErrorMessage(error)}`),
+  });
+
+  const invokeWebhook: FeishuWebhookInvoker = async (data, params) => {
+    let rawEnvelope: string;
+    try {
+      const serialized = JSON.stringify(data);
+      if (serialized === undefined) {
+        throw new TypeError("Feishu ingress envelope has no JSON representation.");
+      }
+      rawEnvelope = serialized;
+    } catch (error) {
+      throw new FeishuIngressPermanentError(
+        "invalid-event",
+        "Feishu ingress envelope is not serializable.",
+        { cause: error },
+      );
+    }
+    // Webhook transport verifies the raw-body signature before invoke; the
+    // Lark WS client invokes from its authenticated socket with needCheck=false.
+    // Keep malformed recognized deliveries durable when their stable event id
+    // exists. Claim-side validation then dead-letters them without retry.
+    const facts = inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, true);
+    if (!facts) {
+      return {
+        kind: "non-durable",
+        value: await options.dispatcher.invoke(data, params),
+      };
+    }
+    try {
+      await monitor.admit(rawEnvelope, { facts });
+    } catch (error) {
+      socketTerminator?.();
+      throw error;
+    }
+    return { kind: "durable", value: undefined };
+  };
+  const invoke: Lark.EventDispatcher["invoke"] = async (data, params) =>
+    (await invokeWebhook(data, params)).value;
+
+  return {
+    invoke,
+    invokeWebhook,
+    resolveLifecycle: (data: unknown) => {
+      const eventId = isRecord(data) ? normalizeNullableString(data.event_id) : null;
+      return eventId ? activeLifecycles.get(eventId) : undefined;
+    },
+    setSocketTerminator: (terminate: (() => void) | undefined) => {
+      socketTerminator = terminate;
+    },
+    start: monitor.start,
+    stop: async () => {
+      await monitor.stop();
+      activeLifecycles.clear();
+      socketTerminator = undefined;
+    },
+    waitForIdle: monitor.waitForIdle,
+  };
+}

@@ -1,0 +1,913 @@
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveStateDir } from "../config/paths.js";
+import {
+  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  isMemoryPressureReason,
+  type DiagnosticMemoryPressureFields,
+} from "../infra/diagnostic-process-types.js";
+import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  isMissingPathError,
+} from "../infra/errors.js";
+import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
+import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
+import {
+  assignOptionalFields,
+  readObject,
+  readOptionalNumber,
+  readOptionalPositiveInteger,
+  readRequiredNumber,
+} from "./diagnostic-stability-readers.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  MAX_DIAGNOSTIC_STABILITY_LIMIT,
+  type DiagnosticStabilitySnapshot,
+} from "./diagnostic-stability.js";
+import { redactSensitiveText } from "./redact.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
+
+const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
+const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
+export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
+
+const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const BUNDLE_PREFIX = "openclaw-stability-";
+const BUNDLE_SUFFIX = ".json";
+const REDACTED_HOSTNAME = "<redacted-hostname>";
+const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
+const MAX_SHUTDOWN_ERRORS = 32;
+const MAX_SAFE_ERROR_STACK_LENGTH = 8_000;
+
+type DiagnosticHeapSpaceSummary = {
+  spaceName: string;
+  spaceSizeBytes: number;
+  spaceUsedBytes: number;
+  spaceAvailableBytes: number;
+  physicalSpaceSizeBytes: number;
+};
+
+type DiagnosticHeapStatisticsSummary = {
+  totalHeapSizeBytes: number;
+  totalHeapSizeExecutableBytes: number;
+  totalPhysicalSizeBytes: number;
+  totalAvailableSizeBytes: number;
+  usedHeapSizeBytes: number;
+  heapSizeLimitBytes: number;
+  mallocedMemoryBytes: number;
+  externalMemoryBytes: number;
+};
+
+type DiagnosticActiveResourceSummary = {
+  total: number;
+  byType: Record<string, number>;
+};
+
+type DiagnosticCgroupMemorySummary = {
+  version: "v2";
+  values: Record<string, number | "max">;
+  events: Record<string, number>;
+};
+
+type DiagnosticSessionFileSummary = {
+  relativePath: string;
+  sizeBytes: number;
+  mtimeMs: number;
+};
+
+type DiagnosticMemoryPressureBundleEvidence = Omit<DiagnosticMemoryPressureFields, "type"> & {
+  heapStatistics?: DiagnosticHeapStatisticsSummary;
+  heapSpaces?: DiagnosticHeapSpaceSummary[];
+  cgroup?: DiagnosticCgroupMemorySummary;
+  activeResources?: DiagnosticActiveResourceSummary;
+  topSessionFiles?: DiagnosticSessionFileSummary[];
+};
+
+type DiagnosticStabilityBundleEvidence = {
+  memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
+  shutdown?: {
+    step: string;
+    errors: Array<NonNullable<DiagnosticStabilityBundle["error"]>>;
+  };
+};
+
+export type DiagnosticStabilityBundle = {
+  version: typeof DIAGNOSTIC_STABILITY_BUNDLE_VERSION;
+  generatedAt: string;
+  reason: string;
+  process: {
+    pid: number;
+    platform: NodeJS.Platform;
+    arch: string;
+    node: string;
+    uptimeMs: number;
+    openclawVersion?: string;
+    buildId?: string;
+    commit?: string;
+  };
+  host: {
+    hostname: string;
+  };
+  error?: {
+    name?: string;
+    code?: string;
+    message?: string;
+    stack?: string;
+  };
+  evidence?: DiagnosticStabilityBundleEvidence;
+  snapshot: DiagnosticStabilitySnapshot;
+};
+
+type WriteDiagnosticStabilityBundleForFailureOptions = {
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  shutdownStep?: string;
+};
+
+type DiagnosticStabilityBundleLocationOptions = {
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+};
+
+export type ReadDiagnosticStabilityBundleResult =
+  | { status: "found"; path: string; mtimeMs: number; bundle: DiagnosticStabilityBundle }
+  | { status: "missing"; dir: string }
+  | { status: "failed"; path?: string; error: unknown };
+
+let fatalHookInstalled = false;
+
+function normalizeReason(reason: string): string {
+  return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
+}
+
+function readErrorMessage(message: unknown): string | undefined {
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  const sanitized = redactSensitiveText(message, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.length > MAX_SAFE_ERROR_MESSAGE_LENGTH
+    ? `${truncateUtf16Safe(sanitized, MAX_SAFE_ERROR_MESSAGE_LENGTH)}...`
+    : sanitized;
+}
+
+function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const rawName = "name" in error ? error.name : undefined;
+  const name = typeof rawName === "string" && SAFE_REASON_CODE.test(rawName) ? rawName : undefined;
+  const rawCode = "code" in error ? error.code : undefined;
+  const code =
+    typeof rawCode === "string" && SAFE_REASON_CODE.test(rawCode)
+      ? rawCode
+      : typeof rawCode === "number" && Number.isFinite(rawCode)
+        ? String(rawCode)
+        : undefined;
+  const message = readErrorMessage("message" in error ? error.message : undefined);
+  const stack =
+    "stack" in error && typeof error.stack === "string"
+      ? truncateUtf16Safe(
+          redactSensitiveText(error.stack, { mode: "tools" }),
+          MAX_SAFE_ERROR_STACK_LENGTH,
+        )
+      : undefined;
+  if (!name && !code && !message && !stack) {
+    return undefined;
+  }
+  return {
+    ...(name ? { name } : {}),
+    ...(code ? { code } : {}),
+    ...(message ? { message } : {}),
+    ...(stack ? { stack } : {}),
+  };
+}
+
+function readShutdownError(error: unknown) {
+  const normalized =
+    error && typeof error === "object" ? error : { message: formatErrorMessage(error) };
+  return readSafeErrorMetadata(normalized) ?? {};
+}
+
+function collectShutdownErrors(error: unknown) {
+  let remaining = MAX_SHUTDOWN_ERRORS - 1;
+  const candidates = collectErrorGraphCandidates(error, (current) => {
+    const nested: unknown[] = [
+      current.cause,
+      ...(Array.isArray(current.errors) ? current.errors.slice(0, remaining) : []),
+    ]
+      .filter((value) => value !== undefined)
+      .slice(0, remaining);
+    remaining -= nested.length;
+    return nested;
+  });
+  return (candidates.length ? candidates : [error]).map(readShutdownError);
+}
+
+function resolveDiagnosticStabilityBundleDir(
+  options: DiagnosticStabilityBundleLocationOptions = {},
+): string {
+  return path.join(
+    options.stateDir ?? resolveStateDir(options.env ?? process.env),
+    "logs",
+    "stability",
+  );
+}
+
+function isBundleFile(name: string): boolean {
+  return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
+}
+
+function readTimestampMs(value: unknown, label: string): number {
+  const timestamp = readRequiredNumber(value, label);
+  if (Number.isNaN(new Date(timestamp).getTime())) {
+    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
+  }
+  return timestamp;
+}
+
+function readRequiredString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid stability bundle: ${label} must be a string`);
+  }
+  return value;
+}
+
+function readTimestampString(value: unknown, label: string): string {
+  const timestamp = readRequiredString(value, label);
+  if (Number.isNaN(new Date(timestamp).getTime())) {
+    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
+  }
+  return timestamp;
+}
+
+function readCodeString(value: unknown, label: string): string {
+  const code = readRequiredString(value, label);
+  if (!SAFE_REASON_CODE.test(code)) {
+    throw new Error(`Invalid stability bundle: ${label} must be a safe diagnostic code`);
+  }
+  return code;
+}
+
+function readOptionalCodeString(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const code = readRequiredString(value, label);
+  return SAFE_REASON_CODE.test(code) ? code : undefined;
+}
+
+function readProcessBuildIdentity(source: Record<string, unknown>) {
+  const identity: Pick<
+    DiagnosticStabilityBundle["process"],
+    "openclawVersion" | "buildId" | "commit"
+  > = {};
+  // Preserve SemVer metadata and generated build IDs without importing paths,
+  // terminal controls, or unbounded strings from externally supplied bundles.
+  for (const [field, pattern] of [
+    ["openclawVersion", /^[A-Za-z0-9.+_-]{1,256}$/u],
+    ["buildId", /^[A-Za-z0-9._-]{1,96}$/u],
+    ["commit", /^[0-9a-f]{7,40}$/iu],
+  ] as const) {
+    const value = source[field];
+    if (typeof value === "string" && pattern.test(value)) {
+      identity[field] = value;
+    }
+  }
+  return identity;
+}
+
+function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence.memoryPressure.heapStatistics");
+  const result = {} as DiagnosticHeapStatisticsSummary;
+  assignOptionalFields(
+    result,
+    source,
+    "evidence.memoryPressure.heapStatistics",
+    [
+      "totalHeapSizeBytes",
+      "totalHeapSizeExecutableBytes",
+      "totalPhysicalSizeBytes",
+      "totalAvailableSizeBytes",
+      "usedHeapSizeBytes",
+      "heapSizeLimitBytes",
+      "mallocedMemoryBytes",
+      "externalMemoryBytes",
+    ],
+    readOptionalPositiveInteger,
+  );
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function readEvidenceArray<T>(
+  value: unknown,
+  label: string,
+  read: (source: Record<string, unknown>, label: string) => T | undefined,
+): T[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid stability bundle: ${label} must be an array`);
+  }
+  const entries: T[] = [];
+  for (const [index, entry] of value.entries()) {
+    const entryLabel = `${label}[${index}]`;
+    const parsed = read(readObject(entry, entryLabel), entryLabel);
+    if (parsed !== undefined) {
+      entries.push(parsed);
+    }
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefined {
+  return readEvidenceArray(value, "evidence.memoryPressure.heapSpaces", (source, label) => {
+    const spaceName = readOptionalCodeString(source.spaceName, `${label}.spaceName`);
+    if (!spaceName) {
+      return undefined;
+    }
+    return {
+      spaceName,
+      spaceSizeBytes:
+        readOptionalPositiveInteger(source.spaceSizeBytes, `${label}.spaceSizeBytes`) ?? 0,
+      spaceUsedBytes:
+        readOptionalPositiveInteger(source.spaceUsedBytes, `${label}.spaceUsedBytes`) ?? 0,
+      spaceAvailableBytes:
+        readOptionalPositiveInteger(source.spaceAvailableBytes, `${label}.spaceAvailableBytes`) ??
+        0,
+      physicalSpaceSizeBytes:
+        readOptionalPositiveInteger(
+          source.physicalSpaceSizeBytes,
+          `${label}.physicalSpaceSizeBytes`,
+        ) ?? 0,
+    };
+  });
+}
+
+function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence.memoryPressure.cgroup");
+  const version = readCodeString(source.version, "evidence.memoryPressure.cgroup.version");
+  if (version !== "v2") {
+    return undefined;
+  }
+  const valuesSource = readObject(source.values, "evidence.memoryPressure.cgroup.values");
+  const values: Record<string, number | "max"> = {};
+  for (const [key, raw] of Object.entries(valuesSource)) {
+    if (!SAFE_REASON_CODE.test(key)) {
+      continue;
+    }
+    if (raw === "max") {
+      values[key] = "max";
+    } else {
+      values[key] =
+        readOptionalPositiveInteger(raw, `evidence.memoryPressure.cgroup.values.${key}`) ?? 0;
+    }
+  }
+  return {
+    version,
+    values,
+    events: readNumberMap(source.events, "evidence.memoryPressure.cgroup.events"),
+  };
+}
+
+function readActiveResources(value: unknown): DiagnosticActiveResourceSummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence.memoryPressure.activeResources");
+  return {
+    total:
+      readOptionalPositiveInteger(source.total, "evidence.memoryPressure.activeResources.total") ??
+      0,
+    byType: readNumberMap(source.byType, "evidence.memoryPressure.activeResources.byType"),
+  };
+}
+
+function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | undefined {
+  return readEvidenceArray(value, "evidence.memoryPressure.topSessionFiles", (source, label) => {
+    const relativePath = readRequiredString(source.relativePath, `${label}.relativePath`);
+    if (
+      path.isAbsolute(relativePath) ||
+      relativePath.includes("..") ||
+      relativePath.length > 300 ||
+      /[\r\n]/u.test(relativePath)
+    ) {
+      return undefined;
+    }
+    return {
+      relativePath: sanitizeSessionEvidencePath(relativePath),
+      sizeBytes: readOptionalPositiveInteger(source.sizeBytes, `${label}.sizeBytes`) ?? 0,
+      mtimeMs: readOptionalPositiveInteger(source.mtimeMs, `${label}.mtimeMs`) ?? 0,
+    };
+  });
+}
+
+function readMemoryPressureEvidence(
+  value: unknown,
+): DiagnosticMemoryPressureBundleEvidence | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const pressure = readObject(value, "evidence.memoryPressure");
+  const level = readCodeString(pressure.level, "evidence.memoryPressure.level");
+  const reason = readCodeString(pressure.reason, "evidence.memoryPressure.reason");
+  if ((level !== "warning" && level !== "critical") || !isMemoryPressureReason(reason)) {
+    return undefined;
+  }
+  const heapStatistics = readHeapStatistics(pressure.heapStatistics);
+  const heapSpaces = readHeapSpaces(pressure.heapSpaces);
+  const cgroup = readCgroupMemorySummary(pressure.cgroup);
+  const activeResources = readActiveResources(pressure.activeResources);
+  const topSessionFiles = readSessionFiles(pressure.topSessionFiles);
+  const result: DiagnosticMemoryPressureBundleEvidence = {
+    level,
+    reason,
+    memory: readMemoryUsage(pressure.memory, "evidence.memoryPressure.memory"),
+  };
+  assignOptionalFields(
+    result,
+    pressure,
+    "evidence.memoryPressure",
+    DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+    readOptionalNumber,
+  );
+  return {
+    ...result,
+    ...(heapStatistics ? { heapStatistics } : {}),
+    ...(heapSpaces ? { heapSpaces } : {}),
+    ...(cgroup ? { cgroup } : {}),
+    ...(activeResources ? { activeResources } : {}),
+    ...(topSessionFiles ? { topSessionFiles } : {}),
+  };
+}
+
+function readBundleEvidence(value: unknown): DiagnosticStabilityBundleEvidence | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence");
+  const memoryPressure = readMemoryPressureEvidence(source.memoryPressure);
+  let shutdown: DiagnosticStabilityBundleEvidence["shutdown"];
+  if (source.shutdown !== undefined) {
+    const shutdownSource = readObject(source.shutdown, "evidence.shutdown");
+    if (!Array.isArray(shutdownSource.errors)) {
+      throw new Error("Invalid stability bundle: evidence.shutdown.errors must be an array");
+    }
+    shutdown = {
+      step: readCodeString(shutdownSource.step, "evidence.shutdown.step"),
+      errors: shutdownSource.errors.slice(0, MAX_SHUTDOWN_ERRORS).map(readShutdownError),
+    };
+  }
+  return memoryPressure || shutdown
+    ? { ...(memoryPressure ? { memoryPressure } : {}), ...(shutdown ? { shutdown } : {}) }
+    : undefined;
+}
+
+function readNumberMap(value: unknown, label: string): Record<string, number> {
+  const source = readObject(value, label);
+  const result: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(source)) {
+    if (!SAFE_REASON_CODE.test(key)) {
+      continue;
+    }
+    result[key] = readRequiredNumber(entry, `${label}.${key}`);
+  }
+  return result;
+}
+
+function readMemorySummary(
+  value: unknown,
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]> {
+  const memory = readObject(value, "snapshot.summary.memory");
+  const latest =
+    memory.latest === undefined
+      ? undefined
+      : readMemoryUsage(memory.latest, "snapshot.summary.memory.latest");
+  const result: Partial<NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>> = latest
+    ? { latest }
+    : {};
+  assignOptionalFields(
+    result,
+    memory,
+    "snapshot.summary.memory",
+    ["maxRssBytes", "maxHeapUsedBytes"],
+    readOptionalNumber,
+  );
+  return {
+    ...result,
+    pressureCount: readRequiredNumber(
+      memory.pressureCount,
+      "snapshot.summary.memory.pressureCount",
+    ),
+  };
+}
+
+function readPayloadLargeSummary(
+  value: unknown,
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["payloadLarge"]> {
+  const payloadLarge = readObject(value, "snapshot.summary.payloadLarge");
+  return {
+    count: readRequiredNumber(payloadLarge.count, "snapshot.summary.payloadLarge.count"),
+    rejected: readRequiredNumber(payloadLarge.rejected, "snapshot.summary.payloadLarge.rejected"),
+    truncated: readRequiredNumber(
+      payloadLarge.truncated,
+      "snapshot.summary.payloadLarge.truncated",
+    ),
+    chunked: readRequiredNumber(payloadLarge.chunked, "snapshot.summary.payloadLarge.chunked"),
+    bySurface: readNumberMap(payloadLarge.bySurface, "snapshot.summary.payloadLarge.bySurface"),
+  };
+}
+
+function readStabilityEventRecord(
+  value: unknown,
+  label: string,
+): DiagnosticStabilitySnapshot["events"][number] {
+  const record = readObject(value, label);
+  const sanitized: DiagnosticStabilitySnapshot["events"][number] = {
+    seq: readRequiredNumber(record.seq, `${label}.seq`),
+    ts: readTimestampMs(record.ts, `${label}.ts`),
+    type: readCodeString(
+      record.type,
+      `${label}.type`,
+    ) as DiagnosticStabilitySnapshot["events"][number]["type"],
+  };
+
+  assignOptionalFields(
+    sanitized,
+    record,
+    label,
+    [
+      "channel",
+      "pluginId",
+      "source",
+      "surface",
+      "action",
+      "reason",
+      "outcome",
+      "level",
+      "phase",
+      "approvalId",
+      "detector",
+      "toolName",
+      "activeWorkKind",
+      "pairedToolName",
+      "provider",
+      "model",
+      "failureKind",
+    ],
+    readOptionalCodeString,
+  );
+
+  assignOptionalFields(
+    sanitized,
+    record,
+    label,
+    [
+      "durationMs",
+      "providerProcessingMs",
+      "providerWaitEstimateMs",
+      "requestBytes",
+      "responseBytes",
+      "timeToFirstByteMs",
+      "costUsd",
+      "count",
+      "bytes",
+      ...DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+      "ageMs",
+      "queueDepth",
+      "queueSize",
+      "queueLength",
+      "waitMs",
+      "active",
+      "waiting",
+      "queued",
+      "droppedEvents",
+      "droppedTrustedEvents",
+      "droppedUntrustedEvents",
+      "droppedPriorityEvents",
+      "maxQueueLength",
+      "drainBatchSize",
+    ],
+    readOptionalNumber,
+  );
+
+  if (record.webhooks !== undefined) {
+    const webhooks = readObject(record.webhooks, `${label}.webhooks`);
+    sanitized.webhooks = {
+      received: readRequiredNumber(webhooks.received, `${label}.webhooks.received`),
+      processed: readRequiredNumber(webhooks.processed, `${label}.webhooks.processed`),
+      errors: readRequiredNumber(webhooks.errors, `${label}.webhooks.errors`),
+    };
+  }
+  if (record.memory !== undefined) {
+    sanitized.memory = readMemoryUsage(record.memory, `${label}.memory`);
+  }
+  if (record.usage !== undefined) {
+    const usage = readObject(record.usage, `${label}.usage`);
+    sanitized.usage = {};
+    assignOptionalFields(
+      sanitized.usage,
+      usage,
+      `${label}.usage`,
+      ["input", "output", "cacheRead", "cacheWrite", "promptTokens", "total"],
+      readOptionalNumber,
+    );
+  }
+  if (record.context !== undefined) {
+    const context = readObject(record.context, `${label}.context`);
+    sanitized.context = {};
+    assignOptionalFields(
+      sanitized.context,
+      context,
+      `${label}.context`,
+      ["limit", "used"],
+      readOptionalNumber,
+    );
+  }
+
+  return sanitized;
+}
+
+function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
+  const snapshot = readObject(value, "snapshot");
+  const generatedAt = readTimestampString(snapshot.generatedAt, "snapshot.generatedAt");
+  const capacity = readRequiredNumber(snapshot.capacity, "snapshot.capacity");
+  const count = readRequiredNumber(snapshot.count, "snapshot.count");
+  const dropped = readRequiredNumber(snapshot.dropped, "snapshot.dropped");
+  const firstSeq = readOptionalNumber(snapshot.firstSeq, "snapshot.firstSeq");
+  const lastSeq = readOptionalNumber(snapshot.lastSeq, "snapshot.lastSeq");
+  if (!Array.isArray(snapshot.events)) {
+    throw new Error("Invalid stability bundle: snapshot.events must be an array");
+  }
+  const events = snapshot.events.map((event, index) =>
+    readStabilityEventRecord(event, `snapshot.events[${index}]`),
+  );
+  const summary = readObject(snapshot.summary, "snapshot.summary");
+  return {
+    generatedAt,
+    capacity,
+    count,
+    dropped,
+    ...(firstSeq !== undefined ? { firstSeq } : {}),
+    ...(lastSeq !== undefined ? { lastSeq } : {}),
+    events,
+    summary: {
+      byType: readNumberMap(summary.byType, "snapshot.summary.byType"),
+      ...(summary.memory !== undefined ? { memory: readMemorySummary(summary.memory) } : {}),
+      ...(summary.payloadLarge !== undefined
+        ? { payloadLarge: readPayloadLargeSummary(summary.payloadLarge) }
+        : {}),
+    },
+  };
+}
+
+function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBundle {
+  const bundle = readObject(value, "bundle");
+  if (bundle.version !== DIAGNOSTIC_STABILITY_BUNDLE_VERSION) {
+    throw new Error(`Unsupported stability bundle version: ${String(bundle.version)}`);
+  }
+  const processInfo = readObject(bundle.process, "process");
+  readObject(bundle.host, "host");
+  const error = bundle.error === undefined ? undefined : readSafeErrorMetadata(bundle.error);
+  const evidence = readBundleEvidence(bundle.evidence);
+  return {
+    version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
+    generatedAt: readTimestampString(bundle.generatedAt, "generatedAt"),
+    reason: normalizeReason(readRequiredString(bundle.reason, "reason")),
+    process: {
+      pid: readRequiredNumber(processInfo.pid, "process.pid"),
+      platform: readCodeString(processInfo.platform, "process.platform") as NodeJS.Platform,
+      arch: readCodeString(processInfo.arch, "process.arch"),
+      node: readCodeString(processInfo.node, "process.node"),
+      uptimeMs: readRequiredNumber(processInfo.uptimeMs, "process.uptimeMs"),
+      ...readProcessBuildIdentity(processInfo),
+    },
+    host: {
+      hostname: REDACTED_HOSTNAME,
+    },
+    ...(error ? { error } : {}),
+    ...(evidence ? { evidence } : {}),
+    snapshot: readStabilitySnapshot(bundle.snapshot),
+  };
+}
+
+function sanitizeSessionEvidencePath(relativePath: string): string {
+  const parts = relativePath.split("/");
+  if (parts.length === 4 && parts[0] === "agents" && parts[2] === "sessions") {
+    return `agents/<agent>/sessions/${sanitizeSessionEvidenceFileName(expectDefined(parts[3], "parts entry at 3"))}`;
+  }
+  if (parts.length === 2 && parts[0] === "sessions") {
+    return `sessions/${sanitizeSessionEvidenceFileName(expectDefined(parts[1], "parts entry at 1"))}`;
+  }
+  return redactSensitiveText(relativePath, { mode: "tools" });
+}
+
+function sanitizeSessionEvidenceFileName(fileName: string): string {
+  if (fileName === "sessions.json") {
+    return "sessions.json";
+  }
+  if (fileName.endsWith(".jsonl")) {
+    return "<session>.jsonl";
+  }
+  if (fileName.endsWith(".json")) {
+    return "<session>.json";
+  }
+  return "<session>";
+}
+
+function listDiagnosticStabilityBundleFilesSync(
+  dir: string,
+  statFailure: "throw" | "use-zero",
+): {
+  path: string;
+  mtimeMs: number;
+}[] {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && isBundleFile(entry.name))
+      .map((entry) => {
+        const file = path.join(dir, entry.name);
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(file).mtimeMs;
+        } catch (error) {
+          if (statFailure === "throw") {
+            throw error;
+          }
+        }
+        return { path: file, mtimeMs };
+      })
+      .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export function readDiagnosticStabilityBundleFileSync(
+  file: string,
+): ReadDiagnosticStabilityBundleResult {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size > MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES) {
+      throw new Error(
+        `Stability bundle is too large: ${stat.size} bytes exceeds ${MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES}`,
+      );
+    }
+    const raw = fs.readFileSync(file, "utf8");
+    const bundle = parseDiagnosticStabilityBundle(JSON.parse(raw));
+    return {
+      status: "found",
+      path: file,
+      mtimeMs: stat.mtimeMs,
+      bundle,
+    };
+  } catch (error) {
+    return { status: "failed", path: file, error };
+  }
+}
+
+export function readLatestDiagnosticStabilityBundleSync(
+  options: DiagnosticStabilityBundleLocationOptions = {},
+): ReadDiagnosticStabilityBundleResult {
+  try {
+    const latest = listDiagnosticStabilityBundleFilesSync(
+      resolveDiagnosticStabilityBundleDir(options),
+      "throw",
+    )[0];
+    if (!latest) {
+      return {
+        status: "missing",
+        dir: resolveDiagnosticStabilityBundleDir(options),
+      };
+    }
+    return readDiagnosticStabilityBundleFileSync(latest.path);
+  } catch (error) {
+    return { status: "failed", error };
+  }
+}
+
+function pruneOldBundles(dir: string, retainedFile: string): void {
+  try {
+    const entries = listDiagnosticStabilityBundleFilesSync(dir, "use-zero").filter(
+      (entry) => entry.path !== retainedFile,
+    );
+
+    for (const entry of entries.slice(DIAGNOSTIC_STABILITY_BUNDLE_RETENTION - 1)) {
+      try {
+        fs.unlinkSync(entry.path);
+      } catch {
+        // Retention cleanup must not block failure handling.
+      }
+    }
+  } catch {
+    // Retention cleanup must not block failure handling.
+  }
+}
+
+export function writeDiagnosticStabilityBundleForFailureSync(
+  reason: string,
+  error?: unknown,
+  options: WriteDiagnosticStabilityBundleForFailureOptions = {},
+): { status: "written"; message: string; path: string } | { status: "failed"; message: string } {
+  try {
+    const now = options.now ?? new Date();
+    const snapshot = getDiagnosticStabilitySnapshot({
+      limit: MAX_DIAGNOSTIC_STABILITY_LIMIT,
+    });
+
+    const normalizedReason = normalizeReason(reason);
+    const safeError = error ? readSafeErrorMetadata(error) : undefined;
+    const evidence = options.shutdownStep
+      ? {
+          shutdown: {
+            step: readCodeString(options.shutdownStep, "shutdownStep"),
+            errors: collectShutdownErrors(error),
+          },
+        }
+      : undefined;
+    const bundle: DiagnosticStabilityBundle = {
+      version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
+      generatedAt: now.toISOString(),
+      reason: normalizedReason,
+      process: {
+        pid: process.pid,
+        platform: process.platform,
+        arch: process.arch,
+        node: process.versions.node,
+        uptimeMs: Math.round(process.uptime() * 1000),
+        // These values were captured when the runtime loaded, before an updater
+        // could replace the installation that this failing process still runs.
+        ...readProcessBuildIdentity({
+          openclawVersion: VERSION,
+          buildId: resolveRuntimeServiceBuildId(),
+          commit: resolveRuntimeServiceCommit(),
+        }),
+      },
+      host: {
+        hostname: REDACTED_HOSTNAME,
+      },
+      ...(safeError ? { error: safeError } : {}),
+      ...(evidence ? { evidence } : {}),
+      snapshot,
+    };
+
+    const dir = resolveDiagnosticStabilityBundleDir(options);
+    const file = path.join(
+      dir,
+      `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
+    );
+    replaceFileAtomicSync({
+      filePath: file,
+      content: `${JSON.stringify(bundle, null, 2)}\n`,
+      dirMode: 0o700,
+      mode: 0o600,
+      tempPrefix: ".openclaw-stability",
+    });
+    pruneOldBundles(dir, file);
+    return { status: "written", path: file, message: `wrote stability bundle: ${file}` };
+  } catch (writeError) {
+    return {
+      status: "failed",
+      message: `failed to write stability bundle: ${String(writeError)}`,
+    };
+  }
+}
+
+export function installDiagnosticStabilityFatalHook(
+  options: WriteDiagnosticStabilityBundleForFailureOptions = {},
+): void {
+  if (fatalHookInstalled) {
+    return;
+  }
+  fatalHookInstalled = true;
+  setFatalErrorHook(({ reason, error }) => {
+    return writeDiagnosticStabilityBundleForFailureSync(reason, error, options).message;
+  });
+}
+
+export function uninstallDiagnosticStabilityFatalHook(): void {
+  setFatalErrorHook(undefined);
+  fatalHookInstalled = false;
+}
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

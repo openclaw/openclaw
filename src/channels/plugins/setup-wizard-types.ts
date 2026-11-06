@@ -1,0 +1,367 @@
+import type { DmPolicy } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { ChannelOwnedSetupContract } from "./setup-contract.js";
+import type { ChannelAccessPolicy } from "./setup-group-access.js";
+import type { ChannelConfigAdapter, ChannelSetupAdapter } from "./types.adapters.js";
+import type { ChannelCapabilities, ChannelId, ChannelMeta } from "./types.core.js";
+
+export type ChannelSetupPlugin = {
+  id: ChannelId;
+  meta: ChannelMeta;
+  capabilities: ChannelCapabilities;
+  config: ChannelConfigAdapter<unknown>;
+  /** Channel-owned typed setup contract. Preferred over the legacy shared input adapter. */
+  setupContract?: ChannelOwnedSetupContract;
+  /** @deprecated Use setupContract for new plugins. */
+  setup?: ChannelSetupAdapter;
+  setupWizard?: ChannelSetupWizard | ChannelSetupWizardAdapter;
+};
+
+/** Status block shown before users select channels during setup. */
+export type ChannelSetupWizardStatus = {
+  configuredLabel: string;
+  unconfiguredLabel: string;
+  configuredHint?: string;
+  unconfiguredHint?: string;
+  configuredScore?: number;
+  unconfiguredScore?: number;
+  resolveConfigured: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  }) => boolean | Promise<boolean>;
+  resolveStatusLines?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    configured: boolean;
+  }) => string[] | Promise<string[]>;
+  resolveSelectionHint?: (
+    params: Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0],
+  ) => string | undefined | Promise<string | undefined>;
+  resolveQuickstartScore?: (
+    params: Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0],
+  ) => number | undefined | Promise<number | undefined>;
+};
+
+/** Snapshot of one credential before prompting or reusing existing config. */
+type ChannelSetupWizardCredentialState = {
+  accountConfigured: boolean;
+  hasConfiguredValue: boolean;
+  resolvedValue?: string;
+  envValue?: string;
+};
+
+export type ChannelSetupWizardCredentialValues = Partial<Record<string, string>>;
+
+type ChannelSetupWizardAccountContext = {
+  cfg: OpenClawConfig;
+  accountId: string;
+};
+
+type ChannelSetupWizardStepContext = ChannelSetupWizardAccountContext & {
+  credentialValues: ChannelSetupWizardCredentialValues;
+};
+
+type ChannelSetupWizardNote = {
+  title: string;
+  lines: string[];
+  shouldShow?: (params: ChannelSetupWizardStepContext) => boolean | Promise<boolean>;
+};
+
+/** Lets a wizard configure an account entirely from existing environment. */
+type ChannelSetupWizardEnvShortcut = {
+  prompt: string;
+  preferredEnvVar?: string;
+  isAvailable: (params: ChannelSetupWizardAccountContext) => boolean;
+  apply: (params: ChannelSetupWizardAccountContext) => OpenClawConfig | Promise<OpenClawConfig>;
+};
+
+export type ChannelSetupWizardCredential = {
+  /** Plugin-owned key written into the runtime setup input. */
+  inputKey: string;
+  providerHint: string;
+  credentialLabel: string;
+  preferredEnvVar?: string;
+  helpTitle?: string;
+  helpLines?: string[];
+  envPrompt: string;
+  keepPrompt: string;
+  inputPrompt: string;
+  allowEnv?: (params: ChannelSetupWizardAccountContext) => boolean;
+  inspect: (params: ChannelSetupWizardAccountContext) => ChannelSetupWizardCredentialState;
+  shouldPrompt?: (
+    params: ChannelSetupWizardStepContext & {
+      currentValue?: string;
+      state: ChannelSetupWizardCredentialState;
+    },
+  ) => boolean | Promise<boolean>;
+  applyUseEnv?: ChannelSetupWizardEnvShortcut["apply"];
+  applySet?: (
+    params: ChannelSetupWizardStepContext & {
+      value: unknown;
+      resolvedValue: string;
+    },
+  ) => OpenClawConfig | Promise<OpenClawConfig>;
+};
+
+export type ChannelSetupWizardTextInput = {
+  /** Plugin-owned key written into the runtime setup input. */
+  inputKey: string;
+  message: string;
+  placeholder?: string;
+  /** Mask input and keep any configured value server-side. */
+  sensitive?: boolean;
+  required?: boolean;
+  applyEmptyValue?: boolean;
+  helpTitle?: string;
+  helpLines?: string[];
+  confirmCurrentValue?: boolean;
+  keepPrompt?: string | ((value: string) => string);
+  currentValue?: (
+    params: ChannelSetupWizardStepContext,
+  ) => string | undefined | Promise<string | undefined>;
+  initialValue?: NonNullable<ChannelSetupWizardTextInput["currentValue"]>;
+  shouldPrompt?: (
+    params: ChannelSetupWizardStepContext & {
+      currentValue?: string;
+    },
+  ) => boolean | Promise<boolean>;
+  applyCurrentValue?: boolean;
+  validate?: (params: ChannelSetupWizardStepContext & { value: string }) => string | undefined;
+  normalizeValue?: (params: ChannelSetupWizardStepContext & { value: string }) => string;
+  applySet?: (
+    params: ChannelSetupWizardAccountContext & {
+      value: string;
+    },
+  ) => OpenClawConfig | Promise<OpenClawConfig>;
+};
+
+export type ChannelSetupWizardAllowFromEntry = {
+  input: string;
+  resolved: boolean;
+  id: string | null;
+};
+
+type ChannelSetupWizardHookContext = ChannelSetupWizardStepContext & {
+  runtime: ChannelSetupConfigureContext["runtime"];
+  prompter: WizardPrompter;
+  options?: ChannelSetupConfigureContext["options"];
+};
+
+type ChannelSetupWizardHookResult = {
+  cfg?: OpenClawConfig;
+  credentialValues?: ChannelSetupWizardCredentialValues;
+} | void;
+
+export type ChannelSetupWizard = {
+  channel: string;
+  status: ChannelSetupWizardStatus;
+  introNote?: ChannelSetupWizardNote;
+  envShortcut?: ChannelSetupWizardEnvShortcut;
+  resolveAccountIdForConfigure?: (params: {
+    cfg: OpenClawConfig;
+    prompter: WizardPrompter;
+    options?: ChannelSetupConfigureContext["options"];
+    accountOverride?: string;
+    shouldPromptAccountIds: boolean;
+    listAccountIds: ChannelSetupPlugin["config"]["listAccountIds"];
+    defaultAccountId: string;
+  }) => string | Promise<string>;
+  resolveShouldPromptAccountIds?: (params: {
+    cfg: OpenClawConfig;
+    options?: ChannelSetupConfigureContext["options"];
+    shouldPromptAccountIds: boolean;
+  }) => boolean;
+  /** Optional pre-step hook for deriving helper config or credential values. */
+  prepare?: (
+    params: ChannelSetupWizardHookContext,
+  ) => ChannelSetupWizardHookResult | Promise<ChannelSetupWizardHookResult>;
+  stepOrder?: "credentials-first" | "text-first";
+  credentials: ChannelSetupWizardCredential[];
+  textInputs?: ChannelSetupWizardTextInput[];
+  /** Optional post-step hook for final validation, writes, or post prompts. */
+  finalize?: (
+    params: ChannelSetupWizardHookContext & {
+      forceAllowFrom: boolean;
+    },
+  ) => ChannelSetupWizardHookResult | Promise<ChannelSetupWizardHookResult>;
+  completionNote?: ChannelSetupWizardNote;
+  dmPolicy?: ChannelSetupDmPolicy;
+  allowFrom?: {
+    helpTitle?: string;
+    helpLines?: string[];
+    credentialInputKey?: string;
+    message: string;
+    placeholder: string;
+    invalidWithoutCredentialNote: string;
+    parseInputs?: (raw: string) => string[];
+    parseId: (raw: string) => string | null;
+    resolveEntries: (
+      params: ChannelSetupWizardStepContext & {
+        entries: string[];
+      },
+    ) => Promise<ChannelSetupWizardAllowFromEntry[]>;
+    apply: (
+      params: ChannelSetupWizardAccountContext & {
+        allowFrom: string[];
+      },
+    ) => OpenClawConfig | Promise<OpenClawConfig>;
+  };
+  groupAccess?: {
+    label: string;
+    placeholder: string;
+    helpTitle?: string;
+    helpLines?: string[];
+    skipAllowlistEntries?: boolean;
+    currentPolicy: (params: ChannelSetupWizardAccountContext) => ChannelAccessPolicy;
+    currentEntries: (params: ChannelSetupWizardAccountContext) => string[];
+    updatePrompt: (params: ChannelSetupWizardAccountContext) => boolean;
+    setPolicy: (
+      params: ChannelSetupWizardAccountContext & {
+        policy: ChannelAccessPolicy;
+      },
+    ) => OpenClawConfig;
+    resolveAllowlist?: (
+      params: ChannelSetupWizardStepContext & {
+        entries: string[];
+        prompter: Pick<WizardPrompter, "note">;
+      },
+    ) => Promise<unknown>;
+    applyAllowlist?: (
+      params: ChannelSetupWizardAccountContext & {
+        resolved: unknown;
+      },
+    ) => OpenClawConfig;
+  };
+  disable?: (cfg: OpenClawConfig) => OpenClawConfig;
+  onAccountRecorded?: ChannelSetupWizardAdapter["onAccountRecorded"];
+};
+
+export type SetupChannelsOptions = {
+  /** Workspace already selected by the caller, used for trusted plugin discovery. */
+  workspaceDir?: string;
+  allowDisable?: boolean;
+  allowIMessageInstall?: boolean;
+  allowSignalInstall?: boolean;
+  /** Revalidate host authority immediately before an installer or other durable effect. */
+  beforePersistentEffect?: () => Promise<void>;
+  /** Pure live setup-owner check after asynchronous preparation and at the final write grant. */
+  assertPersistentEffectCurrent?: () => void;
+  onSelection?: (selection: ChannelId[]) => void;
+  onPostWriteHook?: (hook: ChannelOnboardingPostWriteHook) => void;
+  accountIds?: Partial<Record<ChannelId, string>>;
+  onAccountId?: (channel: ChannelId, accountId: string) => void;
+  onResolvedPlugin?: (channel: ChannelId, plugin: ChannelSetupPlugin) => void;
+  promptAccountIds?: boolean;
+  forceAllowFromChannels?: ChannelId[];
+  deferStatusUntilSelection?: boolean;
+  /**
+   * The controlling client finishes device linking itself after config is
+   * written (e.g. Control UI renders the WhatsApp QR via web.login.*), so
+   * setup surfaces must skip terminal-interactive login/link prompts.
+   */
+  deferDeviceLinkToClient?: boolean;
+  skipStatusNote?: boolean;
+  skipDmPolicyPrompt?: boolean;
+  skipConfirm?: boolean;
+  quickstartDefaults?: boolean;
+  initialSelection?: ChannelId[];
+  /** Finish after the explicitly targeted channel is configured or paused. */
+  finishAfterInitialSelection?: boolean;
+  secretInputMode?: "plaintext" | "ref";
+};
+
+export type PromptAccountIdParams = {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  label: string;
+  currentId?: string;
+  listAccountIds: (cfg: OpenClawConfig) => string[];
+  defaultAccountId: string;
+};
+
+export type PromptAccountId = (params: PromptAccountIdParams) => Promise<string>;
+
+export type ChannelSetupStatus = {
+  channel: ChannelId;
+  configured: boolean;
+  statusLines: string[];
+  selectionHint?: string;
+  quickstartScore?: number;
+};
+
+export type ChannelSetupStatusContext = {
+  cfg: OpenClawConfig;
+  options?: SetupChannelsOptions;
+  accountOverrides: Partial<Record<ChannelId, string>>;
+};
+
+type ChannelSetupConfigureContext = ChannelSetupStatusContext & {
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  shouldPromptAccountIds: boolean;
+  forceAllowFrom: boolean;
+};
+
+/** Deferred hook for channel work that must run after config persistence. */
+export type ChannelOnboardingPostWriteHook = {
+  channel: ChannelId;
+  accountId: string;
+  run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => Promise<void> | void;
+};
+
+export type ChannelSetupResult =
+  | {
+      cfg: OpenClawConfig;
+      accountId?: string;
+      completion?: "configured";
+    }
+  | {
+      cfg: OpenClawConfig;
+      /** Paused setup is persisted without configured-account hooks or routing. */
+      completion: "paused";
+      accountId?: never;
+    };
+
+export type ChannelSetupConfiguredResult = ChannelSetupResult | "skip";
+
+export type ChannelSetupDmPolicy = {
+  label: string;
+  channel: ChannelId;
+  policyKey: string;
+  allowFromKey: string;
+  resolveConfigKeys?: (
+    cfg: OpenClawConfig,
+    accountId?: string,
+  ) => { policyKey: string; allowFromKey: string };
+  getCurrent: (cfg: OpenClawConfig, accountId?: string) => DmPolicy;
+  setPolicy: (cfg: OpenClawConfig, policy: DmPolicy, accountId?: string) => OpenClawConfig;
+  promptAllowFrom?: (params: {
+    cfg: OpenClawConfig;
+    prompter: WizardPrompter;
+    accountId?: string;
+  }) => Promise<OpenClawConfig>;
+};
+
+export type ChannelSetupWizardAdapter = {
+  channel: ChannelId;
+  getStatus: (ctx: ChannelSetupStatusContext) => Promise<ChannelSetupStatus>;
+  configure: (ctx: ChannelSetupConfigureContext) => Promise<ChannelSetupResult>;
+  configureInteractive?: (
+    ctx: ChannelSetupConfigureContext & {
+      configured: boolean;
+      label: string;
+    },
+  ) => Promise<ChannelSetupConfiguredResult>;
+  configureWhenConfigured?: NonNullable<ChannelSetupWizardAdapter["configureInteractive"]>;
+  afterConfigWritten?: (
+    ctx: ChannelSetupWizardAccountContext & {
+      previousCfg: OpenClawConfig;
+      runtime: RuntimeEnv;
+    },
+  ) => Promise<void> | void;
+  dmPolicy?: ChannelSetupDmPolicy;
+  onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;
+  disable?: (cfg: OpenClawConfig) => OpenClawConfig;
+};

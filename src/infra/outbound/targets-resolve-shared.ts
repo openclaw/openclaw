@@ -1,0 +1,103 @@
+// Shared target resolution applies plugin defaults, allowlists, prefixes, and
+// fallback errors for direct and loaded-channel send paths.
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
+import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
+import { resolveReservedTargetLiteral } from "./target-normalization.js";
+
+export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
+
+/**
+ * Inputs shared by direct and heartbeat outbound target resolution.
+ */
+export type ResolveOutboundTargetParams = {
+  channel: string;
+  to?: string;
+  allowFrom?: string[];
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
+  mode?: ChannelOutboundTargetMode;
+};
+
+/**
+ * Resolves a target through a channel plugin or the generic fallback path.
+ */
+export async function resolveOutboundTargetWithPlugin(params: {
+  plugin: ChannelPlugin | undefined;
+  target: ResolveOutboundTargetParams;
+}): Promise<OutboundTargetResolution | undefined> {
+  if (params.target.channel === INTERNAL_MESSAGE_CHANNEL) {
+    return {
+      ok: false,
+      error: new Error(
+        `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
+      ),
+    };
+  }
+
+  const plugin = params.plugin;
+  if (!plugin) {
+    return undefined;
+  }
+
+  // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.
+  const allowFromRaw =
+    params.target.allowFrom ??
+    (params.target.cfg
+      ? await resolveChannelAllowFrom({
+          plugin,
+          cfg: params.target.cfg,
+          accountId: params.target.accountId ?? undefined,
+        })
+      : undefined);
+  const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
+
+  const effectiveTo =
+    params.target.to?.trim() ||
+    (params.target.cfg && plugin.config.resolveDefaultTo
+      ? plugin.config.resolveDefaultTo({
+          cfg: params.target.cfg,
+          accountId: params.target.accountId ?? undefined,
+        })
+      : undefined);
+  const targetPrefixError = validateTargetProviderPrefix({
+    channel: params.target.channel,
+    to: effectiveTo,
+  });
+  if (targetPrefixError) {
+    return { ok: false, error: targetPrefixError };
+  }
+  const hint = plugin.messaging?.targetResolver?.hint;
+  // Heartbeats defer reserved literals to the async resolver so directory hits can win.
+  if (params.target.mode !== "heartbeat") {
+    const reservedLiteral = resolveReservedTargetLiteral({ raw: effectiveTo, plugin });
+    if (reservedLiteral) {
+      return {
+        ok: false,
+        error: reservedTargetLiteralError(plugin.meta.label, reservedLiteral, hint),
+      };
+    }
+  }
+
+  const resolveTarget = plugin.outbound?.resolveTarget;
+  return resolveTarget
+    ? resolveTarget({
+        cfg: params.target.cfg,
+        to: effectiveTo,
+        allowFrom,
+        accountId: params.target.accountId ?? undefined,
+        mode: params.target.mode ?? "explicit",
+      })
+    : effectiveTo
+      ? { ok: true, to: effectiveTo }
+      : {
+          ok: false,
+          error: missingTargetError(plugin.meta.label, hint),
+        };
+}

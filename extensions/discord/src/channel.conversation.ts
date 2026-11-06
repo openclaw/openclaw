@@ -1,0 +1,123 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDiscordCurrentConversationIdentity } from "./conversation-identity.js";
+import { normalizeDiscordMessagingTarget } from "./normalize.js";
+import { parseDiscordTarget } from "./target-parsing.js";
+
+export function resolveDiscordAttachedOutboundTarget(params: {
+  to: string;
+  threadId?: string | number | null;
+}): string {
+  if (params.threadId == null) {
+    return params.to;
+  }
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
+  return threadId ? `channel:${threadId}` : params.to;
+}
+
+function resolveDiscordConversationIdFromTargets(
+  targets: Array<string | undefined>,
+): string | undefined {
+  for (const raw of targets) {
+    if (!raw) {
+      continue;
+    }
+    try {
+      const target = parseDiscordTarget(raw, { defaultKind: "channel" });
+      if (target?.normalized) {
+        return target.normalized;
+      }
+    } catch {
+      // A malformed fallback target must not hide a later usable conversation target.
+    }
+  }
+  return undefined;
+}
+
+function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
+  const sessionKey = normalizeLowercaseStringOrEmpty(raw);
+  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
+  return match?.[1] ? `channel:${match[1]}` : undefined;
+}
+
+export function resolveDiscordCommandConversation(params: {
+  threadId?: string | number;
+  threadParentId?: string;
+  parentSessionKey?: string;
+  from?: string;
+  chatType?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const threadConversation = resolveDiscordThreadConversationRef(params);
+  if (threadConversation) {
+    return threadConversation;
+  }
+  const conversationId = resolveDiscordCurrentConversationIdentity({
+    from: params.from,
+    chatType: params.chatType,
+    originatingTo: params.originatingTo,
+    commandTo: params.commandTo,
+    fallbackTo: params.fallbackTo,
+  });
+  return conversationId ? { conversationId } : null;
+}
+
+function resolveDiscordThreadConversationRef(params: {
+  threadId?: string | number | null;
+  threadParentId?: string | number | null;
+  parentSessionKey?: string | null;
+  originatingTo?: string;
+  to?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+  conversationId?: string;
+}) {
+  const threadId = normalizeOptionalStringifiedId(params.threadId);
+  if (!threadId) {
+    return null;
+  }
+  const targets = [
+    params.originatingTo ?? params.to,
+    params.commandTo,
+    params.fallbackTo ?? params.conversationId,
+  ];
+  const parentConversationId =
+    normalizeDiscordMessagingTarget(normalizeOptionalStringifiedId(params.threadParentId) ?? "") ||
+    parseDiscordParentChannelFromSessionKey(params.parentSessionKey) ||
+    resolveDiscordConversationIdFromTargets(targets);
+
+  return {
+    conversationId: threadId,
+    ...(parentConversationId && parentConversationId !== threadId ? { parentConversationId } : {}),
+  };
+}
+
+export function resolveDiscordInboundConversation(params: {
+  from?: string;
+  to?: string;
+  conversationId?: string;
+  threadId?: string | number;
+  threadParentId?: string | number;
+  isGroup: boolean;
+}) {
+  const threadConversation = resolveDiscordThreadConversationRef({
+    to: params.to,
+    conversationId: params.conversationId,
+    threadId: params.threadId,
+    threadParentId: params.threadParentId,
+  });
+  if (threadConversation) {
+    return threadConversation;
+  }
+  const conversationId = resolveDiscordCurrentConversationIdentity({
+    from: params.from,
+    chatType: params.isGroup ? "group" : "direct",
+    originatingTo: params.to,
+    fallbackTo: params.conversationId,
+  });
+  return conversationId ? { conversationId } : null;
+}

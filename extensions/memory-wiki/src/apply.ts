@@ -1,0 +1,350 @@
+import path from "node:path";
+import {
+  replaceManagedMarkdownBlock,
+  withTrailingNewline,
+} from "openclaw/plugin-sdk/memory-host-markdown";
+import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asNonArrayRecord,
+  normalizeSingleOrTrimmedStringList,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
+import type { ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
+  parseWikiMarkdown,
+  renderWikiMarkdown,
+  slugifyWikiPageStem,
+  slugifyWikiSegment,
+  normalizeWikiClaims,
+  type WikiClaim,
+} from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { readMemoryWikiPageByLookup } from "./query.js";
+import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
+import { initializeMemoryWikiVault } from "./vault.js";
+
+const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
+const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
+
+type MemoryWikiMutationMetadata = {
+  sourceIds?: string[];
+  claims?: WikiClaim[];
+  contradictions?: string[];
+  questions?: string[];
+  confidence?: number | null;
+  status?: string;
+};
+
+type CreateSynthesisMemoryWikiMutation = MemoryWikiMutationMetadata & {
+  op: "create_synthesis";
+  title: string;
+  body: string;
+  sourceIds: string[];
+  confidence?: number;
+};
+
+type UpdateMetadataMemoryWikiMutation = MemoryWikiMutationMetadata & {
+  op: "update_metadata";
+  lookup: string;
+};
+
+type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
+
+type ApplyMemoryWikiMutationResult = {
+  changed: boolean;
+  operation: ApplyMemoryWikiMutation["op"];
+  pagePath: string;
+  pageId?: string;
+  compile: CompileMemoryWikiResult;
+};
+
+// Reads stay tolerant of legacy or hand-written frontmatter. Mutations reject
+// new invalid confidence before source sync or a vault write can persist it.
+function normalizeMutationClaims(claims: unknown[]): WikiClaim[] {
+  const normalizedClaims = normalizeWikiClaims(claims);
+  for (const [index, claim] of normalizedClaims.entries()) {
+    const confidence = claim.confidence;
+    if (confidence !== undefined && (confidence < 0 || confidence > 1)) {
+      throw new Error(
+        `claims[${index}].confidence must be a number between 0 and 1; received ${confidence}.`,
+      );
+    }
+  }
+  return normalizedClaims;
+}
+
+function normalizeMemoryWikiMutationOp(op: unknown): ApplyMemoryWikiMutation["op"] {
+  if (op === "synthesis" || op === "create_synthesis") {
+    return "create_synthesis";
+  }
+  if (op === "metadata" || op === "update_metadata") {
+    return "update_metadata";
+  }
+  throw new Error(
+    'wiki mutation op must be one of "create_synthesis", "update_metadata" (aliases: "synthesis", "metadata").',
+  );
+}
+
+export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
+  const params = asNonArrayRecord(rawParams) as MemoryWikiMutationMetadata & {
+    op: unknown;
+    title?: string;
+    body?: string;
+    lookup?: string;
+  };
+  const op = normalizeMemoryWikiMutationOp(params.op);
+  if (op === "create_synthesis") {
+    if (!params.title?.trim()) {
+      throw new Error("wiki mutation requires title for create_synthesis.");
+    }
+    if (!params.body?.trim()) {
+      throw new Error("wiki mutation requires body for create_synthesis.");
+    }
+    if (!params.sourceIds || params.sourceIds.length === 0) {
+      throw new Error("wiki mutation requires at least one sourceId for create_synthesis.");
+    }
+    const confidence = readFiniteNumberParam(params, "confidence", { min: 0, max: 1 });
+    return {
+      op: "create_synthesis",
+      title: params.title,
+      body: params.body,
+      sourceIds: params.sourceIds,
+      ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
+      ...(params.contradictions ? { contradictions: params.contradictions } : {}),
+      ...(params.questions ? { questions: params.questions } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+      ...(params.status ? { status: params.status } : {}),
+    };
+  }
+  if (!params.lookup?.trim()) {
+    throw new Error("wiki mutation requires lookup for update_metadata.");
+  }
+  const confidence =
+    params.confidence === null
+      ? null
+      : readFiniteNumberParam(params, "confidence", { min: 0, max: 1 });
+  return {
+    op: "update_metadata",
+    lookup: params.lookup,
+    ...(params.sourceIds ? { sourceIds: params.sourceIds } : {}),
+    ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
+    ...(params.contradictions ? { contradictions: params.contradictions } : {}),
+    ...(params.questions ? { questions: params.questions } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(params.status ? { status: params.status } : {}),
+  };
+}
+
+function normalizeUniqueStrings(values: string[] | undefined): string[] | undefined {
+  if (!values) {
+    return undefined;
+  }
+  return uniqueStrings(normalizeStringEntries(values));
+}
+
+function ensureHumanNotesBlock(body: string): string {
+  if (body.includes(HUMAN_START_MARKER) && body.includes(HUMAN_END_MARKER)) {
+    return body;
+  }
+  const trimmed = body.trimEnd();
+  const prefix = trimmed.length > 0 ? `${trimmed}\n\n` : "";
+  return `${prefix}## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+}
+
+function buildSynthesisBody(params: {
+  title: string;
+  originalBody?: string;
+  generatedBody: string;
+}): string {
+  const base = params.originalBody?.trim().length
+    ? params.originalBody
+    : `# ${params.title}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+  const withGenerated = replaceManagedMarkdownBlock({
+    original: base,
+    heading: "## Summary",
+    startMarker: GENERATED_START,
+    endMarker: GENERATED_END,
+    body: params.generatedBody,
+  });
+  return ensureHumanNotesBlock(withGenerated);
+}
+
+async function writeWikiPage(params: {
+  rootDir: string;
+  relativePath: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+}): Promise<boolean> {
+  const root = await fsRoot(params.rootDir);
+  const existing = await readExistingWikiPage(
+    () => root.readText(params.relativePath),
+    isMissingWikiPageError,
+  );
+  const rendered = withTrailingNewline(
+    renderWikiMarkdown({
+      frontmatter: params.frontmatter,
+      body: params.body,
+      original: existing,
+    }),
+  );
+  if (existing === rendered) {
+    return false;
+  }
+  await root.write(params.relativePath, rendered);
+  return true;
+}
+
+async function applyCreateSynthesisMutation(params: {
+  config: ResolvedMemoryWikiConfig;
+  mutation: CreateSynthesisMemoryWikiMutation;
+}): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
+  const slug = slugifyWikiSegment(params.mutation.title);
+  const pageStem = slugifyWikiPageStem(params.mutation.title);
+  const pagePath = path.join("syntheses", `${pageStem}.md`).replace(/\\/g, "/");
+  const root = await fsRoot(params.config.vault.path);
+  const existing = await readExistingWikiPage(
+    () => root.readText(pagePath),
+    isMissingWikiPageError,
+  );
+  const parsed = parseWikiMarkdown(existing);
+  const pageId =
+    (typeof parsed.frontmatter.id === "string" && parsed.frontmatter.id.trim()) ||
+    `synthesis.${slug}`;
+  const contradictions = normalizeUniqueStrings(params.mutation.contradictions);
+  const questions = normalizeUniqueStrings(params.mutation.questions);
+  const changed = await writeWikiPage({
+    rootDir: params.config.vault.path,
+    relativePath: pagePath,
+    frontmatter: {
+      ...parsed.frontmatter,
+      pageType: "synthesis",
+      id: pageId,
+      title: params.mutation.title,
+      sourceIds: normalizeSingleOrTrimmedStringList(params.mutation.sourceIds),
+      ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
+      ...(contradictions ? { contradictions } : {}),
+      ...(questions ? { questions } : {}),
+      ...(params.mutation.confidence !== undefined
+        ? { confidence: params.mutation.confidence }
+        : {}),
+      status:
+        params.mutation.status?.trim() ||
+        (typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()) ||
+        "active",
+      updatedAt: new Date().toISOString(),
+    },
+    body: buildSynthesisBody({
+      title: params.mutation.title,
+      originalBody: parsed.body,
+      generatedBody: params.mutation.body.trim(),
+    }),
+  });
+  return { changed, pagePath, pageId };
+}
+
+function buildUpdatedFrontmatter(params: {
+  original: Record<string, unknown>;
+  mutation: UpdateMetadataMemoryWikiMutation;
+}): Record<string, unknown> {
+  const frontmatter: Record<string, unknown> = {
+    ...params.original,
+    updatedAt: new Date().toISOString(),
+  };
+  if (params.mutation.sourceIds) {
+    frontmatter.sourceIds = normalizeSingleOrTrimmedStringList(params.mutation.sourceIds);
+  }
+  for (const key of ["claims", "contradictions", "questions"] as const) {
+    if (params.mutation[key]) {
+      const values =
+        key === "claims"
+          ? normalizeWikiClaims(params.mutation.claims)
+          : (normalizeUniqueStrings(params.mutation[key]) ?? []);
+      if (values.length > 0) {
+        frontmatter[key] = values;
+      } else {
+        delete frontmatter[key];
+      }
+    }
+  }
+  if (params.mutation.confidence === null) {
+    delete frontmatter.confidence;
+  } else if (params.mutation.confidence !== undefined) {
+    frontmatter.confidence = params.mutation.confidence;
+  }
+  if (params.mutation.status?.trim()) {
+    frontmatter.status = params.mutation.status.trim();
+  }
+  return frontmatter;
+}
+
+async function applyUpdateMetadataMutation(params: {
+  config: ResolvedMemoryWikiConfig;
+  mutation: UpdateMetadataMemoryWikiMutation;
+  signal?: AbortSignal;
+}): Promise<{ changed: boolean; pagePath: string; pageId?: string }> {
+  const page = await readMemoryWikiPageByLookup(
+    params.config.vault.path,
+    params.mutation.lookup,
+    params.signal ? { signal: params.signal } : {},
+  );
+  if (!page) {
+    throw new Error(`Wiki page not found: ${params.mutation.lookup}`);
+  }
+  const parsed = page.parsed;
+  const changed = await writeWikiPage({
+    rootDir: params.config.vault.path,
+    relativePath: page.relativePath,
+    frontmatter: buildUpdatedFrontmatter({
+      original: parsed.frontmatter,
+      mutation: params.mutation,
+    }),
+    body: parsed.body,
+  });
+  return {
+    changed,
+    pagePath: page.relativePath,
+    ...(page.id ? { pageId: page.id } : {}),
+  };
+}
+
+export async function applyMemoryWikiMutation(params: {
+  config: ResolvedMemoryWikiConfig;
+  mutation: ApplyMemoryWikiMutation;
+  signal?: AbortSignal;
+}): Promise<ApplyMemoryWikiMutationResult> {
+  return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
+    await initializeMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    params.signal?.throwIfAborted();
+    const result =
+      params.mutation.op === "create_synthesis"
+        ? await applyCreateSynthesisMutation({
+            config: params.config,
+            mutation: params.mutation,
+          })
+        : await applyUpdateMetadataMutation({
+            config: params.config,
+            mutation: params.mutation,
+            ...(params.signal ? { signal: params.signal } : {}),
+          });
+    params.signal?.throwIfAborted();
+    const compile = await compileMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    return {
+      changed: result.changed,
+      operation: params.mutation.op,
+      pagePath: result.pagePath,
+      ...(result.pageId ? { pageId: result.pageId } : {}),
+      compile,
+    };
+  });
+}

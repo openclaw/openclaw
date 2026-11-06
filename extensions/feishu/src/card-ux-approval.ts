@@ -1,0 +1,49 @@
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import {
+  buildFeishuActionCard,
+  buildFeishuCardButton,
+  buildFeishuCardInteractionContext,
+} from "./card-ux-shared.js";
+
+export const FEISHU_APPROVAL_REQUEST_ACTION = "feishu.quick_actions.request_approval";
+export const FEISHU_APPROVAL_CONFIRM_ACTION = "feishu.approval.confirm";
+export const FEISHU_APPROVAL_CANCEL_ACTION = "feishu.approval.cancel";
+
+export function createApprovalCard(params: {
+  operatorOpenId: string;
+  chatId?: string;
+  command: string;
+  prompt: string;
+  expiresAt: number;
+  chatType?: "p2p" | "group";
+  sessionKey?: string;
+  confirmLabel?: string;
+}): Record<string, unknown> {
+  const context = buildFeishuCardInteractionContext(params);
+
+  return buildFeishuActionCard({
+    title: "Confirm action",
+    template: "orange",
+    content: params.prompt,
+    actions: [
+      buildFeishuCardButton({
+        label: params.confirmLabel ?? "Confirm",
+        type: "primary",
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: FEISHU_APPROVAL_CONFIRM_ACTION,
+          q: params.command,
+          c: context,
+        }),
+      }),
+      buildFeishuCardButton({
+        label: "Cancel",
+        value: createFeishuCardInteractionEnvelope({
+          k: "button",
+          a: FEISHU_APPROVAL_CANCEL_ACTION,
+          c: context,
+        }),
+      }),
+    ],
+  });
+}

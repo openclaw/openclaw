@@ -1,0 +1,112 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
+import { resolveAcpSessionTarget } from "../../../acp/control-plane/manager.utils.js";
+import { bindAgentToolGatewayRequest } from "../../../agents/tools/in-process-gateway.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { SESSION_ID_RE } from "../../../sessions/session-id.js";
+import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
+import { resolveCommandSourceSessionKey } from "../command-source-session-key.js";
+import type { HandleCommandsParams } from "../commands-types.js";
+import { resolveAcpCommandBindingContext } from "./context.js";
+
+async function resolveSessionKeyByToken(
+  token: string,
+  commandParams: HandleCommandsParams,
+): Promise<AcpSessionTarget | null> {
+  const attempts: Array<Record<string, string>> = [{ key: token }];
+  if (SESSION_ID_RE.test(token)) {
+    attempts.push({ sessionId: token });
+  }
+  attempts.push({ label: token });
+
+  const callGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
+  for (const params of attempts) {
+    const resolved = await callGateway({
+      method: "sessions.resolve",
+      params: {
+        ...params,
+        allowMissing: true,
+        agentId: parseAgentSessionKey(token)?.agentId ?? commandParams.agentId,
+      },
+      timeoutMs: 8_000,
+    });
+    const key = normalizeOptionalString(resolved?.key);
+    if (key) {
+      return resolveAcpSessionTarget({
+        cfg: commandParams.cfg,
+        sessionKey: key,
+        agentId: normalizeOptionalString(resolved?.agentId),
+      });
+    }
+    if (Array.isArray(resolved?.candidates) && resolved.candidates.length) {
+      throw new Error(`Ambiguous ACP session target: ${token}. Use an agent-qualified key.`);
+    }
+  }
+  return null;
+}
+
+export async function resolveBoundAcpThreadSessionKey(
+  params: Parameters<typeof resolveAcpCommandBindingContext>[0],
+  commandTargetSessionKey?: string,
+): Promise<string | undefined> {
+  const activeSessionKey =
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) ??
+    normalizeOptionalString(params.sessionKey);
+  const bindingContext = resolveAcpCommandBindingContext(params);
+  return await resolveEffectiveResetTargetSessionKey({
+    cfg: params.cfg,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
+    commandTargetSessionKey,
+    activeSessionKey,
+    allowNonAcpBindingSessionKey: true,
+    skipConfiguredFallbackWhenActiveSessionNonAcp: false,
+  });
+}
+
+export async function resolveAcpTargetSessionKey(params: {
+  commandParams: HandleCommandsParams;
+  token?: string;
+}): Promise<({ ok: true } & AcpSessionTarget) | { ok: false; error: string }> {
+  const token = normalizeOptionalString(params.token) ?? "";
+  if (token) {
+    try {
+      const resolved = await resolveSessionKeyByToken(token, params.commandParams);
+      if (resolved) {
+        return { ok: true, ...resolved };
+      }
+    } catch (error) {
+      return { ok: false, error: formatErrorMessage(error) };
+    }
+    // Token was supplied but could not be resolved as a session key/id/label.
+    // Fall through to thread-bound resolution so that callers that auto-fill
+    // the current thread ID as the token (e.g. Discord slash commands) still
+    // reach the correct session via the binding context.
+  }
+
+  const threadBound = await resolveBoundAcpThreadSessionKey(params.commandParams);
+  params.commandParams.opts?.abortSignal?.throwIfAborted();
+  const sessionKey =
+    threadBound ||
+    (!token && resolveCommandSourceSessionKey(params.commandParams, { preferCommandTarget: true }));
+  if (!sessionKey) {
+    return {
+      ok: false,
+      error: token ? `Unable to resolve session target: ${token}` : "Missing session key.",
+    };
+  }
+  return {
+    ok: true,
+    ...resolveAcpSessionTarget({
+      cfg: params.commandParams.cfg,
+      sessionKey,
+      agentId:
+        threadBound && threadBound !== params.commandParams.sessionKey
+          ? undefined
+          : params.commandParams.agentId,
+    }),
+  };
+}

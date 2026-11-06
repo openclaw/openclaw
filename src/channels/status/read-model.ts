@@ -1,0 +1,83 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  CREDENTIAL_STATUS_KEYS,
+  hasConfiguredUnavailableCredentialStatus,
+} from "../account-snapshot-fields.js";
+import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
+
+type RuntimeChannelAccount = Record<string, unknown>;
+
+function readRuntimeAccountsByChannel(payload: unknown): Record<string, unknown> {
+  return asRecord(asRecord(payload).channelAccounts);
+}
+
+/** Reads raw runtime account records for one channel from a gateway payload. */
+export function getRuntimeChannelAccounts(params: {
+  payload: unknown;
+  channelId: string;
+}): RuntimeChannelAccount[] {
+  const raw = readRuntimeAccountsByChannel(params.payload)[params.channelId];
+  return Array.isArray(raw) ? raw.map(asRecord) : [];
+}
+
+/** Normalizes gateway channel account snapshots into a channel-id map. */
+export function normalizeRuntimeChannelAccountSnapshots(
+  payload: unknown,
+): Map<string, ChannelAccountSnapshot[]> {
+  const out = new Map<string, ChannelAccountSnapshot[]>();
+  for (const [channelId, accounts] of Object.entries(readRuntimeAccountsByChannel(payload))) {
+    if (!Array.isArray(accounts)) {
+      continue;
+    }
+    const normalized = accounts.filter(
+      (account): account is ChannelAccountSnapshot =>
+        Boolean(account) &&
+        typeof account === "object" &&
+        typeof (account as { accountId?: unknown }).accountId === "string",
+    );
+    if (normalized.length > 0) {
+      out.set(channelId, normalized);
+    }
+  }
+  return out;
+}
+
+/** Reports whether a runtime account has usable live credentials. */
+export function hasRuntimeCredentialAvailable(params: {
+  liveAccounts: RuntimeChannelAccount[];
+  accountId: string;
+}): boolean {
+  const account =
+    params.liveAccounts.find(
+      (candidate) =>
+        (normalizeOptionalString(candidate.accountId) ??
+          normalizeOptionalString(candidate.id) ??
+          normalizeOptionalString(candidate.name) ??
+          DEFAULT_ACCOUNT_ID) === params.accountId,
+    ) ??
+    (params.accountId === DEFAULT_ACCOUNT_ID && params.liveAccounts.length === 1
+      ? params.liveAccounts[0]
+      : undefined);
+  if (!account) {
+    return false;
+  }
+  if (hasConfiguredUnavailableCredentialStatus(account)) {
+    return false;
+  }
+  return account.running === true || account.connected === true;
+}
+
+/** Converts configured-but-unavailable credential markers to available. */
+export function markConfiguredUnavailableCredentialStatusesAvailable(
+  account: unknown,
+): Record<string, unknown> {
+  const record = { ...asRecord(account) };
+  for (const key of CREDENTIAL_STATUS_KEYS) {
+    if (record[key] === "configured_unavailable") {
+      record[key] = "available";
+    }
+  }
+  return record;
+}

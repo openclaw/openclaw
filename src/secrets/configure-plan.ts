@@ -1,0 +1,231 @@
+/** Builds the interactive `openclaw secrets configure` target list and apply plan. */
+import { isDeepStrictEqual } from "node:util";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveSecretInputRef,
+  type SecretProviderConfig,
+  type SecretRef,
+} from "../config/types.secrets.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
+import { isRecord } from "./shared.js";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
+import {
+  discoverAuthProfileSecretTargets,
+  discoverConfigSecretTargets,
+} from "./target-registry.js";
+
+/** Credential target shown by `openclaw secrets configure` before a SecretRef is selected. */
+export type ConfigureCandidate = Omit<SecretsPlanTarget, "ref" | "pathSegments"> &
+  Pick<SecretTargetRegistryEntry, "configFile" | "expectedResolvedValue"> & {
+    pathSegments: string[];
+    label: string;
+    existingRef?: SecretRef;
+    isDerived?: boolean;
+  };
+
+/** Configure candidate after the operator chooses the SecretRef to write. */
+type ConfigureSelectedTarget = ConfigureCandidate & {
+  ref: SecretRef;
+};
+
+/** Provider config mutations collected while building a secrets configure plan. */
+type ConfigureProviderChanges = ReturnType<typeof collectConfigureProviderChanges>;
+
+function configureCandidateSortKey(candidate: ConfigureCandidate): string {
+  if (candidate.configFile === "auth-profile-store") {
+    const agentId = candidate.agentId ?? "";
+    return `auth-profiles:${agentId}:${candidate.path}`;
+  }
+  return `openclaw:${candidate.path}`;
+}
+
+function resolveAuthProfileProvider(
+  store: AuthProfileStore,
+  pathSegments: string[],
+): string | undefined {
+  const profileId = pathSegments[1];
+  if (!profileId) {
+    return undefined;
+  }
+  return store.profiles[profileId]?.provider.trim() || undefined;
+}
+
+/** Builds configure candidates for OpenClaw config plus an optional auth-profile scope. */
+export function buildConfigureCandidatesForScope(params: {
+  config: OpenClawConfig;
+  authoredOpenClawConfig?: OpenClawConfig;
+  authProfiles?: {
+    agentId: string;
+    store: AuthProfileStore;
+  };
+}): ConfigureCandidate[] {
+  const authoredConfig = params.authoredOpenClawConfig ?? params.config;
+  const candidates: ConfigureCandidate[] = [];
+  for (const configFile of ["openclaw.json", "auth-profile-store"] as const) {
+    const authProfiles = configFile === "auth-profile-store" ? params.authProfiles : undefined;
+    if (configFile === "auth-profile-store" && authProfiles === undefined) {
+      continue;
+    }
+    const targets =
+      authProfiles === undefined
+        ? discoverConfigSecretTargets(params.config)
+        : discoverAuthProfileSecretTargets(authProfiles.store);
+    for (const entry of targets.filter((candidate) => candidate.entry.includeInConfigure)) {
+      const authProfileProvider =
+        authProfiles === undefined
+          ? undefined
+          : resolveAuthProfileProvider(authProfiles.store, entry.pathSegments);
+      const resolved = resolveSecretInputRef({
+        value: entry.value,
+        refValue: entry.refValue,
+        defaults: params.config.secrets?.defaults,
+      });
+      const candidate: ConfigureCandidate = {
+        type: entry.entry.targetType,
+        path: entry.path,
+        pathSegments: [...entry.pathSegments],
+        label:
+          authProfiles === undefined
+            ? entry.path
+            : `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
+        configFile,
+        expectedResolvedValue: entry.entry.expectedResolvedValue,
+        ...(resolved.ref ? { existingRef: resolved.ref } : {}),
+      };
+      if (authProfiles === undefined) {
+        const pathExists = hasPath(authoredConfig, entry.pathSegments);
+        const refPathExists = entry.refPathSegments
+          ? hasPath(authoredConfig, entry.refPathSegments)
+          : false;
+        // Generated/defaulted paths remain configurable but are marked as derived.
+        Object.assign(
+          candidate,
+          pathExists || refPathExists ? {} : { isDerived: true },
+          entry.providerId ? { providerId: entry.providerId } : {},
+          entry.accountId ? { accountId: entry.accountId } : {},
+        );
+      } else {
+        // Auth-profile apply can create missing profiles only when the provider is known.
+        Object.assign(
+          candidate,
+          { agentId: authProfiles.agentId },
+          authProfileProvider ? { authProfileProvider } : {},
+        );
+      }
+      candidates.push(candidate);
+    }
+  }
+  return candidates.toSorted((a, b) =>
+    configureCandidateSortKey(a).localeCompare(configureCandidateSortKey(b)),
+  );
+}
+
+function hasPath(root: unknown, segments: string[]): boolean {
+  if (segments.length === 0) {
+    return false;
+  }
+  let cursor: unknown = root;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index] ?? "";
+    if (Array.isArray(cursor)) {
+      const parsedIndex = parseConfigPathArrayIndex(segment);
+      if (parsedIndex === undefined || parsedIndex >= cursor.length) {
+        return false;
+      }
+      if (index < segments.length - 1) {
+        cursor = cursor[parsedIndex];
+      }
+    } else {
+      if (!isRecord(cursor) || !Object.hasOwn(cursor, segment)) {
+        return false;
+      }
+      if (index < segments.length - 1) {
+        cursor = cursor[segment];
+      }
+    }
+  }
+  return true;
+}
+
+/** Computes provider upserts/deletes between original and edited config. */
+export function collectConfigureProviderChanges(params: {
+  original: OpenClawConfig;
+  next: OpenClawConfig;
+}) {
+  const originalProviders = params.original.secrets?.providers ?? {};
+  const nextProviders = params.next.secrets?.providers ?? {};
+
+  const upserts: Record<string, SecretProviderConfig> = {};
+  const deletes: string[] = [];
+
+  for (const [providerAlias, nextProviderConfig] of Object.entries(nextProviders)) {
+    const current = originalProviders[providerAlias];
+    if (isDeepStrictEqual(current, nextProviderConfig)) {
+      continue;
+    }
+    upserts[providerAlias] = nextProviderConfig;
+  }
+
+  for (const providerAlias of Object.keys(originalProviders)) {
+    if (!Object.hasOwn(nextProviders, providerAlias)) {
+      deletes.push(providerAlias);
+    }
+  }
+
+  return {
+    upserts,
+    deletes: deletes.toSorted(),
+  };
+}
+
+/** Returns true when selected targets or provider mutations would produce a plan. */
+export function hasConfigurePlanChanges(params: {
+  selectedTargets: ReadonlyMap<string, ConfigureSelectedTarget>;
+  providerChanges: ConfigureProviderChanges;
+}): boolean {
+  return (
+    params.selectedTargets.size > 0 ||
+    Object.keys(params.providerChanges.upserts).length > 0 ||
+    params.providerChanges.deletes.length > 0
+  );
+}
+
+/** Builds the serializable secrets apply plan from configure selections. */
+export function buildSecretsConfigurePlan(params: {
+  selectedTargets: ReadonlyMap<string, ConfigureSelectedTarget>;
+  providerChanges: ConfigureProviderChanges;
+}): SecretsApplyPlan {
+  return {
+    version: 1,
+    protocolVersion: 1,
+    generatedAt: new Date().toISOString(),
+    generatedBy: "openclaw secrets configure",
+    targets: [...params.selectedTargets.values()].map((entry) =>
+      Object.assign(
+        {
+          type: entry.type,
+          path: entry.path,
+          pathSegments: [...entry.pathSegments],
+          ref: entry.ref,
+        },
+        entry.agentId ? { agentId: entry.agentId } : {},
+        entry.providerId ? { providerId: entry.providerId } : {},
+        entry.accountId ? { accountId: entry.accountId } : {},
+        entry.authProfileProvider ? { authProfileProvider: entry.authProfileProvider } : {},
+      ),
+    ),
+    ...(Object.keys(params.providerChanges.upserts).length > 0
+      ? { providerUpserts: params.providerChanges.upserts }
+      : {}),
+    ...(params.providerChanges.deletes.length > 0
+      ? { providerDeletes: params.providerChanges.deletes }
+      : {}),
+    options: {
+      scrubEnv: true,
+      scrubAuthProfilesForProviderTargets: true,
+      scrubLegacyAuthJson: false,
+    },
+  };
+}

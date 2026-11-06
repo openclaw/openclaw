@@ -1,0 +1,176 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  externalContentStamp,
+  nativeWebSearchCodecs,
+  buildSearchCacheKey,
+  DEFAULT_SEARCH_COUNT,
+  readCachedSearchPayload,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+  resolveSearchCacheTtlMs,
+  resolveSearchTimeoutSeconds,
+  type SearchConfigRecord,
+  writeCachedSearchPayload,
+} from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeBoundedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
+
+// Internal-only bounds (the model-facing tool schema declares its own copies).
+const PARALLEL_MAX_SEARCH_COUNT = 40;
+// Parallel v1 Search caps each search_queries entry at 200 chars, the objective
+// field at 5000, and accepts up to 5 search queries. See
+// https://docs.parallel.ai/search/best-practices.
+const PARALLEL_MAX_SEARCH_QUERY_CHARS = 200;
+const PARALLEL_MAX_OBJECTIVE_CHARS = 5000;
+const PARALLEL_MAX_SEARCH_QUERIES = 5;
+// Paid v1 REST accepts session ids up to 1000 chars, but the free Search MCP
+// `tools/list` schema caps session_id at 100. Each runtime passes its own limit
+// (and advertises it in the tool schema) so callers never send an out-of-contract id.
+const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
+const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
+
+export type ParallelSearchResponse = {
+  search_id?: unknown;
+  session_id?: unknown;
+  results?: unknown;
+  warnings?: unknown;
+  usage?: unknown;
+};
+
+type NormalizedParallelSearchRequest = {
+  objective?: string;
+  searchQueries: string[];
+  count: number;
+  sessionId?: string;
+  clientModel?: string;
+};
+
+export async function executeParallelSearchRequest(params: {
+  provider: "parallel" | "parallel-free";
+  endpoint: string;
+  apiKey?: string;
+  args: Record<string, unknown>;
+  searchConfig: SearchConfigRecord | undefined;
+  search: (
+    request: NormalizedParallelSearchRequest,
+    timeoutSeconds: number,
+  ) => Promise<ParallelSearchResponse>;
+}): Promise<Record<string, unknown>> {
+  const { args } = params;
+  const configuredCount = params.searchConfig?.maxResults;
+  const objective =
+    truncateUtf16Safe(readStringParam(args, "objective") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
+    undefined;
+  const cliQuery =
+    truncateUtf16Safe(readStringParam(args, "query") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
+    undefined;
+  let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
+  if (searchQueries.length === 0 && cliQuery) {
+    searchQueries = normalizeParallelSearchQueries([cliQuery]);
+  }
+  if (searchQueries.length === 0) {
+    return {
+      error: "invalid_search_queries",
+      message:
+        "search_queries must be a non-empty array of keyword strings (max 5, max 200 chars each). See https://docs.parallel.ai/search/best-practices.",
+      docs: "https://docs.openclaw.ai/tools/parallel-search",
+    };
+  }
+  const requestedCount = readPositiveIntegerParam(args, "count", {
+    max: PARALLEL_MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${PARALLEL_MAX_SEARCH_COUNT}.`,
+  });
+  const value =
+    requestedCount ??
+    (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
+  const request: NormalizedParallelSearchRequest = {
+    objective,
+    searchQueries,
+    count: resolveIntegerOption(value, DEFAULT_SEARCH_COUNT, {
+      min: 1,
+      max: PARALLEL_MAX_SEARCH_COUNT,
+    }),
+    sessionId: normalizeBoundedOptionalString(
+      readStringParam(args, "session_id"),
+      params.provider === "parallel"
+        ? PARALLEL_SESSION_ID_MAX_LENGTH
+        : PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
+    ),
+    clientModel:
+      truncateUtf16Safe(
+        readStringParam(args, "client_model") ?? "",
+        PARALLEL_CLIENT_MODEL_MAX_LENGTH,
+      ) || undefined,
+  };
+  const cacheKey = buildSearchCacheKey([
+    params.provider,
+    params.apiKey ? sha256Hex(params.apiKey) : undefined,
+    JSON.stringify({ endpoint: params.endpoint, ...request }),
+  ]);
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
+  if (cached) {
+    return cached;
+  }
+
+  const start = Date.now();
+  const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
+  const count = request.count;
+  const results = nativeWebSearchCodecs["parallel.search"].results(response, count);
+  const payload: Record<string, unknown> = {
+    ...(request.objective ? { objective: request.objective } : {}),
+    searchQueries: request.searchQueries,
+    provider: params.provider,
+    count: results.length,
+    tookMs: Date.now() - start,
+    externalContent: externalContentStamp(params.provider),
+    results,
+  };
+  if (typeof response.search_id === "string") {
+    payload.searchId = response.search_id;
+  }
+  if (typeof response.session_id === "string") {
+    payload.sessionId = response.session_id;
+  }
+  if (Array.isArray(response.warnings) && response.warnings.length > 0) {
+    payload.warnings = response.warnings;
+  }
+  if (Array.isArray(response.usage) && response.usage.length > 0) {
+    payload.usage = response.usage;
+  }
+  // Generated session ids belong to this call, never to unrelated cache hits.
+  const cachePayload = !request.sessionId && "sessionId" in payload ? { ...payload } : payload;
+  if (!request.sessionId) {
+    delete cachePayload.sessionId;
+  }
+  writeCachedSearchPayload(cacheKey, cachePayload, cacheTtlMs);
+  return payload;
+}
+
+// Parallel's API caps each entry at 200 chars and accepts up to 5 queries. We
+// trim, drop empties/duplicates, truncate over-long entries to the API's hard
+// limit, and cap to the API's maximum so a malformed call from the model
+// doesn't 422 the request. See https://docs.parallel.ai/search/best-practices.
+function normalizeParallelSearchQueries(candidates: string[] = []): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of candidates) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const capped = truncateUtf16Safe(trimmed, PARALLEL_MAX_SEARCH_QUERY_CHARS);
+    if (seen.has(capped)) {
+      continue;
+    }
+    seen.add(capped);
+    out.push(capped);
+    if (out.length === PARALLEL_MAX_SEARCH_QUERIES) {
+      break;
+    }
+  }
+  return out;
+}

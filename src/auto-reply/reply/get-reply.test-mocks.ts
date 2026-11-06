@@ -1,0 +1,88 @@
+/** Shared Vitest mocks for get-reply tests that need agent/session/runtime isolation. */
+import { vi } from "vitest";
+import { createMockTypingController } from "./reply.test-helpers.js";
+import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(() => "main"),
+    resolveAgentSkillsFilter: vi.fn(() => undefined),
+  };
+});
+
+vi.mock("../../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
+    "../../agents/model-selection.js",
+  );
+  return {
+    ...actual,
+    resolveModelRefFromString: vi.fn(() => null),
+  };
+});
+
+vi.mock("../../agents/timeout.js", () => ({
+  resolveAgentTimeoutMs: vi.fn(() => 60000),
+}));
+
+vi.mock("../../agents/workspace.js", () => ({
+  DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
+  ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
+    dir: params?.dir ?? "/tmp/workspace",
+  })),
+}));
+
+vi.mock("../../channels/model-overrides.js", () => ({
+  resolveChannelModelOverride: vi.fn(() => undefined),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+}));
+
+// mock-isolation: Reply fixtures authorize their sender without command-owner database admission.
+vi.mock("../command-auth.js", () => ({
+  resolveCommandAuthorizationAsync: vi.fn(() => ({ isAuthorizedSender: true })),
+}));
+
+vi.mock("./directive-handling.defaults.js", () => ({
+  resolveDefaultModel: vi.fn(() => ({
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    aliasIndex: new Map(),
+  })),
+}));
+
+vi.mock("./get-reply-run.js", () => ({
+  runPreparedReply: vi.fn(async () => undefined),
+}));
+
+vi.mock("./inbound-context.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./inbound-context.js")>("./inbound-context.js");
+  return {
+    ...actual,
+    finalizeInboundContext: vi.fn(actual.finalizeInboundContext),
+  };
+});
+
+vi.mock("./session-reset-model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-reset-model.js")>()),
+  applyResetModelOverride: vi.fn(async () => undefined),
+}));
+
+vi.mock("./stage-sandbox-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stage-sandbox-media.js")>()),
+  stageSandboxMedia: vi.fn(async (): Promise<StageSandboxMediaResult> => ({ staged: new Map() })),
+}));
+
+vi.mock("./typing.js", () => ({
+  createTypingController: vi.fn(() => createMockTypingController()),
+}));

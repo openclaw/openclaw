@@ -1,0 +1,52 @@
+/**
+ * Shared tool-call name validation helpers.
+ * Keeps model-supplied tool names compact, normalized, and policy-checked
+ * before routing them to any tool execution surface.
+ */
+import type { AgentMessage } from "@openclaw/agent-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  type classifyToolUseResultPairing,
+  collectCompletedToolCallBlocks,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
+
+const TOOL_CALL_NAME_MAX_CHARS = 64;
+const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
+
+/** Normalize an optional iterable of allowed tool names for lookup. */
+export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
+  if (!allowedToolNames) {
+    return null;
+  }
+  const normalized = normalizeLowercaseStringSet(allowedToolNames);
+  return normalized.size > 0 ? normalized : null;
+}
+
+/** Return whether a model-supplied tool call name is syntactically and policy allowed. */
+export function isAllowedToolCallName(
+  name: unknown,
+  allowedToolNames: Set<string> | null,
+): boolean {
+  const trimmed = normalizeOptionalString(name);
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
+    return false;
+  }
+  if (!allowedToolNames) {
+    return true;
+  }
+  return allowedToolNames.has(trimmed.toLowerCase());
+}
+
+/** Completed replay facts survive capability removal without granting live tool authority. */
+export function createCompletedToolCallPredicate(
+  messages: readonly AgentMessage[],
+  pairing?: ReturnType<typeof classifyToolUseResultPairing>,
+) {
+  const completed = collectCompletedToolCallBlocks(messages, pairing);
+  return (block: { name?: unknown }): boolean =>
+    completed.has(block) && isAllowedToolCallName(block.name, null);
+}

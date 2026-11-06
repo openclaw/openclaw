@@ -1,0 +1,744 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
+import { resolveStateDir } from "../config/paths.js";
+import { createAbortError } from "../infra/abort-signal.js";
+import {
+  loadExecApprovalsReadOnlyAsync,
+  maxAsk,
+  minSecurity,
+  normalizeExecAsk,
+  resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
+} from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import {
+  rejectUnsafeExecControlShellCommand,
+  rejectUnsafeExecLiveStateSqliteShellCommand,
+} from "../infra/exec-control-command-guard.js";
+import { captureExecRequestOwners, readExecRequestOwners } from "../infra/exec-request-context.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { logInfo } from "../logger.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
+import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { bindAgentToolAvailability } from "./agent-tool-availability.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { markBackgrounded } from "./bash-process-registry.js";
+import { describeExecTool } from "./bash-tools.descriptions.js";
+import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
+import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
+import {
+  buildExecRuntimeErrorOutcome,
+  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
+} from "./bash-tools.exec-output.js";
+import {
+  assertSupportedExecParams,
+  assertDurableExecAvailable,
+  createExecRequestPreparation,
+  type ExecToolArgs,
+  resolveExecPreparedRunEnvironment,
+  resolveExecNotificationDefaults,
+  resolvePreparedExecEnvironment,
+} from "./bash-tools.exec-request-preparation.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
+import {
+  DEFAULT_MAX_OUTPUT,
+  DEFAULT_PENDING_MAX_OUTPUT,
+  type ExecProcessHandle,
+  normalizePathPrepend,
+  resolveApprovalRunningNoticeMs,
+  runExecProcess,
+} from "./bash-tools.exec-runtime.js";
+import {
+  shouldSkipExecScriptPreflight,
+  validateScriptFileForShellBleed,
+} from "./bash-tools.exec-script-preflight.js";
+import {
+  attachExecApprovalReview,
+  buildExecForegroundResult,
+  resolveExecReviewerDefaults,
+} from "./bash-tools.exec-support.js";
+import {
+  canInterruptExec,
+  resolveExecElevatedMode,
+  resolveExecHost,
+} from "./bash-tools.exec-target.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import {
+  createExecToolExecutionTimeoutResolver,
+  resolveExecDefaultTimeoutSec,
+} from "./exec-tool-timeout.js";
+import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import type { AgentToolWithMeta } from "./tools/common.js";
+import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+
+type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
+
+const BACKGROUND_EXEC_FOLLOW_UP =
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. Automatic completion wake, when enabled, occurs only after exit. New output while this command is running does not automatically start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
+
+export function createExecTool(defaults?: ExecToolDefaults) {
+  const secretEgressEnabled = isSecretEgressProxyActive();
+  const cleanupMs = defaults?.cleanupMs;
+  const requestOwners =
+    (defaults && readExecRequestOwners(defaults)) ??
+    captureExecRequestOwners({
+      runId: defaults?.runId,
+      sessionId: defaults?.sessionId,
+    });
+  const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
+  let subagentExecutionPromise: Promise<boolean> | undefined;
+  const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
+    (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
+      () =>
+        resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
+          cfg: defaults?.config,
+        }).depth > 0,
+    ));
+  // Agent runs own one tool instance; unprepared store snapshots are read on first exec.
+  // A new run constructs a new instance and observes later store mutations.
+  let storeEnvPromise: Promise<Readonly<SecretStoreExecEnvironment>> | undefined =
+    defaults?.preparedStoreEnvironment === undefined
+      ? undefined
+      : Promise.resolve(defaults.preparedStoreEnvironment);
+  const resolveStoreEnv = () => {
+    if (storeEnvPromise === undefined) {
+      const context = captureOpenClawStateReadWorkerContext();
+      storeEnvPromise = import("../secrets/store/secret-store.js").then((store) =>
+        store.readSecretStoreExecEnvironment({
+          includeSecretSentinels: secretEgressEnabled,
+          excludeNames: preparedRunEnvironment.excludedStoreNames,
+          context,
+        }),
+      );
+    }
+    return storeEnvPromise;
+  };
+  const defaultBackgroundMs = clampWithDefault(
+    defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
+    10_000,
+    10,
+    120_000,
+  );
+  const backgroundAvailable =
+    defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
+  const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
+  const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
+  const {
+    safeBins,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    unprofiledSafeBins,
+    unprofiledInterpreterSafeBins,
+  } = resolveExecSafeBinRuntimePolicy({
+    local: {
+      safeBins: defaults?.safeBins,
+      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
+      safeBinProfiles: defaults?.safeBinProfiles,
+    },
+    onWarning: logInfo,
+  });
+  if (unprofiledSafeBins.length > 0) {
+    logInfo(
+      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+    );
+  }
+  if (unprofiledInterpreterSafeBins.length > 0) {
+    logInfo(
+      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+    );
+  }
+  const {
+    notifyOnExit,
+    notifyOnExitEmptySuccess,
+    notifySessionKey,
+    resolveSubagentSession,
+    notifyDeliveryContext,
+  } = resolveExecNotificationDefaults(defaults);
+  const durableNotifications = { notifyOnExit, notifyOnExitEmptySuccess };
+  const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
+  // Derive agentId only when sessionKey is an agent session key.
+  const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
+  const agentId =
+    defaults?.agentId ??
+    (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const requestPreparation = createExecRequestPreparation({
+    defaults,
+    agentId,
+    resolveHostForParams: (params) => resolveExecHost(params, defaults),
+  });
+  const tool: AgentToolWithMeta<typeof execSchema, ExecToolDetails> = {
+    name: "exec",
+    label: "exec",
+    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
+    get description() {
+      return describeExecTool({
+        hasCronTool: defaults?.hasCronTool === true,
+        autoReview: defaults?.mode === "auto",
+      });
+    },
+    parameters: createExecSchema(defaults),
+    interruptible: (args) => canInterruptExec(args, defaults),
+    getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
+    prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
+    finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      signal?.throwIfAborted();
+      const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
+      const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
+      assertSupportedExecParams(args);
+      // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
+      let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
+      if (!autoReviewer) {
+        const reviewerParams = {
+          cfg: defaults?.config,
+          agentId,
+          reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
+          signal,
+        };
+        autoReviewer = async (input) => {
+          const { createModelExecAutoReviewer } = await import("./exec-auto-reviewer.js");
+          return createModelExecAutoReviewer(reviewerParams)(input);
+        };
+      }
+      const reviewCommand = autoReviewer;
+      autoReviewer = (input) => {
+        const transcript = defaults?.reviewTranscript?.();
+        return reviewCommand(transcript ? { ...input, transcript } : input);
+      };
+      let params = requestPreparation.normalizeParams(args);
+      // A required command remains an owned tool call until its terminal result is collected.
+      // Explicit detached services retain their existing independent process lifetime.
+      const allowBackground = backgroundAvailable && params.awaitResults !== true;
+      const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
+        args as ExecToolArgs,
+      );
+      const hookContext = requestPreparation.getExecHookContext(params);
+      const preparedWorkdirState = requestPreparation.getResolvedExecWorkdirPreparedState(params);
+
+      const warnings: string[] = [];
+      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
+      const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
+      if (approvalWarningText) {
+        warnings.push(approvalWarningText);
+      }
+      const startedAt = Date.now();
+      let execCommandOverride: string | undefined;
+      let gatewayApproval: GatewayApprovalResult | undefined;
+      let approvalReview: ExecToolApprovalReview | undefined;
+      const yieldWindow = allowBackground
+        ? params.background === true
+          ? 0
+          : clampWithDefault(
+              params.yieldMs ?? defaultBackgroundMs,
+              defaultBackgroundMs,
+              10,
+              120_000,
+            )
+        : null;
+      const elevatedDefaults = defaults?.elevated;
+      const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
+      const elevatedRequested = elevatedMode !== "off";
+      if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
+        const runtime = defaults?.sandbox ? "sandboxed" : "direct";
+        const contextParts: string[] = [];
+        const provider = normalizeOptionalString(defaults?.messageProvider);
+        const sessionKey = normalizeOptionalString(defaults?.sessionKey);
+        if (provider) {
+          contextParts.push(`provider=${provider}`);
+        }
+        if (sessionKey) {
+          contextParts.push(`session=${sessionKey}`);
+        }
+        const gate = !elevatedDefaults?.enabled
+          ? "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)"
+          : "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)";
+        throw new Error(
+          [
+            `elevated is not available right now (runtime=${runtime}).`,
+            `Failing gates: ${gate}`,
+            contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
+            "Fix-it keys:",
+            "- tools.elevated.enabled",
+            "- tools.elevated.allowFrom.<provider>",
+            "- agents.entries.*.tools.elevated.enabled",
+            "- agents.entries.*.tools.elevated.allowFrom.<provider>",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+      const host = resolveExecHost(params, defaults);
+      assertDurableExecAvailable(params, host, allowBackground);
+      const foregroundFallbackWarning =
+        (host === "node" || !backgroundAvailable) &&
+        (params.background === true || typeof params.yieldMs === "number")
+          ? host === "node"
+            ? "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session."
+            : "Warning: continuation options are unavailable; running synchronously."
+          : undefined;
+
+      const explicitSecurity = defaults?.security;
+      const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
+      const modePolicy = resolveExecModePolicy({
+        mode: defaults?.mode,
+        security: configuredSecurity,
+        ask: defaults?.ask ?? "off",
+      });
+      const approvalPolicy =
+        host === "sandbox" || defaults?.bypassHostApprovalFloors === true
+          ? undefined
+          : resolveExecApprovalsFromFile({
+              file: await loadExecApprovalsReadOnlyAsync(),
+              agentId,
+              overrides: {
+                security: "full",
+                ask: "off",
+              },
+            }).agent;
+      const security = minSecurity(
+        modePolicy.security,
+        approvalPolicy?.security ?? modePolicy.security,
+      );
+      if (
+        security === "deny" &&
+        (host !== "sandbox" || defaults?.mode === "deny" || explicitSecurity === "deny")
+      ) {
+        throw new Error(`exec denied: host=${host} security=deny`);
+      }
+      const hostPolicyAllowsFullBypass =
+        (approvalPolicy?.security ?? "full") === "full" && (approvalPolicy?.ask ?? "off") === "off";
+      const modePolicyAllowsFullBypass = modePolicy.security === "full" && modePolicy.ask === "off";
+      // Explicit full-session authority is the sole exception to host approval floors.
+      const requestedAsk = normalizeExecAsk(params.ask);
+      const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
+      const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
+      let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
+      const bypassApprovals =
+        (defaults?.bypassHostApprovalFloors === true && modePolicy.ask === "off") ||
+        (elevatedRequested &&
+          elevatedMode === "full" &&
+          modePolicyAllowsFullBypass &&
+          hostPolicyAllowsFullBypass);
+      if (bypassApprovals) {
+        ask = "off";
+      }
+      const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
+
+      const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
+      if (host === "sandbox" && !sandbox) {
+        throw new Error(
+          [
+            "exec host=sandbox requires a sandbox runtime for this session.",
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
+          ].join("\n"),
+        );
+      }
+      if (!params.command) {
+        throw new Error("Provide a command to start.");
+      }
+      await rejectUnsafeExecControlShellCommand(params.command);
+      let workdir: string | undefined;
+      let scriptPreflightCwd: string | null = null;
+      let containerWorkdir = sandbox?.containerWorkdir;
+      let discardPreparedSandboxWorkdir: (() => void) | null = null;
+      const workdirResolution =
+        preparedWorkdirState?.host === host
+          ? preparedWorkdirState.resolution
+          : await resolveExecWorkdir({
+              host,
+              workdir: params.workdir,
+              defaultCwd: defaults?.cwd,
+              nodeCwd: defaults?.nodeCwd,
+              sandbox,
+            });
+      if (workdirResolution.kind === "unavailable") {
+        return buildExecForegroundResult({
+          outcome: buildExecRuntimeErrorOutcome({
+            error: formatUnavailableWorkdirFailure(workdirResolution.requestedCwd),
+            aggregated: "",
+            durationMs: Date.now() - startedAt,
+          }),
+          cwd: workdirResolution.requestedCwd,
+          warningText: warnings.join("\n"),
+        });
+      }
+      if (workdirResolution.kind === "sandbox") {
+        workdir = workdirResolution.hostCwd;
+        containerWorkdir = workdirResolution.containerCwd;
+        scriptPreflightCwd = workdirResolution.scriptPreflightCwd;
+        if (sandbox?.discardPreparedWorkdir && sandbox.workdirValidation === "backend") {
+          const preparedContainerWorkdir = containerWorkdir;
+          discardPreparedSandboxWorkdir = () => {
+            sandbox.discardPreparedWorkdir?.(preparedContainerWorkdir);
+          };
+        }
+      } else if (workdirResolution.kind === "local") {
+        workdir = workdirResolution.hostCwd;
+        scriptPreflightCwd = workdirResolution.hostCwd;
+      } else {
+        workdir = workdirResolution.remoteCwd;
+      }
+      if (host === "gateway" && workdir) {
+        await rejectUnsafeExecLiveStateSqliteShellCommand(params.command, {
+          stateDir: resolveStateDir(),
+          workdir,
+        });
+      }
+      let run: ExecProcessHandle;
+      let settled = false;
+      const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
+      try {
+        if (elevatedRequested) {
+          logInfo("exec: elevated command");
+        }
+        if (!resolveExecEnvPrepared) {
+          params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
+            hookContext,
+          });
+        }
+
+        const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
+        const storeEnv = await resolveStoreEnv();
+        const subagentExecution = await resolveSubagentExecution();
+        assertSourceActive();
+        const storeBindings = storeEnv.secretEgressBindings ?? [];
+        const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
+        const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
+        if (secretEgressEnabled && params.durable && storeBindings.length) {
+          warnings.push(
+            `Durable execution starts without ${storeBindings.length} secret-store credential${storeBindings.length === 1 ? "" : "s"}: secret-egress grants end when the Gateway restarts. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need them.`,
+          );
+        }
+        if (useSecretEgress && !defaults?.operationalRunInstance) {
+          throw new Error("Secret egress proxy requires an admitted agent run instance");
+        }
+        const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
+          execParams: params,
+          host,
+          sandbox,
+          containerWorkdir,
+          channelContext: defaults?.channelContext,
+          subagentExecution,
+          defaultPathPrepend,
+          pluginEnv: resolvedExecEnvState?.pluginEnv,
+          storeEnv: host === "gateway" ? storeEnv.env : undefined,
+          storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
+          ...preparedRunEnvironment,
+          warnings,
+        });
+
+        const hostApprovalParams = () => ({
+          approvalTransport,
+          command: params.command,
+          toolCallId,
+          env,
+          requestedEnv,
+          sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
+          bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+          nonInteractiveApproval: defaults?.nonInteractiveApproval,
+          approvalFollowupMode: defaults?.approvalFollowupMode,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          agentId,
+          security,
+          ask,
+          bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
+          autoReview,
+          autoReviewer,
+          signal,
+          strictInlineEval: defaults?.strictInlineEval,
+          commandHighlighting: defaults?.commandHighlighting,
+          trigger: defaults?.trigger,
+          timeoutSec: params.timeoutSeconds,
+          defaultTimeoutSec,
+          approvalRunningNoticeMs,
+          warnings,
+          notifySessionKey,
+          trustedSafeBinDirs,
+        });
+
+        if (host === "node") {
+          return executeNodeHostCommand({
+            ...hostApprovalParams(),
+            workdir,
+            executionContext,
+            requestedNode: params.node?.trim(),
+            boundNode: defaults?.node?.trim(),
+            foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
+            // Remote system.run has no process-session owner.
+            processContinuationAvailable: false,
+            notifyOnExit,
+          });
+        }
+
+        if (!workdir) {
+          throw new Error("exec internal error: local execution requires a resolved workdir");
+        }
+
+        const githubProfileDir =
+          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
+            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
+            : undefined;
+
+        if (host === "gateway" && !bypassApprovals) {
+          gatewayApproval = await processGatewayAllowlist({
+            ...hostApprovalParams(),
+            workdir,
+            secretEgressBindings,
+            durable: params.durable ? durableNotifications : undefined,
+            githubProfileDir,
+            pathPrepend: defaultPathPrepend,
+            pty: params.pty === true && !sandbox,
+            safeBins,
+            safeBinProfiles,
+            runId: defaults?.runId,
+            onApprovalReview: (review) => (approvalReview = review),
+            scopeKey: defaults?.scopeKey,
+            approvalFollowupText: defaults?.approvalFollowupText,
+            approvalFollowup: defaults?.approvalFollowup,
+            maxOutput: DEFAULT_MAX_OUTPUT,
+            pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
+            cleanupMs,
+            processContinuationAvailable: allowBackground,
+          });
+          const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
+          if (immediateResult) {
+            return attachExecApprovalReview(immediateResult, approvalReview);
+          }
+          signal?.throwIfAborted();
+          execCommandOverride = gatewayApproval.allowWithoutEnforcedCommand
+            ? undefined
+            : gatewayApproval.execCommandOverride;
+        }
+
+        // Pending approvals have not started the command. Add fallback warnings only
+        // after approval routing proves this call will execute in the foreground.
+        if (foregroundFallbackWarning) {
+          warnings.push(foregroundFallbackWarning);
+        }
+
+        const usePty = params.pty === true && !sandbox;
+        if (params.pty === true && sandbox) {
+          warnings.push(
+            "Warning: PTY is unavailable in sandbox mode; running without a PTY. Use a noninteractive command.",
+          );
+        }
+
+        // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
+        // before execution. JavaScript source diagnostics belong to Node.
+        if (scriptPreflightCwd && !shouldSkipExecScriptPreflight({ host, security, ask })) {
+          await validateScriptFileForShellBleed({
+            command: params.command,
+            workdir: scriptPreflightCwd,
+          });
+        }
+
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
+        assertSourceActive();
+        run = await runExecProcess({
+          command: params.command,
+          execCommand: execCommandOverride,
+          workdir,
+          env,
+          secretEgressBindings,
+          durable: params.durable ? durableNotifications : undefined,
+          sessionId: defaults?.sessionId,
+          githubProfileDir,
+          pathPrepend: defaultPathPrepend,
+          sandbox,
+          containerWorkdir,
+          usePty,
+          warnings,
+          maxOutput: DEFAULT_MAX_OUTPUT,
+          pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
+          cleanupMs,
+          notifyOnExit,
+          subagentSession,
+          notifyOnExitEmptySuccess,
+          requestOwners: params.background === true ? undefined : requestOwners,
+          scopeKey: defaults?.scopeKey,
+          sessionKey: notifySessionKey,
+          agentId,
+          eventRouting: defaults?.eventRouting,
+          notifyDeliveryContext,
+          timeoutSec: effectiveTimeout,
+          processContinuationAvailable: allowBackground,
+          startupSignal: signal,
+          onUpdate,
+          beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
+          assertCurrent: gatewayApproval?.assertCurrent,
+          approvalTransport,
+          initiateSpawn: gatewayApproval?.initiateSpawn,
+          releaseSpawn: gatewayApproval?.releaseSpawn,
+          onSettledBeforeNotify: () => {
+            settled = true;
+          },
+        });
+        // Completion wakes need the backgrounding below, so this precedes any wake.
+        run.session.originRunId = defaults?.runId;
+        discardPreparedSandboxWorkdir = null;
+      } catch (error) {
+        gatewayApproval?.releaseSpawn?.();
+        discardPreparedSandboxWorkdir?.();
+        return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
+      }
+
+      const backgroundFollowUp =
+        run.session.notifyOnExit && notifyOnExitEmptySuccess
+          ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
+          : run.session.notifyOnExit
+            ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
+            : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
+      let yielded = false;
+      let yieldTimer: NodeJS.Timeout | null = null;
+      let registeredAbortSignal: AbortSignal | null = null;
+      let toolAborted = false;
+
+      // Invocation disposal stops foreground work. The request owner separately
+      // retains cancellation of ordinary commands after this invocation yields.
+      const onAbortSignal = () => {
+        // Immediately suppress onUpdate calls so that any late stdout/stderr
+        // from the still-running process cannot push a rejected Promise into
+        // agent runtime's updateEvents after the agent run has ended (#62520).
+        // Intentionally placed *before* the yielded/backgrounded guard: the
+        // agent run is ending regardless, so no consumer exists for further
+        // tool_execution_update events even for backgrounded sessions (which
+        // retrieve output via process poll/log instead of onUpdate callbacks).
+        run.disableUpdates();
+        if (yielded || run.session.backgrounded) {
+          return;
+        }
+        // Cancellation must win over foreground-to-background promotion while
+        // the child settles; detached background sessions keep their owner.
+        toolAborted = true;
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
+        }
+        if (!run.session.requestCancelled) {
+          run.kill();
+        }
+      };
+
+      const cleanupToolRunListeners = () => {
+        run.disableUpdates();
+        registeredAbortSignal?.removeEventListener("abort", onAbortSignal);
+        registeredAbortSignal = null;
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
+        }
+      };
+
+      if (signal?.aborted) {
+        onAbortSignal();
+      } else if (signal) {
+        signal.addEventListener("abort", onAbortSignal, { once: true });
+        registeredAbortSignal = signal;
+      }
+
+      // Neither the race nor its losing process promise may retain this turn's
+      // caller context after a background result has returned.
+      const backgrounded = withoutGatewayToolCallerIdentity(() =>
+        createDeferredCore<{ status: "backgrounded" }>(),
+      );
+      const result = withoutGatewayToolCallerIdentity(() =>
+        Promise.race([
+          run.promise.then((outcome) => ({ status: "settled" as const, outcome })),
+          backgrounded.promise,
+        ]),
+      );
+      const onYieldNow = () => {
+        if (yielded || toolAborted || run.session.finalizing || settled) {
+          return;
+        }
+        yielded = true;
+        run.disableUpdates();
+        markBackgrounded(run.session);
+        backgrounded.resolve({ status: "backgrounded" });
+      };
+
+      try {
+        if (!toolAborted && allowBackground && yieldWindow !== null) {
+          if (yieldWindow === 0) {
+            onYieldNow();
+          } else {
+            yieldTimer = setTimeout(onYieldNow, yieldWindow);
+          }
+        }
+        const completed = await result;
+        if (toolAborted && !(signal?.reason instanceof ToolInterruptedByUser)) {
+          throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
+        }
+        const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
+        const followUp =
+          deadlineAtMs === undefined
+            ? backgroundFollowUp
+            : `Automatic stop will be requested at ${new Date(deadlineAtMs).toISOString()}; the process may exit earlier. ${backgroundFollowUp}`;
+        return attachExecApprovalReview(
+          completed.status === "settled"
+            ? buildExecForegroundResult({
+                outcome: completed.outcome,
+                cwd: run.session.cwd,
+                warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
+              })
+            : {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
+                      run.session.pid ?? "n/a"
+                    }). ${followUp}`,
+                  },
+                ],
+                details: {
+                  status: "running",
+                  sessionId: run.session.id,
+                  pid: run.session.pid ?? undefined,
+                  startedAt: run.startedAt,
+                  ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+                  cwd: run.session.cwd,
+                  tail: run.session.tail,
+                  ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
+                  // Structured callers receive details without the visible content.
+                  followUp,
+                },
+              },
+          approvalReview,
+        );
+      } catch (error) {
+        if (toolAborted) {
+          throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
+        }
+        throw error;
+      } finally {
+        cleanupToolRunListeners();
+      }
+    },
+  };
+  return bindAgentToolAvailability(tool, {
+    prepare: () => undefined,
+    // Explicit host requests still reach the runtime's authoritative rejection.
+    executionSchema: () => execSchema,
+  });
+}
+
+export const execTool = createExecTool();

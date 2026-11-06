@@ -1,0 +1,185 @@
+import { createHash } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { raceWithTimeoutAndAbort } from "./async.js";
+import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
+import type { FeishuProbeResult } from "./types.js";
+
+/** Cache probe results to reduce repeated health-check calls.
+ * Gateway health checks call probeFeishu() every minute; without caching this
+ * burns ~43,200 calls/month, easily exceeding Feishu's free-tier quota.
+ * Successful bot info is effectively static, while failures are cached briefly
+ * to avoid hammering the API during transient outages. */
+const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: number }>();
+const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000;
+const PROBE_ERROR_TTL_MS = 60 * 1000;
+const MAX_PROBE_CACHE_SIZE = 64;
+const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
+type ProbeFeishuOptions = {
+  timeoutMs?: number;
+  abortSignal?: AbortSignal;
+};
+
+type FeishuBotInfoResponse = {
+  code: number;
+  msg?: string;
+  bot?: { app_name?: string; open_id?: string };
+  data?: { bot?: { app_name?: string; open_id?: string } };
+};
+
+type FeishuAiAgentRegistrationResponse = {
+  code: number;
+};
+
+type FeishuAiAgentRegistrationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "missing-credentials" | "aborted" | "timeout" | "api-error" | "request-error";
+    };
+
+function buildProbeCacheKey(creds: FeishuClientCredentials): string {
+  // Account ids survive config reloads. Bind cached health and identity to the
+  // complete credentials so a reconfigured account must perform a fresh probe.
+  const identity = [creds.accountId ?? null, creds.appId, creds.appSecret, creds.domain ?? null];
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
+function setCachedProbeResult(
+  cacheKey: string,
+  result: FeishuProbeResult,
+  ttlMs: number,
+): FeishuProbeResult {
+  probeCache.set(cacheKey, { result, expiresAt: performance.now() + ttlMs });
+  pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
+  return result;
+}
+
+export async function probeFeishu(
+  creds?: FeishuClientCredentials,
+  options: ProbeFeishuOptions = {},
+): Promise<FeishuProbeResult> {
+  if (!creds?.appId || !creds?.appSecret) {
+    return {
+      ok: false,
+      error: "missing credentials (appId, appSecret)",
+    };
+  }
+  if (options.abortSignal?.aborted) {
+    return {
+      ok: false,
+      appId: creds.appId,
+      error: "check aborted",
+    };
+  }
+
+  const timeoutMs = options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS;
+
+  // Return cached result if still valid for this exact configured identity.
+  const cacheKey = buildProbeCacheKey(creds);
+  const cacheError = (error: string) =>
+    setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
+  const cached = probeCache.get(cacheKey);
+  if (cached) {
+    if (cached.expiresAt > performance.now()) {
+      return cached.result;
+    }
+    probeCache.delete(cacheKey);
+  }
+
+  try {
+    const client = createFeishuClient(creds);
+    // Bot identity is required for mention and self-message filtering. Keep it on the
+    // standard bot-info API so optional AI-agent registration cannot gate the channel.
+    const responseResult = await raceWithTimeoutAndAbort(
+      client.request<FeishuBotInfoResponse>({
+        method: "GET",
+        url: "/open-apis/bot/v3/info",
+        timeout: timeoutMs,
+      }),
+      {
+        timeoutMs,
+        abortSignal: options.abortSignal,
+      },
+    );
+
+    if (responseResult.status === "aborted") {
+      return {
+        ok: false,
+        appId: creds.appId,
+        error: "check aborted",
+      };
+    }
+    if (responseResult.status === "timeout") {
+      return cacheError(`check timed out after ${timeoutMs}ms`);
+    }
+
+    const response = responseResult.value;
+    if (options.abortSignal?.aborted) {
+      return {
+        ok: false,
+        appId: creds.appId,
+        error: "check aborted",
+      };
+    }
+
+    if (response.code !== 0) {
+      return cacheError(`API error: ${response.msg || `code ${response.code}`}`);
+    }
+
+    const botInfo = response.bot ?? response.data?.bot;
+    if (!botInfo?.open_id) {
+      return cacheError("API response missing bot open_id");
+    }
+    return setCachedProbeResult(
+      cacheKey,
+      {
+        ok: true,
+        appId: creds.appId,
+        botName: botInfo.app_name,
+        botOpenId: botInfo.open_id,
+      },
+      PROBE_SUCCESS_TTL_MS,
+    );
+  } catch (err) {
+    return cacheError(formatErrorMessage(err));
+  }
+}
+
+/**
+ * Preserve Feishu's optional AI-agent registration without coupling it to health or
+ * identity. Monitor startup calls this once per account and never awaits it.
+ */
+export async function registerFeishuAiAgent(
+  creds?: FeishuClientCredentials,
+  options: Pick<ProbeFeishuOptions, "abortSignal"> = {},
+): Promise<FeishuAiAgentRegistrationResult> {
+  if (!creds?.appId || !creds?.appSecret) {
+    return { ok: false, reason: "missing-credentials" };
+  }
+  if (options.abortSignal?.aborted) {
+    return { ok: false, reason: "aborted" };
+  }
+
+  try {
+    const client = createFeishuClient(creds);
+    const responseResult = await raceWithTimeoutAndAbort(
+      client.request<FeishuAiAgentRegistrationResponse>({
+        method: "POST",
+        url: "/open-apis/bot/v1/openclaw_bot/ping",
+        data: { needBotInfo: true },
+        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+      }),
+      { timeoutMs: FEISHU_PROBE_REQUEST_TIMEOUT_MS, abortSignal: options.abortSignal },
+    );
+    if (responseResult.status === "aborted" || options.abortSignal?.aborted) {
+      return { ok: false, reason: "aborted" };
+    }
+    if (responseResult.status === "timeout") {
+      return { ok: false, reason: "timeout" };
+    }
+    return responseResult.value.code === 0 ? { ok: true } : { ok: false, reason: "api-error" };
+  } catch {
+    return { ok: false, reason: "request-error" };
+  }
+}

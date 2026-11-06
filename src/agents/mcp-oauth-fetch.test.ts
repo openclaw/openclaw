@@ -1,0 +1,131 @@
+import type { FetchLike } from "@modelcontextprotocol/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+
+const oauthMocks = vi.hoisted(() => ({
+  recordAuthorizationRequired: vi.fn(),
+  resolve: vi.fn(),
+}));
+const IDENTITY = operatorMcpOAuthIdentity("docs", "https://mcp.example.com/mcp");
+
+// mock-isolation: exercise bearer retries without starting the persistent OAuth coordinator.
+vi.mock("./mcp-oauth.js", () => ({
+  recordMcpOAuthAuthorizationRequired: oauthMocks.recordAuthorizationRequired,
+  resolveMcpOAuthAccessToken: oauthMocks.resolve,
+}));
+
+function wrap(fetchFn: ReturnType<typeof vi.fn<FetchLike>>) {
+  return withMcpOAuthBearer({ fetchFn, authFetchFn: fetchFn, identity: IDENTITY });
+}
+
+function expectBearers(fetchFn: ReturnType<typeof vi.fn<FetchLike>>, tokens: (string | null)[]) {
+  expect(
+    fetchFn.mock.calls.map(
+      ([input, init]) =>
+        new Headers(input instanceof Request ? input.headers : init?.headers)
+          .get("authorization")
+          ?.replace(/^Bearer /u, "") ?? null,
+    ),
+  ).toEqual(tokens);
+}
+
+function makeResponse(status = 200, challenge?: string) {
+  return new Response("fixture", {
+    status,
+    headers: challenge ? { "www-authenticate": challenge } : undefined,
+  });
+}
+
+describe("MCP OAuth bearer fetch", () => {
+  beforeEach(() => {
+    oauthMocks.recordAuthorizationRequired.mockReset();
+    oauthMocks.resolve.mockReset();
+  });
+
+  it("injects native OAuth only at the configured resource origin", async () => {
+    oauthMocks.resolve.mockResolvedValue("test-token-placeholder");
+    const fetchFn = vi.fn<FetchLike>(async () => makeResponse());
+    const wrapped = wrap(fetchFn);
+
+    await wrapped("https://mcp.example.com/mcp", { headers: { "x-tenant": "docs" } });
+    await wrapped("https://auth.example.com/token");
+
+    expect(oauthMocks.resolve).toHaveBeenCalledOnce();
+    expect(oauthMocks.resolve.mock.calls[0]?.[0]).toMatchObject({ acceptUnknownExpiry: true });
+    expectBearers(fetchFn, ["test-token-placeholder", null]);
+  });
+
+  it("bootstraps a missing token and replays the request body after the challenge", async () => {
+    oauthMocks.resolve.mockResolvedValueOnce(undefined).mockResolvedValueOnce("test-auth-token");
+    const body = '{"jsonrpc":"2.0","method":"tools/list"}';
+    const bodies: string[] = [];
+    const fetchFn = vi.fn<FetchLike>(async (input, init) => {
+      expect(init).not.toBeInstanceOf(Request);
+      bodies.push(await new Request(input, init).text());
+      return bodies.length === 1
+        ? makeResponse(
+            401,
+            'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="docs.read"',
+          )
+        : makeResponse();
+    });
+    await expect(
+      wrap(fetchFn)(
+        new Request(IDENTITY.serverUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }),
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(bodies).toEqual([body, body]);
+    expectBearers(fetchFn, [null, "test-auth-token"]);
+    expect(oauthMocks.resolve.mock.calls[0]?.[0]).toMatchObject({ allowMissingToken: true });
+    expect(oauthMocks.resolve.mock.calls[1]?.[0]).toMatchObject({
+      authorizationChallenge: true,
+      resourceMetadataUrl: new URL("https://mcp.example.com/.well-known/oauth-protected-resource"),
+      scope: "docs.read",
+    });
+  });
+
+  it("requires scope-bearing login on insufficient-scope 403 but leaves other 403s untouched", async () => {
+    const loginRequired = new Error("additional OAuth authorization required");
+    oauthMocks.resolve.mockResolvedValueOnce("decoy-token").mockRejectedValueOnce(loginRequired);
+    const fetchFn = vi
+      .fn<FetchLike>()
+      .mockResolvedValueOnce(
+        makeResponse(403, 'Bearer error="insufficient_scope", scope="docs.write"'),
+      );
+    const wrapped = wrap(fetchFn);
+
+    await expect(wrapped("https://mcp.example.com/mcp")).rejects.toBe(loginRequired);
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(oauthMocks.resolve.mock.calls[1]?.[0]).toMatchObject({
+      interactiveAuthorizationRequired: true,
+      scope: "docs.write",
+    });
+
+    oauthMocks.resolve.mockReset().mockResolvedValue("test-token-placeholder");
+    fetchFn.mockReset().mockResolvedValue(makeResponse(403));
+    await expect(wrapped("https://mcp.example.com/mcp")).resolves.toMatchObject({ status: 403 });
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(oauthMocks.resolve).toHaveBeenCalledOnce();
+  });
+
+  it("returns the second rejection without an unbounded auth loop", async () => {
+    oauthMocks.resolve
+      .mockResolvedValueOnce("decoy-token")
+      .mockResolvedValueOnce("test-auth-token");
+    const fetchFn = vi.fn<FetchLike>(async () => makeResponse(401));
+    await expect(wrap(fetchFn)(IDENTITY.serverUrl)).resolves.toMatchObject({ status: 401 });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(oauthMocks.resolve).toHaveBeenCalledTimes(2);
+    expect(oauthMocks.recordAuthorizationRequired).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identity: IDENTITY,
+        rejectedAccessToken: "test-auth-token",
+      }),
+    );
+  });
+});

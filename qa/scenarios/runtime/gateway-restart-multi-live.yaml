@@ -1,0 +1,243 @@
+title: Live OpenAI multi-restart task resume
+
+scenario:
+  id: gateway-restart-multi-live
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.recovery-restart-recovery
+    secondary:
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
+  gatewayRuntime:
+    preserveDebugArtifacts: true
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - qa_restart_wait
+      codeMode:
+        enabled: true
+        timeoutMs: 60000
+  objective: Verify one substantive live OpenAI task automatically resumes through three Gateway replacements and delivers exactly once.
+  successCriteria:
+    - The live model reaches three distinct ordinary Code Mode waits across the original turn and fresh resume turns.
+    - The Gateway child and qa-channel recover after every replacement without a user follow-up.
+    - Each graceful replacement adds one ordinary resume input under current permissions, and the completed audit is delivered exactly once.
+  docsRefs:
+    - docs/tools/code-mode.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-lab/src/suite-runtime-agent-session.ts
+    - extensions/qa-lab/src/suite-runtime-gateway.ts
+    - extensions/qa-channel/src/inbound.ts
+    - src/gateway/session-restart-resume.ts
+  execution:
+    kind: flow
+    runtime: openclaw
+    retryCount: 0
+    summary: Run a fixture-backed audit with GPT-5.4 across three graceful Gateway replacements while ordinary Code Mode waits are pending.
+    suiteIsolation: isolated
+    isolationReason: Replaces the Gateway child three times and inspects one persistent in-flight session.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: openai
+      requiredModel: gpt-5.4
+      finalMarker: LIVE-MULTI-RESTART-OK
+      resumeNeedle: "The Gateway restarted while you were working. Resume your work:"
+      prompt: |-
+        Perform a restart-resilience release audit. This is one task; do not ask me to follow up.
+
+        This task spans four Gateway lifecycles. Use the lifecycle phase, not tool-call counts, to decide your work:
+        - On this original user turn, perform only checkpoint 1.
+        - After the first ordinary system input beginning "The Gateway restarted while you were working. Resume your work:", perform only checkpoint 2.
+        - After the second ordinary system input beginning "The Gateway restarted while you were working. Resume your work:", perform only checkpoint 3.
+        - After the third ordinary system input beginning "The Gateway restarted while you were working. Resume your work:", perform the audit and final report.
+
+        For each checkpoint phase, make exactly one ordinary `exec` call. Its JavaScript must search for `qa_restart_wait`, bind the single match as `target`, explicitly suspend with `await Promise.all([target({}), yield_control("restart checkpoint")])`, and then return only that phase's literal (`CHECKPOINT-1`, `CHECKPOINT-2`, or `CHECKPOINT-3`). `yield_control` is a built-in function; never search for or redeclare it. Once `exec` reports waiting, call `wait` exactly once with its run id. Do not issue another `exec` until a new ordinary system input beginning "The Gateway restarted while you were working. Resume your work:" arrives. Do not read audit files or write the final report during a checkpoint phase.
+
+        A Gateway restart will interrupt each checkpoint wait. A failed, unavailable, expired, or aborted `wait` result after restart is expected checkpoint evidence, not an audit failure; do not retry the old wait. Checkpoint literals are internal tool output. Never echo them or send assistant text during a checkpoint phase.
+
+        Each resume input is a fresh turn with current permissions. Inspect the transcript before continuing; do not repeat a completed action. In the audit phase, use the currently available file tools to read these exact files. Do not read the `restart-audit/` directory path itself:
+        - `restart-audit/components.md`
+        - `restart-audit/risks.md`
+        - `restart-audit/deployments.md`
+        - `restart-audit/controls.md`
+        - `restart-audit/recommendation.md`
+
+        Each file read returns `{ kind: "text", content: string }`. Use the `content` strings. Parse the `key=value` lines by splitting on newlines and `=`, then convert each value with `Number`; do not use regular expressions.
+
+        Then calculate:
+        - component total from services, workers, and jobs
+        - risk total from low, medium, and high
+        - deployment total across all regions
+        - control checksum from approvals, rollbacks, and drills
+        - the release recommendation from the evidence
+
+        Finish with exactly one concise report containing these exact lines:
+        components=16
+        risks=6
+        deployments=27
+        controls=21
+        recommendation=GO
+        LIVE-MULTI-RESTART-OK
+
+flow:
+  steps:
+    - name: verifies live OpenAI lane
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: scenario requires live-frontier provider mode
+        - set: selected
+          value:
+            expr: splitModelRef(env.primaryModel)
+        - assert:
+            expr: "selected?.provider === config.requiredProvider && selected?.model === config.requiredModel"
+            message:
+              expr: "`expected ${config.requiredProvider}/${config.requiredModel}, got ${env.primaryModel}`"
+        - assert:
+            expr: "Boolean(env.gateway.runtimeEnv.OPENAI_API_KEY?.trim() || env.gateway.runtimeEnv.OPENCLAW_LIVE_OPENAI_KEY?.trim())"
+            message: live OpenAI API key did not reach the Gateway child
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} auth=env-api-key`"
+
+    - name: resumes one substantive task through three restarts
+      actions:
+        - call: fs.mkdir
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit')"
+            - recursive: true
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'components.md')"
+            - "services=4\nworkers=7\njobs=5\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'risks.md')"
+            - "low=3\nmedium=2\nhigh=1\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'deployments.md')"
+            - "us-west-2=12\nus-east-1=9\neu-west-1=6\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'controls.md')"
+            - "approvals=8\nrollbacks=7\ndrills=6\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'recommendation.md')"
+            - "Release only when components=16, risks=6, deployments=27, controls=21. Matching evidence means GO.\n"
+            - utf8
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 180000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 180000]
+        - call: reset
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: gatewayLogCursor
+          value:
+            expr: markGatewayLogCursor()
+        - set: conversationId
+          value:
+            expr: "`restart-multi-live-${randomUUID().slice(0, 8)}`"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: resumeEventCursors
+          value:
+            expr: "[]"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id: { ref: conversationId }
+              kind: direct
+            senderId: { ref: conversationId }
+            senderName: QA Restart Operator
+            text: { expr: config.prompt }
+          saveAs: inbound
+        - forEach:
+            items: [1, 2, 3]
+            item: checkpoint
+            actions:
+              - call: waitForCondition
+                saveAs: checkpointTranscript
+                args:
+                  - lambda:
+                      async: true
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker, pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}` }).then((summary) => summary.hasPendingCodeModeWait ? summary : undefined).catch(() => undefined)"
+                  - expr: liveTurnTimeoutMs(env, 180000)
+                  - 50
+              - assert:
+                  expr: "checkpointTranscript.userMessageCount >= checkpoint && checkpointTranscript.eventCursor > 0 && (checkpointTranscript.probeTextEndLine ?? 0) > 0"
+                  message: pending work did not retain the original task transcript
+              - call: restartGatewayWithConfigPatch
+                args:
+                  - env: { ref: env }
+                    patch:
+                      gateway:
+                        controlUi:
+                          allowedOrigins:
+                            - expr: "`http://127.0.0.1:${64000 + checkpoint}`"
+              - call: waitForGatewayHealthy
+                args: [{ ref: env }, 180000]
+              - call: waitForQaChannelReady
+                args: [{ ref: env }, 180000]
+              - call: waitForCondition
+                saveAs: resumedTranscript
+                args:
+                  - lambda:
+                      async: true
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { afterEventCursor: checkpointTranscript.eventCursor, probeText: config.resumeNeedle }).then((summary) => summary.userMessageCount === 1 && (summary.probeTextEndLine ?? 0) > checkpointTranscript.eventCursor ? summary : undefined).catch(() => undefined)"
+                  - expr: liveTurnTimeoutMs(env, 120000)
+                  - 50
+              - set: resumeEventCursors
+                value:
+                  expr: "[...resumeEventCursors, resumedTranscript.probeTextEndLine]"
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker)"
+            - expr: liveTurnTimeoutMs(env, 300000)
+            - sinceIndex: { ref: startIndex }
+        - set: outboundCountAfterDelivery
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - waitForNoOutbound:
+            quietMs: 3000
+            sinceIndex: { ref: outboundCountAfterDelivery }
+        - call: readSessionTranscriptSummary
+          saveAs: finalTranscript
+          args: [{ ref: env }, { ref: sessionKey }, { includeCodeModeControl: true }]
+        - set: finalMatches
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker))"
+        - set: inboundMatches
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'inbound' && candidate.conversation.id === conversationId)"
+        - assert:
+            expr: "inboundMatches.length === 1 && inboundMatches[0].id === inbound.id"
+            message: task required another qa-channel inbound message
+        - assert:
+            expr: "resumeEventCursors.length === 3 && new Set(resumeEventCursors).size === 3"
+            message: each graceful replacement must append one new resume input
+        - assert:
+            expr: "finalMatches.length === 1 && outbound.text.split(config.finalMarker).length - 1 === 1"
+            message: expected exactly one resumed final delivery
+        - assert:
+            expr: "['components=16', 'risks=6', 'deployments=27', 'controls=21', 'recommendation=GO'].every((needle) => outbound.text.includes(needle))"
+            message: substantive audit output was incomplete
+        - assert:
+            expr: "finalTranscript.lastAssistantStopReason !== 'error' && finalTranscript.lastAssistantStopReason !== 'aborted'"
+            message: resumed task did not finish normally
+        - call: assertNoGatewayLogSentinels
+          args:
+            - since: { ref: gatewayLogCursor }
+      detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 resumeInputs=${resumeEventCursors.length} finalDeliveries=${finalMatches.length}\n${outbound.text}`"

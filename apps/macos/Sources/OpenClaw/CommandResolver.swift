@@ -1,0 +1,518 @@
+import Foundation
+
+enum CommandResolver {
+    private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
+    private static let helperName = "openclaw"
+    /// Version probes may queue under machine load; keep command resolution tolerant but bounded.
+    static let versionProbeTimeout: TimeInterval = 10
+
+    static func gatewayEntrypoint(in root: URL) -> String? {
+        ["dist/index.js", "openclaw.mjs", "bin/openclaw.js"]
+            .lazy.map { root.appendingPathComponent($0).path }
+            .first { FileManager().isReadableFile(atPath: $0) }
+    }
+
+    static func errorCommand(with message: String) -> [String] {
+        ["/bin/sh", "-c", "printf '%s\\n' \"$1\" >&2; exit 1", "openclaw-error", message]
+    }
+
+    static func projectRoot(
+        defaults: UserDefaults = AppDefaults.standard,
+        profile: AppProfile = .current,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL
+    {
+        if let stored = defaults.string(forKey: projectRootDefaultsKey) {
+            let url = self.expandPath(stored)
+            if FileManager().fileExists(atPath: url.path) { return url }
+        }
+        if profile.isActive {
+            return profile.stateDirectoryURL(homeDirectory: homeDirectory)
+        }
+        let fallback = homeDirectory.appendingPathComponent("Projects/openclaw")
+        if FileManager().fileExists(atPath: fallback.path) {
+            return fallback
+        }
+        return homeDirectory
+    }
+
+    static func setProjectRoot(_ path: String) {
+        AppDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
+    }
+
+    static func projectRootPath() -> String {
+        self.projectRoot().path
+    }
+
+    static func preferredPaths() -> [String] {
+        let current = ProcessInfo.processInfo.environment["PATH"]?
+            .split(separator: ":").map(String.init) ?? []
+        let home = FileManager().homeDirectoryForCurrentUser
+        let projectRoot = self.projectRoot()
+        let validatedExecutable = self.validatedOpenClawExecutable(
+            defaults: AppDefaults.standard,
+            fileManager: .default,
+            requiredVersion: GatewayEnvironment.expectedGatewayVersionString())
+        return self.preferredPaths(
+            home: home,
+            current: current,
+            projectRoot: projectRoot,
+            validatedExecutable: validatedExecutable)
+    }
+
+    /// Version-manager trees can make discovery arbitrarily slow. Async callers
+    /// must leave their actor before touching the filesystem or the UI can stall.
+    @concurrent
+    static func preferredPathsAsync() async -> [String] {
+        self.preferredPaths()
+    }
+
+    static func preferredPaths(
+        home: URL,
+        current: [String],
+        projectRoot: URL,
+        validatedExecutable: String? = nil,
+        profile: AppProfile = .current) -> [String]
+    {
+        var preferredPaths: [String] = []
+        let managedPaths = self.openclawManagedPaths(home: home, profile: profile)
+        // Other profiles' managed trees must not leak in via stale validation or the
+        // inherited shell PATH (the CLI installer adds ~/.openclaw/bin to shell profiles).
+        let activeManagedBase = profile.stateDirectoryURL(homeDirectory: home).path
+        func isForeignManaged(_ path: String) -> Bool {
+            guard path.hasPrefix(home.path + "/") else { return false }
+            let name = path.dropFirst(home.path.count + 1)
+                .split(separator: "/").first.map(String.init) ?? ""
+            return self.isManagedDirectoryName(name)
+                && home.appendingPathComponent(name).path != activeManagedBase
+        }
+        if let validatedExecutable {
+            let validatedBin = URL(fileURLWithPath: validatedExecutable).deletingLastPathComponent().path
+            if managedPaths.contains(validatedBin) {
+                preferredPaths.append(contentsOf: managedPaths)
+            } else if !isForeignManaged(validatedBin) {
+                preferredPaths.append(validatedBin)
+            }
+        }
+        let externalPaths = [
+            home.appendingPathComponent("Library/pnpm").path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            home.appendingPathComponent(".local/bin").path,
+        ]
+        #if DEBUG
+        // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
+        preferredPaths.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
+        #endif
+        var seen = Set<String>()
+        let fallbackPaths = self.nodeManagerBinPaths(home: home) + externalPaths + managedPaths
+        // Preserve order while stripping duplicates so PATH lookups remain deterministic.
+        return (preferredPaths + fallbackPaths + current)
+            .filter { !isForeignManaged($0) && seen.insert($0).inserted }
+    }
+
+    static func validatedOpenClawExecutable(
+        defaults: UserDefaults,
+        fileManager: FileManager,
+        requiredVersion: String?) -> String?
+    {
+        guard let executable = defaults.string(forKey: cliValidatedExecutableKey),
+              fileManager.isExecutableFile(atPath: executable),
+              let validatedVersion = defaults.string(forKey: cliValidatedVersionKey),
+              Semver.parse(validatedVersion) != nil
+        else {
+            return nil
+        }
+        return Semver.satisfiesExpectedGatewayVersion(
+            installed: validatedVersion,
+            expected: requiredVersion) ? executable : nil
+    }
+
+    /// Exactly the AppProfile.stateDirectoryURL namespace; ~/.openclaw2 is not managed.
+    private static func isManagedDirectoryName(_ name: String) -> Bool {
+        name == ".openclaw" || name.hasPrefix(".openclaw-")
+    }
+
+    private static func openclawManagedPaths(home: URL, profile: AppProfile) -> [String] {
+        let base = profile.stateDirectoryURL(homeDirectory: home)
+        return ["bin", "tools/node/bin"]
+            .map { base.appendingPathComponent($0).path }
+            .filter { FileManager().fileExists(atPath: $0) }
+    }
+
+    private static func nodeManagerBinPaths(home: URL) -> [String] {
+        var bins = [".volta/bin", ".asdf/shims"]
+            .map { home.appendingPathComponent($0).path }
+            .filter { FileManager().fileExists(atPath: $0) }
+
+        // fnm
+        bins.append(contentsOf: self.versionedNodeBinPaths(
+            base: home.appendingPathComponent(".local/share/fnm/node-versions"),
+            suffix: "installation/bin"))
+
+        // nvm
+        bins.append(contentsOf: self.versionedNodeBinPaths(
+            base: home.appendingPathComponent(".nvm/versions/node"),
+            suffix: "bin"))
+
+        return bins
+    }
+
+    private static func versionedNodeBinPaths(base: URL, suffix: String) -> [String] {
+        guard FileManager().fileExists(atPath: base.path) else { return [] }
+        guard let entries = try? FileManager().contentsOfDirectory(atPath: base.path) else { return [] }
+
+        let sorted = entries.compactMap { entry -> (name: String, version: Semver)? in
+            guard let version = RuntimeLocator.parseVersion(entry),
+                  RuntimeLocator.isSupportedNodeVersion(version)
+            else { return nil }
+            return (entry, version)
+        }.sorted { first, second in
+            first.version == second.version ? first.name > second.name : first.version > second.version
+        }
+
+        return sorted.compactMap { entry, _ in
+            let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
+            let node = binDir.appendingPathComponent("node")
+            return FileManager().isExecutableFile(atPath: node.path) ? binDir.path : nil
+        }
+    }
+
+    static func findExecutable(named name: String, searchPaths: [String]? = nil) -> String? {
+        for dir in searchPaths ?? self.preferredPaths() {
+            let candidate = (dir as NSString).appendingPathComponent(name)
+            if FileManager().isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    static func openclawExecutable(searchPaths: [String]? = nil) -> String? {
+        self.findExecutable(named: self.helperName, searchPaths: searchPaths)
+    }
+
+    static func projectOpenClawExecutable(projectRoot: URL? = nil) -> String? {
+        #if DEBUG
+        let root = projectRoot ?? self.projectRoot()
+        let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
+        if FileManager().isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        // pnpm does not create a self-referential node_modules/.bin link for
+        // this package. Source builds still need the checkout CLI, not a stale
+        // globally installed binary with a different private command surface.
+        let sourceEntrypoint = root.appendingPathComponent("openclaw.mjs").path
+        return FileManager().isExecutableFile(atPath: sourceEntrypoint) ? sourceEntrypoint : nil
+        #else
+        return nil
+        #endif
+    }
+
+    static func nodeHostWorkerLaunch(
+        bundle: Bundle = .main,
+        projectRoot: URL? = nil,
+        searchPaths: [String]? = nil,
+        desktopSharingEnabled: Bool? = nil) async throws -> MacNodeHostWorkerLaunch
+    {
+        // Packaging and optimization are independent: even DEBUG apps must use
+        // their signed payload, including after relocation or checkout removal.
+        if bundle.bundleURL.pathExtension == "app" {
+            return try BundledRuntime.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
+        }
+        #if DEBUG
+        let root = projectRoot ?? self.projectRoot()
+        let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else {
+            throw MacNodeHostWorker.WorkerError.unavailable(reason: "Development worker source runner is missing")
+        }
+        let runtime = try await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths()).get()
+        return MacNodeHostWorkerLaunch(
+            command: self.nodeHostWorkerCommand(
+                prefix: [runtime.path, sourceRunner.path],
+                desktopSharingEnabled: desktopSharingEnabled),
+            currentDirectoryURL: root)
+        #else
+        throw MacNodeHostWorker.WorkerError.unavailable(reason: "The node worker requires a packaged OpenClaw.app")
+        #endif
+    }
+
+    static func nodeHostWorkerCommand(
+        prefix: [String],
+        profile: AppProfile = .current,
+        desktopSharingEnabled: Bool? = nil) -> [String]
+    {
+        var arguments = ["node", "worker"]
+        if let desktopSharingEnabled {
+            arguments.append(desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing")
+        }
+        return profile.localCLICommand(prefix: prefix, arguments: arguments)
+    }
+
+    enum LocalCLIResolution {
+        case executable([String])
+        case unavailable(String)
+    }
+
+    typealias LocalCLIResolver = @Sendable ([String]?, URL?) async -> LocalCLIResolution
+
+    static func localOpenclawCommand(
+        subcommand: String,
+        extraArgs: [String] = [],
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil,
+        profile: AppProfile = .current,
+        resolveCLI: LocalCLIResolver = resolveLocalCLI) async -> [String]
+    {
+        switch await resolveCLI(searchPaths, projectRoot) {
+        case let .executable(prefix):
+            profile.localCLICommand(prefix: prefix, arguments: [subcommand] + extraArgs)
+        case let .unavailable(message):
+            self.errorCommand(with: message)
+        }
+    }
+
+    static func resolveLocalCLI(searchPaths: [String]?, projectRoot: URL?) async -> LocalCLIResolution {
+        if BundledRuntime.isBundledApp {
+            do {
+                if let runtime = try BundledRuntime.seeded() {
+                    return .executable(runtime.cliCommand)
+                }
+            } catch {
+                return .unavailable(error.localizedDescription)
+            }
+            // Existing external and managed Node installs remain inspectable before adoption.
+            if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
+                return .executable([openclawPath])
+            }
+            return .unavailable("OpenClaw's bundled runtime is not prepared. Retry setup in OpenClaw.app.")
+        }
+        let root = projectRoot ?? self.projectRoot()
+        if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
+            return .executable([openclawPath])
+        }
+        if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
+            return .executable([openclawPath])
+        }
+        let runtimeResult = await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
+        if case let .success(runtime) = runtimeResult, let entry = gatewayEntrypoint(in: root) {
+            return .executable([runtime.path, entry])
+        }
+        if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
+            return .executable([pnpm, "--silent", "openclaw"])
+        }
+        switch runtimeResult {
+        case .success:
+            return .unavailable(
+                "openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.")
+        case let .failure(error):
+            return .unavailable(RuntimeLocator.describeFailure(error))
+        }
+    }
+
+    // MARK: - SSH helpers
+
+    static func sshEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment,
+        searchPaths: [String]? = nil) -> [String: String]
+    {
+        var environment = base
+        environment["PATH"] = (searchPaths ?? self.preferredPaths()).joined(separator: ":")
+        return environment
+    }
+
+    enum SSHHostKeyPolicy: String, Sendable {
+        case strict
+        case openssh
+
+        var hostKeyOptions: [String] {
+            switch self {
+            case .strict:
+                [
+                    "-o", "StrictHostKeyChecking=yes",
+                    "-o", "UpdateHostKeys=yes",
+                ]
+            case .openssh:
+                []
+            }
+        }
+
+        var commandOptions: [String] {
+            [
+                "-o", "ControlMaster=no",
+                "-o", "ControlPath=none",
+                "-o", "ControlPersist=no",
+                "-o", "ForkAfterAuthentication=no",
+            ] + self.hostKeyOptions
+        }
+    }
+
+    struct RemoteSettings {
+        let mode: AppState.ConnectionMode
+        let transport: AppState.RemoteTransport
+        let target: String
+        let identity: String
+        let projectRoot: String
+        let cliPath: String
+        let sshHostKeyPolicy: SSHHostKeyPolicy
+    }
+
+    static func connectionSettings(
+        defaults: UserDefaults = AppDefaults.standard,
+        configRoot: [String: Any]? = nil) -> RemoteSettings
+    {
+        let root = configRoot ?? OpenClawConfigFile.loadDict()
+        let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
+        let transport = GatewayRemoteConfig.resolveTransport(root: root)
+        let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
+        let configuredTarget = self.normalizeSSHTargetInput(remote?["sshTarget"] as? String ?? "")
+        // Canonical config wins after an offline edit. UserDefaults remains the
+        // compatibility fallback for older configs that never stored SSH fields.
+        let target = hasConfiguredTarget
+            ? configuredTarget
+            : self.normalizeSSHTargetInput(defaults.string(forKey: remoteTargetKey) ?? "")
+        let hasConfiguredIdentity = remote?.keys.contains("sshIdentity") == true
+        let configuredIdentity = (remote?["sshIdentity"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let identity = hasConfiguredIdentity
+            ? configuredIdentity
+            : defaults.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
+        let projectRoot = defaults.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
+        let cliPath = defaults.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
+        let rawHostKeyPolicy = remote?["sshHostKeyPolicy"] as? String
+        let configuredHostKeyPolicy = rawHostKeyPolicy.flatMap(SSHHostKeyPolicy.init(rawValue:)) ?? .strict
+        let sshHostKeyPolicy: SSHHostKeyPolicy = if configuredHostKeyPolicy == .openssh,
+                                                    !target.isEmpty,
+                                                    target == configuredTarget
+        {
+            .openssh
+        } else {
+            .strict
+        }
+        return RemoteSettings(
+            mode: mode,
+            transport: transport,
+            target: target,
+            identity: identity,
+            projectRoot: projectRoot,
+            cliPath: cliPath,
+            sshHostKeyPolicy: sshHostKeyPolicy)
+    }
+
+    static func connectionModeIsRemote(defaults: UserDefaults = AppDefaults.standard) -> Bool {
+        self.connectionSettings(defaults: defaults).mode == .remote
+    }
+
+    struct SSHParsedTarget: Equatable, Sendable {
+        let user: String?
+        let host: String
+        let port: Int
+    }
+
+    static func parseSSHTarget(_ target: String) -> SSHParsedTarget? {
+        let trimmed = self.normalizeSSHTargetInput(target)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
+            return nil
+        }
+        let userHostPort: String
+        let user: String?
+        if let atRange = trimmed.range(of: "@") {
+            user = String(trimmed[..<atRange.lowerBound])
+            userHostPort = String(trimmed[atRange.upperBound...])
+        } else {
+            user = nil
+            userHostPort = trimmed
+        }
+
+        let host: String
+        let port: Int
+        if let colon = userHostPort.lastIndex(of: ":"), colon != userHostPort.startIndex {
+            host = String(userHostPort[..<colon])
+            let portStr = String(userHostPort[userHostPort.index(after: colon)...])
+            guard let parsedPort = Int(portStr), parsedPort > 0, parsedPort <= 65535 else {
+                return nil
+            }
+            port = parsedPort
+        } else {
+            host = userHostPort
+            port = 22
+        }
+
+        return self.makeSSHTarget(user: user, host: host, port: port)
+    }
+
+    static func sshTargetValidationMessage(_ target: String) -> String? {
+        let trimmed = self.normalizeSSHTargetInput(target)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("-") {
+            return "SSH target cannot start with '-'"
+        }
+        if trimmed.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
+            return "SSH target cannot contain spaces"
+        }
+        if self.parseSSHTarget(trimmed) == nil {
+            return "SSH target must look like user@host[:port]"
+        }
+        return nil
+    }
+
+    private static func expandPath(_ path: String) -> URL {
+        var expanded = path
+        if expanded.hasPrefix("~") {
+            let home = FileManager().homeDirectoryForCurrentUser.path
+            expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
+        }
+        return URL(fileURLWithPath: expanded)
+    }
+
+    static func normalizeSSHTargetInput(_ target: String) -> String {
+        var trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("ssh ") {
+            trimmed = trimmed.replacingOccurrences(of: "ssh ", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
+    private static func isValidSSHComponent(_ value: String) -> Bool {
+        if value.isEmpty { return false }
+        if value.hasPrefix("-") { return false }
+        let invalid = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        return value.rangeOfCharacter(from: invalid) == nil
+    }
+
+    static func makeSSHTarget(user: String?, host: String, port: Int) -> SSHParsedTarget? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.isValidSSHComponent(trimmedHost) else { return nil }
+        let trimmedUser = user?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedUser, !self.isValidSSHComponent(trimmedUser) { return nil }
+        guard port > 0, port <= 65535 else { return nil }
+        return SSHParsedTarget(user: trimmedUser, host: trimmedHost, port: port)
+    }
+
+    static func sshArguments(
+        target: SSHParsedTarget,
+        identity: String,
+        options: [String],
+        remoteCommand: [String] = []) -> [String]
+    {
+        var args = options
+        if target.port > 0 {
+            args.append(contentsOf: ["-p", String(target.port)])
+        }
+        let trimmedIdentity = identity.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedIdentity.isEmpty {
+            // Only use IdentitiesOnly when an explicit identity file is provided.
+            // This allows 1Password SSH agent and other SSH agents to provide keys.
+            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
+            args.append(contentsOf: ["-i", trimmedIdentity])
+        }
+        args.append("--")
+        args.append(target.user.map { "\($0)@\(target.host)" } ?? target.host)
+        args.append(contentsOf: remoteCommand)
+        return args
+    }
+}

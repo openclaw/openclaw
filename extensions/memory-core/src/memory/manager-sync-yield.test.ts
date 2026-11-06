@@ -1,0 +1,170 @@
+import os from "node:os";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import {
+  resolveSessionTranscriptsDirForAgent,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  ensureMemoryIndexSchema,
+  requireNodeSqlite,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { buildSessionEntryMock } = vi.hoisted(() => ({ buildSessionEntryMock: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
+  const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
+  return {
+    ...actual,
+    buildSessionEntry: buildSessionEntryMock,
+    buildSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
+      Promise.all(inputs.map(({ absPath, options }) => buildSessionEntryMock(absPath, options))),
+    isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
+    isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
+    listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
+    parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
+      agentId: "main",
+      sessionId: basename(filePath).replace(/\.jsonl$/, ""),
+    }),
+    sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
+    sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
+      `sessions/${agentId}/${sessionId}`,
+  };
+});
+
+import { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryIndexEntry } from "./manager-index-preparation.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
+
+function createDb(): DatabaseSync {
+  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+  const db = new NodeDatabaseSync(":memory:");
+  ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: false, ftsTokenizer: "unicode61" });
+  return db;
+}
+
+class SessionSyncYieldHarness extends MemorySyncTestHarness {
+  protected readonly cfg = {} as OpenClawConfig;
+  protected readonly settings = {
+    sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
+  } as ResolvedMemorySearchConfig;
+  protected publishedDatabase: MemoryIndexDatabase;
+
+  readonly indexedPaths: string[] = [];
+  private corpusFiles: string[] = [];
+
+  constructor(
+    db: DatabaseSync,
+    private readonly onIndexFile: (count: number) => void,
+    private readonly indexConcurrency: number,
+  ) {
+    super();
+    this.publishedDatabase = new MemoryIndexDatabase(db);
+    // Keep this scheduler fixture microtask-only; worker I/O could hide a missing yield.
+    this.publishedDatabase.readSourceState = async (query) =>
+      loadMemorySourceFileState({ db, ...query });
+  }
+
+  async reindexArchiveFiles(files: string[]): Promise<void> {
+    this.corpusFiles = files;
+    // Source-wide reindexing reads one in-memory hash snapshot. Worker round trips
+    // in targeted sync would yield on their own and hide a missing scheduler yield.
+    await this.syncArchiveFiles({ needsFullReindex: true });
+  }
+
+  protected override async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
+    return this.corpusFiles.map((sessionFile, index) => ({
+      agentId: this.agentId,
+      artifactKind: "archive-artifact",
+      sessionFile,
+      sessionId: `session-${index}`,
+    }));
+  }
+
+  protected async sync(): Promise<void> {}
+
+  protected getIndexConcurrency(): number {
+    return this.indexConcurrency;
+  }
+
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
+    this.indexedPaths.push(entry.path);
+    this.onIndexFile(this.indexedPaths.length);
+  }
+}
+
+describe("session sync responsiveness", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(os.tmpdir(), "openclaw-session-sync-yield"));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    { concurrency: 1, fileCount: 4 },
+    { concurrency: 4, fileCount: 40 },
+  ])(
+    "serves queued work before publishing a prepared session batch with $concurrency workers",
+    async ({ concurrency, fileCount }) => {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      const files = Array.from({ length: fileCount }, (_value, index) =>
+        path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
+      );
+      let immediateRan = false;
+      const immediate = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          immediateRan = true;
+          resolve();
+        });
+      });
+      const observedBeforePublication: boolean[] = [];
+      const db = createDb();
+      let elapsedMs = 0;
+      buildSessionEntryMock.mockImplementation(async (absPath: string) => {
+        // Model worker preparation time; microtask-only I/O keeps the owner's yield observable.
+        elapsedMs += 20;
+        const name = path.basename(absPath);
+        return {
+          path: `sessions/${name}`,
+          absPath,
+          mtimeMs: 1,
+          size: 1,
+          hash: `hash-${name}`,
+          content: `user message for ${name}`,
+        };
+      });
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const harness = new SessionSyncYieldHarness(
+        db,
+        (count) => {
+          if (count === 1) {
+            observedBeforePublication.push(immediateRan);
+          }
+        },
+        concurrency,
+      );
+
+      try {
+        await harness.reindexArchiveFiles(files);
+        expect(harness.indexedPaths).toEqual(
+          files.map((file) => `sessions/${path.basename(file)}`),
+        );
+        expect(observedBeforePublication).toEqual([true]);
+        await immediate;
+      } finally {
+        clock.mockRestore();
+        await immediate;
+        db.close();
+      }
+    },
+  );
+});

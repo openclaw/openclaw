@@ -1,0 +1,35 @@
+export { matrixPlugin } from "./src/channel.js";
+export { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./src/setup-core.js";
+export { matrixOnboardingAdapter } from "./src/onboarding.js";
+export {
+  findMatrixAccountEntry,
+  requiresExplicitMatrixDefaultAccount,
+  resolveConfiguredMatrixAccountIds,
+  resolveMatrixChannelConfig,
+  resolveMatrixDefaultOrOnlyAccountId,
+} from "./src/account-selection.js";
+export {
+  getMatrixScopedEnvVarNames,
+  listMatrixEnvAccountIds,
+  resolveMatrixEnvAccountToken,
+} from "./src/env-vars.js";
+export {
+  hashMatrixAccessToken,
+  resolveMatrixAccountStorageRoot,
+  resolveMatrixCredentialsDir,
+  resolveMatrixCredentialsFilename,
+  resolveMatrixCredentialsPath,
+  resolveMatrixHomeserverKey,
+  sanitizeMatrixPathSegment,
+} from "./src/storage-paths.js";
+export {
+  createMatrixThreadBindingManager,
+  getMatrixThreadBindingManager,
+} from "./src/matrix/thread-bindings.js";
+export {
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKeyAsync,
+} from "./src/matrix/thread-bindings-shared.js";
+export { matrixOnboardingAdapter as matrixSetupWizard } from "./src/onboarding.js";

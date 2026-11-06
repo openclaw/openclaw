@@ -1,0 +1,46 @@
+import { readFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+let wslCached: boolean | null = null;
+
+/** Detects WSL from environment variables without touching the filesystem. */
+export function isWSLEnv(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env.WSL_INTEROP || env.WSL_DISTRO_NAME || env.WSLENV);
+}
+
+/** Detects WSL2 from kernel-version markers, which also establish WSL itself. */
+export function isWSL2Sync(): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  try {
+    const version = normalizeLowercaseStringOrEmpty(readFileSync("/proc/version", "utf8"));
+    return version.includes("wsl2") || version.includes("microsoft-standard");
+  } catch {
+    return false;
+  }
+}
+
+/** Asynchronously detects WSL from env vars and `/proc/sys/kernel/osrelease`, with process cache. */
+export async function isWSL(): Promise<boolean> {
+  if (wslCached !== null) {
+    return wslCached;
+  }
+  let detected = false;
+  if (process.platform === "linux") {
+    detected = isWSLEnv();
+    if (!detected) {
+      try {
+        const release = normalizeLowercaseStringOrEmpty(
+          await fs.readFile("/proc/sys/kernel/osrelease", "utf8"),
+        );
+        detected = release.includes("microsoft") || release.includes("wsl");
+      } catch {
+        // Missing release information leaves the environment undetected.
+      }
+    }
+  }
+  wslCached = detected;
+  return detected;
+}

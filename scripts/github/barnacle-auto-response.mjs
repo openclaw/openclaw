@@ -1,0 +1,1376 @@
+// Barnacle owns deterministic GitHub triage and auto-response behavior.
+
+import { createHash } from "node:crypto";
+import { escapeRegExp } from "../lib/regexp.mjs";
+import {
+  BARNACLE,
+  admissionKey,
+  cheapProtection,
+  freshTarget,
+  humanActivityAt,
+  ownershipProtection,
+  reader,
+  securityProtection,
+  snapshotOf,
+  trustedBarnacle,
+  verifiedComment,
+} from "./barnacle-state.mjs";
+import {
+  NEEDS_PR_CONTEXT_LABEL,
+  PROOF_SUFFICIENT_LABEL,
+  evaluatePullRequestContext,
+  hasAuthoredPullRequestSection,
+  labelsForPullRequestContext,
+} from "./real-behavior-proof-policy.mjs";
+
+const activePrLimit = 20;
+const skillCloseLabel = "r: skill";
+
+const thirdPartyExtensionMessage =
+  "Please publish this as a third-party plugin on [ClawHub](https://clawhub.ai) instead of adding it to the core repo. Docs: https://docs.openclaw.ai/plugin and https://docs.openclaw.ai/clawhub";
+
+const rules = [
+  {
+    label: skillCloseLabel,
+    message:
+      "Thanks for the contribution! New skills should be published on [ClawHub](https://clawhub.ai) for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
+  },
+  {
+    label: "r: support",
+    message:
+      "Please use [our support server](https://openclaw.ai/discord?from=github-openclaw-support-reply) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
+  },
+  {
+    label: "r: false-positive",
+    message:
+      "Closing this because it looks like a false positive or reclassification-only report rather than an actionable OpenClaw bug. If this is still a real issue, please open a fresh report with concrete reproduction steps and current-version details.",
+  },
+  {
+    label: "r: no-ci-pr",
+    message:
+      "Please don't make PRs for test failures on main.\n\n" +
+      "The team is aware of those and will handle them directly on the codebase, not only fixing the tests but also investigating what the root cause is. Having to sift through test-fix-PRs (including some that have been out of date for weeks...) on top of that doesn't help. There are already way too many PRs for humans to manage; please don't make the flood worse.\n\n" +
+      "Thank you.",
+  },
+  {
+    label: "r: too-many-prs",
+    message:
+      `Closing this PR because the author has more than ${activePrLimit} active PRs in this repo. ` +
+      "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. You can close your own PRs to get back under the limit.",
+  },
+  {
+    label: "r: testflight",
+    commentTriggers: ["testflight"],
+    message: "Not available, build from source.",
+  },
+  {
+    label: "r: third-party-extension",
+    message: thirdPartyExtensionMessage,
+  },
+  {
+    label: "r: bluebubbles",
+    commentTriggers: ["bluebubbles", "blue bubbles"],
+    message:
+      "BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Use iMessage via `imsg` instead: https://docs.openclaw.ai/channels/imessage. If this needs to stay BlueBubbles-backed, publish it as a third-party plugin on ClawHub instead of adding it back to core.",
+  },
+  {
+    label: "r: moltbook",
+    lock: true,
+    lockReason: "off-topic",
+    commentTriggers: ["moltbook"],
+    message:
+      "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
+  },
+];
+// Authentication-only history: never publish this pre-attribution support receipt again.
+const legacySupportRule = {
+  label: "r: support",
+  message:
+    "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
+};
+const issueInvalidRule = { stateReason: "not_planned" };
+const issueSpamRule = { stateReason: "not_planned", lock: true, lockReason: "spam" };
+
+// A receipt from a previous close cannot authorize a later reopen episode.
+// Immutable event IDs distinguish transitions even within the same second.
+function responseEpisode(snapshot) {
+  const reopens = snapshot.timeline.filter((event) => event.event === "reopened");
+  if (
+    reopens.some(
+      (event) => !Number.isSafeInteger(event.id) || event.id <= 0 || !Date.parse(event.created_at),
+    )
+  ) {
+    return null;
+  }
+  return reopens.length ? `reopen-${reopens.at(-1).id}` : "initial";
+}
+
+function responseClosureBody(snapshot, rule) {
+  const { pr: item } = snapshot;
+  const episode = responseEpisode(snapshot);
+  if (!episode) {
+    throw new Error("Unknown Barnacle response episode; closure withheld");
+  }
+  const kind = item.head ? "pull-request" : "issue";
+  return `${rule.message ?? "Closing as not planned."}\n\n<!-- barnacle-response:v1 item=${item.number} kind=${kind} head=${item.head?.sha ?? "none"} episode=${episode} rule=${createHash("sha256").update(JSON.stringify(rule)).digest("hex")} -->\n`;
+}
+
+function verifiedResponseReceipt(snapshot, commentId, body, appId, existing = false) {
+  return (
+    verifiedComment(
+      snapshot.comments.find((comment) => comment.id === commentId),
+      body,
+      appId,
+      existing,
+    ) && !snapshot.edits.some((edit) => edit.commentId === commentId)
+  );
+}
+
+/** Only the response owner can authenticate its deterministic closure rules. */
+export function hasVerifiedResponseClosure(snapshot, event) {
+  const { pr, comments } = snapshot;
+  if (
+    pr.head ||
+    pr.state !== "closed" ||
+    pr.state_reason !== "not_planned" ||
+    pr.closed_by?.id !== event.actor?.id ||
+    !BARNACLE.has(event.actor?.id) ||
+    snapshot.activityProtection ||
+    snapshot.historyProtection ||
+    snapshot.unstable ||
+    !responseEpisode(snapshot)
+  ) {
+    return false;
+  }
+  return comments.some((comment) =>
+    [...rules, legacySupportRule, issueInvalidRule, issueSpamRule].some(
+      (rule) =>
+        verifiedResponseReceipt(
+          snapshot,
+          comment.id,
+          responseClosureBody(snapshot, rule),
+          BARNACLE.get(event.actor.id),
+          true,
+        ) && Date.parse(comment.created_at) <= Date.parse(event.created_at),
+    ),
+  );
+}
+
+/** @type {Record<string, { color: string; description: string }>} */
+export const managedLabelSpecs = {
+  [skillCloseLabel]: {
+    color: "5319E7",
+    description: "Auto-close: skills should be published on ClawHub, not added to core.",
+  },
+  "r: support": {
+    color: "0E8A16",
+    description: "Auto-close: support requests belong in Discord or support docs.",
+  },
+  "r: false-positive": {
+    color: "D93F0B",
+    description: "Auto-close: false positive or reclassification-only report.",
+  },
+  "r: no-ci-pr": {
+    color: "D93F0B",
+    description: "Auto-close: PR only chasing known main CI/test failures.",
+  },
+  "r: too-many-prs": {
+    color: "D93F0B",
+    description: "Auto-close: author has more than twenty active PRs.",
+  },
+  "r: too-many-prs-override": {
+    color: "C2E0C6",
+    description: "Maintainer override for the active-PR limit auto-close.",
+  },
+  "r: testflight": {
+    color: "D93F0B",
+    description: "Auto-close: TestFlight access/request issues are off-topic here.",
+  },
+  "r: third-party-extension": {
+    color: "5319E7",
+    description: "Auto-close: third-party plugins/capabilities belong on ClawHub.",
+  },
+  "r: bluebubbles": {
+    color: "D93F0B",
+    description: "Auto-close: BlueBubbles is deprecated; use iMessage via imsg or ClawHub.",
+  },
+  "r: moltbook": {
+    color: "B60205",
+    description: "Auto-close and lock: Moltbook is off-topic for OpenClaw.",
+  },
+  "r: spam": {
+    color: "B60205",
+    description: "Auto-close and lock spam.",
+  },
+  dirty: {
+    color: "B60205",
+    description: "Maintainer-applied auto-close for dirty/unrelated PR branches.",
+  },
+  "bad-barnacle": {
+    color: "E99695",
+    description: "Suppress Barnacle automation on this issue or PR.",
+  },
+  "trigger-response": {
+    color: "FBCA04",
+    description: "Maintainer trigger to rerun Barnacle auto-response on an item.",
+  },
+  "triage: low-signal-docs": {
+    color: "C5DEF5",
+    description: "Candidate: docs-only change looks low signal; maintainer review needed.",
+  },
+  "triage: docs-discoverability": {
+    color: "C5DEF5",
+    description: "Candidate: docs discoverability/listing change may belong elsewhere.",
+  },
+  "triage: test-only-no-bug": {
+    color: "C5DEF5",
+    description: "Candidate: test-only change has no linked bug or behavior evidence.",
+  },
+  "triage: refactor-only": {
+    color: "C5DEF5",
+    description: "Candidate: refactor/cleanup-only PR without maintainer context.",
+  },
+  "triage: blank-template": {
+    color: "C5DEF5",
+    description: "Candidate: PR template appears mostly untouched.",
+  },
+  [NEEDS_PR_CONTEXT_LABEL]: {
+    color: "C5DEF5",
+    description: "Candidate: external PR body lacks required problem context or evidence.",
+  },
+  "triage: dirty-candidate": {
+    color: "C5DEF5",
+    description: "Candidate: broad unrelated surfaces; may need splitting or cleanup.",
+  },
+  "triage: risky-infra": {
+    color: "C5DEF5",
+    description: "Candidate: infra/CI/release change needs maintainer review.",
+  },
+  "triage: external-plugin-candidate": {
+    color: "C5DEF5",
+    description: "Candidate: plugin/capability may belong on ClawHub.",
+  },
+};
+
+export const candidateLabels = {
+  blankTemplate: "triage: blank-template",
+  lowSignalDocs: "triage: low-signal-docs",
+  docsDiscoverability: "triage: docs-discoverability",
+  testOnlyNoBug: "triage: test-only-no-bug",
+  refactorOnly: "triage: refactor-only",
+  needsPrContext: NEEDS_PR_CONTEXT_LABEL,
+  dirtyCandidate: "triage: dirty-candidate",
+  riskyInfra: "triage: risky-infra",
+  externalPluginCandidate: "triage: external-plugin-candidate",
+};
+
+const bugSubtypeLabelSpecs = {
+  regression: {
+    color: "D93F0B",
+    description: "Behavior that previously worked and now fails",
+  },
+  "bug:crash": {
+    color: "B60205",
+    description: "Process/app exits unexpectedly or hangs",
+  },
+  "bug:behavior": {
+    color: "D73A4A",
+    description: "Incorrect behavior without a crash",
+  },
+};
+
+const bugTypeToLabel = {
+  "Regression (worked before, now fails)": "regression",
+  "Crash (process/app exits or hangs)": "bug:crash",
+  "Behavior bug (incorrect output/state without crash)": "bug:behavior",
+};
+const bugSubtypeLabels = Object.keys(bugSubtypeLabelSpecs);
+
+const maintainerTeam = "maintainer";
+const pingWarningMessage =
+  "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://openclaw.ai/discord?from=github-openclaw-maintainer-warning";
+const mentionRegex = /@([A-Za-z0-9-]+)/g;
+const triggerLabel = "trigger-response";
+const activePrLimitLabel = "r: too-many-prs";
+const activePrLimitOverrideLabel = "r: too-many-prs-override";
+const invalidLabel = "invalid";
+const spamLabel = "r: spam";
+const dirtyLabel = "dirty";
+const badBarnacleLabel = "bad-barnacle";
+const maintainerAuthorLabel = "maintainer";
+const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
+const candidateLabelValues = Object.values(candidateLabels);
+const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL, skillCloseLabel];
+const noisyPrMessage =
+  "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
+
+const candidateActionRules = Object.entries({
+  [candidateLabels.needsPrContext]:
+    "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
+  [candidateLabels.dirtyCandidate]: noisyPrMessage,
+  [candidateLabels.externalPluginCandidate]: thirdPartyExtensionMessage,
+  [candidateLabels.riskyInfra]:
+    "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. These changes can affect many development and release workflows; open an issue/RFC or get owner approval before sending a patch.",
+  [candidateLabels.docsDiscoverability]:
+    "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
+  [candidateLabels.lowSignalDocs]:
+    "Closing this PR because the docs-only change is too low-signal for the core repo. Please reopen or resubmit with a concrete OpenClaw docs gap and linked context.",
+  [candidateLabels.testOnlyNoBug]:
+    "Closing this PR because it only changes tests without a linked bug, owner request, or behavior change. Test-only PRs need a concrete regression or maintainer-requested gap.",
+  [candidateLabels.refactorOnly]:
+    "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
+  [candidateLabels.blankTemplate]:
+    "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
+}).map(([label, message]) => ({ label, message }));
+
+const normalizeLogin = (login) => login.toLowerCase();
+const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
+
+function isAutomationPullRequest(pullRequest) {
+  const headRefName = pullRequest.headRefName ?? pullRequest.head?.ref ?? "";
+  return (
+    typeof headRefName === "string" &&
+    automationPrHeadPrefixes.some((prefix) => headRefName.startsWith(prefix))
+  );
+}
+
+function extractIssueFormValue(body, field) {
+  if (!body) {
+    return "";
+  }
+  const escapedField = escapeRegExp(field);
+  const regex = new RegExp(
+    `(?:^|\\n)###\\s+${escapedField}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|$)`,
+    "i",
+  );
+  const match = body.match(regex);
+  if (!match) {
+    return "";
+  }
+  for (const line of match[1].split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return "";
+}
+
+function hasLinkedReference(text) {
+  return /(?:#\d+|github\.com\/openclaw\/openclaw\/(?:issues|pull)\/\d+)/i.test(text);
+}
+
+function hasFilledTemplateLine(body, field) {
+  const escapedField = escapeRegExp(field);
+  const regex = new RegExp(`^\\s*-\\s*${escapedField}:\\s*\\S`, "im");
+  return regex.test(body);
+}
+
+function hasMostlyBlankTemplate(body) {
+  if (!body) {
+    return true;
+  }
+  const legacyEmptyFields = [
+    "Problem",
+    "Why it matters",
+    "What changed",
+    "What did NOT change",
+    "Root cause",
+    "Target test or file",
+  ].filter((field) => {
+    const escapedField = escapeRegExp(field);
+    const regex = new RegExp(`^\\s*-\\s*${escapedField}(?: \\([^)]*\\))?:\\s*$`, "im");
+    return regex.test(body);
+  }).length;
+  const hasLegacyTemplateIntro = body.includes("Describe the problem and fix in 2–5 bullets");
+  const emptyClosingRef = /^\s*-\s*(?:Closes|Related)\s+#\s*$/im.test(body);
+  const hasNewTemplateIntro = body.includes(
+    "Describe the concrete user, product, or operational problem.",
+  );
+  return (
+    (hasLegacyTemplateIntro && legacyEmptyFields >= 3 && emptyClosingRef) ||
+    (hasNewTemplateIntro &&
+      !hasAuthoredPullRequestSection("What Problem This Solves", body) &&
+      !hasAuthoredPullRequestSection("Evidence", body))
+  );
+}
+
+function stripPullRequestTemplateBoilerplate(text) {
+  return text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/^#{2,3}\s+.*$/gm, "")
+    .replace(/^-\s*\[[ xX]\]\s+.*$/gm, "")
+    .replace(/^-\s*(?:Closes|Related)\s+#\s*$/gim, "")
+    .replace(
+      /^-\s*(?:Problem|Why it matters|What changed|What did NOT change|Root cause|Missing detection \/ guardrail|Contributing context|Target test or file|Scenario the test should lock in|Why this is the smallest reliable guardrail|Existing test that already covers this|If no new test is added, why not|Verified scenarios|Edge cases checked|What you did \*\*not\*\* verify|Risk|Mitigation):\s*$/gim,
+      "",
+    )
+    .replace(/Describe the problem and fix in 2–5 bullets:/g, "")
+    .replace(
+      /For bug fixes or regressions, explain why this happened, not just what changed\. Otherwise write `N\/A`\. If the cause is unclear, write `Unknown`\./g,
+      "",
+    )
+    .replace(
+      /For bug fixes or regressions, name the smallest reliable test coverage that should catch this\. Otherwise write `N\/A`\./g,
+      "",
+    );
+}
+
+function hasConcreteBehaviorContext(body, text) {
+  if (hasLinkedReference(text)) {
+    return true;
+  }
+  if (hasAuthoredPullRequestSection("What Problem This Solves", body)) {
+    return true;
+  }
+  if (
+    hasFilledTemplateLine(body, "Problem") &&
+    hasFilledTemplateLine(body, "Why it matters") &&
+    hasFilledTemplateLine(body, "What changed")
+  ) {
+    return true;
+  }
+  const signalText = stripPullRequestTemplateBoilerplate(text);
+  return /\b(repro|regression|root cause|crash|bug|failure|failing|broken|behavior|scenario|fixes?)\b/i.test(
+    signalText,
+  );
+}
+
+function hasClearDesignContext(body, text) {
+  if (hasConcreteBehaviorContext(body, text)) {
+    return true;
+  }
+  const signalText = stripPullRequestTemplateBoilerplate(text);
+  return /\b(rfc|design|architecture|migration|maintainer request|owner request|requested by maintainer|approved by maintainer|beta blocker)\b/i.test(
+    signalText,
+  );
+}
+
+function isMarkdownOrDocsFile(filename) {
+  return (
+    filename.startsWith("docs/") ||
+    /\.mdx?$/i.test(filename) ||
+    /(^|\/)(README|CHANGELOG|CONTRIBUTING|AGENTS|CLAUDE)\.md$/i.test(filename)
+  );
+}
+
+function isTestLikeFile(filename) {
+  return (
+    /(^|\/)(__tests__|fixtures?|snapshots?)(\/|$)/i.test(filename) ||
+    /(^|\/)test\/helpers\//i.test(filename) ||
+    /(^|\/)src\/test-utils\//i.test(filename) ||
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(filename) ||
+    /\.(?:snap|snapshot)$/i.test(filename)
+  );
+}
+
+function isInfraLikeFile(filename) {
+  return (
+    /^\.github\/(?:workflows|actions)\//.test(filename) ||
+    filename.startsWith("scripts/") ||
+    /^Dockerfile(?:\.|$)/.test(filename) ||
+    filename.startsWith("docker/") ||
+    /(^|\/)(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|bun\.lockb?|actionlint\.yaml|dependabot\.yml)$/i.test(
+      filename,
+    ) ||
+    /\brelease\b/i.test(filename)
+  );
+}
+
+function isStandaloneSkillSubmission(files) {
+  // Auto-close only whole submissions; rename sources stop core files from
+  // acquiring the destructive skill label by moving under a new skill root.
+  const addedSkillRoots = files
+    .filter(
+      (file) => file.status === "added" && /^skills\/(?:[^/]+\/)+SKILL\.md$/i.test(file.filename),
+    )
+    .map((file) => file.filename.slice(0, -"SKILL.md".length).toLowerCase());
+  const isInAddedSkillRoot = (filename) => {
+    const normalizedFilename = filename.toLowerCase();
+    return addedSkillRoots.some((root) => normalizedFilename.startsWith(root));
+  };
+
+  return (
+    addedSkillRoots.length > 0 &&
+    files.every(
+      (file) =>
+        isInAddedSkillRoot(file.filename) &&
+        (file.status !== "renamed" ||
+          (typeof file.previous_filename === "string" &&
+            isInAddedSkillRoot(file.previous_filename))),
+    )
+  );
+}
+
+function surfacesForFile(filename) {
+  const prefix = ["ui", "src/gateway", "src/plugins", "extensions", "apps", ".github"].find(
+    (surface) => filename.startsWith(`${surface}/`),
+  );
+  const surface =
+    prefix ??
+    (filename.startsWith("docs/") || /\.mdx?$/i.test(filename)
+      ? "docs"
+      : filename.startsWith("scripts/")
+        ? "scripts"
+        : "other");
+  return /\.generated\/|generated|\.snap$/i.test(filename) ? ["generated", surface] : [surface];
+}
+
+export function classifyPullRequestCandidateLabels(pullRequest, files) {
+  if (files.length === 0) {
+    return [];
+  }
+
+  const filenames = files.map((file) => file.filename);
+  const body = pullRequest.body ?? "";
+  const text = `${pullRequest.title ?? ""}\n${body}`;
+  const contentText = stripPullRequestTemplateBoilerplate(text);
+  const lowerText = text.toLowerCase();
+  const linkedReference = hasLinkedReference(text);
+  const blankTemplate = hasMostlyBlankTemplate(body);
+  const concreteBehaviorContext = blankTemplate
+    ? linkedReference
+    : hasConcreteBehaviorContext(body, text);
+  const clearDesignContext = blankTemplate ? linkedReference : hasClearDesignContext(body, text);
+  const labelsToAdd = [];
+
+  if (blankTemplate) {
+    labelsToAdd.push(candidateLabels.blankTemplate);
+  }
+
+  labelsToAdd.push(
+    ...labelsForPullRequestContext(
+      evaluatePullRequestContext({
+        pullRequest,
+      }),
+    ),
+  );
+
+  const docsOnly = filenames.every(isMarkdownOrDocsFile);
+  const docsSignal =
+    /\b(add|adds|update|updates|fix|fixes|improve|cleanup|clean up|typo|readme|docs?|documentation|translation|translate)\b/i.test(
+      text,
+    );
+  const discoverabilityDocs = filenames.some((filename) =>
+    /^(README(?:\.[^.]+)?\.md|docs\/plugins\/community\.md)$/i.test(filename),
+  );
+  if (docsOnly && !linkedReference && (blankTemplate || docsSignal)) {
+    labelsToAdd.push(candidateLabels.lowSignalDocs);
+  }
+  if (
+    docsOnly &&
+    !linkedReference &&
+    (discoverabilityDocs ||
+      /\b(community plugin|plugin listing|discoverability|showcase|clawhub)\b/i.test(text))
+  ) {
+    labelsToAdd.push(candidateLabels.docsDiscoverability);
+  }
+
+  const testOnly = filenames.every(isTestLikeFile);
+  const lowSignalTestTitle =
+    /\b(add|adds|added|improve|increase|boost|expand|fix|stabilize|update)\b.*\b(test|tests|coverage|flaky|flake|snapshot|fixtures?)\b/i.test(
+      pullRequest.title ?? "",
+    ) ||
+    /\b(test|tests|coverage|flaky|flake)\b.*\b(add|increase|improve|fix|update|stabilize)\b/i.test(
+      pullRequest.title ?? "",
+    );
+  if (testOnly && !linkedReference && !concreteBehaviorContext && lowSignalTestTitle) {
+    labelsToAdd.push(candidateLabels.testOnlyNoBug);
+  }
+
+  if (
+    !linkedReference &&
+    !concreteBehaviorContext &&
+    /\b(refactor|cleanup|clean up|rename|formatting|style-only|style only)\b/i.test(contentText)
+  ) {
+    labelsToAdd.push(candidateLabels.refactorOnly);
+  }
+
+  if (filenames.every(isInfraLikeFile) && !linkedReference && !clearDesignContext) {
+    labelsToAdd.push(candidateLabels.riskyInfra);
+  }
+
+  const addsPluginManifest = files.some(
+    (file) =>
+      file.status === "added" && /^extensions\/[^/]+\/openclaw\.plugin\.json$/i.test(file.filename),
+  );
+  if (
+    !clearDesignContext &&
+    (addsPluginManifest ||
+      /\b(third[- ]party|external plugin|community plugin|clawhub)\b/i.test(lowerText))
+  ) {
+    labelsToAdd.push(candidateLabels.externalPluginCandidate);
+  }
+
+  if (isStandaloneSkillSubmission(files)) {
+    labelsToAdd.push(skillCloseLabel);
+  }
+
+  const surfaces = new Set(filenames.flatMap(surfacesForFile));
+  if (surfaces.size >= 4 && !clearDesignContext) {
+    labelsToAdd.push(candidateLabels.dirtyCandidate);
+  }
+
+  return [...new Set(labelsToAdd)];
+}
+
+async function ensureLabelSynced(github, context, name, color, description) {
+  try {
+    const current = await github.rest.issues.getLabel({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      name,
+    });
+    const currentDescription = current.data.description ?? "";
+    if (
+      current.data.color.toLowerCase() !== color.toLowerCase() ||
+      currentDescription !== description
+    ) {
+      await github.rest.issues.updateLabel({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        name,
+        color,
+        description,
+      });
+    }
+  } catch (error) {
+    if (error?.status !== 404) {
+      throw error;
+    }
+    await github.rest.issues.createLabel({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      name,
+      color,
+      description,
+    });
+  }
+}
+
+async function syncManagedLabels(github, context) {
+  for (const [name, spec] of Object.entries(managedLabelSpecs)) {
+    await ensureLabelSynced(github, context, name, spec.color, spec.description);
+  }
+}
+
+async function syncBugSubtypeLabel(github, context, issue, labelSet) {
+  if (!labelSet.has("bug")) {
+    return;
+  }
+
+  const selectedBugType = extractIssueFormValue(issue.body ?? "", "Bug type");
+  const targetLabel = bugTypeToLabel[selectedBugType];
+  if (!targetLabel) {
+    return;
+  }
+
+  const targetSpec = bugSubtypeLabelSpecs[targetLabel];
+  await ensureLabelSynced(github, context, targetLabel, targetSpec.color, targetSpec.description);
+
+  for (const subtypeLabel of bugSubtypeLabels) {
+    if (subtypeLabel === targetLabel) {
+      continue;
+    }
+    if (!labelSet.has(subtypeLabel)) {
+      continue;
+    }
+    try {
+      await github.rest.issues.removeLabel({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: issue.number,
+        name: subtypeLabel,
+      });
+      labelSet.delete(subtypeLabel);
+    } catch (error) {
+      if (error?.status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  if (!labelSet.has(targetLabel)) {
+    await github.rest.issues.addLabels({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      issue_number: issue.number,
+      labels: [targetLabel],
+    });
+    labelSet.add(targetLabel);
+  }
+}
+
+function createMaintainerChecker(github, context) {
+  const maintainerCache = new Map();
+  return async (login) => {
+    if (!login) {
+      return false;
+    }
+    const normalized = normalizeLogin(login);
+    if (maintainerCache.has(normalized)) {
+      return maintainerCache.get(normalized);
+    }
+    let isMember = false;
+    try {
+      const membership = await github.rest.teams.getMembershipForUserInOrg({
+        org: context.repo.owner,
+        team_slug: maintainerTeam,
+        username: normalized,
+      });
+      isMember = membership?.data?.state === "active";
+    } catch (error) {
+      if (error?.status !== 404) {
+        throw error;
+      }
+    }
+    maintainerCache.set(normalized, isMember);
+    return isMember;
+  };
+}
+
+async function hasPrivilegedRepositoryRole(github, context, login) {
+  try {
+    const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      username: login,
+    });
+    const roleName = (permission?.data?.role_name ?? "").toLowerCase();
+    const permissionName = (permission?.data?.permission ?? "").toLowerCase();
+    return privilegedRepositoryRoles.has(roleName) || privilegedRepositoryRoles.has(permissionName);
+  } catch (error) {
+    if (error?.status !== 404) {
+      throw error;
+    }
+  }
+
+  return false;
+}
+
+async function isPrivilegedActor(github, context, login, isMaintainer) {
+  if (!login) {
+    return false;
+  }
+  return (await isMaintainer(login)) || (await hasPrivilegedRepositoryRole(github, context, login));
+}
+
+async function isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer) {
+  const authorLogin = target.user?.login ?? "";
+  const authorAssociation = String(target.author_association ?? "").toUpperCase();
+  if (labelSet.has(maintainerAuthorLabel) || privilegedAuthorAssociations.has(authorAssociation)) {
+    return true;
+  }
+  return isPrivilegedActor(github, context, authorLogin, isMaintainer);
+}
+
+async function countMaintainerMentions(body, authorLogin, isMaintainer, owner) {
+  if (!body) {
+    return 0;
+  }
+  const normalizedAuthor = authorLogin ? normalizeLogin(authorLogin) : "";
+  if (normalizedAuthor && (await isMaintainer(normalizedAuthor))) {
+    return 0;
+  }
+
+  const haystack = body.toLowerCase();
+  const teamMention = `@${owner.toLowerCase()}/${maintainerTeam}`;
+  if (haystack.includes(teamMention)) {
+    return 3;
+  }
+
+  const mentions = new Set();
+  for (const match of body.matchAll(mentionRegex)) {
+    mentions.add(normalizeLogin(match[1]));
+  }
+  if (normalizedAuthor) {
+    mentions.delete(normalizedAuthor);
+  }
+
+  let count = 0;
+  for (const login of mentions) {
+    if (await isMaintainer(login)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+async function addMissingLabels(github, context, core, issueNumber, labels, labelSet) {
+  const missingLabels = labels.filter((label) => !labelSet.has(label));
+  if (missingLabels.length === 0) {
+    return;
+  }
+  await github.rest.issues.addLabels({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    issue_number: issueNumber,
+    labels: missingLabels,
+  });
+  for (const label of missingLabels) {
+    labelSet.add(label);
+  }
+  core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
+}
+
+function isClawSweeperOwnedLabel(label) {
+  return label === "clawsweeper" || label.startsWith("clawsweeper:");
+}
+
+async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
+  const files = await github.paginate(github.rest.pulls.listFiles, {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    pull_number: pullRequest.number,
+    per_page: 100,
+  });
+  const candidateLabelsToApply = classifyPullRequestCandidateLabels(
+    {
+      ...pullRequest,
+      labels: [...labelSet].map((name) => ({ name })),
+    },
+    files,
+  );
+  const preserveSkillCloseLabel =
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === skillCloseLabel &&
+    !isAutomationActor(context);
+  const staleContextLabels = structuralContextLabelValues.filter(
+    (label) =>
+      (!preserveSkillCloseLabel || label !== skillCloseLabel) &&
+      labelSet.has(label) &&
+      !candidateLabelsToApply.includes(label),
+  );
+  await removeLabels(github, context, pullRequest.number, staleContextLabels, labelSet);
+  await addMissingLabels(
+    github,
+    context,
+    core,
+    pullRequest.number,
+    candidateLabelsToApply,
+    labelSet,
+  );
+}
+
+function isAutomationUser(user, fallbackLogin = "") {
+  const login = user?.login ?? fallbackLogin;
+  return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
+}
+
+function isAutomationActor(context) {
+  return isAutomationUser(context.payload.sender, context.actor ?? "");
+}
+
+function isClawSweeperProofSufficientLabelEvent(context) {
+  const senderLogin = context.payload.sender?.login ?? context.actor ?? "";
+  return (
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === PROOF_SUFFICIENT_LABEL &&
+    isAutomationUser(context.payload.sender, senderLogin) &&
+    /clawsweeper/i.test(senderLogin)
+  );
+}
+
+function candidateActionRuleForLabelSet(labelSet, preferredLabel = "") {
+  const preferredRule = candidateActionRules.find(
+    (rule) => rule.label === preferredLabel && labelSet.has(rule.label),
+  );
+  if (preferredRule) {
+    return preferredRule;
+  }
+  return candidateActionRules.find((rule) => labelSet.has(rule.label));
+}
+
+async function applyPullRequestCandidateAction({
+  github,
+  context,
+  pullRequest,
+  labelSet,
+  hasTriggerLabel,
+  isLabelEvent,
+}) {
+  if (isAutomationActor(context)) {
+    return false;
+  }
+
+  const eventLabel = context.payload.label?.name ?? "";
+  const isCandidateLabelEvent = isLabelEvent && candidateLabelValues.includes(eventLabel);
+  if (!hasTriggerLabel && !isCandidateLabelEvent) {
+    return false;
+  }
+
+  const rule = candidateActionRuleForLabelSet(
+    labelSet,
+    isCandidateLabelEvent ? eventLabel : undefined,
+  );
+  if (!rule) {
+    return false;
+  }
+
+  await applyResponseRule(github, context, pullRequest.number, rule);
+  return true;
+}
+
+async function applyResponseRule(github, context, issueNumber, rule) {
+  const target = {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    issue_number: issueNumber,
+  };
+  const io = reader(github, github, context, 4500);
+  const live = await freshTarget(github, context, issueNumber);
+  const kind = live.head ? "pull-request" : "issue";
+  const observe = () => snapshotOf(github, github, io, issueNumber, kind, false);
+  const before = await observe();
+  const protection = (snapshot) =>
+    cheapProtection(snapshot.pr) ||
+    snapshot.ownershipProtection ||
+    snapshot.activityProtection ||
+    snapshot.historyProtection ||
+    snapshot.unstable ||
+    securityProtection(snapshot.comments, snapshot.pr);
+  if (protection(before)) {
+    return;
+  }
+  const body = responseClosureBody(before, rule);
+  const existing = before.comments.findLast((comment) =>
+    verifiedResponseReceipt(before, comment.id, body, context.barnacleAppId, true),
+  );
+  const { data: posted } = existing
+    ? { data: existing }
+    : await github.rest.issues.createComment({ ...target, body });
+  const { data: stored } = await github.rest.issues.getComment({
+    ...context.repo,
+    comment_id: posted.id,
+  });
+  if (!verifiedComment(stored, body, context.barnacleAppId, Boolean(existing))) {
+    throw new Error("Barnacle response readback mismatch; closure withheld");
+  }
+  const final = await observe();
+  if (
+    protection(final) ||
+    responseEpisode(final) !== responseEpisode(before) ||
+    !verifiedResponseReceipt(final, stored.id, body, context.barnacleAppId, Boolean(existing)) ||
+    admissionKey(before.pr) !== admissionKey(final.pr) ||
+    humanActivityAt(before) !== humanActivityAt(final)
+  ) {
+    throw new Error("Barnacle target changed after notice; closure withheld");
+  }
+  await github.rest.issues.update({
+    ...target,
+    state: "closed",
+    state_reason: rule.stateReason ?? "not_planned",
+  });
+  const terminal = await freshTarget(github, context, issueNumber);
+  const actor = [...BARNACLE].find(([, app]) => app === context.barnacleAppId)?.[0];
+  if (
+    terminal.state !== "closed" ||
+    terminal.merged ||
+    terminal.closed_by?.id !== actor ||
+    terminal.head?.sha !== live.head?.sha ||
+    (!live.head && terminal.state_reason !== (rule.stateReason ?? "not_planned"))
+  ) {
+    throw new Error("Barnacle closure terminal verification failed");
+  }
+  if (rule.lock) {
+    const afterClose = await observe();
+    const lockTarget = await freshTarget(github, context, issueNumber);
+    if (
+      afterClose.pr.state !== "closed" ||
+      afterClose.pr.locked ||
+      responseEpisode(afterClose) !== responseEpisode(before) ||
+      !verifiedResponseReceipt(
+        afterClose,
+        stored.id,
+        body,
+        context.barnacleAppId,
+        Boolean(existing),
+      ) ||
+      admissionKey({ ...afterClose.pr, state: "open" }) !== admissionKey(before.pr) ||
+      humanActivityAt(afterClose) !== humanActivityAt(before) ||
+      afterClose.ownershipProtection ||
+      afterClose.activityProtection ||
+      afterClose.historyProtection ||
+      afterClose.unstable ||
+      securityProtection(afterClose.comments, afterClose.pr) ||
+      lockTarget.closed_by?.id !== actor ||
+      admissionKey(lockTarget) !== admissionKey(afterClose.pr)
+    ) {
+      throw new Error("Barnacle target changed before lock");
+    }
+    await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason });
+    const locked = await freshTarget(github, context, issueNumber);
+    if (!locked.locked || locked.state !== "closed") {
+      throw new Error("Barnacle lock readback mismatch");
+    }
+  }
+}
+
+async function removeLabels(github, context, issueNumber, labels, labelSet) {
+  for (const label of labels) {
+    if (!labelSet.has(label)) {
+      continue;
+    }
+    if (isClawSweeperOwnedLabel(label)) {
+      continue;
+    }
+    try {
+      await github.rest.issues.removeLabel({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: issueNumber,
+        name: label,
+      });
+    } catch (error) {
+      if (error?.status !== 404) {
+        throw error;
+      }
+    }
+    labelSet.delete(label);
+  }
+}
+
+export async function runBarnacleAutoResponse({ github, context, core = console, expectedAppId }) {
+  const target = context.payload.issue ?? context.payload.pull_request;
+  if (!target) {
+    return;
+  }
+  if (![...BARNACLE.values()].includes(expectedAppId)) {
+    throw new Error("A selected Barnacle app identity is required");
+  }
+  const io = reader(github, github, context, 4500);
+  let expectedTarget;
+  const admit = async () => {
+    const live = await freshTarget(github, context, target.number);
+    const reason = cheapProtection(live) || (await ownershipProtection(io, live));
+    if (reason) {
+      throw Object.assign(new Error(reason), { code: "BARNACLE_PROTECTED" });
+    }
+    if (expectedTarget && admissionKey(live) !== admissionKey(expectedTarget)) {
+      throw new Error("Barnacle target changed during response admission");
+    }
+    return live;
+  };
+  try {
+    const live = await admit();
+    expectedTarget = structuredClone(live);
+    const guarded = { ...github, rest: { ...github.rest, issues: { ...github.rest.issues } } };
+    for (const method of [
+      "addLabels",
+      "removeLabel",
+      "createComment",
+      "createLabel",
+      "updateLabel",
+      "update",
+    ]) {
+      guarded.rest.issues[method] = async (params) => {
+        if (method !== "createComment") {
+          await admit();
+          const response = await github.rest.issues[method](params);
+          if (method === "addLabels") {
+            const labels = new Set(expectedTarget.labels.map((label) => label.name ?? label));
+            for (const name of params.labels) {
+              labels.add(name);
+            }
+            expectedTarget.labels = [...labels].map((name) => ({ name }));
+          }
+          if (method === "removeLabel") {
+            expectedTarget.labels = expectedTarget.labels.filter(
+              (label) => (label.name ?? label) !== params.name,
+            );
+          }
+          return response;
+        }
+        const body = params.body.includes("<!-- barnacle-")
+          ? params.body
+          : `${params.body}\n\n<!-- barnacle-reply:v1 item=${target.number} event=${context.payload.comment?.id ?? context.payload.action} key=${createHash(
+              "sha256",
+            )
+              .update(JSON.stringify([live.head?.sha, live.body, params.body]))
+              .digest("hex")} -->\n`;
+        const previous = (
+          await io.pages(github.rest.issues.listComments, { issue_number: target.number })
+        ).findLast(
+          (comment) =>
+            trustedBarnacle(comment) &&
+            comment.body === body &&
+            comment.created_at === comment.updated_at,
+        );
+        // Pagination may outlive a new hold or changed target. Re-admit at
+        // publication, including receipt reuse, before this wrapper returns.
+        await admit();
+        const response = previous
+          ? { data: previous }
+          : await github.rest.issues.createComment({ ...params, body });
+        const { data: stored } = await io.call(github.rest.issues.getComment, {
+          comment_id: response.data.id,
+        });
+        if (!verifiedComment(stored, body, expectedAppId, Boolean(previous))) {
+          throw new Error("Barnacle comment readback mismatch");
+        }
+        return { data: stored };
+      };
+    }
+    const payload = {
+      ...context.payload,
+      [context.payload.issue ? "issue" : "pull_request"]: live,
+    };
+    // Label-trigger admission uses the live label set. Replayed/removed labels
+    // cannot turn an old event into a new product decision.
+    if (
+      payload.action === "labeled" &&
+      !live.labels.some((label) => (label.name ?? label) === payload.label?.name)
+    ) {
+      return;
+    }
+    await runAdmittedAutoResponse({
+      github: guarded,
+      context: Object.assign(Object.create(context), { payload, barnacleAppId: expectedAppId }),
+      core,
+    });
+  } catch (error) {
+    if (error.code !== "BARNACLE_PROTECTED") {
+      throw error;
+    }
+    core.info(`Skipping Barnacle #${target.number}: ${error.message}`);
+  }
+}
+
+/**
+ * @param {{
+ *   github: Record<string, unknown>;
+ *   context: Record<string, unknown>;
+ *   core?: Pick<Console, "info">;
+ * }} params
+ */
+async function runAdmittedAutoResponse({ github, context, core = console }) {
+  const target = context.payload.issue ?? context.payload.pull_request;
+  if (!target) {
+    return;
+  }
+
+  const labelSet = new Set(
+    (target.labels ?? [])
+      .map((label) => (typeof label === "string" ? label : label?.name))
+      .filter((name) => typeof name === "string"),
+  );
+
+  const issue = context.payload.issue;
+  const pullRequest = context.payload.pull_request;
+  const comment = context.payload.comment;
+  const isMaintainer = createMaintainerChecker(github, context);
+
+  if (comment) {
+    const authorLogin = comment.user?.login ?? "";
+    if (comment.user?.type === "Bot" || authorLogin.endsWith("[bot]")) {
+      return;
+    }
+    if (
+      (await isPrivilegedActor(github, context, authorLogin, isMaintainer)) ||
+      (await isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer))
+    ) {
+      core.info(
+        `Skipping Barnacle comment checks for #${target.number} because a maintainer is involved.`,
+      );
+      return;
+    }
+
+    const commentBody = comment.body ?? "";
+    const responses = [];
+    const mentionCount = await countMaintainerMentions(
+      commentBody,
+      authorLogin,
+      isMaintainer,
+      context.repo.owner,
+    );
+    if (mentionCount >= 3) {
+      responses.push(pingWarningMessage);
+    }
+
+    const commentHaystack = commentBody.toLowerCase();
+    const commentRule = rules.find((item) =>
+      (item.commentTriggers ?? []).some((trigger) => commentHaystack.includes(trigger)),
+    );
+    if (commentRule) {
+      responses.push(commentRule.message);
+    }
+
+    if (responses.length > 0) {
+      await github.rest.issues.createComment({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: target.number,
+        body: responses.join("\n\n"),
+      });
+    }
+    return;
+  }
+
+  if (await isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer)) {
+    core.info(
+      `Skipping Barnacle auto-response checks for #${target.number} because it is maintainer-authored.`,
+    );
+    return;
+  }
+
+  if (issue) {
+    const action = context.payload.action;
+    if (action === "opened" || action === "edited") {
+      const issueText = `${issue.title ?? ""}\n${issue.body ?? ""}`.trim();
+      const authorLogin = issue.user?.login ?? "";
+      const mentionCount = await countMaintainerMentions(
+        issueText,
+        authorLogin,
+        isMaintainer,
+        context.repo.owner,
+      );
+      if (mentionCount >= 3) {
+        await github.rest.issues.createComment({
+          owner: context.repo.owner,
+          repo: context.repo.repo,
+          issue_number: issue.number,
+          body: pingWarningMessage,
+        });
+      }
+
+      await syncBugSubtypeLabel(github, context, issue, labelSet);
+    }
+  }
+
+  const hasTriggerLabel = labelSet.has(triggerLabel);
+  if (hasTriggerLabel) {
+    labelSet.delete(triggerLabel);
+    try {
+      await github.rest.issues.removeLabel({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: target.number,
+        name: triggerLabel,
+      });
+    } catch (error) {
+      if (error?.status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  const isLabelEvent = context.payload.action === "labeled";
+  const eventLabel = context.payload.label?.name ?? "";
+  const isPrCandidateEvent =
+    pullRequest &&
+    ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
+      context.payload.action,
+    );
+  if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
+    return;
+  }
+
+  if (issue) {
+    const title = issue.title ?? "";
+    const body = issue.body ?? "";
+    const haystack = `${title}\n${body}`.toLowerCase();
+    for (const [label, matches] of [
+      ["security", title.toLowerCase().includes("security")],
+      ["r: testflight", title.toLowerCase().includes("testflight")],
+      ["r: moltbook", haystack.includes("moltbook")],
+    ]) {
+      if (!matches || labelSet.has(label)) {
+        continue;
+      }
+      await github.rest.issues.addLabels({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: issue.number,
+        labels: [label],
+      });
+      labelSet.add(label);
+    }
+  }
+
+  await syncManagedLabels(github, context);
+
+  if (pullRequest) {
+    if (labelSet.has(badBarnacleLabel)) {
+      core.info(
+        `Skipping PR auto-response checks for #${pullRequest.number} because ${badBarnacleLabel} is present.`,
+      );
+      return;
+    }
+
+    if (isClawSweeperProofSufficientLabelEvent(context)) {
+      core.info(
+        `Skipping PR auto-response checks for #${pullRequest.number} because ClawSweeper owns ${PROOF_SUFFICIENT_LABEL}.`,
+      );
+      return;
+    }
+
+    if (isAutomationUser(pullRequest.user)) {
+      await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
+      core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
+    }
+
+    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+
+    if (isLabelEvent && eventLabel === skillCloseLabel && isAutomationActor(context)) {
+      core.info(
+        `Skipping duplicate PR auto-response for automation-applied ${skillCloseLabel} on #${pullRequest.number}.`,
+      );
+      return;
+    }
+
+    if (labelSet.has(dirtyLabel)) {
+      await applyResponseRule(github, context, pullRequest.number, {
+        message: noisyPrMessage,
+      });
+      return;
+    }
+    if (labelSet.has(spamLabel)) {
+      await applyResponseRule(github, context, pullRequest.number, {
+        lock: true,
+        lockReason: "spam",
+      });
+      return;
+    }
+    if (labelSet.has(invalidLabel)) {
+      await applyResponseRule(github, context, pullRequest.number, {});
+      return;
+    }
+
+    const handledCandidateAction = await applyPullRequestCandidateAction({
+      github,
+      context,
+      pullRequest,
+      labelSet,
+      hasTriggerLabel,
+      isLabelEvent,
+    });
+    if (handledCandidateAction) {
+      return;
+    }
+  }
+
+  if (issue && labelSet.has(spamLabel)) {
+    await applyResponseRule(github, context, issue.number, issueSpamRule);
+    return;
+  }
+
+  if (issue && labelSet.has(invalidLabel)) {
+    await applyResponseRule(github, context, issue.number, issueInvalidRule);
+    return;
+  }
+
+  if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
+    labelSet.delete(activePrLimitLabel);
+  }
+  if (pullRequest && (isAutomationPullRequest(pullRequest) || isAutomationUser(pullRequest.user))) {
+    await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
+  }
+
+  const rule = rules.find((item) => labelSet.has(item.label));
+  if (!rule) {
+    return;
+  }
+
+  await applyResponseRule(github, context, target.number, rule);
+}

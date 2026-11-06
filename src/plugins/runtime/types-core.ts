@@ -1,0 +1,514 @@
+import type { AcquireConfiguredProviderLocalService } from "../../agents/provider-local-service-target.js";
+import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
+import type { ConfigMutationBase } from "../../config/mutation-types.js";
+import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
+import type { LogLevel } from "../../logging/levels.js";
+import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
+import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
+import type { LlmCompleteParams, LlmCompleteResult } from "./runtime-llm.types.js";
+
+type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
+type RuntimeWriteConfigOptions = {
+  /** Revalidate caller authority at guarded publication; accepted writes still settle. */
+  assertCurrent?: () => void;
+  envSnapshotForRestore?: Record<string, string | undefined>;
+  expectedConfigPath?: string;
+  unsetPaths?: string[][];
+};
+
+type DeepReadonly<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends readonly (infer U)[]
+    ? ReadonlyArray<DeepReadonly<U>>
+    : T extends object
+      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+      : T;
+
+type RuntimeConfigAfterWrite = import("../../config/config.js").ConfigWriteAfterWrite;
+type RuntimeConfigReplaceResult = import("../../config/mutate.js").ConfigReplaceResult;
+type RuntimeProviderListParams = {
+  config?: import("../../config/types.openclaw.js").OpenClawConfig;
+};
+type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionPluginExtensions =
+  | Record<string, Record<string, SessionPluginJsonValue>>
+  | undefined;
+type RuntimeSessionStoreReadParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  hydrateSkillPromptRefs?: boolean;
+  sessionKey: string;
+  readConsistency?: "latest";
+  storePath?: string;
+};
+type RuntimeSessionStoreEntrySummary = {
+  sessionKey: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryResult = {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryContext = RuntimeCreateSessionEntryResult & {
+  /** Host creation authority; runtimes that cannot supply it must leave it absent. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+};
+type RuntimeCreateSessionEntryFinalPatch = {
+  pluginExtensions: RuntimeSessionPluginExtensions;
+};
+/** @public Part of the PluginRuntime declaration contract. */
+export type PluginRuntimeThinkingPolicyRequest = {
+  provider?: string | null;
+  model?: string | null;
+  catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+  agentRuntime?: string | null;
+};
+/** @public Part of the PluginRuntime declaration contract. */
+export type PluginRuntimeThinkingPolicyLevel = {
+  id: import("../../auto-reply/thinking.js").ThinkLevel;
+  label: string;
+};
+/** @public Part of the PluginRuntime declaration contract. */
+export type PluginRuntimeThinkingPolicy = {
+  levels: PluginRuntimeThinkingPolicyLevel[];
+  defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;
+};
+
+/** Structured logger surface injected into runtime-backed plugin helpers. */
+export type RuntimeLogger = {
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
+  info: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+  error: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+/** Core runtime helpers exposed to trusted native plugins. */
+export type PluginRuntimeCore = {
+  version: string;
+  /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
+  readonly capabilities?: readonly string[];
+  decisions: import("../../decisions/runtime-types.js").DecisionRuntimeV2;
+  config: {
+    /** Current process runtime config snapshot. Prefer config passed into the active call path. */
+    current: {
+      /** Independent mutable copy retaining the published config's resolution facts. */
+      (options: { clone: true }): import("../../config/types.openclaw.js").OpenClawConfig;
+      /** Keep the default last so ReturnType consumers retain the readonly snapshot. */
+      (): DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
+    };
+    /**
+     * Persist a focused config mutation. Callers must choose the post-write
+     * behavior explicitly so the gateway can hot-reload, restart, or defer.
+     */
+    mutateConfigFile: <T = void>(params: {
+      base?: ConfigMutationBase;
+      baseHash?: string;
+      afterWrite: RuntimeConfigAfterWrite;
+      writeOptions?: RuntimeWriteConfigOptions;
+      mutate: (
+        draft: import("../../config/types.openclaw.js").OpenClawConfig,
+        context: {
+          snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
+          previousHash: string | null;
+        },
+      ) => Promise<T | void> | T | void;
+    }) => Promise<RuntimeConfigReplaceResult & { result: T | undefined }>;
+    /**
+     * Persist a full config replacement. Callers must choose the post-write
+     * behavior explicitly so the gateway can hot-reload, restart, or defer.
+     */
+    replaceConfigFile: (params: {
+      nextConfig: import("../../config/types.openclaw.js").OpenClawConfig;
+      baseHash?: string;
+      afterWrite: RuntimeConfigAfterWrite;
+      writeOptions?: RuntimeWriteConfigOptions;
+    }) => Promise<RuntimeConfigReplaceResult>;
+  };
+  agent: {
+    defaults: {
+      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
+      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+    };
+    resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
+    resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
+    resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    /** Resolve an allowed catalog create target through canonical agent model/runtime policy. */
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveAgentCatalogCreateTarget;
+    resolveThinkingDefault: (params: {
+      cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+      provider: string;
+      model: string;
+      catalog?: import("../../agents/model-catalog.types.js").ModelCatalogEntry[];
+    }) => import("../../auto-reply/thinking.js").ThinkLevel;
+    normalizeThinkingLevel: (
+      raw?: string | null,
+    ) => import("../../auto-reply/thinking.js").ThinkLevel | undefined;
+    resolveThinkingPolicy: (
+      params: PluginRuntimeThinkingPolicyRequest,
+    ) => PluginRuntimeThinkingPolicy;
+    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    runCommandFromIngress: (
+      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      runtime: import("../../runtime.js").RuntimeEnv,
+    ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
+    runEmbeddedAgent: (
+      params: Omit<
+        import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+        "admittedRunContext" | "preparedRunAdmission"
+      > & {
+        /** @deprecated Ignored; the host derives availability. Retained until the next Plugin SDK major. */
+        githubPublicationAvailable?: boolean;
+      },
+    ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
+    resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    /**
+     * Shares the embedded runner's CLI-backend dispatch eligibility (route,
+     * registered backend, stored credential mode) so opted-in callers can
+     * budget timeouts for the run that will actually execute.
+     */
+    /** @deprecated Use resolveCliBackendDispatchEligibilityAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+    resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
+    resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
+    ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
+    /**
+     * Explain whether named tools reach an agent (configured policy) or one session
+     * (adds its model, harness and sandbox), naming the stage and config path that
+     * removed each blocked tool. Read-only; uses the current runtime config.
+     */
+    explainToolAvailability: (
+      params: Omit<
+        import("../../agents/tool-availability-explanation.js").ExplainToolAvailabilityParams,
+        "config"
+      >,
+    ) => Promise<import("../../agents/tool-availability-explanation.js").ToolAvailabilityReport>;
+    session: {
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
+      createSessionEntry: (
+        params: {
+          cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+          key: string;
+          agentId?: string;
+          label?: string;
+          /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
+          displayName?: string;
+          spawnedCwd?: string;
+          sessionRoot?: string;
+          permissionMode?: RuntimeSessionEntry["permissionMode"];
+          /** Bind the created session's CLI execution to this paired node. */
+          execNode?: string;
+          /** Working directory interpreted only by execNode. */
+          execCwd?: string;
+          initialEntry:
+            | {
+                agentHarnessId: string;
+                color?: string;
+                modelSelectionLocked?: true;
+                pluginExtensions?: RuntimeSessionPluginExtensions;
+              }
+            | {
+                cliBackendId: string;
+                color?: string;
+                model: string;
+                cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
+                modelSelectionLocked: true;
+                pluginExtensions?: RuntimeSessionPluginExtensions;
+                /** Registry-injected owner; plugin callers cannot select another owner. */
+                pluginOwnerId?: string;
+              }
+            | {
+                acpBackendId: string;
+                color?: string;
+                acpSessionBinding: {
+                  acpAgentId: string;
+                  agentSessionId: string;
+                };
+                modelSelectionLocked?: true;
+                pluginExtensions?: RuntimeSessionPluginExtensions;
+                /** Registry-injected owner; plugin callers cannot select another owner. */
+                pluginOwnerId?: string;
+              };
+        } & (
+          | {
+              /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
+              recoverMatchingInitialEntry: true;
+              afterCreate: (
+                created: RuntimeCreateSessionEntryContext,
+              ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
+            }
+          | {
+              recoverMatchingInitialEntry?: never;
+              afterCreate?: (
+                created: RuntimeCreateSessionEntryContext,
+              ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
+            }
+        ),
+      ) => Promise<RuntimeCreateSessionEntryResult>;
+      /** @deprecated Use getSessionEntryAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+      getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Worker-backed descriptive read; keep live effect authority with the owning operation. */
+      getSessionEntryAsync: (
+        params: RuntimeSessionStoreReadParams,
+      ) => Promise<RuntimeSessionEntry | undefined>;
+      /** Complete public entry for a visible current ID in the selected physical store. */
+      getSessionEntryByIdAsync: (
+        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & {
+          sessionId: string;
+          /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+          orderBy?: "updatedAt";
+        },
+      ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
+      /** @deprecated Use listSessionEntriesAsync for metadata reads. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+      listSessionEntries: (
+        params?: Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+          readOnly?: boolean;
+          projection?: "full" | "list";
+          /** Restrict results to exact persisted keys while retaining canonical listing validation. */
+          sessionKeys?: readonly string[];
+          /** Set false to skip derived participant identities and counts when reading metadata. */
+          includeParticipants?: boolean;
+          /** Capture the admitted store's physical identity; access policy remains caller-owned. */
+          captureSource?: (assertCurrent: () => void) => void;
+        },
+      ) => RuntimeSessionStoreEntrySummary[];
+      /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
+      listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
+      /** Exact selected entries retained through a synchronous disclosure callback. */
+      withSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").withSessionEntriesAsync;
+      createSessionEntryListReader: (params: {
+        agentId: string;
+        storePath: string;
+        env?: NodeJS.ProcessEnv;
+      }) => Promise<
+        () => Promise<{
+          entries: RuntimeSessionStoreEntrySummary[];
+          assertCurrent: () => void;
+        }>
+      >;
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+      patchSessionEntry: (
+        params: RuntimeSessionStoreReadParams & {
+          /** Synchronous final ownership check executed inside the commit transaction. */
+          assertCommitAllowed?: () => void;
+          fallbackEntry?: RuntimeSessionEntry;
+          maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
+          preserveActivity?: boolean;
+          replaceEntry?: boolean;
+          update: (
+            entry: RuntimeSessionEntry,
+            context: { existingEntry?: RuntimeSessionEntry },
+          ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+        },
+      ) => Promise<RuntimeSessionEntry | null>;
+      prepareSessionEntryPatch: typeof import("../../plugin-sdk/session-store-runtime.js").prepareSessionEntryPatch;
+      upsertSessionEntry: (
+        params: RuntimeSessionStoreReadParams & {
+          entry: RuntimeSessionEntry;
+        },
+      ) => Promise<void>;
+      runWithWorkAdmission: <T>(
+        params: {
+          storePath: string;
+          sessionKey: string;
+          signal?: AbortSignal;
+        },
+        run: (signal: AbortSignal) => Promise<T>,
+      ) => Promise<T>;
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+      updateSessionStoreEntry: (params: {
+        storePath: string;
+        sessionKey: string;
+        update: (
+          entry: RuntimeSessionEntry,
+        ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+        skipMaintenance?: boolean;
+        takeCacheOwnership?: boolean;
+        requireWriteSuccess?: boolean;
+      }) => Promise<RuntimeSessionEntry | null>;
+    };
+  };
+  hooks: {
+    /** Dispatch untrusted external content through an isolated, contained hook agent turn. */
+    dispatchHookAgentTurn: (params: {
+      name: string;
+      agentId: string;
+      sessionKey: string;
+      message: string;
+      externalContentSource: "email";
+      deliver: boolean;
+      model?: string;
+      thinking?: import("../../auto-reply/thinking.js").ThinkLevel;
+      timeoutSeconds?: number;
+      idempotencyKey?: string;
+    }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
+  };
+  system: {
+    captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
+    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
+    enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
+    /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
+    captureSessionGeneration: typeof import("./runtime-session-notice.js").capturePluginSessionGeneration;
+    /** Post this plugin's background notice to the session generation it observed. */
+    postSessionNotice: typeof import("./runtime-session-notice.js").postPluginSessionNotice;
+    runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
+    formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
+  };
+  media: {
+    loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
+    detectMime: typeof import("@openclaw/media-core/mime").detectMime;
+    mediaKindFromMime: typeof import("@openclaw/media-core/constants").mediaKindFromMime;
+    isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
+    getImageMetadata: typeof import("../../media/media-services.js").getImageMetadata;
+    resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
+  };
+  tts: {
+    /** Await machine preference preparation before rendering; optional for older custom runtimes. */
+    buildSystemPromptHintAsync?: TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
+    prepareTtsRequest: typeof import("../../tts/tts-request.js").prepareTtsRequest;
+    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
+    textToSpeechStream: TtsRuntimeApi["textToSpeechStream"];
+    textToSpeechTelephony: TtsRuntimeApi["textToSpeechTelephony"];
+    listVoices: TtsRuntimeApi["listSpeechVoices"];
+  };
+  mediaUnderstanding: {
+    resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
+    runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
+    describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
+    describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    extractStructuredWithModel: MediaUnderstandingRuntime["extractStructuredWithModel"];
+    describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
+    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
+  };
+  imageGeneration: {
+    generate: (
+      params: import("../../image-generation/runtime-types.js").GenerateImageParams,
+    ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
+    listProviders: (
+      params?: RuntimeProviderListParams,
+    ) => import("../../image-generation/provider-types.js").ImageGenerationProvider[];
+  };
+  videoGeneration: {
+    generate: (
+      params: import("../../video-generation/runtime-types.js").GenerateVideoParams,
+    ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
+    listProviders: (
+      params?: RuntimeProviderListParams,
+    ) => import("../../video-generation/provider-types.js").VideoGenerationProvider[];
+  };
+  musicGeneration: {
+    generate: (
+      params: import("../../music-generation/runtime-types.js").GenerateMusicParams,
+    ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
+    listProviders: (
+      params?: RuntimeProviderListParams,
+    ) => import("../../music-generation/provider-types.js").MusicGenerationProvider[];
+  };
+  webSearch: {
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+    listProviders: (
+      params?: RuntimeProviderListParams,
+    ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];
+    listProvidersAsync: (
+      params?: RuntimeProviderListParams,
+    ) => Promise<import("../web-provider-types.js").PluginWebSearchProviderEntry[]>;
+    search: (
+      params: import("../../web-search/runtime-types.js").RunWebSearchParams,
+    ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
+  };
+  events: {
+    onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
+    onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
+  };
+  logging: {
+    shouldLogVerbose: typeof import("../../globals.js").shouldLogVerbose;
+    getChildLogger: (
+      bindings?: Record<string, unknown>,
+      opts?: { level?: LogLevel },
+    ) => RuntimeLogger;
+  };
+  state: {
+    resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openBlobStore: <TMetadata>(
+      options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
+    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStoreWithReceipts<TMetadata>;
+    openKeyedStore: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
+    /** Data-only worker store; operations retain this runtime and optional action authority. */
+    openKeyedStoreV2: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: import("../../plugin-state/plugin-state-store.types.js").PluginStateActionAuthority,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T, 2>;
+    /**
+     * @deprecated Use openKeyedStoreV2 and await its operations. This synchronous
+     * compatibility adapter is supported through 2026-12-31, then removed in the first January 2027 stable release.
+     */
+    openSyncKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
+    openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
+    ) => import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
+      TPayload,
+      TMetadata,
+      TCompletedMetadata
+    >;
+    openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options: Omit<
+        CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
+        "queue"
+      > & {
+        queue?: import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
+          TPayload,
+          TMetadata,
+          TCompletedMetadata
+        >;
+        accountId?: string;
+        stateDir?: string;
+      },
+    ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
+  };
+  llm: {
+    complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    acquireLocalService: AcquireConfiguredProviderLocalService;
+  };
+  modelConfig: {
+    /** Read-only model selection; no session mutation or harness execution authority. */
+    resolveDefaultModelForAgent: typeof import("../../agents/model-selection-config.js").resolveDefaultModelForAgent;
+    resolveAllowedModelRef: typeof import("../../agents/model-selection-resolve.js").resolveAllowedModelRefCore;
+    /** Read authored model/provider runtime policy without projecting runtime availability. */
+    resolveModelRuntimePolicy: typeof import("../../agents/model-runtime-policy.js").resolveModelRuntimePolicy;
+  };
+  modelAuth: {
+    /** Existing synchronous SDK operations, composed by the native host. */
+    resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
+    /** @deprecated Use ensureAuthProfileStoreAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+    ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
+    ensureAuthProfileStoreAsync: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStoreAsync;
+    resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
+    listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
+    /** @deprecated Use isProviderApiKeyConfiguredAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+    isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
+    isProviderApiKeyConfiguredAsync: typeof import("../provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
+    /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
+    getApiKeyForModel: (params: {
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
+    }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
+    /** Resolve request-ready auth for a model, including provider runtime exchanges. */
+    getRuntimeAuthForModel: (params: {
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
+    }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
+    /** Resolve auth for a provider by name. Only provider, optional cfg, and workspaceDir are used. */
+    resolveApiKeyForProvider: (params: {
+      provider: string;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
+    }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
+  };
+};

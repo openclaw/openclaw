@@ -1,0 +1,803 @@
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { createDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostic-record.js";
+import {
+  recordReasoningSuppressedDiagnostic,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
+import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
+import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  clearActiveCredentialDegradedOwner,
+  setActiveCredentialDegradedOwner,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
+import { getStatusSummary } from "../status/summary.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import {
+  registerStatusSummarySessionRowCases,
+  registerStatusSummaryWalCases,
+} from "./status.summary.test-support.js";
+
+const statusSummaryMocks = vi.hoisted(() => ({
+  readProactiveJobs:
+    vi.fn<typeof import("../cron/proactive-job-receipt.js").readDefaultProactiveJobsByKeyAsync>(),
+  hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
+    typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
+  >(async () => true),
+  buildChannelSummary: vi.fn(async () => ["ok"]),
+  resolveProviderStaticModel: vi.fn(),
+  getPreparedModelCatalogSnapshot:
+    vi.fn<typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogSnapshot>(),
+  listSessionEntriesCore: vi.fn<
+    (scope?: { agentId?: string; storePath?: string }) => Array<{
+      sessionKey: string;
+      entry: Record<string, unknown>;
+    }>
+  >(() => []),
+  withSessionEntriesFromStoresInWorker:
+    vi.fn<
+      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntriesFromStoresInWorker
+    >(),
+}));
+
+// mock-isolation: Project fixed receipt-owned jobs without opening shared-state storage in the aggregation fixture.
+vi.mock("../cron/proactive-job-receipt.js", () => ({
+  readDefaultProactiveJobsAsync: statusSummaryMocks.readProactiveJobs,
+  readDefaultProactiveJobsByKeyAsync: statusSummaryMocks.readProactiveJobs,
+}));
+
+// mock-isolation: Keep plugin discovery outside this status aggregation fixture.
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScopeAsync:
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync,
+}));
+
+// mock-isolation: Exercise catalog projection without preparing runtime owners or provider I/O.
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogSnapshot: statusSummaryMocks.getPreparedModelCatalogSnapshot,
+}));
+
+vi.mock("../status/summary.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../status/summary.runtime.js")>();
+  return {
+    ...actual,
+    statusSummaryRuntime: {
+      ...actual.statusSummaryRuntime,
+      classifySessionKey: vi.fn(() => "direct"),
+      resolveConfiguredStatusModelRef: vi.fn(() => ({
+        provider: "openai",
+        model: "gpt-5.5",
+      })),
+      resolveSessionModelRef: vi.fn(() => ({
+        provider: "openai",
+        model: "gpt-5.5",
+      })),
+      resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
+      readSessionRuntimeMetadata: vi.fn(async (_cfg, candidates) => candidates.map(() => null)),
+      resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
+        typeof model === "string" && model.length > 0
+          ? {
+              provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
+              model,
+            }
+          : null,
+      ),
+      resolveAuthoredModelContextTokens: vi.fn(() => undefined),
+      resolveContextTokensForModel: vi.fn(() => 200_000),
+    },
+  };
+});
+
+vi.mock("../agents/defaults.js", () => ({
+  DEFAULT_CONTEXT_TOKENS: 200_000,
+  DEFAULT_MODEL: "gpt-5.5",
+  DEFAULT_PROVIDER: "openai",
+}));
+
+vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: vi.fn(() =>
+    vi.fn(({ provider, modelId }) =>
+      provider === "openai" && modelId === "gpt-5.5"
+        ? { contextWindow: 1_000_000, contextTokens: 272_000 }
+        : undefined,
+    ),
+  ),
+  createBundledProviderStaticCatalogContextResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
+}));
+
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  getRuntimeConfig: vi.fn(() => ({})),
+  captureRuntimeConfigAsyncReader: vi.fn(() =>
+    Object.assign(async () => ({}), { assertCurrent() {} }),
+  ),
+  projectConfigOntoRuntimeSourceSnapshot: vi.fn((config) => config),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+// mock-isolation: Status aggregation consumes fixture summaries and counts without starting session storage.
+vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
+  const { createSessionStoreSummaryReaderStub } =
+    await import("../config/sessions/session-store-summary.test-support.js");
+  return {
+    withSessionEntriesFromStoresInWorker: statusSummaryMocks.withSessionEntriesFromStoresInWorker,
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
+      const entries = statusSummaryMocks
+        .listSessionEntriesCore(scope)
+        .filter(({ sessionKey }) => sessionKey.startsWith("agent:"))
+        .map(({ sessionKey, entry }) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
+        );
+      const summarize = (rows: typeof entries) => ({
+        count: rows.length,
+        recent: rows.slice(0, options.recentLimit),
+      });
+      return {
+        ...summarize(entries),
+        byAgent: new Map(
+          [
+            ...new Set([
+              ...options.agentIds,
+              ...entries.flatMap(
+                ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId ?? [],
+              ),
+            ]),
+          ].map((agentId) => [
+            agentId,
+            summarize(
+              entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`)),
+            ),
+          ]),
+        ),
+      };
+    }),
+  };
+});
+
+vi.mock("../gateway/agent-list.js", () => ({
+  listGatewayAgentsBasic: vi.fn(),
+}));
+
+vi.mock("../infra/channel-summary.js", () => ({
+  buildChannelSummary: statusSummaryMocks.buildChannelSummary,
+}));
+
+vi.mock("../infra/system-events.js", () => ({
+  peekSystemEvents: vi.fn(() => []),
+}));
+
+vi.mock("../routing/session-key.js", async () => {
+  const actual = await vi.importActual<typeof import("../routing/session-key.js")>(
+    "../routing/session-key.js",
+  );
+  return {
+    ...actual,
+    LEGACY_IMPLICIT_AGENT_ID: "main",
+    normalizeAgentId: vi.fn((value: string) => value),
+    normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
+    parseAgentSessionKey: vi.fn(actual.parseAgentSessionKey),
+  };
+});
+
+vi.mock("../version.js", async () => {
+  const actual = await vi.importActual<typeof import("../version.js")>("../version.js");
+  return {
+    ...actual,
+    resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
+  };
+});
+
+vi.mock("../status/link-channel.js", () => ({
+  resolveLinkChannelContext: vi.fn(async () => undefined),
+}));
+
+const { buildChannelSummary } = await import("../infra/channel-summary.js");
+const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
+const { peekSystemEvents } = await import("../infra/system-events.js");
+const { resolveLinkChannelContext } = await import("../status/link-channel.js");
+let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
+
+function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
+  return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+}
+
+function setSession(entry: Record<string, unknown>) {
+  statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
+    { sessionKey: "agent:main:main", entry: { sessionId: "session-1", updatedAt: 100, ...entry } },
+  ]);
+}
+
+function setExplicitAgents(scope: "global" | "per-sender", mainKey?: string) {
+  vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
+    defaultId: "research",
+    mainKey: mainKey ?? "main",
+    scope,
+    agents: [{ id: "research" }, { id: "ops" }],
+    ownership: "explicit",
+    selectionRequired: true,
+  });
+  return {
+    agents: { ownership: "explicit" as const, entries: { research: {}, ops: {} } },
+    session: { scope, ...(mainKey ? { mainKey } : {}) },
+  };
+}
+
+describe("getStatusSummary", () => {
+  beforeAll(async () => {
+    ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    statusSummaryMocks.readProactiveJobs.mockResolvedValue([]);
+    resetDiagnosticSessionStateForTest();
+    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
+    setActiveDegradedPlugins([]);
+    clearActiveCredentialDegradedOwner("account", "telegram:work");
+    setActiveDegradedSecretOwners([]);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(true);
+    statusSummaryMocks.resolveProviderStaticModel.mockReset();
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
+    vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
+    statusSummaryMocks.withSessionEntriesFromStoresInWorker.mockImplementation(
+      async (inputs, consume) =>
+        consume(
+          inputs.map((input) => ({
+            database: { agentId: input.agentId, path: input.storePath, env: {} },
+            assertCurrent: () => {},
+            result: {
+              kind: "session-exact-entries",
+              lifecycleTimestamps: {},
+              entries: statusSummaryMocks
+                .listSessionEntriesCore(input)
+                .filter(({ sessionKey }) => input.sessionKeys?.includes(sessionKey))
+                .map(({ sessionKey, entry }) => ({
+                  sessionKey,
+                  entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+                })),
+            },
+          })),
+        ),
+    );
+    vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+    vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
+      id: "openclaw",
+      label: "OpenClaw Default",
+    });
+    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
+      defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    });
+  });
+
+  registerStatusSummarySessionRowCases({
+    getStatusSummary: () => getStatusSummary(),
+    getStatusSummaryRuntime: () => statusSummaryRuntime,
+    rejectProviderStaticModel: (error) =>
+      statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(error),
+    setSessions: (store) =>
+      statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
+  });
+  registerStatusSummaryWalCases((options) => getStatusSummary(options));
+
+  it("prepares session snapshots while channel summary is pending", async () => {
+    const channel = Promise.withResolvers<string[]>();
+    statusSummaryMocks.buildChannelSummary.mockReturnValueOnce(channel.promise);
+    const reading = getStatusSummary();
+    try {
+      await vi.waitFor(() => expect(statusSummaryMocks.buildChannelSummary).toHaveBeenCalled());
+      await vi.waitFor(() => expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalled());
+    } finally {
+      channel.resolve(["ok"]);
+      await reading;
+    }
+    expect((await reading).channelSummary).toEqual(["ok"]);
+  });
+
+  it("summarizes every configured agent's global pending events without an ambient owner", async () => {
+    const config = setExplicitAgents("global", "inbox");
+    vi.mocked(peekSystemEvents).mockImplementation((key) => [`pending: ${key}`]);
+
+    const summary = await getStatusSummary({
+      config,
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+
+    expect(summary.sessions.byAgent.map((agent) => agent.agentId)).toEqual(["research", "ops"]);
+    expect(summary.queuedSystemEvents).toEqual([
+      "pending: agent:research:global",
+      "pending: agent:ops:global",
+    ]);
+  });
+
+  it.each([false, true])("reads the receipt-owned automation route (empty=%s)", async (empty) => {
+    const main = "agent:main:main";
+    const configured = "agent:main:telegram:alerts";
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
+      {
+        sessionKey: empty ? main : configured,
+        entry: {
+          delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "123" } }),
+        },
+      },
+      { sessionKey: empty ? configured : main, entry: {} },
+    ]);
+    statusSummaryMocks.readProactiveJobs.mockResolvedValue([
+      makeCronJob({
+        agentId: "main",
+        sessionTarget: `session:${configured}`,
+        delivery: { mode: "announce", channel: "last" },
+      }),
+    ]);
+    const summary = await getStatusSummary({
+      config: { agents: { entries: { main: {} } } },
+    });
+    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(empty);
+  });
+
+  it("keeps global automation routes separate across agent stores", async () => {
+    const config = setExplicitAgents("global");
+    statusSummaryMocks.readProactiveJobs.mockResolvedValue(
+      ["research", "ops"].map((agentId) =>
+        makeCronJob({
+          id: agentId,
+          agentId,
+          sessionTarget: "session:global",
+          delivery: { mode: "announce", channel: "last" },
+        }),
+      ),
+    );
+    // Distinct physical stores keep each agent's literal global row separate.
+    vi.mocked(resolveSessionStorePathCore).mockImplementation(
+      (_store, options) => `/tmp/${options?.agentId}/sessions.json`,
+    );
+    statusSummaryMocks.listSessionEntriesCore.mockImplementation((scope) => [
+      {
+        sessionKey: "global",
+        entry:
+          scope?.agentId === "research"
+            ? {
+                delivery: normalizeSessionDeliveryState({
+                  context: { channel: "telegram", to: "123" },
+                }),
+              }
+            : {},
+      },
+    ]);
+
+    const summary = await getStatusSummary({
+      config,
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+
+    expect(summary.heartbeat.agents).toMatchObject([
+      { agentId: "research", waitingForRoute: false },
+      { agentId: "ops", waitingForRoute: true },
+    ]);
+  });
+
+  it("does not read an unused route for a disabled automation", async () => {
+    statusSummaryMocks.readProactiveJobs.mockResolvedValue([
+      makeCronJob({
+        agentId: "main",
+        enabled: false,
+        delivery: { mode: "announce", target: "owner" },
+      }),
+    ]);
+    const summary = await getStatusSummary({
+      config: { agents: { entries: { main: {} } } },
+      includeChannelSummary: false,
+    });
+    expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
+    expect(statusSummaryMocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
+  });
+
+  it("projects observed reasoning mismatches without exposing incognito or redacted model names", async () => {
+    recordReasoningSuppressedDiagnostic(
+      { sessionId: "private-session", sessionKey: "agent:main:dashboard:incognito-fixture" },
+      "ollama",
+      "private-model",
+    );
+    expect((await getStatusSummary()).modelReasoningWarning).toBeUndefined();
+    recordReasoningSuppressedDiagnostic({ sessionId: "visible-session" }, "ollama", "qwen3:4b");
+
+    const visible = await getStatusSummary();
+    expect(visible.modelReasoningWarning).toContain('"ollama/qwen3:4b"');
+    expect(visible.modelReasoningWarning).toContain("Set reasoning: true");
+    expect(visible.modelReasoningWarning).not.toContain("private-model");
+    const redacted = await getStatusSummary({ includeSensitive: false });
+    expect(redacted.modelReasoningWarning).toContain("Set reasoning: true");
+    expect(redacted.modelReasoningWarning).not.toContain("qwen3:4b");
+  });
+
+  it("skips session model discovery and projection when sensitive output is disabled", async () => {
+    setSession({ model: "gpt-5.5", modelProvider: "openai", totalTokens: 42 });
+
+    const summary = await getStatusSummary({ includeSensitive: false });
+
+    expect(summary.sessions).toEqual({
+      paths: [],
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      recent: [],
+      byAgent: [{ agentId: "main", path: "[redacted]", count: 1, recent: [] }],
+    });
+  });
+
+  it("redacts admitted database paths without mutating the owner's facts", async () => {
+    const privatePath = "/private/status-operator-read/agent.sqlite";
+    const store: ReturnType<typeof createDatabaseStoreDiagnostic> = {
+      ...createDatabaseStoreDiagnostic({
+        family: "agent",
+        path: privatePath,
+        configured: {
+          default: "postgres",
+          override: null,
+          effective: "postgres",
+          fixedLocal: false,
+        },
+      }),
+      observed: "postgres",
+      namespace: "oc_agent_fixture",
+    };
+    using admitted = vi.spyOn(
+      await import("../infra/database-engine/admitted-diagnostics.js"),
+      "describeAdmittedDatabaseStores",
+    );
+    admitted.mockReturnValue([store]);
+    const options = { includeCliProjection: true, includeChannelSummary: false };
+    const redacted = await getStatusSummary({
+      ...options,
+      includeSensitive: false,
+    });
+    expect(redacted.databaseStores?.[0]).toMatchObject({
+      family: "agent",
+      path: null,
+      observed: "postgres",
+      namespace: "oc_agent_fixture",
+    });
+    expect(JSON.stringify(redacted)).not.toContain(privatePath);
+    expect(store.path).toBe(privatePath);
+    const sensitive = await getStatusSummary({
+      ...options,
+      includeSensitive: true,
+    });
+    expect(sensitive.databaseStores?.[0]?.path).toBe(privatePath);
+  });
+
+  it("reports stale snapshot and cold credential owners without exposing ref identifiers", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:PRIVATE_REF_ID"],
+        reason: "provider SecretRef is unresolved (env:default:PRIVATE_REF_ID)",
+      },
+    ]);
+    setActiveCredentialDegradedOwner({
+      ownerKind: "account",
+      ownerId: "telegram:work",
+      state: "unavailable",
+      paths: ["channels.telegram.accounts.work.tokenFile"],
+      refKeys: [],
+      reason: "credential failure includes PRIVATE_REF_ID",
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.degradedSecretOwners).toMatchObject([
+      { ownerId: "openai", degradationState: "stale", reason: "secret resolution failed" },
+      { ownerId: "telegram:work", degradationState: "cold", reason: "secret resolution failed" },
+    ]);
+    expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");
+  });
+
+  it("reports utility capability warnings with details only for configuration access", async () => {
+    const backend: CliBackendPlugin = {
+      id: "fixture-cli",
+      config: { command: "fixture" },
+      nativeToolMode: "always-on",
+    };
+    using setup = vi.spyOn(
+      await import("../plugins/setup-registry.js"),
+      "resolvePluginSetupCliBackend",
+    );
+    setup.mockImplementation(({ backend: id }) =>
+      id === backend.id ? { pluginId: "fixture", backend } : undefined,
+    );
+    using registered = vi.spyOn(
+      await import("../plugins/cli-backends.runtime.js"),
+      "resolveRuntimeCliBackends",
+    );
+    registered.mockReturnValue([]);
+    const config = {
+      agents: {
+        defaults: { utilityModel: "fixture-cli/small" },
+        entries: { worker: {} },
+      },
+    };
+    const visible = await getStatusSummary({ config, includeChannelSummary: false });
+    expect(visible.utilityModelWarnings).toEqual([
+      expect.objectContaining({
+        path: "agents.defaults.utilityModel",
+        message: expect.stringContaining('Utility model "fixture-cli/small"'),
+      }),
+    ]);
+    const redacted = await getStatusSummary({
+      config,
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+    expect(redacted.utilityModelWarnings).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "Choose a capable utility model or add capable utilityModel fallbacks",
+        ),
+      }),
+    ]);
+    expect(JSON.stringify(redacted.utilityModelWarnings)).not.toMatch(
+      /fixture-cli|small|worker|agents\./,
+    );
+  });
+
+  it("reports every plugin configured unavailable by startup verification", async () => {
+    const plugins = [
+      [
+        "discord",
+        "unreadable-package-json",
+        "Could not read /private/plugins/discord/package.json: permission denied",
+        "/private/plugins/discord",
+      ],
+      ["matrix", "missing-main-entry", "dist/index.js is missing", undefined],
+      [
+        "peer-plugin",
+        "missing-openclaw-peer-link",
+        "/private/plugins/peer-plugin/node_modules/openclaw points to /private/other/openclaw instead of /private/host/openclaw",
+        "/private/plugins/peer-plugin",
+      ],
+    ] as const;
+    setActiveDegradedPlugins(
+      plugins.map(([pluginId, reason, detail, installPath]) => ({
+        pluginId,
+        state: "configured-unavailable",
+        diagnostic: { kind: "plugin-verification", reason, detail, installPath },
+      })),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(
+      summary.degradedPlugins.map(({ pluginId, diagnostic }) => [
+        pluginId,
+        diagnostic.reason,
+        diagnostic.detail,
+      ]),
+    ).toEqual([
+      [
+        "discord",
+        "unreadable-package-json",
+        "Could not read <plugin-install>/package.json: permission denied",
+      ],
+      ["matrix", "missing-main-entry", "dist/index.js is missing"],
+      [
+        "peer-plugin",
+        "missing-openclaw-peer-link",
+        'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+      ],
+    ]);
+    expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/plugins");
+    expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/host");
+  });
+
+  it("skips channel summary imports when no channels are configured", async () => {
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockResolvedValue(false);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.channelSummary).toStrictEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("rejects wrong-version checkpoint usage provenance", async () => {
+    setSession({
+      totalTokens: 50_000,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION + 1,
+    });
+    const summary = await getStatusSummary();
+    expect(summary.sessions.recent[0]).toMatchObject({
+      totalTokens: 50_000,
+      totalTokensFresh: false,
+      remainingTokens: null,
+      percentUsed: null,
+    });
+  });
+
+  it.each([32_768, undefined])(
+    "uses admitted local capacity (%s) ahead of a previous model's window",
+    async (capacity) => {
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockImplementation(
+        resolveContextTokensForModelFromCache,
+      );
+      vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+        provider: "ollama",
+        model: "qwen3:4b",
+      });
+      statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue({
+        entries:
+          capacity === undefined
+            ? []
+            : [
+                {
+                  provider: "ollama",
+                  id: "qwen3:4b",
+                  name: "qwen3:4b",
+                  contextWindow: 262_144,
+                  contextTokens: capacity,
+                },
+              ],
+        routeVariants: [],
+      });
+      setSession({
+        modelProvider: "ollama",
+        model: "qwen3:8b",
+        agentHarnessId: "openclaw",
+        contextTokens: 128_000,
+        contextTokensSource: "resolved-v1",
+      });
+
+      const summary = await getStatusSummary();
+
+      expect(summary.sessions.recent[0]).toMatchObject({
+        model: "qwen3:4b",
+        contextTokens: capacity ?? null,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "pinned session",
+      entry: {
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+      },
+      reason: "session override",
+    },
+    {
+      name: "runtime-only snapshot",
+      entry: { modelProvider: "deepseek", model: "deepseek-v4-flash" },
+      reason: null,
+    },
+    {
+      name: "auto fallback",
+      entry: {
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "zhipu",
+        modelOverrideFallbackOriginModel: "glm-4.5-air",
+      },
+      reason: "fallback selected",
+    },
+  ])("reports configured and selected models for $name", async ({ entry, reason }) => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    setSession(entry);
+    const summary = await getStatusSummary();
+    expect(summary.sessions.recent[0]).toMatchObject({
+      configuredModel: "zhipu/glm-4.5-air",
+      selectedModel: "deepseek/deepseek-v4-flash",
+      modelSelectionReason: reason,
+    });
+  });
+
+  it("does not mark provider-local model aliases as pinned mismatches", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "anthropic",
+      model: "opus",
+    });
+    const normalizeRef = ({
+      provider,
+      model,
+    }: Parameters<typeof statusSummaryRuntime.resolveStatusModelLookupRef>[0]) => {
+      if (provider === "anthropic" && model === "opus") {
+        return { provider: "anthropic", model: "claude-opus-4-8" };
+      }
+      return typeof model === "string" && model.length > 0
+        ? {
+            provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
+            model,
+          }
+        : null;
+    };
+    vi.mocked(statusSummaryRuntime.resolveStatusModelLookupRef).mockImplementation(normalizeRef);
+    setSession({ modelOverride: "opus", modelOverrideSource: "user" });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]).toMatchObject({
+      configuredModel: "anthropic/claude-opus-4-8",
+      selectedModel: "anthropic/opus",
+      modelSelectionReason: null,
+    });
+    expect(statusSummaryRuntime.resolveSessionRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+      }),
+    );
+  });
+
+  it("resolves aggregate selected models from each row's agent", async () => {
+    const models: Record<string, string> = { ops: "ops", research: "research" };
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockImplementation(
+      ({ agentId }) => ({ provider: "openai", model: models[agentId ?? ""] ?? "global" }),
+    );
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation((model) => model);
+    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },
+        "agent:research:main": { sessionId: "research-session", updatedAt: 2 },
+        "agent:main:main": { sessionId: "global-session", updatedAt: 1 },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+    const selected = summary.sessions.recent.map(({ selectedModel }) => selectedModel);
+
+    expect(selected).toEqual(["openai/ops", "openai/research", "openai/global"]);
+    expect(summary.sessions.count).toBe(3);
+    expect(summary.sessions.byAgent[0]?.count).toBe(1);
+    expect(summary.sessions.byAgent[0]?.recent.map(({ key }) => key)).toEqual(["agent:main:main"]);
+  });
+});

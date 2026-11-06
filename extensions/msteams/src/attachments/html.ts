@@ -1,0 +1,144 @@
+import {
+  extractHtmlFromAttachment,
+  extractInlineImageReferences,
+  htmlTagAttributeValues,
+  isAdvertisedFileAttachment,
+  isLikelyImageAttachment,
+  normalizeContentType,
+  resolveMSTeamsMediaKind,
+  safeHostForUrl,
+} from "./shared.js";
+import type {
+  MSTeamsAttachmentLike,
+  MSTeamsHtmlAttachmentSummary,
+  MSTeamsInboundMedia,
+} from "./types.js";
+
+function collectHtmlAttachmentIds(html: string, ids: Set<string>): void {
+  for (const value of htmlTagAttributeValues(html, "attachment", "id")) {
+    const id = value.trim();
+    if (id) {
+      ids.add(id);
+    }
+  }
+}
+
+/**
+ * Extract every `<attachment id="...">` reference from the HTML attachments in
+ * the inbound activity. Returns the complete (non-sliced) list; callers that
+ * need a capped diagnostic summary can truncate after calling this helper.
+ */
+export function extractMSTeamsHtmlAttachmentIds(
+  attachments: MSTeamsAttachmentLike[] | undefined,
+): string[] {
+  const list = attachments ?? [];
+  const ids = new Set<string>();
+  for (const att of list) {
+    const html = extractHtmlFromAttachment(att);
+    if (!html) {
+      continue;
+    }
+    collectHtmlAttachmentIds(html, ids);
+  }
+  return Array.from(ids);
+}
+
+export function summarizeMSTeamsHtmlAttachments(
+  attachments: MSTeamsAttachmentLike[] | undefined,
+): MSTeamsHtmlAttachmentSummary | undefined {
+  const list = attachments ?? [];
+  let htmlAttachments = 0;
+  let imgTags = 0;
+  let dataImages = 0;
+  let cidImages = 0;
+  const srcHosts = new Set<string>();
+  const attachmentIds = new Set<string>();
+
+  for (const att of list) {
+    const html = extractHtmlFromAttachment(att);
+    if (!html) {
+      continue;
+    }
+    htmlAttachments += 1;
+    for (const value of htmlTagAttributeValues(html, "img", "src")) {
+      imgTags += 1;
+      const src = value.trim();
+      if (src) {
+        if (src.startsWith("data:")) {
+          dataImages += 1;
+        } else if (src.startsWith("cid:")) {
+          cidImages += 1;
+        } else {
+          srcHosts.add(safeHostForUrl(src));
+        }
+      }
+    }
+
+    collectHtmlAttachmentIds(html, attachmentIds);
+  }
+
+  if (htmlAttachments === 0) {
+    return undefined;
+  }
+  return {
+    htmlAttachments,
+    imgTags,
+    dataImages,
+    cidImages,
+    srcHosts: Array.from(srcHosts).slice(0, 5),
+    attachmentIds: Array.from(attachmentIds).slice(0, 5),
+  };
+}
+
+export function resolveUnrepresentedHtmlAttachmentIds(
+  attachments: MSTeamsAttachmentLike[],
+): string[] {
+  const representedIds = new Set<string>();
+  for (const attachment of attachments) {
+    const contentType = normalizeContentType(attachment.contentType) ?? "";
+    if (contentType.startsWith("text/html")) {
+      continue;
+    }
+    const id = attachment.id?.trim();
+    if (id) {
+      representedIds.add(id);
+    }
+  }
+  return extractMSTeamsHtmlAttachmentIds(attachments).filter((id) => !representedIds.has(id));
+}
+
+function createAdvertisedMediaFact(
+  kind: MSTeamsInboundMedia["kind"],
+  sourceId?: string,
+): MSTeamsInboundMedia {
+  return { kind, ...(sourceId ? { sourceId } : {}) };
+}
+
+export function resolveMSTeamsAdvertisedMedia(
+  attachments: MSTeamsAttachmentLike[] | undefined,
+): MSTeamsInboundMedia[] {
+  const list = attachments ?? [];
+  const fileAttachments = list.filter(isAdvertisedFileAttachment);
+  const inlineMedia = extractInlineImageReferences(list).map((candidate) =>
+    createAdvertisedMediaFact("image", candidate.sourceId),
+  );
+  // Teams HTML uses <attachment> tags as references. A matching attachment
+  // entry is the same resource (and may be a card), so count only unmatched
+  // IDs that need the Graph/Bot Framework hosted-content fallback.
+  const htmlAttachmentIds = resolveUnrepresentedHtmlAttachmentIds(list);
+  return [
+    ...fileAttachments.map((attachment) =>
+      createAdvertisedMediaFact(
+        isLikelyImageAttachment(attachment)
+          ? "image"
+          : resolveMSTeamsMediaKind({
+              contentType: normalizeContentType(attachment.contentType),
+              fileName: attachment.name ?? undefined,
+            }),
+        attachment.id?.trim() || undefined,
+      ),
+    ),
+    ...inlineMedia,
+    ...htmlAttachmentIds.map((sourceId) => createAdvertisedMediaFact("document", sourceId)),
+  ];
+}

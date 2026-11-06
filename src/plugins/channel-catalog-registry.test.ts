@@ -1,0 +1,259 @@
+// Covers channel catalog registry loading and reset behavior.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+  vi.doUnmock("./discovery.js");
+  vi.doUnmock("./installed-plugin-index-record-reader.js");
+  vi.doUnmock("../logging/subsystem.js");
+});
+
+const ENV: NodeJS.ProcessEnv = { HOME: "/tmp/openclaw-test-home" };
+let loadCase = 0;
+
+const RECORDS: Record<string, PluginInstallRecord> = {
+  weixin: {
+    source: "npm",
+    spec: "@tencent-weixin/openclaw-weixin@2.3.7",
+    installPath:
+      "/tmp/openclaw-test-home/.openclaw/npm/node_modules/@tencent-weixin/openclaw-weixin",
+  } as PluginInstallRecord,
+};
+
+function emptyDiscoveryResult(): PluginDiscoveryResult {
+  return {
+    candidates: [] as PluginCandidate[],
+    diagnostics: [],
+  };
+}
+
+async function loadWithMocks(params: {
+  loadRecords?: (env: NodeJS.ProcessEnv | undefined) => Record<string, PluginInstallRecord>;
+}): Promise<{
+  module: typeof import("./channel-catalog-registry.js");
+  discoverSpy: ReturnType<typeof vi.fn>;
+  loadRecordsSpy: ReturnType<typeof vi.fn>;
+  warnSpy: ReturnType<typeof vi.fn>;
+}> {
+  const discoverSpy = vi.fn(() => emptyDiscoveryResult());
+  const warnSpy = vi.fn();
+  const loadRecordsSpy = vi.fn((opts: { env?: NodeJS.ProcessEnv } = {}) => {
+    return params.loadRecords ? params.loadRecords(opts.env) : RECORDS;
+  });
+
+  vi.doMock("./discovery.js", () => ({ discoverOpenClawPlugins: discoverSpy }));
+  vi.doMock("./installed-plugin-index-record-reader.js", () => ({
+    loadInstalledPluginIndexInstallRecordsSync: loadRecordsSpy,
+  }));
+  vi.doMock("../logging/subsystem.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+    return {
+      ...actual,
+      createSubsystemLogger: (subsystem: string) => {
+        const logger = actual.createSubsystemLogger(subsystem);
+        return subsystem === "plugins/channel-catalog" ? { ...logger, warn: warnSpy } : logger;
+      },
+    };
+  });
+
+  const module = await importFreshModule<typeof import("./channel-catalog-registry.js")>(
+    import.meta.url,
+    `./channel-catalog-registry.js?case=${++loadCase}`,
+  );
+  return { module, discoverSpy, loadRecordsSpy, warnSpy };
+}
+
+function firstDiscoverOptions(discoverSpy: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const call = discoverSpy.mock.calls[0];
+  if (!call) {
+    throw new Error("expected discovery call");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
+    throw new Error("expected discovery options");
+  }
+  return options as Record<string, unknown>;
+}
+
+function createChannelCandidate(params: {
+  idHint?: string;
+  pluginId?: string;
+  bundledPluginId?: string;
+  origin?: PluginCandidate["origin"];
+}): PluginCandidate {
+  return {
+    idHint: params.idHint ?? "hint-plugin",
+    source: "/tmp/openclaw-test-plugin/index.js",
+    rootDir: "/tmp/openclaw-test-plugin",
+    origin: params.origin ?? "global",
+    packageName: "@vendor/openclaw-test-plugin",
+    packageManifest: {
+      ...(params.pluginId ? { plugin: { id: params.pluginId } } : {}),
+      channel: {
+        id: "test-channel",
+        name: "Test Channel",
+        description: "Test channel",
+      },
+    },
+    ...(params.bundledPluginId ? { bundledManifestId: params.bundledPluginId } : {}),
+  } as PluginCandidate;
+}
+
+describe("listChannelCatalogEntries", () => {
+  it("skips ledger lookup when origin is 'bundled' and omits installRecords", async () => {
+    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+
+    module.listChannelCatalogEntries({ origin: "bundled", env: ENV });
+
+    expect(loadRecordsSpy).not.toHaveBeenCalled();
+    expect(discoverSpy).toHaveBeenCalledTimes(1);
+    expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
+  });
+
+  it("uses caller-supplied install records verbatim and does not load the ledger", async () => {
+    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+    const supplied: Record<string, PluginInstallRecord> = {
+      slack: {
+        source: "npm",
+        spec: "@openclaw/slack@1.0.0",
+      } as PluginInstallRecord,
+    };
+
+    const extraPaths = ["/tmp/plugins/a", "/tmp/plugins/b"];
+    module.listChannelCatalogEntries({ env: ENV, installRecords: supplied, extraPaths });
+
+    expect(loadRecordsSpy).not.toHaveBeenCalled();
+    expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
+      env: ENV,
+      extraPaths,
+      installRecords: supplied,
+      workspaceDir: undefined,
+    });
+  });
+
+  it("warns when ledger read errors require a soft fallback", async () => {
+    const error = new Error("simulated reader failure");
+    const { module, discoverSpy, loadRecordsSpy, warnSpy } = await loadWithMocks({
+      loadRecords: () => {
+        throw error;
+      },
+    });
+
+    expect(module.listChannelCatalogEntries({ env: ENV })).toStrictEqual([]);
+
+    expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
+    expect(discoverSpy).toHaveBeenCalledTimes(1);
+    expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("installed channels may be missing. Run openclaw doctor"),
+      { error },
+    );
+  });
+
+  it("uses discovered package metadata for channel plugin ids", async () => {
+    const { module, loadRecordsSpy } = await loadWithMocks({});
+
+    expect(
+      module.listChannelCatalogEntries({
+        discovery: {
+          candidates: [createChannelCandidate({ pluginId: "package-plugin" })],
+          diagnostics: [],
+        },
+      }),
+    ).toStrictEqual([
+      {
+        pluginId: "package-plugin",
+        origin: "global",
+        packageName: "@vendor/openclaw-test-plugin",
+        workspaceDir: undefined,
+        rootDir: "/tmp/openclaw-test-plugin",
+        channel: {
+          id: "test-channel",
+          name: "Test Channel",
+          description: "Test channel",
+        },
+      },
+    ]);
+    expect(loadRecordsSpy).not.toHaveBeenCalled();
+  });
+
+  it("prefers bundled manifest ids over package id hints", async () => {
+    const { module } = await loadWithMocks({});
+
+    expect(
+      module.listChannelCatalogEntries({
+        installRecords: {},
+        discovery: {
+          candidates: [
+            createChannelCandidate({
+              idHint: "hint-plugin",
+              pluginId: "package-plugin",
+              bundledPluginId: "bundled-plugin",
+              origin: "bundled",
+            }),
+          ],
+          diagnostics: [],
+        },
+      })[0]?.pluginId,
+    ).toBe("bundled-plugin");
+  });
+  it.each([
+    { name: "current npm global", origin: "global", source: "npm", trusted: true },
+    { name: "current official ClawHub", origin: "global", source: "clawhub", trusted: true },
+    { name: "legacy ClawHub without authority", origin: "global", source: "clawhub", legacy: true },
+    { name: "conflicting package identity", origin: "global", source: "npm", conflict: true },
+    {
+      name: "relocated install before ledger repair",
+      origin: "global",
+      source: "npm",
+      stalePath: true,
+    },
+    { name: "unrecorded discovery owner", origin: "global", source: "npm", unowned: true },
+    { name: "ambiguous discovery owner", origin: "global", source: "npm", ambiguous: true },
+    { name: "workspace shadow", origin: "workspace", source: "npm" },
+    { name: "local npm archive", origin: "global", source: "npm", archive: true },
+  ] as const)("retains the canonical trust decision for $name", async (scenario) => {
+    const { module } = await loadWithMocks({});
+    const rootDir = "/tmp/openclaw-test-slack/current";
+    const candidate = recordPluginCandidateInstallOwner(
+      {
+        ...createChannelCandidate({ idHint: "slack", origin: scenario.origin }),
+        source: `${rootDir}/index.js`,
+        rootDir,
+        packageName: "@openclaw/slack",
+        packageManifest: { channel: { id: "slack", label: "Slack", blurb: "Slack channel" } },
+      },
+      "unowned" in scenario ? undefined : "slack",
+      "ambiguous" in scenario,
+    );
+    const record: PluginInstallRecord =
+      scenario.source === "clawhub"
+        ? {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/slack",
+            clawhubPackage: "@openclaw/slack",
+            installPath: rootDir,
+            ...("legacy" in scenario
+              ? {}
+              : { clawhubUrl: "https://clawhub.ai", clawhubChannel: "official" as const }),
+          }
+        : {
+            source: "npm",
+            spec: "@openclaw/slack@2026.9.4",
+            resolvedName: "conflict" in scenario ? "@vendor/slack" : "@openclaw/slack",
+            installPath: "stalePath" in scenario ? "/tmp/openclaw-test-slack/previous" : rootDir,
+            ...("archive" in scenario ? { sourcePath: "/tmp/slack.tgz" } : {}),
+          };
+    const entry = module.listChannelCatalogEntries({
+      env: ENV,
+      installRecords: { slack: record },
+      discovery: { candidates: [candidate], diagnostics: [] },
+    })[0];
+    expect(entry?.trustedOfficialInstall).toBe("trusted" in scenario ? true : undefined);
+  });
+});

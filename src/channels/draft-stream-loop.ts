@@ -1,0 +1,149 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+
+/** Throttled draft-stream sender used by channels that edit in-progress replies. */
+export type DraftStreamLoop<T = string> = Omit<
+  ReturnType<typeof createDraftStreamLoop<T>>,
+  "takePending"
+> & {
+  /** Removes queued (not in-flight) text atomically and cancels its scheduled flush. */
+  takePending?: () => T;
+};
+
+export function createDraftStreamLoop<T = string>(params: {
+  throttleMs: number;
+  /** Keep background updates arriving during a send in the next throttle window. */
+  coalesceInFlight?: boolean;
+  isStopped: () => boolean;
+  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
+  /** Empty sentinel and predicate for non-string payloads. */
+  emptyValue?: T;
+  isEmpty?: (value: T) => boolean;
+  onBackgroundFlushError?: (err: unknown) => void;
+}) {
+  const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
+  const emptyValue = params.emptyValue ?? ("" as T);
+  const isEmpty =
+    params.isEmpty ?? ((value: T) => typeof value === "string" && value.trim().length === 0);
+  // String callers historically treated only "" as absent between sends,
+  // while trim-empty text is discarded at the top of the next flush.
+  const hasPendingValue = (value: T) =>
+    typeof value === "string" ? value.length > 0 : !isEmpty(value);
+  let lastSentAt = 0;
+  let pendingValue = emptyValue;
+  let inFlightPromise: Promise<void | boolean> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearTimer = () => {
+    clearTimeout(timer);
+    timer = undefined;
+  };
+
+  const retainUnsentValue = (value: T, background: boolean) => {
+    if (!hasPendingValue(pendingValue)) {
+      pendingValue = value;
+    } else if (background && params.coalesceInFlight) {
+      // Only newer work owns another attempt; never retry the failed/rejected value.
+      schedule();
+    }
+  };
+
+  const flush = async (background = false) => {
+    clearTimer();
+    while (!params.isStopped()) {
+      if (inFlightPromise) {
+        await inFlightPromise;
+        if (background && params.coalesceInFlight) {
+          return;
+        }
+        continue;
+      }
+      const value = pendingValue;
+      if (isEmpty(value)) {
+        pendingValue = emptyValue;
+        return;
+      }
+      pendingValue = emptyValue;
+      let sent: void | boolean;
+      try {
+        inFlightPromise = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
+          inFlightPromise = undefined;
+        });
+        sent = await inFlightPromise;
+      } catch (err) {
+        retainUnsentValue(value, background);
+        throw err;
+      }
+      if (sent === false) {
+        retainUnsentValue(value, background);
+        return;
+      }
+      lastSentAt = Date.now();
+      if (!hasPendingValue(pendingValue)) {
+        return;
+      }
+      if (background && params.coalesceInFlight) {
+        schedule();
+        return;
+      }
+    }
+  };
+
+  const startBackgroundFlush = () => {
+    void flush(true).catch((err: unknown) => {
+      params.onBackgroundFlushError?.(err);
+    });
+  };
+
+  const schedule = () => {
+    if (timer) {
+      return;
+    }
+    const delay = Math.max(0, throttleMs - (Date.now() - lastSentAt));
+    timer = setTimeout(() => {
+      startBackgroundFlush();
+    }, delay);
+  };
+
+  return {
+    update: (value: T) => {
+      if (params.isStopped()) {
+        return;
+      }
+      pendingValue = value;
+      if (inFlightPromise) {
+        if (!params.coalesceInFlight) {
+          schedule();
+        }
+        return;
+      }
+      if (!timer && Date.now() - lastSentAt >= throttleMs) {
+        startBackgroundFlush();
+        return;
+      }
+      schedule();
+    },
+    flush: () => flush(),
+    stop: () => {
+      pendingValue = emptyValue;
+      clearTimer();
+    },
+    resetPending: () => {
+      pendingValue = emptyValue;
+    },
+    resetThrottleWindow: () => {
+      lastSentAt = 0;
+      clearTimer();
+    },
+    waitForInFlight: async () => {
+      if (inFlightPromise) {
+        await inFlightPromise;
+      }
+    },
+    takePending: () => {
+      const value = pendingValue;
+      pendingValue = emptyValue;
+      clearTimer();
+      return value;
+    },
+  };
+}

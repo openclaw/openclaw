@@ -1,0 +1,391 @@
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import {
+  resolveMessageActionMessageId,
+  resolveMessageActionOutcome,
+  type MessageActionResult,
+} from "../infra/outbound/message-action-contracts.js";
+import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { readParsedField } from "../utils/string-readers.js";
+import { shortenText } from "./text-format.js";
+
+const resolveChannelLabel = (channel: ChannelId) =>
+  getLoadedChannelPlugin(channel)?.meta.label ?? channel;
+
+function firstNonemptyString(
+  record: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string {
+  return (record && readParsedField(record, keys, readNonEmptyStringPreservingWhitespace)) ?? "";
+}
+
+type FormatOpts = {
+  width: number;
+  /** Max rows to render. Defaults to 25 when omitted. */
+  displayLimit?: number;
+};
+
+function renderSummaryValue(value: unknown): string {
+  if (value == null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} items`;
+  }
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+    case "bigint":
+    case "symbol":
+      return String(value);
+    default:
+      return typeof value;
+  }
+}
+
+function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
+  if (!payload || typeof payload !== "object") {
+    return sanitizeTerminalText(String(payload));
+  }
+  const obj = payload as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (keys.length === 0) {
+    return theme.muted("(empty)");
+  }
+
+  const rows = keys.slice(0, 20).map((k) => {
+    const value = renderSummaryValue(obj[k]);
+    return { Key: k, Value: shortenText(value, 96) };
+  });
+  return renderTerminalSafeTable({
+    width: opts.width,
+    columns: [
+      { key: "Key", header: "Key", minWidth: 16 },
+      { key: "Value", header: "Value", flex: true, minWidth: 24 },
+    ],
+    rows,
+  }).trimEnd();
+}
+
+function renderMessageList(
+  messages: unknown[],
+  opts: FormatOpts,
+  emptyLabel: string,
+  unwrapMessage = false,
+): string {
+  const cap = opts.displayLimit ?? 25;
+  const rows = messages.slice(0, cap).map((m) => {
+    const msg = (unwrapMessage && isRecord(m) && isRecord(m.message) ? m.message : m) as Record<
+      string,
+      unknown
+    >;
+    const id = firstNonemptyString(msg, "id", "ts", "messageId");
+    const authorObj = msg.author as Record<string, unknown> | undefined;
+    let author =
+      firstNonemptyString(msg, "authorTag") ||
+      firstNonemptyString(authorObj, "username") ||
+      firstNonemptyString(msg, "user");
+    if (!author) {
+      const from = asOptionalObjectRecord(msg.from);
+      author = firstNonemptyString(
+        asOptionalObjectRecord(from?.user ?? from?.application),
+        "displayName",
+        "id",
+      );
+    }
+    const time = firstNonemptyString(msg, "timestamp", "ts", "createdAt");
+    const text = firstNonemptyString(msg, "content", "text");
+    return {
+      Time: shortenText(time, 28),
+      Author: shortenText(author, 22),
+      Text: shortenText(text.replace(/\s+/g, " ").trim(), 90),
+      Id: shortenText(id, 22),
+    };
+  });
+
+  if (rows.length === 0) {
+    return theme.muted(emptyLabel);
+  }
+
+  return renderTerminalSafeTable({
+    width: opts.width,
+    columns: [
+      { key: "Time", header: "Time", minWidth: 14 },
+      { key: "Author", header: "Author", minWidth: 10 },
+      { key: "Text", header: "Text", flex: true, minWidth: 24 },
+      { key: "Id", header: "Id", minWidth: 10 },
+    ],
+    rows,
+  }).trimEnd();
+}
+
+function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  if (
+    obj.hasMore === true ||
+    (typeof obj.nextBatch === "string" && obj.nextBatch) ||
+    (typeof obj["@odata.nextLink"] === "string" && obj["@odata.nextLink"])
+  ) {
+    return muted(
+      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
+    );
+  }
+  return null;
+}
+
+export function formatMessageCliText(
+  result: MessageActionResult,
+  opts?: { displayLimit?: number },
+): string[] {
+  const rich = isRich();
+  const ok = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.success(safeText) : safeText;
+  };
+  const fail = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.error(safeText) : safeText;
+  };
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+
+  const width = getTerminalTableWidth();
+  const displayLimit = opts?.displayLimit;
+  const formatOpts: FormatOpts = { width, displayLimit };
+
+  if (result.dryRun) {
+    return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
+  }
+
+  const outcome = resolveMessageActionOutcome(result);
+  if (result.kind === "broadcast") {
+    const results = result.payload.results ?? [];
+    const rows = results.map((entry) => ({
+      Channel: resolveChannelLabel(entry.channel),
+      Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
+      Status: entry.ok ? "ok" : entry.attempted === false ? "not attempted" : "error",
+      Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
+    }));
+    const okCount = results.filter((entry) => entry.ok).length;
+    const notAttemptedCount = results.filter((entry) => entry.attempted === false).length;
+    const failedCount = results.length - okCount - notAttemptedCount;
+    const total = results.length;
+    const successful = outcome.ok;
+    const headingLine = (successful ? ok : fail)(
+      `${successful ? "✅ Broadcast complete" : notAttemptedCount ? "❌ Broadcast incomplete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${failedCount} failed${notAttemptedCount ? `, ${notAttemptedCount} not attempted` : ""})`,
+    );
+    return [
+      headingLine,
+      renderTerminalSafeTable({
+        width: formatOpts.width,
+        columns: [
+          { key: "Channel", header: "Channel", minWidth: 10 },
+          { key: "Target", header: "Target", minWidth: 12, flex: true },
+          { key: "Status", header: "Status", minWidth: 6 },
+          { key: "Error", header: "Error", minWidth: 20, flex: true },
+        ],
+        rows,
+      }).trimEnd(),
+    ];
+  }
+
+  if (!outcome.ok) {
+    const messageId = result.kind === "send" ? result.sendResult?.result?.messageId : undefined;
+    return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
+  }
+
+  if (result.kind === "send" || result.kind === "poll") {
+    const send = result.kind === "send" ? result.sendResult : undefined;
+    const poll = result.kind === "poll" ? result.pollResult : undefined;
+    const delivery = send ?? poll;
+    const action = result.kind === "poll" ? "Poll sent" : "Sent";
+    if (result.handledBy === "core" && delivery) {
+      const pollId = poll?.result?.pollId;
+      const directResult = poll?.result
+        ? { ...poll.result, channel: poll.channel }
+        : (send?.result as OutboundDeliveryResult | undefined);
+      let summary: string;
+      if (delivery.via === "direct") {
+        const resultChannel = directResult ? directResult.channel : delivery.channel;
+        let label = getChannelPlugin(resultChannel)?.meta.label;
+        if (!label) {
+          // Some legacy chat channels are not plugins; keep their human labels for CLI output.
+          const normalized = normalizeChatChannelId(resultChannel);
+          label = normalized
+            ? (findChatChannelMeta(normalized)?.label ?? resultChannel)
+            : resultChannel;
+        }
+        const base = `✅ ${action} via ${label}. Message ID: ${directResult ? directResult.messageId : "unknown"}`;
+        summary = directResult?.target
+          ? `${base} (${directResult.target.kind} ${directResult.target.id})`
+          : base;
+      } else {
+        const channelSuffix = delivery.channel ? ` (${delivery.channel})` : "";
+        const messageId = delivery.result?.messageId ?? "unknown";
+        summary = `✅ ${action} via gateway${channelSuffix}. Message ID: ${messageId}`;
+      }
+      const lines = [ok(summary)];
+      if (pollId) {
+        lines.push(ok(`Poll id: ${pollId}`));
+      }
+      return lines;
+    }
+
+    const label = resolveChannelLabel(result.channel);
+    const msgId = resolveMessageActionMessageId(result.payload);
+    return [ok(`✅ ${action} via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
+  }
+
+  // Channel actions share the generic plugin-action payload shape, so format
+  // known read/reaction shapes first and fall back to a compact object table.
+  const payload = result.payload;
+  if (result.action === "react") {
+    const added = (payload as { added?: unknown }).added;
+    const removed = (payload as { removed?: unknown }).removed;
+    if (typeof added === "string" && added.trim()) {
+      return [ok(`✅ Reaction added: ${added.trim()}`)];
+    }
+    if (typeof removed === "string" && removed.trim()) {
+      return [ok(`✅ Reaction removed: ${removed.trim()}`)];
+    }
+    if (Array.isArray(removed)) {
+      const list = normalizeStringEntries(removed).join(", ");
+      return [ok(`✅ Reactions removed${list ? `: ${list}` : ""}`)];
+    }
+    return [ok("✅ Reaction updated.")];
+  }
+
+  if (result.action === "reactions" && payload && typeof payload === "object") {
+    const reactions = (payload as { reactions?: unknown }).reactions;
+    if (Array.isArray(reactions)) {
+      const rows = reactions.slice(0, displayLimit ?? 50).map((r) => {
+        const entry = r as Record<string, unknown>;
+        const emojiObj = entry.emoji as Record<string, unknown> | undefined;
+        const emoji =
+          firstNonemptyString(emojiObj, "raw") ||
+          firstNonemptyString(entry, "name", "emoji", "key");
+        const count = typeof entry.count === "number" ? String(entry.count) : "";
+        const userList = Array.isArray(entry.users)
+          ? (entry.users as unknown[])
+              .slice(0, 8)
+              .map((u) => {
+                if (typeof u === "string") {
+                  return u;
+                }
+                if (!u || typeof u !== "object") {
+                  return "";
+                }
+                const user = u as Record<string, unknown>;
+                return firstNonemptyString(user, "tag", "username", "id");
+              })
+              .filter(Boolean)
+          : [];
+        return {
+          Emoji: emoji,
+          Count: count,
+          Users: shortenText(userList.join(", "), 72),
+        };
+      });
+      // Escape remote labels and users only for display; raw keys remain identities in JSON.
+      const table =
+        rows.length === 0
+          ? theme.muted("No reactions.")
+          : renderTerminalSafeTable({
+              width,
+              columns: [
+                { key: "Emoji", header: "Emoji", minWidth: 8 },
+                { key: "Count", header: "Count", align: "right", minWidth: 6 },
+                { key: "Users", header: "Users", flex: true, minWidth: 20 },
+              ],
+              rows,
+            }).trimEnd();
+      return [heading("Reactions"), table];
+    }
+  }
+
+  if (result.action === "read" || result.action === "list-pins") {
+    const read = result.action === "read";
+    let messages =
+      payload && typeof payload === "object"
+        ? (payload as { messages?: unknown; pins?: unknown })[read ? "messages" : "pins"]
+        : undefined;
+    if (read && !Array.isArray(messages)) {
+      const message = asOptionalObjectRecord(payload)?.message;
+      if (message && typeof message === "object") {
+        messages = [message];
+      }
+    }
+    if (Array.isArray(messages)) {
+      const table = renderMessageList(
+        messages,
+        formatOpts,
+        read ? "No messages." : "No pins.",
+        !read && result.channel === "slack",
+      );
+      const lines = [heading(read ? "Messages" : "Pinned messages"), table];
+      const hint = renderPaginationHint(payload, muted);
+      if (hint) {
+        lines.push(hint);
+      }
+      return lines;
+    }
+  }
+
+  if (result.action === "search") {
+    const results = (payload as { results?: unknown }).results;
+    let list: unknown[] | null = null;
+    if (results && typeof results === "object") {
+      const raw = (results as { messages?: unknown }).messages;
+      if (Array.isArray(raw)) {
+        list = [];
+        // Discord search returns messages as array-of-array; first element is the message.
+        for (const entry of raw) {
+          if (Array.isArray(entry) && entry.length > 0) {
+            list.push(entry[0]);
+          } else if (entry && typeof entry === "object") {
+            list.push(entry);
+          }
+        }
+      }
+    }
+    if (list === null) {
+      const messages = asOptionalObjectRecord(payload)?.messages;
+      if (Array.isArray(messages)) {
+        list = messages;
+      }
+    }
+    if (list) {
+      const lines = [heading("Search results"), renderMessageList(list, formatOpts, "No results.")];
+      // Discord's approximate result count cannot prove another page exists.
+      const hint = renderPaginationHint(payload, muted) ?? renderPaginationHint(results, muted);
+      if (hint) {
+        lines.push(hint);
+      }
+      return lines;
+    }
+  }
+
+  return [
+    ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`),
+    "",
+    renderObjectSummary(payload, formatOpts),
+    "",
+    muted("Tip: use --json for full output."),
+  ];
+}

@@ -1,0 +1,370 @@
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import {
+  formatAgentEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getTlonRuntime } from "../runtime.js";
+import { normalizeShip } from "../targets.js";
+
+export function formatModelName(modelString?: string | null): string {
+  if (!modelString) {
+    return "AI";
+  }
+  const modelName = modelString.includes("/")
+    ? expectDefined(modelString.split("/").at(1), "provider/model second segment")
+    : modelString;
+  const modelMappings: Record<string, string> = {
+    "claude-opus-4-5": "Claude Opus 4.5",
+    "claude-sonnet-4-5": "Claude Sonnet 4.5",
+    "claude-sonnet-3-5": "Claude Sonnet 3.5",
+    "gpt-4o": "GPT-4o",
+    "gpt-4-turbo": "GPT-4 Turbo",
+    "gpt-4": "GPT-4",
+    "gemini-2.0-flash": "Gemini 2.0 Flash",
+    "gemini-pro": "Gemini Pro",
+  };
+
+  const mappedName = Object.hasOwn(modelMappings, modelName) ? modelMappings[modelName] : undefined;
+  if (mappedName !== undefined) {
+    return mappedName;
+  }
+  return modelName
+    .replace(/-/g, " ")
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+export function isBotMentioned(
+  messageText: string,
+  botShipName: string,
+  nickname?: string,
+): boolean {
+  if (!messageText || !botShipName) {
+    return false;
+  }
+
+  if (/@all\b/i.test(messageText)) {
+    return true;
+  }
+
+  const normalizedBotShip = normalizeShip(botShipName);
+  const escapedShip = escapeRegExp(normalizedBotShip);
+  const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
+  if (mentionPattern.test(messageText)) {
+    return true;
+  }
+
+  if (nickname) {
+    const escapedNickname = escapeRegExp(nickname);
+    const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
+    if (nicknamePattern.test(messageText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function stripBotMention(messageText: string, botShipName: string): string {
+  if (!messageText || !botShipName) {
+    return messageText;
+  }
+  return messageText.replace(normalizeShip(botShipName), "").trim();
+}
+
+export function extractDmPartnerShip(whom: unknown): string {
+  const raw =
+    typeof whom === "string"
+      ? whom
+      : whom && typeof whom === "object" && "ship" in whom && typeof whom.ship === "string"
+        ? whom.ship
+        : "";
+  const normalized = normalizeShip(raw);
+  // Keep DM routing strict: accept only patp-like values.
+  return /^~?[a-z-]+$/i.test(normalized) ? normalized : "";
+}
+
+const tlonIngressIdentity = {
+  key: "sender-ship",
+  normalize: normalizeShip,
+  sensitivity: "pii",
+  isWildcardEntry: () => false,
+  entryIdPrefix: "tlon-entry",
+} satisfies StableChannelIngressIdentityParams;
+
+export async function isDmAllowedWithIngress(
+  senderShip: string,
+  allowlist: string[] | undefined,
+): Promise<boolean> {
+  const access = await resolveTlonMessageIngress({
+    senderShip,
+    allowFrom: allowlist ?? [],
+    conversation: { kind: "direct", id: "direct" },
+  });
+  return access.senderAccess.allowed;
+}
+
+export async function resolveTlonMessageIngress(params: {
+  senderShip: string;
+  allowFrom: string[];
+  conversation: { kind: "direct" | "group"; id: string };
+  accountId?: string;
+  groupPolicy?: "open" | "allowlist";
+  contextBinding?: ChannelIngressContextBinding;
+}) {
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
+    channelId: "tlon",
+    accountId: params.accountId ?? "default",
+    identity: tlonIngressIdentity,
+    subject: { stableId: params.senderShip },
+    conversation: params.conversation,
+    contextBinding: params.contextBinding,
+    dmPolicy: "allowlist",
+    groupPolicy: params.groupPolicy ?? "open",
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.allowFrom,
+  });
+}
+
+export async function resolveTlonCommandAuthorizationWithIngress(params: {
+  senderShip: string;
+  ownerShip: string | null | undefined;
+}) {
+  const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    useAccessGroups: true,
+    subject: { stableId: params.senderShip },
+    conversation: {
+      kind: "direct",
+      id: "command",
+    },
+    event: {
+      authMode: "none",
+      mayPair: false,
+    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
+    allowFrom: normalizedOwner ? [normalizedOwner] : [],
+    command: {},
+  });
+}
+
+export function isGroupInviteAllowed(
+  inviterShip: string,
+  allowlist: string[] | undefined,
+): boolean {
+  const normalizedInviter = normalizeShip(inviterShip);
+  return resolveAllowlistMatchByCandidates({
+    allowList: (allowlist ?? []).map((ship) => normalizeShip(ship)),
+    candidates: [{ value: normalizedInviter, source: "ship" }],
+  }).allowed;
+}
+
+// Inline styles can nest arbitrarily deeply in remote content. Stop rendering past
+// this depth and degrade to truncated plain text rather than recursing until the
+// call stack overflows; legitimate inline markup never approaches this bound.
+const MAX_INLINE_DEPTH = 100;
+
+function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
+  if (typeof item === "string") {
+    return item;
+  }
+  const record = asNullableRecord(item);
+  if (!record) {
+    return "";
+  }
+  const ship = readStringField(record, "ship");
+  if (ship) {
+    return ship;
+  }
+  if ("sect" in record) {
+    const sect = record.sect;
+    if (typeof sect === "string") {
+      return `@${sect || "all"}`;
+    }
+    if (sect === null) {
+      return "@all";
+    }
+  }
+  if (topLevel && "break" in record) {
+    return "\n";
+  }
+  const code = readStringField(record, "inline-code") || readStringField(record, "code");
+  if (code) {
+    return `\`${code}\``;
+  }
+  const link = asNullableRecord(record.link);
+  const linkHref = link ? readStringField(link, "href") : undefined;
+  if (link && linkHref) {
+    const linkContent = readStringField(link, "content");
+    return topLevel ? linkHref : linkContent || linkHref;
+  }
+  const bold = Array.isArray(record.bold) ? record.bold : undefined;
+  const italics = Array.isArray(record.italics) ? record.italics : undefined;
+  const strike = Array.isArray(record.strike) ? record.strike : undefined;
+  const blockquote = topLevel && Array.isArray(record.blockquote) ? record.blockquote : undefined;
+  const nested = bold ?? italics ?? strike ?? blockquote;
+  if (!nested) {
+    return "";
+  }
+  if (depth >= MAX_INLINE_DEPTH) {
+    return "";
+  }
+  const inner = extractInlineText(nested, depth + 1);
+  if (bold) {
+    return `**${inner}**`;
+  }
+  if (italics) {
+    return `*${inner}*`;
+  }
+  if (strike) {
+    return `~~${inner}~~`;
+  }
+  return `> ${inner}`;
+}
+
+function extractInlineText(items: readonly unknown[], depth = 0): string {
+  return items.map((item) => renderInlineItem(item, false, depth)).join("");
+}
+
+export function extractMessageText(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((verse) => {
+      const verseRecord = asNullableRecord(verse);
+      if (!verseRecord) {
+        return "";
+      }
+
+      if (Array.isArray(verseRecord.inline)) {
+        return verseRecord.inline.map((item) => renderInlineItem(item, true)).join("");
+      }
+
+      const block = asNullableRecord(verseRecord.block);
+      if (block) {
+        const image = asNullableRecord(block.image);
+
+        if (image) {
+          const imageSrc = readStringField(image, "src");
+          if (imageSrc) {
+            const altText = readStringField(image, "alt");
+            const alt = altText ? ` (${altText})` : "";
+            return `\n${imageSrc}${alt}\n`;
+          }
+        }
+
+        const codeBlock = asNullableRecord(block.code);
+        if (codeBlock) {
+          const lang = readStringField(codeBlock, "lang") ?? "";
+          const code = readStringField(codeBlock, "code") ?? "";
+          let fenceLength = 3;
+          for (const match of code.matchAll(/`+/g)) {
+            fenceLength = Math.max(fenceLength, match[0].length + 1);
+          }
+          const fence = "`".repeat(fenceLength);
+          return `\n${fence}${lang}\n${code}\n${fence}\n`;
+        }
+
+        const header = asNullableRecord(block.header);
+        if (header) {
+          const headerContent = Array.isArray(header.content) ? header.content : [];
+          const text = headerContent.map((item) => (typeof item === "string" ? item : "")).join("");
+          return `\n## ${text}\n`;
+        }
+
+        const cite = asNullableRecord(block.cite);
+        if (cite) {
+          const chanCite = asNullableRecord(cite.chan);
+
+          if (chanCite) {
+            const nest = readStringField(chanCite, "nest");
+            const where = readStringField(chanCite, "where");
+            // where is typically /msg/~author/timestamp
+            const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
+            if (whereMatch) {
+              const [, author, _postId] = whereMatch;
+              return `\n> [quoted: ${author} in ${nest}]\n`;
+            }
+            return `\n> [quoted from ${nest}]\n`;
+          }
+
+          const group = readStringField(cite, "group");
+          if (group) {
+            return `\n> [ref: group ${group}]\n`;
+          }
+
+          const desk = asNullableRecord(cite.desk);
+          if (desk) {
+            const flag = readStringField(desk, "flag");
+            if (flag) {
+              return `\n> [ref: ${flag}]\n`;
+            }
+          }
+
+          const bait = asNullableRecord(cite.bait);
+          if (bait) {
+            const graph = readStringField(bait, "graph");
+            const groupName = readStringField(bait, "group");
+            if (graph && groupName) {
+              return `\n> [ref: ${graph} in ${groupName}]\n`;
+            }
+          }
+
+          return `\n> [quoted message]\n`;
+        }
+      }
+
+      return "";
+    })
+    .join("\n")
+    .trim();
+}
+
+export function isSummarizationRequest(messageText: string): boolean {
+  const patterns = [
+    /summarize\s+(this\s+)?(channel|chat|conversation)/i,
+    /what\s+did\s+i\s+miss/i,
+    /catch\s+me\s+up/i,
+    /channel\s+summary/i,
+    /tldr/i,
+  ];
+  return patterns.some((pattern) => pattern.test(messageText));
+}
+
+/**
+ * Formats channel history for a summarization request. Each entry is rendered
+ * through the shared inbound envelope so timestamps honor the configured user
+ * timezone instead of the host process zone (matches Mattermost/Feishu).
+ */
+export function formatSummarizationHistoryText(
+  history: ReadonlyArray<{ author: string; content: string; timestamp: number }>,
+  cfg?: OpenClawConfig,
+): string {
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  return history
+    .map((msg) =>
+      formatAgentEnvelope({
+        channel: "Tlon",
+        from: msg.author,
+        timestamp: msg.timestamp,
+        body: msg.content,
+        envelope: envelopeOptions,
+      }),
+    )
+    .join("\n");
+}

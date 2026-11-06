@@ -1,0 +1,485 @@
+import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  getOwnedSessionTranscriptActor,
+  SessionTranscriptWriterClaimReboundError,
+} from "../../config/sessions/transcript-write-context.js";
+import type { ImageContent, TextContent } from "../../llm/types.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
+import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
+import type { CustomMessage } from "./messages.js";
+import {
+  sessionManagerAppendPromptContext,
+  type PrepareModelPromptProjection,
+} from "./model-prompt-projection-append.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
+import { SessionManagerAppend } from "./session-manager-append.js";
+import { generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
+import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
+import type {
+  BranchSummaryEntry,
+  CompactionEntry,
+  CustomEntry,
+  CustomMessageEntry,
+  LabelEntry,
+  ResetEntry,
+  ResetReason,
+  SessionContext,
+  SessionEntry,
+  SessionInfoEntry,
+  SessionLeafControl,
+} from "./session-manager-types.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+
+type LeafControlSelection = {
+  targetId: string | null;
+  appendParentId: string | null;
+  appendMode?: "side";
+};
+
+export class SessionManagerEntries extends SessionManagerAppend {
+  private createEntry<T extends { type: SessionEntry["type"] }>(data: T, timestamp = Date.now()) {
+    return {
+      ...data,
+      id: generateSessionEntryId(),
+      parentId: this.appendParentId,
+      timestamp: new Date(timestamp).toISOString(),
+    };
+  }
+
+  async appendCompactionAsync(
+    summary: string,
+    firstKeptEntryId: string,
+    tokensBefore: number,
+    details?: unknown,
+    fromHook?: boolean,
+    metadata?: CompactionEntry["__openclaw"],
+    tokensAfter?: number,
+  ): Promise<string> {
+    const entry: CompactionEntry = this.createEntry({
+      type: "compaction",
+      summary,
+      firstKeptEntryId,
+      tokensBefore,
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+      details,
+      fromHook,
+      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
+    });
+    await this.appendEntryAsync(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
+    return entry.id;
+  }
+
+  /** @deprecated Await appendCompactionAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendCompaction(
+    summary: string,
+    firstKeptEntryId: string,
+    tokensBefore: number,
+    details?: unknown,
+    fromHook?: boolean,
+    metadata?: CompactionEntry["__openclaw"],
+    tokensAfter?: number,
+  ): string {
+    prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
+    const entry: CompactionEntry = this.createEntry({
+      type: "compaction",
+      summary,
+      firstKeptEntryId,
+      tokensBefore,
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+      details,
+      fromHook,
+      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
+    });
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
+    return entry.id;
+  }
+
+  async appendResetBoundaryAsync(reason: ResetReason, firstKeptEntryId?: string): Promise<string> {
+    const entry: ResetEntry = this.createEntry({
+      type: "reset",
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+    });
+    await this.appendEntryAsync(entry);
+    return entry.id;
+  }
+
+  /** @deprecated Await appendResetBoundaryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
+    prepareSessionManagerSync("appendResetBoundary", this.persistenceTarget, this);
+    const entry: ResetEntry = this.createEntry({
+      type: "reset",
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+    });
+    this.appendEntry(entry);
+    return entry.id;
+  }
+
+  async appendCustomEntryAsync(customType: string, data?: unknown): Promise<string> {
+    const entry: CustomEntry = this.createEntry({
+      type: "custom",
+      customType,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+    await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
+    return entry.id;
+  }
+
+  /** @deprecated Await appendCustomEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendCustomEntry(customType: string, data?: unknown): string {
+    prepareSessionManagerSync("appendCustomEntry", this.persistenceTarget, this);
+    const entry: CustomEntry = this.createEntry({
+      type: "custom",
+      customType,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
+    return entry.id;
+  }
+
+  async appendSessionInfoAsync(name: string): Promise<string> {
+    const entry: SessionInfoEntry = this.createEntry({
+      type: "session_info",
+      name: name.replace(/[\r\n]+/g, " ").trim(),
+    });
+    await this.appendEntryAsync(entry);
+    return entry.id;
+  }
+
+  /** @deprecated Await appendSessionInfoAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendSessionInfo(name: string): string {
+    prepareSessionManagerSync("appendSessionInfo", this.persistenceTarget, this);
+    const entry: SessionInfoEntry = this.createEntry({
+      type: "session_info",
+      name: name.replace(/[\r\n]+/g, " ").trim(),
+    });
+    this.appendEntry(entry);
+    return entry.id;
+  }
+
+  async appendCustomMessageEntryAsync(
+    customType: string,
+    content: string | (TextContent | ImageContent)[],
+    display: boolean,
+    details?: unknown,
+    timestamp?: number,
+  ): Promise<string> {
+    // Runtime context replays as user input, including its original timestamp.
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
+    await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
+    return entry.id;
+  }
+
+  async [sessionManagerAppendPromptContext](
+    message: CustomMessage,
+    prepare: PrepareModelPromptProjection,
+  ): Promise<string> {
+    const target = this.getSessionTarget();
+    const actor = target ? getOwnedSessionTranscriptActor(target)?.actor : undefined;
+    // Join user admission before entering the manager's append queue.
+    const projection =
+      actor && actor.target.database.kind !== "memory" ? await prepare() : undefined;
+    const { customType, content, display, details, timestamp } = message;
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
+    await this.appendEntryAsync(
+      entry,
+      { invalidateSerializedPrefixCache: true },
+      false,
+      projection,
+    );
+    return entry.id;
+  }
+
+  /** @deprecated Await appendCustomMessageEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendCustomMessageEntry(
+    customType: string,
+    content: string | (TextContent | ImageContent)[],
+    display: boolean,
+    details?: unknown,
+    timestamp?: number,
+  ): string {
+    prepareSessionManagerSync("appendCustomMessageEntry", this.persistenceTarget, this);
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
+    return entry.id;
+  }
+
+  async appendLeafControlAsync(params: LeafControlSelection): Promise<SessionLeafControl> {
+    const captured = { ...params };
+    return await withSessionManagerAppend(this, async (admission) => {
+      this.assertTranscriptWriteActive();
+      this.validateLeafControl(captured);
+      if (!admission) {
+        return this.appendLeafControlSync(captured);
+      }
+      const entry = this.createSelectedLeafControl(captured);
+      const target = this.getSessionTarget();
+      const assertNavigation = this.captureTranscriptNavigationAssertion();
+      // This control selects the loaded tree; retrying could hide a newer user turn.
+      const committed = await this.persistWorkerRecord(
+        entry,
+        undefined,
+        admission,
+        "reload",
+        undefined,
+        undefined,
+        this.transcriptMutationAt,
+        false,
+        assertNavigation,
+      );
+      try {
+        if (!sameSessionTranscriptTargetBinding(target, this.getSessionTarget())) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+        assertNavigation();
+        if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
+          throw committed.viewFailure;
+        }
+        if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
+          if (committed.viewFailure) {
+            throw committed.viewFailure;
+          }
+          this.transcriptVersion = committed.committedVersion;
+          this.transcriptMutationAt = committed.committedVersion.updatedAt;
+          if (committed.reload) {
+            this.adoptPreparedTranscriptReload(committed.reload);
+          } else {
+            this.adoptLeafSelection(entry, captured);
+          }
+        }
+        return entry;
+      } catch (cause) {
+        const error = new Error(
+          "Session leaf committed, but its view could not be adopted; do not replay the write",
+          { cause },
+        );
+        recordModelFallbackStop(error);
+        this.invalidateTranscriptView(error);
+        throw error;
+      }
+    });
+  }
+
+  /** @deprecated Await appendLeafControlAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendLeafControl(params: LeafControlSelection): SessionLeafControl {
+    prepareSessionManagerSync("appendLeafControl", this.persistenceTarget, this);
+    return this.appendLeafControlSync(params);
+  }
+
+  private validateLeafControl(params: LeafControlSelection): void {
+    this.assertTranscriptViewAvailable();
+    if (params.targetId !== null && !this.byId.has(params.targetId)) {
+      throw new Error(`Entry ${params.targetId} not found`);
+    }
+    if (
+      params.appendParentId !== null &&
+      !this.byId.has(params.appendParentId) &&
+      !this.opaqueParentsById.has(params.appendParentId)
+    ) {
+      throw new Error(`Append parent ${params.appendParentId} not found`);
+    }
+  }
+
+  protected appendLeafControlSync(params: LeafControlSelection): SessionLeafControl {
+    this.validateLeafControl(params);
+    const entry = this.createSelectedLeafControl(params);
+    this.persistRecord(entry);
+    this.adoptLeafSelection(entry, params);
+    return entry;
+  }
+
+  private createSelectedLeafControl(params: LeafControlSelection): SessionLeafControl {
+    const previousLeafId = this.leafId;
+    this.leafId = params.targetId;
+    const entry = this.createLeafControl(
+      this.appendParentId,
+      params.appendParentId,
+      params.appendMode,
+    );
+    this.leafId = previousLeafId;
+    return entry;
+  }
+
+  private adoptLeafSelection(entry: SessionLeafControl, params: LeafControlSelection): void {
+    this.rememberLeafControl(entry);
+    this.leafId = params.targetId;
+    this.appendParentId = params.appendParentId;
+    this.appendMode = params.appendMode;
+    this.pendingDeliberateAppend = false;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
+  }
+
+  async appendLabelChangeAsync(targetId: string, label: string | undefined): Promise<string> {
+    const entry: LabelEntry = this.createEntry({
+      type: "label",
+      targetId,
+      label,
+    });
+    await this.appendEntryAsync(entry);
+    return entry.id;
+  }
+
+  /** @deprecated Await appendLabelChangeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  appendLabelChange(targetId: string, label: string | undefined): string {
+    prepareSessionManagerSync("appendLabelChange", this.persistenceTarget, this);
+    this.assertTranscriptViewAvailable();
+    if (!this.byId.has(targetId)) {
+      throw new Error(`Entry ${targetId} not found`);
+    }
+    const entry: LabelEntry = this.createEntry({
+      type: "label",
+      targetId,
+      label,
+    });
+    this.appendEntry(entry);
+    return entry.id;
+  }
+
+  buildSessionContext(): SessionContext {
+    return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
+  }
+
+  /** Omitted projection metadata follows its retained branch anchors, outside model history. */
+  getToolResultProjectionEntries() {
+    let entries: (SessionEntry | Record<string, unknown>)[] = this.getBranch();
+    for (const prefix of this.cacheTtlProjectionPrefixes ?? []) {
+      const anchor = prefix.anchorIds.length
+        ? entries.findIndex((entry) => prefix.anchorIds.some((id) => id === entry.id))
+        : entries.length;
+      if (anchor >= 0) {
+        entries = [...entries.slice(0, anchor), ...prefix.entries, ...entries.slice(anchor)];
+      }
+    }
+    return entries;
+  }
+
+  async branchAsync(branchFromId: string): Promise<void> {
+    await withSessionManagerWrite(this, async () => {
+      if (!this.byId.has(branchFromId)) {
+        await this.ensureCompletePersistedHistoryAsync();
+      }
+      this.selectBranch(branchFromId);
+    });
+  }
+
+  /** @deprecated Await branchAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  branch(branchFromId: string): void {
+    prepareSessionManagerSync("branch", this.persistenceTarget, this);
+    this.branchSync(branchFromId);
+  }
+
+  protected branchSync(branchFromId: string): void {
+    this.assertTranscriptViewAvailable();
+    if (!this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
+    this.selectBranch(branchFromId);
+  }
+
+  private selectBranch(branchFromId: string): void {
+    const branchTargetId = this.resolveBranchTargetId(branchFromId);
+    if (branchTargetId === undefined) {
+      throw new Error(`Entry ${branchFromId} not found`);
+    }
+    this.recordTranscriptNavigationChange();
+    this.leafId = branchTargetId;
+    this.appendParentId = branchTargetId;
+    this.appendMode = undefined;
+    this.pendingDeliberateAppend = true;
+  }
+
+  resetLeaf(): void {
+    this.assertTranscriptViewAvailable();
+    this.recordTranscriptNavigationChange();
+    this.leafId = null;
+    this.appendParentId = null;
+    this.appendMode = undefined;
+    this.pendingDeliberateAppend = true;
+  }
+
+  async resetLeafAsync(): Promise<void> {
+    await withSessionManagerWrite(this, () => this.resetLeaf());
+  }
+
+  async branchWithSummaryAsync(
+    branchFromId: string | null,
+    summary: string,
+    details?: unknown,
+    fromHook?: boolean,
+  ): Promise<string> {
+    return await withSessionManagerWrite(this, async () => {
+      if (branchFromId !== null && !this.byId.has(branchFromId)) {
+        await this.ensureCompletePersistedHistoryAsync();
+      }
+      const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
+      await this.appendEntryAsync(
+        entry,
+        {
+          invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+        },
+        true,
+      );
+      return entry.id;
+    });
+  }
+
+  /** @deprecated Await branchWithSummaryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  branchWithSummary(
+    branchFromId: string | null,
+    summary: string,
+    details?: unknown,
+    fromHook?: boolean,
+  ): string {
+    prepareSessionManagerSync("branchWithSummary", this.persistenceTarget, this);
+    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
+    const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
+    return entry.id;
+  }
+
+  private createBranchSummary(
+    branchFromId: string | null,
+    summary: string,
+    details: unknown,
+    fromHook: boolean | undefined,
+  ): BranchSummaryEntry {
+    const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
+    if (branchTargetId === undefined) {
+      throw new Error(`Entry ${branchFromId} not found`);
+    }
+    return {
+      type: "branch_summary",
+      id: generateSessionEntryId(),
+      parentId: branchTargetId,
+      timestamp: new Date().toISOString(),
+      fromId: branchTargetId ?? "root",
+      summary,
+      details,
+      fromHook,
+    };
+  }
+}

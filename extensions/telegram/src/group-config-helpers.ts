@@ -1,0 +1,92 @@
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import {
+  resolveChannelGroupPolicy,
+  resolveToolsBySender,
+  type GroupToolPolicyConfig,
+} from "openclaw/plugin-sdk/channel-policy";
+import type {
+  OpenClawConfig,
+  TelegramAccountConfig,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+
+export type TelegramGroupConfigResolver = (
+  chatId: string | number,
+  messageThreadId: number | undefined,
+  cfg: OpenClawConfig,
+) => {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+};
+
+export function resolveTelegramScopedGroupConfig(
+  telegramCfg: TelegramAccountConfig,
+  chatId: string | number,
+  messageThreadId?: number,
+) {
+  const chatIdStr = String(chatId);
+  const scopedConfigs = chatIdStr.startsWith("-") ? telegramCfg.groups : telegramCfg.direct;
+  // Whole-entry selection: an exact chat hides every wildcard field.
+  const groupKey = [chatIdStr, "*"].find((key) => Object.hasOwn(scopedConfigs ?? {}, key));
+  const groupConfig = groupKey ? scopedConfigs?.[groupKey] : undefined;
+  const topics = messageThreadId == null ? undefined : groupConfig?.topics;
+  const defaultConfig = topics?.["*"];
+  const exactConfig = topics?.[String(messageThreadId)];
+  const topicConfig =
+    defaultConfig && exactConfig
+      ? { ...defaultConfig, ...exactConfig }
+      : (exactConfig ?? defaultConfig);
+  return { groupConfig, topicConfig };
+}
+
+export function resolveTelegramGroupIngestEnabled(params: {
+  cfg: OpenClawConfig;
+  chatId: string | number;
+  accountId?: string;
+  topicConfig?: TelegramTopicConfig;
+}): boolean {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy({
+    cfg: params.cfg,
+    channel: "telegram",
+    groupId: String(params.chatId),
+    accountId: params.accountId,
+  });
+  return (params.topicConfig?.ingest ?? groupConfig?.ingest ?? defaultConfig?.ingest) === true;
+}
+
+export function resolveTelegramGroupPromptSettings(params: {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+}): {
+  skillFilter: string[] | undefined;
+  groupSystemPrompt: string | undefined;
+} {
+  const skillFilter = firstDefined(params.topicConfig?.skills, params.groupConfig?.skills);
+  const systemPromptParts = [
+    params.groupConfig?.systemPrompt?.trim() || null,
+    params.topicConfig?.systemPrompt?.trim() || null,
+  ].filter((entry): entry is string => Boolean(entry));
+  return { skillFilter, groupSystemPrompt: systemPromptParts.join("\n\n") || undefined };
+}
+
+export function resolveTelegramDirectToolPolicy(params: {
+  directConfig?: Pick<TelegramDirectConfig, "tools" | "toolsBySender">;
+  senderPolicyMode?: "always" | "never";
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+}): GroupToolPolicyConfig | undefined {
+  return (
+    (params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: params.directConfig?.toolsBySender,
+          messageProvider: "telegram",
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+        })) ?? params.directConfig?.tools
+  );
+}

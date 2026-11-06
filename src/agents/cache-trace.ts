@@ -1,0 +1,174 @@
+import crypto from "node:crypto";
+import path from "node:path";
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
+import { stableStringify } from "@openclaw/normalization-core";
+import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveUserPath } from "../utils.js";
+import { parseBooleanValue } from "../utils/boolean.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
+import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
+import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import type { AgentMessage, StreamFn } from "./runtime/index.js";
+import { buildAgentTraceBase, type AgentTraceBase } from "./trace-base.js";
+
+// Payloads are redacted before JSONL output while stable digests preserve
+// correlation across prompt/session/cache stages.
+type CacheTraceStage =
+  | "cache:result"
+  | "cache:state"
+  | "session:loaded"
+  | "session:raw-model-run"
+  | "session:sanitized"
+  | "session:limited"
+  | "prompt:before"
+  | "prompt:images"
+  | "stream:context"
+  | "session:after";
+
+type CacheTraceEvent = AgentTraceBase & {
+  ts: string;
+  seq: number;
+  stage: CacheTraceStage;
+  prompt?: unknown;
+  system?: unknown;
+  options?: unknown;
+  model?: unknown;
+  messages?: unknown;
+  messageCount?: number;
+  messageRoles?: Array<string | undefined>;
+  messageFingerprints?: string[];
+  messagesDigest?: string;
+  systemDigest?: string;
+  note?: unknown;
+  error?: unknown;
+};
+
+type CacheTracePayload = Partial<Omit<CacheTraceEvent, "messages">> & {
+  messages?: AgentMessage[];
+};
+
+type CacheTraceInit = AgentTraceBase & {
+  cfg?: OpenClawConfig;
+};
+
+const writers = new Map<string, QueuedFileWriter>();
+
+function digest(value: unknown): string {
+  const serialized = stableStringify(value, sanitizeSurrogates);
+  return crypto.createHash("sha256").update(serialized).digest("hex");
+}
+
+function summarizeMessages(messages: AgentMessage[]): {
+  messageCount: number;
+  messageRoles: Array<string | undefined>;
+  messageFingerprints: string[];
+  messagesDigest: string;
+} {
+  // Hash each message and then the ordered fingerprint list so traces can detect
+  // prompt drift without writing full messages when disabled.
+  const messageFingerprints = messages.map(digest);
+  return {
+    messageCount: messages.length,
+    messageRoles: messages.map((msg) => (msg as { role?: string }).role),
+    messageFingerprints,
+    messagesDigest: digest(messageFingerprints.join("|")),
+  };
+}
+
+export function createCacheTrace(params: CacheTraceInit) {
+  const env = process.env;
+  const enabled =
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE) ??
+    params.cfg?.diagnostics?.cacheTrace?.enabled ??
+    false;
+  const fileOverride = env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
+  const includeMessages = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? true;
+  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? true;
+  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? true;
+  if (!enabled || isIncognitoSessionKey(params.sessionKey)) {
+    return null;
+  }
+
+  const writer = getQueuedFileWriter(writers, filePath);
+  let seq = 0;
+
+  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
+
+  const recordStage = (stage: CacheTraceStage, payload: CacheTracePayload = {}) => {
+    const event: CacheTraceEvent = {
+      ...base,
+      ts: new Date().toISOString(),
+      seq: (seq += 1),
+      stage,
+    };
+
+    if (payload.prompt !== undefined && includePrompt) {
+      event.prompt = redactAgentDiagnosticPayload(payload.prompt);
+    }
+    if (payload.system !== undefined && includeSystem) {
+      event.system = redactAgentDiagnosticPayload(payload.system);
+      event.systemDigest = digest(payload.system);
+    }
+    if (payload.options) {
+      event.options = redactAgentDiagnosticPayload(payload.options);
+    }
+    if (payload.model) {
+      event.model = redactAgentDiagnosticPayload(payload.model);
+    }
+
+    const messages = payload.messages;
+    if (messages) {
+      Object.assign(event, summarizeMessages(messages));
+      if (includeMessages) {
+        // Full messages are optional; summaries/digests are always recorded when
+        // message payloads are supplied.
+        event.messages = redactAgentDiagnosticPayload(messages);
+      }
+    }
+
+    if (payload.note) {
+      event.note = redactAgentDiagnosticPayload(payload.note);
+    }
+    if (payload.error) {
+      event.error = redactAgentDiagnosticPayload(payload.error);
+    }
+
+    const line = safeJsonStringify(event);
+    if (!line) {
+      return;
+    }
+    writer.write(`${line}\n`);
+  };
+
+  const wrapStreamFn =
+    (streamFn: StreamFn): StreamFn =>
+    (model, context, options) => {
+      const traceContext = context as {
+        messages?: AgentMessage[];
+        system?: unknown;
+        systemPrompt?: unknown;
+      };
+      recordStage("stream:context", {
+        model: {
+          id: model?.id,
+          provider: model?.provider,
+          api: model?.api,
+        },
+        system: traceContext.systemPrompt ?? traceContext.system,
+        messages: traceContext.messages ?? [],
+        options: (options ?? {}) as Record<string, unknown>,
+      });
+      return streamFn(model, context, options);
+    };
+
+  return {
+    filePath,
+    recordStage,
+    wrapStreamFn,
+  };
+}

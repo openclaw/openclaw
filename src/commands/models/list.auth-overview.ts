@@ -1,0 +1,226 @@
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { formatRemainingShort } from "../../agents/auth-health.js";
+import { formatAuthProfileOAuthLabel } from "../../agents/auth-profiles/display.js";
+import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
+import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
+import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-auth-runtime-config.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+  shouldPreferExplicitConfigApiKeyAuth,
+} from "../../agents/model-auth.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
+import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
+import { maskApiKey } from "../../security/secret-mask.js";
+import { shortenHomePath } from "../../utils.js";
+import type { ProviderAuthOverview } from "./list.types.js";
+
+/**
+ * Count-first wording on purpose: `token=1`/`api_key=0` would match the console
+ * secret redactor's key=value patterns and get masked into garbled output.
+ */
+export function formatProviderAuthProfileCounts(
+  profiles: Pick<ProviderAuthOverview["profiles"], "count" | "oauth" | "token" | "apiKey">,
+): string {
+  return `${profiles.count} (${profiles.oauth} oauth, ${profiles.token} token, ${profiles.apiKey} api-key)`;
+}
+
+function formatMarkerOrSecret(value: string): string {
+  return isNonSecretApiKeyMarker(value, { includeEnvVarName: false })
+    ? `marker(${value.trim()})`
+    : maskApiKey(value);
+}
+
+export function resolveProviderAuthOverview(params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  store: AuthProfileStore;
+  modelsPath: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  syntheticAuth?: { value: string; source: string };
+  aliasMap?: Readonly<Record<string, string>>;
+  envCandidateMap?: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+}): ProviderAuthOverview {
+  const { provider, cfg, store } = params;
+  const now = Date.now();
+  const profiles = listProfilesForProvider(store, provider);
+  const withUnusableSuffix = (base: string, profileId: string) => {
+    const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
+    if (!unusableUntil || now >= unusableUntil) {
+      return base;
+    }
+    const stats = store.usageStats?.[profileId];
+    const kind =
+      typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
+        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
+        : "cooldown";
+    const remaining = formatRemainingShort(unusableUntil - now);
+    return `${base} [${kind} ${remaining}]`;
+  };
+  const labels = profiles.map((profileId) => {
+    const profile = store.profiles[profileId];
+    if (!profile) {
+      return `${profileId}=missing`;
+    }
+    if (profile.type === "api_key" || profile.type === "token") {
+      const rawValue = profile.type === "api_key" ? profile.key : profile.token;
+      const ref = profile.type === "api_key" ? profile.keyRef : profile.tokenRef;
+      const kind = profile.type === "api_key" ? "api-key" : "token";
+      const value = normalizeOptionalString(rawValue) ?? "";
+      const display = value
+        ? formatMarkerOrSecret(value)
+        : ref
+          ? `ref(${ref.source}:${ref.id})`
+          : "missing";
+      return withUnusableSuffix(
+        `${profileId}=${kind === "token" ? `token:${display}` : display}`,
+        profileId,
+      );
+    }
+    const base = formatAuthProfileOAuthLabel({ cfg, store, profileId });
+    return withUnusableSuffix(base, profileId);
+  });
+  const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
+  const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
+  const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
+  const normalizedProvider = normalizeProviderIdForAuth(provider);
+  const authLookupProvider = params.aliasMap?.[normalizedProvider] ?? normalizedProvider;
+  const hasPrecomputedCandidates =
+    params.envCandidateMap !== undefined &&
+    Object.hasOwn(params.envCandidateMap, authLookupProvider);
+  const hasPrecomputedEvidence =
+    params.authEvidenceMap !== undefined &&
+    Object.hasOwn(params.authEvidenceMap, authLookupProvider);
+
+  const envKey = resolveEnvApiKey(provider, process.env, {
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    aliasMap: params.aliasMap,
+    candidateMap: params.envCandidateMap,
+    authEvidenceMap: params.authEvidenceMap,
+    skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
+  });
+  const env = envKey
+    ? {
+        value:
+          envKey.source.includes("OAUTH_TOKEN") ||
+          normalizeLowercaseStringOrEmpty(envKey.source).includes("oauth")
+            ? "OAuth (env)"
+            : maskApiKey(envKey.apiKey),
+        source: envKey.source,
+      }
+    : undefined;
+  const customKey = getCustomProviderApiKey(cfg, provider);
+  const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
+
+  const effective: ProviderAuthOverview["effective"] = (() => {
+    if (providerApiKeyRef) {
+      if (
+        providerApiKeyRef.source !== "env" &&
+        resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider })
+      ) {
+        return { kind: "models.json", detail: formatMarkerOrSecret(NON_ENV_SECRETREF_MARKER) };
+      }
+      if (!usableCustomKey) {
+        return { kind: "missing", detail: "missing" };
+      }
+      return providerApiKeyRef.source === "env"
+        ? { kind: "env", detail: maskApiKey(usableCustomKey.apiKey) }
+        : { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    // Inference sends an explicit api-key provider's own key before stored profiles.
+    const providerEntryKey = resolveProviderEntryApiKeyProfileReference({ cfg, provider, store });
+    if (
+      providerEntryKey.kind === "literal" &&
+      shouldPreferExplicitConfigApiKeyAuth(cfg, provider)
+    ) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(providerEntryKey.apiKey) };
+    }
+    if (profiles.length > 0) {
+      return {
+        kind: "profiles",
+        detail: shortenHomePath(
+          resolveAuthStorePathForDisplay(
+            (() => {
+              const agentDir = params.agentDir;
+              if (!agentDir || profiles.length === 0) {
+                return agentDir;
+              }
+              const localStore = loadPersistedAuthProfileStore(agentDir);
+              if (profiles.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
+                return agentDir;
+              }
+              const mainStore = loadPersistedAuthProfileStore(undefined);
+              return profiles.every((profileId) => Boolean(mainStore?.profiles[profileId]))
+                ? undefined
+                : agentDir;
+            })(),
+          ),
+        ),
+      };
+    }
+    if (env) {
+      return {
+        kind: "env",
+        detail: env.value,
+      };
+    }
+    if (usableCustomKey) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    if (params.syntheticAuth) {
+      return { kind: "synthetic", detail: params.syntheticAuth.source };
+    }
+    if (customKey && isOAuthApiKeyMarker(customKey)) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
+    }
+    return { kind: "missing", detail: "missing" };
+  })();
+
+  return {
+    provider,
+    effective,
+    profiles: {
+      count: profiles.length,
+      oauth: oauthCount,
+      token: tokenCount,
+      apiKey: apiKeyCount,
+      labels,
+    },
+    ...(env ? { env } : {}),
+    ...(customKey
+      ? {
+          modelsJson: {
+            value: formatMarkerOrSecret(customKey),
+            source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+          },
+        }
+      : {}),
+    // Re-project instead of passing the caller's object through: status callers
+    // hand richer runtime shapes that also carry the raw synthetic credential,
+    // and structural typing would let it leak into `--json` output verbatim.
+    ...(params.syntheticAuth
+      ? {
+          syntheticAuth: {
+            value: params.syntheticAuth.value,
+            source: params.syntheticAuth.source,
+          },
+        }
+      : {}),
+  };
+}

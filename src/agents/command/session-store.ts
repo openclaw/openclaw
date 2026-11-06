@@ -1,0 +1,302 @@
+import {
+  asNonNegativeFiniteNumber,
+  floorPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  setSessionRuntimeModel,
+  type SessionEntry,
+} from "../../config/sessions.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
+import { projectSessionUsageSnapshot } from "../../config/sessions/session-entry-usage.js";
+import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { clearAllCliSessions } from "../cli-session.js";
+import { resolveContextTokensForModel } from "../context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
+import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
+
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
+
+export async function updateSessionStoreAfterAgentRun(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  agentDir: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  sessionStore: Record<string, SessionEntry>;
+  defaultProvider: string;
+  defaultModel: string;
+  fallbackProvider?: string;
+  fallbackModel?: string;
+  result: RunResult;
+  /** Private committed owner and ordered context; an unknown snapshot invalidates older usage. */
+  compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
+  touchInteraction?: boolean;
+  /**
+   * When false, skip the lastActivityAt bump so internal-event runs
+   * do not re-flag sessions unread; cron and user-facing runs count as activity.
+   */
+  touchActivity?: boolean;
+  /**
+   * When true, preserve the pre-existing runtime model fields (model,
+   * modelProvider, contextTokens) on the session entry instead of overwriting
+   * them with the model used by this run. Used for turn-local fallback and
+   * scheduled runs so their model does not bleed into the session selection.
+   */
+  preserveRuntimeModel?: boolean;
+  preserveUserFacingSessionModelState?: boolean;
+}) {
+  const {
+    cfg,
+    sessionId,
+    sessionKey,
+    storePath,
+    sessionStore,
+    defaultProvider,
+    defaultModel,
+    fallbackProvider,
+    fallbackModel,
+    result,
+  } = params;
+  const now = Date.now();
+  const touchInteraction = params.touchInteraction !== false;
+  const touchActivity = params.touchActivity !== false;
+
+  const usage = result.meta.agentMeta?.usage;
+  const promptTokens = result.meta.agentMeta?.promptTokens;
+  const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
+  const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+  const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const runtimeContextTokens = floorPositiveFiniteNumber(result.meta.agentMeta?.contextTokens);
+  const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
+  const contextTokens =
+    runtimeContextTokens !== undefined
+      ? runtimeContextTokens
+      : (resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
+  const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
+
+  const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+  const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
+  const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
+  const entry: InternalSessionEntry = sessionStore[sessionKey] ?? {
+    sessionId,
+    updatedAt: now,
+    sessionStartedAt: now,
+  };
+  const expectedSession = params.compactionAccounting?.target ?? entry;
+  const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
+  const updatesContext = !preserveUserFacingRunState || currentContextSnapshot !== undefined;
+  if (updatesContext && expectedSession.sessionId !== sessionId) {
+    return;
+  }
+  const next: SessionEntry = {
+    ...entry,
+    updatedAt: now,
+    sessionStartedAt: entry.sessionStartedAt ?? now,
+    lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
+    ...(preserveRuntimeModel
+      ? {}
+      : {
+          contextTokens,
+          contextTokensSource,
+        }),
+  };
+  if (!preserveRuntimeModel) {
+    setSessionRuntimeModel(next, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
+  } else if (entry.model && entry.modelProvider) {
+    // The entry spread retains partial model state and context; normalize only a complete pair.
+    setSessionRuntimeModel(next, { provider: entry.modelProvider, model: entry.model });
+  }
+  if (!preserveUserFacingRunState) {
+    if (!preserveRuntimeModel) {
+      next.agentHarnessId = agentHarnessId;
+    }
+    next.abortedLastRun = result.meta.aborted ?? false;
+    if (result.meta.systemPromptReport) {
+      next.systemPromptReport = result.meta.systemPromptReport;
+    }
+    if (!preserveRuntimeModel) {
+      next.contextBudgetStatus = contextBudgetStatus;
+    }
+  }
+  const hasUsage = hasNonzeroUsage(usage);
+  if (!preserveUserFacingRunState) {
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
+      estimateAggregateUsageCost({
+        usage,
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        agentDir: params.agentDir,
+      }),
+    );
+    Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));
+  }
+  if (updatesContext) {
+    if (currentContextSnapshot || hasUsage) {
+      const totalTokens = currentContextSnapshot
+        ? currentContextSnapshot.tokens
+        : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
+      next.totalTokens = totalTokens;
+      next.totalTokensFresh = totalTokens !== undefined;
+      next.totalTokensVersion =
+        totalTokens !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined;
+    } else {
+      // Empty-session zero is no longer current after a turn without usage.
+      next.totalTokensFresh = false;
+      next.totalTokensVersion = undefined;
+    }
+  }
+  const metadataPatch = preserveUserFacingRunState
+    ? {
+        // Preserved-state runs must not alter perceived session state, so the
+        // unread-driving lastActivityAt stays untouched here.
+        updatedAt: next.updatedAt,
+        ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
+      }
+    : next;
+  const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
+  await patchSessionEntryCore(
+    {
+      agentId: params.agentId,
+      storePath,
+      sessionKey,
+    },
+    (currentEntry, context) => {
+      if (
+        (!context.existingEntry && hadPreExistingEntry) ||
+        (updatesContext &&
+          context.existingEntry &&
+          !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
+      ) {
+        // Successor acceptance owns identity changes. Finalizers may update only
+        // their exact still-current row and cannot recreate a deleted owner.
+        return null;
+      }
+      const patch: Partial<SessionEntry> = preserveUserFacingRunState
+        ? metadataPatch
+        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
+      if (updatesContext) {
+        // This writer's context supersedes its request estimate independently of chat activity.
+        patch.totalTokens = next.totalTokens;
+        patch.totalTokensFresh = next.totalTokensFresh;
+        patch.totalTokensVersion = next.totalTokensVersion;
+      }
+      if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
+        // Clear the current snooze, including one set while this run was in flight.
+        patch.snoozedUntil = undefined;
+        patch.snoozedAt = undefined;
+      }
+      return patch;
+    },
+    {
+      workerGuard: {},
+      ...(preserveUserFacingRunState || params.compactionAccounting
+        ? {}
+        : { fallbackEntry: entry }),
+      maintenanceConfig,
+      onCommitted: (committed) => {
+        // Maintenance may yield to a newer writer before the patch promise returns.
+        sessionStore[sessionKey] = committed;
+      },
+    },
+  );
+}
+
+function isSameSessionLifecycleOwner(
+  current: InternalSessionEntry,
+  expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
+): boolean {
+  return (
+    current.sessionId === expected.sessionId &&
+    current.lifecycleRevision === expected.lifecycleRevision &&
+    current.activeWriterRunId === expected.activeWriterRunId
+  );
+}
+
+/** Records CLI compaction metadata on the persisted session entry. */
+export async function recordCliCompactionInStore(params: {
+  agentId: string;
+  compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  tokensAfter?: number;
+  expectedSession: Pick<
+    InternalSessionEntry,
+    "sessionId" | "lifecycleRevision" | "activeWriterRunId"
+  >;
+}): Promise<SessionEntry | undefined> {
+  const { compactionKind, sessionKey, sessionStore, storePath, expectedSession } = params;
+  const entry = sessionStore[sessionKey];
+  if (!entry) {
+    return undefined;
+  }
+
+  const next = { ...entry };
+  // A shared-history rewrite invalidates every binding; native compaction preserves its session.
+  if (compactionKind === "context-engine") {
+    clearAllCliSessions(next);
+  }
+  next.compactionCount = (entry.compactionCount ?? 0) + 1;
+  next.updatedAt = Date.now();
+  const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
+  next.contextBudgetStatus = undefined;
+  Object.assign(next, COMPACTION_RUN_USAGE_CLEAR_PATCH);
+  if (tokensAfterCompaction !== undefined) {
+    next.totalTokens = Math.floor(tokensAfterCompaction);
+    next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
+  } else {
+    next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
+  }
+
+  let committedEntry: SessionEntry | undefined;
+  await patchSessionEntryCore(
+    {
+      agentId: params.agentId,
+      storePath,
+      sessionKey,
+    },
+    (currentEntry, context) => {
+      if (!context.existingEntry || !isSameSessionLifecycleOwner(currentEntry, expectedSession)) {
+        return null;
+      }
+      return {
+        ...currentEntry,
+        ...projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry }),
+        compactionCount: (currentEntry.compactionCount ?? 0) + 1,
+      };
+    },
+    {
+      workerGuard: {},
+      onCommitted: (committed) => {
+        // Retain the committed fact without overwriting a later writer's cache on return.
+        committedEntry = committed;
+        sessionStore[sessionKey] = committed;
+      },
+    },
+  );
+  return committedEntry;
+}

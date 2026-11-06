@@ -1,0 +1,457 @@
+// Tests ACP dispatch delivery routing and visible reply handoff.
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { buildTestCtx } from "./test-ctx.js";
+import {
+  createAcpTestConfig,
+  createAcpTestReplyDispatcher as createDispatcher,
+} from "./test-fixtures/acp-runtime.js";
+
+const ttsMocks = vi.hoisted(() => ({
+  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as { payload: unknown };
+    return params.payload;
+  }),
+}));
+
+const deliveryMocks = vi.hoisted(() => ({
+  routeReply: vi.fn<typeof import("./route-reply.js").routeReply>(async () => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock-message",
+  })),
+  runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
+}));
+
+const channelPluginMocks = vi.hoisted(() => ({
+  accountIds: ["default"] as string[],
+  defaultAccountId: undefined as string | undefined,
+  replyToModeForAccount: undefined as
+    | ((accountId: string | null | undefined) => "all" | "off")
+    | undefined,
+  shouldTreatDeliveredTextAsVisible: (({
+    kind,
+    text,
+  }: {
+    kind: "tool" | "block" | "final";
+    text?: string;
+  }) => kind === "block" && typeof text === "string" && text.trim().length > 0) as
+    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
+    | undefined,
+  shouldTreatRoutedTextAsVisible: undefined as
+    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
+    | undefined,
+  getChannelPlugin: vi.fn((channelId: string) => {
+    if (channelId !== "visiblechat") {
+      return undefined;
+    }
+    return {
+      config: {
+        listAccountIds: () => channelPluginMocks.accountIds,
+        resolveAccount: () => ({}),
+        ...(channelPluginMocks.defaultAccountId
+          ? { defaultAccountId: () => channelPluginMocks.defaultAccountId ?? "default" }
+          : {}),
+      },
+      ...(channelPluginMocks.replyToModeForAccount
+        ? {
+            threading: {
+              resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
+                channelPluginMocks.replyToModeForAccount?.(accountId) ?? "all",
+            },
+          }
+        : {}),
+      outbound: {
+        shouldTreatDeliveredTextAsVisible: channelPluginMocks.shouldTreatDeliveredTextAsVisible,
+        shouldTreatRoutedTextAsVisible: channelPluginMocks.shouldTreatRoutedTextAsVisible,
+      },
+    };
+  }),
+}));
+
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
+  routeReply: deliveryMocks.routeReply,
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+  normalizeChannelId: (channelId?: string | null) => channelId?.trim().toLowerCase() || null,
+}));
+
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => deliveryMocks.runMessageAction(params),
+}));
+
+function createCoordinator(
+  overrides: Partial<Parameters<typeof createAcpDispatchDeliveryCoordinator>[0]> = {},
+) {
+  return createAcpDispatchDeliveryCoordinator({
+    preparedTtsPreferences: {},
+    cfg: createAcpTestConfig(),
+    ctx: buildTestCtx({
+      Provider: "visiblechat",
+      Surface: "visiblechat",
+      SessionKey: "agent:codex-acp:session-1",
+    }),
+    dispatcher: createDispatcher(),
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    ...overrides,
+  });
+}
+
+function createVisibleChatAcpCoordinator(
+  cfg: OpenClawConfig,
+  dispatcher: ReplyDispatcher = createDispatcher(),
+) {
+  return createCoordinator({
+    cfg,
+    dispatcher,
+    shouldRouteToOriginating: true,
+    originatingChannel: "visiblechat",
+    originatingTo: "channel:thread-1",
+  });
+}
+
+async function expectVisibleChatBlockRoutesToAccount(
+  cfg: OpenClawConfig,
+  accountId: string | undefined,
+): Promise<void> {
+  const coordinator = await createVisibleChatAcpCoordinator(cfg);
+
+  await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+  expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+  const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
+  expect(routeParams.channel).toBe("visiblechat");
+  expect(routeParams.to).toBe("channel:thread-1");
+  expect(routeParams.accountId).toBe(accountId);
+}
+
+describe("createAcpDispatchDeliveryCoordinator", () => {
+  beforeEach(() => {
+    deliveryMocks.routeReply.mockClear();
+    deliveryMocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "mock-message",
+    });
+    deliveryMocks.runMessageAction.mockClear();
+    deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
+    channelPluginMocks.getChannelPlugin.mockClear();
+    channelPluginMocks.accountIds = ["default"];
+    channelPluginMocks.defaultAccountId = undefined;
+    channelPluginMocks.replyToModeForAccount = undefined;
+    channelPluginMocks.shouldTreatDeliveredTextAsVisible = ({
+      kind,
+      text,
+    }: {
+      kind: "tool" | "block" | "final";
+      text?: string;
+    }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
+    channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
+  });
+
+  it("keeps canonical ACP text after an outbound hook rewrites the payload", async () => {
+    const delivered: unknown[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+    dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "transport rewrite" }));
+    const coordinator = await createCoordinator({
+      dispatcher,
+    });
+
+    await expect(
+      coordinator.deliver("block", { text: "canonical runtime text" }, { skipTts: true }),
+    ).resolves.toBe(true);
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([{ text: "transport rewrite" }]);
+    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe(
+      "canonical runtime text",
+    );
+  });
+
+  it("waits for pending direct block delivery before resolving tool delivery", async () => {
+    const delivered: unknown[] = [];
+    const { resolve: markDeliveryStarted, promise: deliveryStarted } = createDeferred();
+    const { resolve: releaseDelivery, promise: deliveryGate } = createDeferred();
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        markDeliveryStarted?.();
+        await deliveryGate;
+      },
+    });
+    const coordinator = await createCoordinator({
+      dispatcher,
+    });
+
+    await expect(coordinator.deliver("block", { text: "hello" }, { skipTts: true })).resolves.toBe(
+      true,
+    );
+    await deliveryStarted;
+
+    let toolDeliverySettled = false;
+    const toolDeliveryPromise = coordinator
+      .deliver("tool", { text: "tool result" }, { skipTts: true })
+      .then((result) => {
+        toolDeliverySettled = true;
+        return result;
+      });
+
+    await Promise.resolve();
+
+    expect(delivered).toEqual([{ text: "hello" }]);
+    expect(toolDeliverySettled).toBe(false);
+
+    releaseDelivery?.();
+    await expect(toolDeliveryPromise).resolves.toBe(true);
+    expect(toolDeliverySettled).toBe(true);
+    expect(delivered).toEqual([{ text: "hello" }, { text: "tool result" }]);
+  });
+
+  it("strips split TTS directives from visible ACP block delivery", async () => {
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    vi.spyOn(dispatcher, "sendBlockReply");
+    const coordinator = await createCoordinator({
+      cfg: createAcpTestConfig({
+        tts: { enabled: true },
+      }),
+      dispatcher,
+    });
+
+    await coordinator.deliver("block", { text: "Intro [[tts:te" }, { skipTts: true });
+    await coordinator.deliver(
+      "block",
+      { text: "xt]]hidden[[/tts:text]] visible" },
+      { skipTts: true },
+    );
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(1, { text: "Intro " });
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(2, { text: " visible" });
+    expect(coordinator.getAccumulatedVisibleBlockText()).toBe("Intro  visible");
+    expect(coordinator.getAccumulatedBlockTtsText()).toBe(
+      "Intro [[tts:text]]hidden[[/tts:text]] visible",
+    );
+  });
+
+  it("keeps status notices out of ACP block TTS accumulation", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = await createCoordinator({
+      cfg: createAcpTestConfig({
+        tts: { enabled: true },
+      }),
+      dispatcher,
+    });
+
+    await coordinator.deliver("block", {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    await coordinator.deliver("block", { text: "Visible answer" });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(1, {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(2, { text: "Visible answer" });
+    expect(coordinator.getAccumulatedTranscriptText()).toBe("Visible answer");
+    expect(coordinator.getAccumulatedBlockTtsText()).toBe("Visible answer");
+  });
+
+  it("keeps final fallback notices out of ACP transcript accumulation", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = await createCoordinator({
+      dispatcher,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    });
+    expect(coordinator.getAccumulatedTranscriptText()).toBe("");
+  });
+
+  it("honors the legacy routed visibility hook name for plugin compatibility", async () => {
+    channelPluginMocks.shouldTreatDeliveredTextAsVisible = undefined;
+    channelPluginMocks.shouldTreatRoutedTextAsVisible = ({
+      kind,
+      text,
+    }: {
+      kind: "tool" | "block" | "final";
+      text?: string;
+    }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
+    const coordinator = await createCoordinator();
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
+
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+  });
+
+  it("tracks failed visible block delivery separately", async () => {
+    const dispatcher: ReplyDispatcher = {
+      sendToolResult: vi.fn(() => true),
+      sendBlockReply: vi.fn(() => false),
+      sendFinalReply: vi.fn(() => true),
+      waitForIdle: vi.fn(async () => {}),
+      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      markComplete: vi.fn(),
+    };
+    const coordinator = await createCoordinator({
+      dispatcher,
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(true);
+  });
+
+  it("does not block delivery when reply lifecycle startup hangs", async () => {
+    const onReplyStart = vi.fn(
+      async () =>
+        await new Promise<void>(() => {
+          // Intentionally never resolve to simulate a stuck typing/reaction side effect.
+        }),
+    );
+    const coordinator = await createCoordinator({ onReplyStart });
+
+    const delivered = await raceWithTimeoutResult(
+      coordinator.deliver("final", { text: "hello" }).then(() => "delivered"),
+      50,
+      "timed-out",
+    );
+
+    expect(delivered).toBe("delivered");
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onReplyStart when reply lifecycle is suppressed", async () => {
+    const onReplyStart = vi.fn(async () => {});
+    const dispatcher = createDispatcher();
+    const coordinator = await createCoordinator({
+      dispatcher,
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: true,
+      onReplyStart,
+    });
+
+    // Directly invoking the lifecycle (e.g. from dispatch-acp.ts before the
+    // first deliver call) must not fire the typing indicator when delivery is
+    // suppressed by sendPolicy: "deny".
+    await coordinator.startReplyLifecycle();
+    const delivered = await coordinator.deliver("final", { text: "hello" });
+
+    expect(delivered).toBe(false);
+    expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("routes ACP replies through the configured default account when AccountId is omitted", async () => {
+    await expectVisibleChatBlockRoutesToAccount(
+      createAcpTestConfig({
+        channels: {
+          visiblechat: {
+            defaultAccount: "work",
+          },
+        },
+      }),
+      "work",
+    );
+  });
+
+  it("mirrors routed ACP replies into the target ACP session", async () => {
+    const coordinator = await createCoordinator({
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:main:main",
+      }),
+      sessionKey: "agent:claude:acp:spawned",
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
+    expect(routeParams.sessionKey).toBe("agent:claude:acp:spawned");
+    expect(routeParams.policySessionKey).toBe("agent:main:main");
+  });
+
+  it("passes caller cancellation through routed ACP delivery", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    deliveryMocks.routeReply.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { abortSignal?: AbortSignal };
+      return params.abortSignal?.aborted
+        ? {
+            ok: false,
+            delivered: false,
+            error: "Reply routing aborted",
+            cause: new PlatformMessageNotDispatchedError("Reply routing aborted", {
+              cause: undefined,
+            }),
+          }
+        : { ok: true, delivered: true, messageId: "unexpected" };
+    });
+    const coordinator = await createCoordinator({
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+      abortSignal: controller.signal,
+    });
+
+    await expect(coordinator.deliver("final", { text: "late" })).resolves.toBe(false);
+
+    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "route call");
+    expect(routeParams.abortSignal).toBe(controller.signal);
+    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+  });
+
+  it("treats hook-suppressed routed ACP block text as handled", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: false,
+      suppressed: true,
+    });
+    const coordinator = await createCoordinator({
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    const delivered = await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+    expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).block).toBe(0);
+    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
+  });
+});

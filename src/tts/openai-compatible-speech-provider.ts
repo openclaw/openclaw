@@ -1,0 +1,326 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as trimToUndefined,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
+import { createSpeechDirectiveParser } from "./directive-parser.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
+
+type OpenAiCompatibleSpeechProviderBaseConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model: string;
+  voice: string;
+  speed?: number;
+  responseFormat?: string;
+};
+
+/** Normalized config shape for OpenAI-compatible speech HTTP providers. */
+export type OpenAiCompatibleSpeechProviderConfig<
+  ExtraConfig extends Record<string, unknown> = Record<string, never>,
+> = OpenAiCompatibleSpeechProviderBaseConfig & ExtraConfig;
+
+/** Base URL normalization policy for providers that share OpenAI-style endpoints. */
+export type OpenAiCompatibleSpeechProviderBaseUrlPolicy =
+  | { kind: "trim-trailing-slash" }
+  | { kind: "canonical"; aliases?: readonly string[]; allowCustom?: boolean };
+
+/** Extra config field to forward into the JSON body under an optional request key. */
+export type OpenAiCompatibleSpeechProviderExtraJsonBodyField<
+  ExtraConfig extends Record<string, unknown>,
+> = {
+  configKey: Extract<keyof ExtraConfig, string>;
+  requestKey?: string;
+};
+
+/** Factory options for a speech provider backed by /audio/speech-compatible HTTP APIs. */
+export type OpenAiCompatibleSpeechProviderOptions<
+  ExtraConfig extends Record<string, unknown> = Record<string, never>,
+> = {
+  id: string;
+  label: string;
+  autoSelectOrder: number;
+  models: readonly string[];
+  voices: readonly string[];
+  defaultModel: string;
+  defaultVoice: string;
+  defaultBaseUrl: string;
+  defaultTimeoutMs?: number;
+  envKey: string;
+  responseFormats: readonly string[];
+  defaultResponseFormat: string;
+  voiceCompatibleResponseFormats: readonly string[];
+  baseUrlPolicy?: OpenAiCompatibleSpeechProviderBaseUrlPolicy;
+  normalizeModel?: (value: string | undefined, fallback: string) => string;
+  configKey?: string;
+  extraHeaders?: Record<string, string>;
+  readExtraConfig?: (raw: Record<string, unknown> | undefined) => ExtraConfig;
+  extraJsonBodyFields?: readonly OpenAiCompatibleSpeechProviderExtraJsonBodyField<ExtraConfig>[];
+  apiErrorLabel?: string;
+  missingApiKeyError?: string;
+};
+
+type ModelProviderConfig = {
+  apiKey?: unknown;
+  baseUrl?: unknown;
+};
+
+function resolveConfiguredSpeechVoice(
+  config: SpeechProviderConfig | undefined,
+): string | undefined {
+  return (
+    trimToUndefined(config?.speakerVoice) ??
+    trimToUndefined(config?.speakerVoiceId) ??
+    trimToUndefined(config?.voice) ??
+    trimToUndefined(config?.voiceId)
+  );
+}
+
+function trimTrailingBaseUrl(value: unknown, fallback: string): string {
+  return (trimToUndefined(value) ?? fallback).replace(/\/+$/u, "");
+}
+
+function readModelProviderConfig(
+  cfg: unknown,
+  providerConfigKey: string,
+): ModelProviderConfig | undefined {
+  const root = asOptionalRecord(cfg);
+  const models = asOptionalRecord(root?.models);
+  const providers = asOptionalRecord(models?.providers);
+  return asOptionalRecord(providers?.[providerConfigKey]);
+}
+
+function buildExtraJsonBodyFields<ExtraConfig extends Record<string, unknown>>(
+  config: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>,
+  fields: readonly OpenAiCompatibleSpeechProviderExtraJsonBodyField<ExtraConfig>[] | undefined,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const field of fields ?? []) {
+    const value = config[field.configKey];
+    if (value != null) {
+      body[field.requestKey ?? field.configKey] = value;
+    }
+  }
+  return body;
+}
+
+/** Build a complete SpeechProviderPlugin for OpenAI-compatible speech endpoints. */
+export function createOpenAiCompatibleSpeechProvider<
+  ExtraConfig extends Record<string, unknown> = Record<string, never>,
+>(options: OpenAiCompatibleSpeechProviderOptions<ExtraConfig>): SpeechProviderPlugin {
+  const providerConfigKey = options.configKey ?? options.id;
+  const compactProviderKey = providerConfigKey.replace(/[^a-z0-9]+/giu, "").toLowerCase();
+  const parseDirectiveToken = createSpeechDirectiveParser({
+    voice: [
+      "allowVoice",
+      ["voice", "voice_id", "voiceid", `${providerConfigKey}_voice`, `${compactProviderKey}voice`],
+    ],
+    model: [
+      "allowModelId",
+      ["model", "model_id", "modelid", `${providerConfigKey}_model`, `${compactProviderKey}model`],
+    ],
+  });
+  const normalizeModel =
+    options.normalizeModel ?? ((value, fallback) => trimToUndefined(value) ?? fallback);
+  const readExtraConfig = options.readExtraConfig ?? (() => ({}) as ExtraConfig);
+
+  function normalizeResponseFormat(value: unknown): string | undefined {
+    const next = normalizeOptionalLowercaseString(value);
+    if (next && !options.responseFormats.includes(next)) {
+      throw new Error(`Invalid ${options.label} speech responseFormat: ${next}`);
+    }
+    return next;
+  }
+
+  function normalizeBaseUrl(value: unknown): string {
+    const normalized = trimTrailingBaseUrl(value, options.defaultBaseUrl);
+    const policy = options.baseUrlPolicy;
+    if (policy?.kind !== "canonical") {
+      return normalized;
+    }
+    const canonical = trimTrailingBaseUrl(options.defaultBaseUrl, options.defaultBaseUrl);
+    // Hosted aliases share the canonical endpoint and its SSRF policy.
+    const aliases = [canonical, ...(policy.aliases ?? [])];
+    return !policy.allowCustom ||
+      aliases.some((entry) => trimTrailingBaseUrl(entry, canonical) === normalized)
+      ? canonical
+      : normalized;
+  }
+
+  function normalizeConfig(
+    rawConfig: Record<string, unknown>,
+  ): OpenAiCompatibleSpeechProviderConfig<ExtraConfig> {
+    const raw =
+      asOptionalRecord(asOptionalRecord(rawConfig.providers)?.[providerConfigKey]) ??
+      asOptionalRecord(rawConfig[providerConfigKey]);
+    return readProviderConfig(raw, {
+      model: options.defaultModel,
+      voice: options.defaultVoice,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw?.apiKey,
+        path: `${appendConfigPathSegment("tts.providers", providerConfigKey)}.apiKey`,
+      }),
+    });
+  }
+
+  function readProviderConfig(
+    config: SpeechProviderConfig | undefined,
+    // Raw config supplies base defaults; direct synthesis retains normalized plugin defaults.
+    normalized: OpenAiCompatibleSpeechProviderBaseConfig = normalizeConfig({}),
+  ): OpenAiCompatibleSpeechProviderConfig<ExtraConfig> {
+    return {
+      apiKey: trimToUndefined(config?.apiKey) ?? normalized.apiKey,
+      baseUrl:
+        trimToUndefined(config?.baseUrl) == null
+          ? normalized.baseUrl
+          : normalizeBaseUrl(config?.baseUrl),
+      model: normalizeModel(trimToUndefined(config?.model ?? config?.modelId), normalized.model),
+      voice: resolveConfiguredSpeechVoice(config) ?? normalized.voice,
+      speed: asFiniteNumber(config?.speed) ?? normalized.speed,
+      responseFormat: normalizeResponseFormat(config?.responseFormat) ?? normalized.responseFormat,
+      ...readExtraConfig(config),
+    };
+  }
+
+  function resolveApiKey(params: {
+    cfg?: unknown;
+    providerConfig: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>;
+  }): string | undefined {
+    return (
+      params.providerConfig.apiKey ??
+      normalizeResolvedSecretInputString({
+        value: readModelProviderConfig(params.cfg, providerConfigKey)?.apiKey,
+        path: `${appendConfigPathSegment("models.providers", providerConfigKey)}.apiKey`,
+      }) ??
+      trimToUndefined(process.env[options.envKey])
+    );
+  }
+
+  return {
+    id: options.id,
+    label: options.label,
+    autoSelectOrder: options.autoSelectOrder,
+    defaultModel: options.defaultModel,
+    defaultTimeoutMs: options.defaultTimeoutMs,
+    models: [...options.models],
+    voices: [...options.voices],
+    resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
+    parseDirectiveToken,
+    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
+      const next = normalizeConfig(baseTtsConfig);
+      const responseFormat = normalizeResponseFormat(talkProviderConfig.responseFormat);
+      if (talkProviderConfig.apiKey !== undefined) {
+        next.apiKey = normalizeResolvedSecretInputString({
+          value: talkProviderConfig.apiKey,
+          path: `${appendConfigPathSegment("talk.providers", providerConfigKey)}.apiKey`,
+        });
+      }
+      const baseUrl = trimToUndefined(talkProviderConfig.baseUrl);
+      if (baseUrl !== undefined) {
+        next.baseUrl = normalizeBaseUrl(baseUrl);
+      }
+      const modelId = trimToUndefined(talkProviderConfig.modelId);
+      if (modelId !== undefined) {
+        next.model = normalizeModel(modelId, options.defaultModel);
+      }
+      next.voice = resolveConfiguredSpeechVoice(talkProviderConfig) ?? next.voice;
+      const speed = asFiniteNumber(talkProviderConfig.speed);
+      if (speed !== undefined) {
+        next.speed = speed;
+      }
+      if (responseFormat !== undefined) {
+        next.responseFormat = responseFormat;
+      }
+      return next;
+    },
+    resolveTalkOverrides: ({ params }) => ({
+      ...(trimToUndefined(params.voiceId ?? params.voice) == null
+        ? {}
+        : { voice: trimToUndefined(params.voiceId ?? params.voice) }),
+      ...(trimToUndefined(params.modelId ?? params.model) == null
+        ? {}
+        : { model: trimToUndefined(params.modelId ?? params.model) }),
+      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
+    }),
+    listVoices: async () => options.voices.map((voice) => ({ id: voice, name: voice })),
+    isConfigured: ({ cfg, providerConfig }) =>
+      Boolean(resolveApiKey({ cfg, providerConfig: readProviderConfig(providerConfig) })),
+    synthesize: async (req) => {
+      const config = readProviderConfig(req.providerConfig);
+      const overrides = req.providerOverrides;
+      const model = trimToUndefined(overrides?.model ?? overrides?.modelId);
+      const voice = trimToUndefined(overrides?.voice ?? overrides?.voiceId);
+      const speed = asFiniteNumber(overrides?.speed) ?? config.speed;
+      const apiKey = resolveApiKey({ cfg: req.cfg, providerConfig: config });
+      if (!apiKey) {
+        throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
+      }
+
+      const baseUrl = normalizeBaseUrl(
+        config.baseUrl ?? readModelProviderConfig(req.cfg, providerConfigKey)?.baseUrl,
+      );
+      const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
+      const {
+        assertOkOrThrowHttpError,
+        postJsonRequest,
+        readProviderBinaryResponse,
+        resolveProviderHttpRequestConfig,
+      } = await import("../plugin-sdk/provider-http.js");
+      const { allowPrivateNetwork, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl,
+        defaultBaseUrl: options.defaultBaseUrl,
+        allowPrivateNetwork: false,
+        defaultHeaders: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          ...options.extraHeaders,
+        },
+        provider: options.id,
+        capability: "audio",
+        transport: "http",
+      });
+
+      // Keep request construction here so provider implementations only supply
+      // static metadata and extra body fields, not duplicated HTTP behavior.
+      const { response, release } = await postJsonRequest({
+        url: `${baseUrl}/audio/speech`,
+        headers,
+        body: {
+          model: normalizeModel(model ?? config.model, options.defaultModel),
+          input: req.text,
+          voice: voice ?? config.voice,
+          response_format: responseFormat,
+          ...(speed == null ? {} : { speed }),
+          ...buildExtraJsonBodyFields(config, options.extraJsonBodyFields),
+        },
+        timeoutMs: req.timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork,
+        dispatcherPolicy,
+      });
+
+      try {
+        await assertOkOrThrowHttpError(
+          response,
+          options.apiErrorLabel ?? `${options.label} TTS API error`,
+        );
+        return {
+          audioBuffer: await readProviderBinaryResponse(
+            response,
+            options.apiErrorLabel ?? `${options.label} TTS API error`,
+            "audio",
+          ),
+          outputFormat: responseFormat,
+          fileExtension: `.${responseFormat}`,
+          voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),
+        };
+      } finally {
+        await release();
+      }
+    },
+  };
+}

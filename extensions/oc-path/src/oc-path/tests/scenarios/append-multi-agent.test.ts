@@ -1,0 +1,60 @@
+// OC Path tests cover append multi agent plugin behavior.
+import { describe, expect, it } from "vitest";
+import type { JsoncValue } from "../../jsonc/ast.js";
+import { appendJsonlOcPath } from "../../jsonl/edit.js";
+import { parseJsonl } from "../../jsonl/parse.js";
+
+function event(name: string, n: number): JsoncValue {
+  return {
+    kind: "object",
+    entries: [
+      { key: "event", line: 0, value: { kind: "string", value: name } },
+      { key: "n", line: 0, value: { kind: "number", value: n } },
+    ],
+  };
+}
+
+describe("jsonl append + multi-agent session sim", () => {
+  it("two agents alternating appends preserve interleave order", () => {
+    let ast = parseJsonl("");
+    for (let i = 0; i < 10; i++) {
+      const agent = i % 2 === 0 ? "a" : "b";
+      ast = appendJsonlOcPath(ast, event(agent, i));
+    }
+    const lines = ast.raw.split("\n").filter((l) => l.length > 0);
+    expect(lines).toHaveLength(10);
+    for (let i = 0; i < 10; i++) {
+      const expected = i % 2 === 0 ? "a" : "b";
+      expect(JSON.parse(lines[i] ?? "").event).toBe(expected);
+    }
+  });
+
+  it("append after a malformed line preserves both", () => {
+    let ast = parseJsonl('{"a":1}\nbroken\n');
+    ast = appendJsonlOcPath(ast, event("start", 1));
+    const out = ast.raw;
+    expect(out).toContain("broken");
+    expect(out).toContain('"event":"start"');
+  });
+
+  it("append after blank lines preserves line-number gaps correctly", () => {
+    let ast = parseJsonl('{"a":1}\n\n\n');
+    ast = appendJsonlOcPath(ast, event("after", 0));
+    // Existing lines: L1 value, L2 blank, L3 blank. Appended line is L4.
+    expect(ast.lines.length).toBe(4);
+    expect(ast.lines[3]?.line).toBe(4);
+  });
+
+  it("append is non-mutating on the input AST", () => {
+    const ast = parseJsonl('{"a":1}\n');
+    const before = JSON.stringify(ast);
+    appendJsonlOcPath(ast, event("x", 0));
+    expect(JSON.stringify(ast)).toBe(before);
+  });
+
+  it("deterministic line-number assignment after malformed lines", () => {
+    let ast = parseJsonl('{"a":1}\nbroken\n{"b":2}\n');
+    ast = appendJsonlOcPath(ast, event("c", 2));
+    expect(ast.lines.map((l) => l.line)).toEqual([1, 2, 3, 4]);
+  });
+});

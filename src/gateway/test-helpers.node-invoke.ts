@@ -1,0 +1,28 @@
+// Node invoke test helpers acknowledge forwarded node requests.
+import type { GatewayClient } from "./client.js";
+
+/**
+ * Node invoke acknowledgement helper for gateway tests.
+ */
+export function acknowledgeNodeInvokeRequestForTest(params: {
+  client: GatewayClient;
+  event: { event?: string; payload?: unknown };
+  onInvoke: (payload: unknown) => void;
+}): Promise<unknown> | undefined {
+  if (params.event.event !== "node.invoke.request") {
+    return undefined;
+  }
+  params.onInvoke(params.event.payload);
+  const payload = params.event.payload as { id?: unknown; nodeId?: unknown };
+  const id = typeof payload.id === "string" ? payload.id : "";
+  const nodeId = typeof payload.nodeId === "string" ? payload.nodeId : "";
+  if (!id || !nodeId) {
+    return undefined;
+  }
+  return params.client.request("node.invoke.result", {
+    id,
+    nodeId,
+    ok: true,
+    payloadJSON: JSON.stringify({ ok: true }),
+  });
+}

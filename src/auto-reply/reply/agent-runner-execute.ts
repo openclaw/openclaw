@@ -1,0 +1,376 @@
+import crypto from "node:crypto";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
+import {
+  resolveReplyRunDeliveryContext,
+  resolveSourceReplyPolicy,
+  scheduleFollowupDrainAfterReplyOperationClear,
+  type RunReplyAgentParams,
+} from "./agent-runner-core.js";
+import { executeAgentTurn } from "./agent-runner-execution.js";
+import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
+import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
+import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import { createFollowupRunner } from "./followup-runner.js";
+import { createGoalContinuationReturn } from "./goal-continuation.js";
+import {
+  buildRecoverablePendingFinalDeliveryText,
+  normalizePendingFinalDeliveryPayloads,
+} from "./pending-final-delivery.js";
+import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
+import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
+import type { PendingReplyDelivery } from "./reply-input-admission.js";
+import {
+  isReplyOperationSuperseded,
+  resolveReplyOperationAbortReason,
+} from "./reply-operation-abort.js";
+import {
+  recordReplyOperationAgentTurn,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
+
+export function prependCompactionNotices(
+  result: ReplyPayload | ReplyPayload[] | undefined,
+  notices: readonly ReplyPayload[],
+  operation: ReplyOperation,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (notices.length === 0 || resolveReplyOperationAbortReason(operation)) {
+    return result;
+  }
+  return [...notices, ...(Array.isArray(result) ? result : result ? [result] : [])];
+}
+
+/** Continues a saved stalled request once, retaining its final-feedback obligation. */
+export function continueStalledReplyTurn({
+  followupRun,
+  queueKey,
+  resolvedQueue,
+  replyOperation,
+  runFollowupTurn,
+  guidance,
+}: Pick<RunReplyAgentParams, "followupRun" | "queueKey" | "resolvedQueue"> & {
+  replyOperation: ReplyOperation;
+  runFollowupTurn: FinalizeReplyAgentRunInput["runFollowupTurn"];
+  guidance?: string;
+}): boolean {
+  // A rerun would hit the same saturated quota.
+  if (replyOperation.staleExpiryReason === "rate_limited") {
+    return false;
+  }
+  // Preflight can stall before admission persists the request. Transcript-only
+  // recovery cannot answer that input; leave its notice with dispatch.
+  if (
+    followupRun.stalledTurnRecovery ||
+    followupRun.userTurnTranscriptRecorder?.hasPersisted() !== true
+  ) {
+    return false;
+  }
+  try {
+    followupRun.operatorAuthority?.assertCurrent();
+  } catch {
+    return false;
+  }
+  const queuedRequest = !guidance && claimNextQueuedFollowupRequestFrom(queueKey, followupRun);
+  if (queuedRequest) {
+    // The handoff owns the same last-resort feedback as a dedicated recovery.
+    queuedRequest.stalledTurnRecovery = true;
+    followupRun.stalledTurnRecovery = true;
+    queuedRequest.currentInboundContext = appendCurrentInboundContext(
+      queuedRequest.currentInboundContext,
+      [{ kind: "runtime-instruction", text: STALLED_TURN_GUIDANCE }],
+    );
+    return true;
+  }
+  // Group-thread participants declare no queued reply owner, so a recovery's
+  // answer would be dropped; leave the notice with the stalled turn's dispatch.
+  if (followupRun.queuedFollowupReplyDisposition?.kind === "drop") {
+    return false;
+  }
+  const enqueued = enqueueFollowupRun(
+    queueKey,
+    buildStalledTurnRecoveryRun(followupRun, guidance),
+    resolvedQueue,
+    "none",
+    runFollowupTurn,
+    false,
+    {
+      position: "front",
+      storePath: followupRun.controllerInput?.mailbox.owner.target?.storeScope,
+    },
+  );
+  if (enqueued) {
+    followupRun.stalledTurnRecovery = true;
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: replyOperation,
+      queueKey,
+      runFollowup: runFollowupTurn,
+    });
+  }
+  return enqueued;
+}
+
+type ExecutePreparedReplyAgentRunInput = Omit<
+  FinalizeReplyAgentRunInput,
+  "activeSessionEntry" | "preflightCompactionApplied" | "execution" | "runId" | "runStartedAt"
+> &
+  Pick<
+    RunReplyAgentParams,
+    "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
+  > & {
+    admitUserTurn: (recorder?: UserTurnTranscriptRecorder) => Promise<void>;
+    applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+    recordPendingDelivery: (delivery: PendingReplyDelivery) => Promise<void>;
+    resolveVisibleReplyDelivery: () => Promise<boolean>;
+    getActiveSessionEntry: () => SessionEntry | undefined;
+    onCompactionNoticePayload: (payload: ReplyPayload) => void;
+    preflightCompactionApplied: boolean;
+    recoveryMemoryFlushAttempted?: boolean;
+    setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
+    shouldEmitToolOutput: () => boolean;
+    shouldEmitToolResult: () => boolean;
+    traceAgentPhase: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
+  };
+
+export async function executePreparedReplyAgentRun(
+  context: ExecutePreparedReplyAgentRunInput,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const onAgentRunTerminalOutcome = context.opts?.onAgentRunTerminalOutcome;
+  let terminalOutcome: "completed" | "failed" | undefined;
+  const executionOpts = onAgentRunTerminalOutcome
+    ? {
+        ...context.opts,
+        onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
+          terminalOutcome = outcome === "failed" ? outcome : (terminalOutcome ?? outcome);
+        },
+      }
+    : context.opts;
+  const activitySummaryCompletion =
+    context.sessionKey && context.storePath
+      ? getGatewayContextResolver(
+          context.replyOperation,
+        )?.()?.sessionActivitySummaries?.beginCompletion(
+          {
+            agentId: context.followupRun.run.agentId,
+            key: context.sessionKey,
+            storePath: context.storePath,
+          },
+          context.getActiveSessionEntry(),
+        )
+      : undefined;
+  try {
+    return await executePreparedReplyAgentRunWithCompletion(
+      { ...context, activitySummaryCompletion },
+      executionOpts,
+    );
+  } catch (error) {
+    if (terminalOutcome !== undefined) {
+      terminalOutcome = "failed";
+    }
+    throw error;
+  } finally {
+    activitySummaryCompletion?.release();
+    if (terminalOutcome) {
+      onAgentRunTerminalOutcome?.(terminalOutcome);
+    }
+  }
+}
+
+async function executePreparedReplyAgentRunWithCompletion(
+  context: ExecutePreparedReplyAgentRunInput,
+  executionOpts: ExecutePreparedReplyAgentRunInput["opts"],
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const {
+    activeSessionStore,
+    admitUserTurn,
+    recordPendingDelivery,
+    defaultModel,
+    followupRun,
+    getActiveSessionEntry,
+    opts,
+    replyOperation,
+    replyThreadingOverride,
+    returnWithQueuedFollowupDrain,
+    preflightCompactionApplied,
+    sessionCtx,
+    sessionKey,
+    setRunFollowupTurn,
+    storePath,
+    toolProgressDetail,
+    traceAgentPhase,
+    typing,
+    typingMode,
+  } = context;
+  let activeSessionEntry = getActiveSessionEntry();
+
+  // Queued turns outlive this invocation and must not inherit its terminal buffer.
+  const runFollowupTurn = createFollowupRunner({
+    resolveGatewayContext: getGatewayContextResolver(replyOperation),
+    opts,
+    typing,
+    typingMode,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    defaultModel,
+    toolProgressDetail,
+  });
+  setRunFollowupTurn(runFollowupTurn);
+
+  replyOperation.setPhase("running");
+  const runStartedAt = Date.now();
+  await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+  activeSessionEntry = getActiveSessionEntry();
+  // Adoption transfers the accepted input into ordinary execution custody.
+  await admitFollowupRunLifecycle(followupRun);
+  const runWithGoalReturn = createGoalContinuationReturn(
+    sessionKey &&
+      storePath &&
+      activeSessionEntry &&
+      (activeSessionEntry.agentHarnessId === undefined ||
+        activeSessionEntry.agentHarnessId === "openclaw")
+      ? {
+          base: followupRun,
+          initialGoalId:
+            activeSessionEntry.goal?.status === "active" ? activeSessionEntry.goal.id : undefined,
+          expectedSession: activeSessionEntry,
+          sessionKey,
+          storePath,
+          queueKey: context.queueKey,
+          settings: context.resolvedQueue,
+          operation: replyOperation,
+          runFollowup: runFollowupTurn,
+        }
+      : undefined,
+  );
+  const runOutcome = await withBeforeAgentReplyObserver(
+    {
+      beforeDispatch: async () => {
+        replyOperation.abortSignal.throwIfAborted();
+        return true;
+      },
+      afterDispatch: async (hookResult) => {
+        if (!hookResult?.handled) {
+          return hookResult;
+        }
+        const hookReply = hookResult.reply ?? {};
+        const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
+        const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
+        if (sessionKey && storePath && normalizedHookReplies.length > 0) {
+          const sourceReplyPolicy = resolveSourceReplyPolicy({
+            ...context,
+            sessionKey,
+            sessionEntry: activeSessionEntry,
+          });
+          if (!sourceReplyPolicy.suppressDelivery) {
+            const pendingFinalDeliveryIntentId = crypto.randomUUID();
+            const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
+            setReplyPayloadMetadata(hookReply, {
+              pendingFinalDeliveryCompletion: {
+                agentId: followupRun.run.agentId,
+                deliveryId: pendingFinalDeliveryDeliveryId,
+                intentId: pendingFinalDeliveryIntentId,
+                sessionId: replyOperation.sessionId,
+                sessionKey,
+                storePath,
+              },
+            });
+            await recordPendingDelivery({
+              text: hookFinalDeliveryText ?? "",
+              intentId: pendingFinalDeliveryIntentId,
+              deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
+              context: resolveReplyRunDeliveryContext({
+                ...context,
+                sessionKey,
+                sessionEntry: activeSessionEntry,
+              }),
+            });
+          }
+        }
+        activeSessionEntry = getActiveSessionEntry();
+        return hookResult;
+      },
+    },
+    () =>
+      withCurrentUserTurnInput(followupRun.userTurnTranscriptRecorder, () =>
+        traceAgentPhase("reply.run_agent_turn", () =>
+          runWithGoalReturn(() =>
+            executeAgentTurn({
+              ...context,
+              opts: executionOpts,
+              resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
+              replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+            }),
+          ),
+        ),
+      ),
+  );
+  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
+  recordReplyOperationAgentTurn(
+    followupRun.replyOperationRunStates,
+    replyOperation,
+    runOutcome.outcome,
+  );
+  activeSessionEntry = getActiveSessionEntry();
+
+  if (runOutcome.outcome.kind !== "settled") {
+    // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
+    await accountAgentTurnCompaction({
+      compaction: runOutcome.outcome.compaction,
+      sessionStore: activeSessionStore,
+      replyOperation,
+    });
+  }
+  if (operationSuperseded) {
+    return {};
+  }
+  if (runOutcome.outcome.kind !== "settled") {
+    if (
+      runOutcome.outcome.kind === "rejected" &&
+      !replyOperation.result &&
+      resolveReplyOperationRunState(opts)?.replyCompletion?.outcome !== "pending"
+    ) {
+      replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
+    }
+    return returnWithQueuedFollowupDrain(
+      runOutcome.outcome.kind === "rejected"
+        ? markPostCompactionModelFailurePayload(
+            runOutcome.outcome.postCompactionModelFailure,
+            runOutcome.outcome.payload,
+          )
+        : {},
+    );
+  }
+
+  const execution = runOutcome.outcome;
+  const result = await runWithGoalReturn(() =>
+    finalizeReplyAgentRun({
+      ...context,
+      opts: executionOpts,
+      activeSessionEntry,
+      preflightCompactionApplied,
+      runFollowupTurn,
+      execution,
+      runId: runOutcome.runId,
+      runStartedAt,
+    }),
+  );
+  const { postCompactionModelFailure } = execution;
+  if (Array.isArray(result)) {
+    return result.map((payload) =>
+      markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+    );
+  }
+  return result
+    ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
+    : result;
+}

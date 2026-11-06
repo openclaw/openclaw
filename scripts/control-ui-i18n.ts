@@ -1,0 +1,1100 @@
+// Control Ui I18N script supports OpenClaw repository automation.
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
+import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
+import {
+  hashControlUiTranslationText,
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+} from "./lib/control-ui-i18n-catalog-values.ts";
+import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
+import {
+  compareStringArrays,
+  createControlUiLocaleSyncPlan,
+  extractTranslationPlaceholders,
+  flattenTranslations,
+  type LocaleEntry,
+  type LocaleMeta,
+  type TranslationBatchItem,
+  type TranslationMap,
+} from "./lib/control-ui-i18n-sync-plan.ts";
+import {
+  loadControlUiPluginCatalogs,
+  materializeControlUiPluginTranslations,
+} from "./lib/control-ui-plugin-i18n-catalog.ts";
+import { escapeRegExp } from "./lib/regexp.mjs";
+import { sleep } from "./lib/sleep.mjs";
+
+// Translation is standalone tooling: Gateway host hooks open operator state
+// and log model identifiers before this script can redact provider failures.
+const translationRuntime = createLlmRuntime();
+registerBuiltInApiProviders(translationRuntime.registry);
+
+const CONTROL_UI_I18N_WORKFLOW = 1;
+const DEFAULT_OPENAI_MODEL = "gpt-6-astra";
+const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
+const DEFAULT_PROVIDER = "openai";
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, "..");
+const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
+const SOURCE_LOCALE = "en";
+const MAX_BATCH_ITEMS = 20;
+const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
+const TRANSLATE_MAX_ATTEMPTS = 2;
+const TRANSLATE_BASE_DELAY_MS = 15_000;
+const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+const PROGRESS_HEARTBEAT_MS = 30_000;
+const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
+const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
+const ENV_FALLBACK_MODEL = "OPENCLAW_I18N_FALLBACK_MODEL";
+const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
+const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
+const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
+const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
+
+type TranslationProvider = "openai" | "anthropic";
+
+const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id" | "name">> = {
+  openai: {
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 400_000,
+    maxTokens: 32_000,
+  },
+  anthropic: {
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 32_000,
+  },
+};
+
+const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_ENTRIES;
+
+function usage(): never {
+  console.error(
+    [
+      "Usage:",
+      "  node --import tsx scripts/control-ui-i18n.ts check",
+      "  node --import tsx scripts/control-ui-i18n.ts sync [--write] [--locale <code>] [--force]",
+      "  node --import tsx scripts/control-ui-i18n.ts sync --write --locale <code> --refresh-key <key> [--refresh-key <key> ...]",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
+function parseArgs(argv: string[]) {
+  const [command, ...rest] = argv;
+  if (command !== "check" && command !== "sync") {
+    usage();
+  }
+
+  let localeFilter: string | null = null;
+  let write = false;
+  let force = false;
+  const refreshKeys = new Set<string>();
+
+  for (let index = 0; index < rest.length; index += 1) {
+    const part = rest[index];
+    switch (part) {
+      case "--locale":
+        localeFilter = rest[index + 1] ?? null;
+        index += 1;
+        break;
+      case "--write":
+        write = true;
+        break;
+      case "--force":
+        force = true;
+        break;
+      case "--refresh-key": {
+        const key = rest[index + 1];
+        if (!key || key.startsWith("--")) {
+          throw new Error("--refresh-key requires a catalog key");
+        }
+        refreshKeys.add(key);
+        if (refreshKeys.size > 64) {
+          throw new Error("--refresh-key accepts at most 64 distinct keys");
+        }
+        index += 1;
+        break;
+      }
+      default:
+        usage();
+    }
+  }
+
+  if (command === "check" && write) {
+    usage();
+  }
+  if (refreshKeys.size > 0 && (command !== "sync" || !write || !localeFilter || force)) {
+    throw new Error(
+      "--refresh-key requires sync --write --locale and cannot be combined with --force",
+    );
+  }
+
+  return {
+    command,
+    force,
+    localeFilter,
+    refreshKeys,
+    write,
+  };
+}
+
+function resolveConfiguredProvider(): string {
+  const configured = process.env[ENV_PROVIDER]?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    return "openai";
+  }
+  if (process.env.ANTHROPIC_API_KEY?.trim()) {
+    return "anthropic";
+  }
+  return DEFAULT_PROVIDER;
+}
+
+function hasTranslationProvider(): boolean {
+  return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
+}
+
+function resolveKnownTranslationProvider(): TranslationProvider {
+  const provider = resolveConfiguredProvider();
+  if (provider === "openai" || provider === "anthropic") {
+    return provider;
+  }
+  throw new Error(`Unsupported translation provider: ${provider}`);
+}
+
+function sha256(input: string | Uint8Array): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function cacheKey(segmentId: string, textHash: string, targetLocale: string): string {
+  return sha256(
+    [
+      `wf=${CONTROL_UI_I18N_WORKFLOW}|engine=openclaw-llm`,
+      SOURCE_LOCALE,
+      targetLocale,
+      segmentId,
+      textHash,
+    ].join("|"),
+  );
+}
+
+function metaPath(entry: LocaleEntry, assetsDir: string): string {
+  return path.join(assetsDir, `${entry.locale}.meta.json`);
+}
+
+function tmPath(entry: LocaleEntry, assetsDir: string): string {
+  return path.join(assetsDir, `${entry.locale}.tm.jsonl`);
+}
+
+type PlaceholderMismatch = {
+  key: string;
+  locale: string;
+  sourcePlaceholders: string[];
+  translatedPlaceholders: string[];
+};
+
+export function findPlaceholderMismatches(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+): PlaceholderMismatch[] {
+  const mismatches: PlaceholderMismatch[] = [];
+  for (const [key, sourceText] of sourceFlat.entries()) {
+    const sourcePlaceholders = extractTranslationPlaceholders(sourceText);
+    const translatedPlaceholders = extractTranslationPlaceholders(translatedFlat.get(key) ?? "");
+    if (!compareStringArrays(sourcePlaceholders, translatedPlaceholders)) {
+      mismatches.push({
+        key,
+        locale,
+        sourcePlaceholders,
+        translatedPlaceholders,
+      });
+    }
+  }
+  return mismatches;
+}
+
+export function filterPlaceholderCompatibleTranslations(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+): Map<string, string> {
+  return new Map(
+    [...translatedFlat].filter(([key, translated]) => {
+      const source = sourceFlat.get(key);
+      return (
+        source !== undefined &&
+        compareStringArrays(
+          extractTranslationPlaceholders(source),
+          extractTranslationPlaceholders(translated),
+        )
+      );
+    }),
+  );
+}
+
+function assertPlaceholderParity(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+) {
+  const mismatches = findPlaceholderMismatches(sourceFlat, translatedFlat, locale);
+  if (mismatches.length === 0) {
+    return;
+  }
+
+  const details = mismatches
+    .slice(0, 20)
+    .map(
+      (mismatch) =>
+        `${mismatch.locale}:${mismatch.key} expected {${mismatch.sourcePlaceholders.join("},{")}} got {${mismatch.translatedPlaceholders.join("},{")}}`,
+    )
+    .join("\n");
+  throw new Error(
+    [
+      `control-ui-i18n placeholder mismatch detected for ${locale}.`,
+      details,
+      mismatches.length > 20 ? `...and ${mismatches.length - 20} more` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
+async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+  const raw = await readFile(filePath, "utf8");
+  return JSON.parse(raw) as LocaleMeta;
+}
+
+function buildSystemPrompt(targetLocale: string): string {
+  return [
+    "You are a translation function, not a chat assistant.",
+    `Translate UI strings from ${controlUiLanguageLabel(SOURCE_LOCALE)} to ${controlUiLanguageLabel(targetLocale)}.`,
+    "",
+    "Rules:",
+    "- Output ONLY valid JSON.",
+    "- The JSON must be an object whose keys exactly match the provided ids.",
+    "- Translate all English prose; keep code, URLs, product names, CLI commands, config keys, and env vars in English.",
+    "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
+    "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
+    "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
+    "- Use natural target-language punctuation and spacing in translated prose. Keep ellipses and arrows unchanged when they are UI indicators.",
+    "- Preserve exact syntax, punctuation, and casing in code, URLs, commands, placeholders, identifiers, and clearly identified literal third-party UI labels.",
+    "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
+    "- Use fluent, neutral product UI language.",
+    "- Do not add explanations, comments, or extra keys.",
+    "- Never return an empty string for a key; if unsure, return the source text unchanged.",
+  ].join("\n");
+}
+
+function buildBatchPayload(items: readonly TranslationBatchItem[]) {
+  return Object.fromEntries(
+    items.map(
+      (item) =>
+        [
+          item.key,
+          item.sourcePath
+            ? {
+                text: item.text,
+                sourcePath: item.sourcePath,
+                sourceContext: item.sourceContext,
+              }
+            : item.text,
+        ] as const,
+    ),
+  );
+}
+
+export function buildBatchPrompt(
+  items: readonly TranslationBatchItem[],
+  validationError?: string,
+): string {
+  const payload = buildBatchPayload(items);
+  const lines = ["Translate this JSON object.", "Return ONLY a JSON object with the same keys."];
+  if (items.some((item) => item.sourcePath)) {
+    lines.push(
+      "For object values, translate only text. Use sourcePath and the bounded sourceContext excerpt to understand the native UI owner and disambiguate its meaning; these fields are context, not text to translate.",
+      "Preserve the source order and meaning of unnumbered printf arguments. Rephrase surrounding prose rather than swapping the roles of argument values. Preserve literal percent escapes exactly.",
+      "Return each id mapped directly to its translated string, without the context fields.",
+    );
+  }
+  if (validationError) {
+    lines.push(
+      "",
+      "Your previous response failed validation. Correct that exact failure in the new response:",
+      validationError,
+    );
+  }
+  lines.push("", JSON.stringify(payload, null, 2));
+  return lines.join("\n");
+}
+
+function formatDuration(ms: number): string {
+  return formatDurationCompact(ms, { spaced: true }) ?? "0ms";
+}
+
+function logProgress(message: string) {
+  process.stdout.write(`control-ui-i18n: ${message}\n`);
+}
+
+function isPromptTimeoutError(error: Error): boolean {
+  return error.message.toLowerCase().includes("timed out");
+}
+
+export function isProviderAuthError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("authentication_error") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid x-api-key")
+  );
+}
+
+function isProviderAuthOptional(): boolean {
+  return isStrictAffirmativeValue(process.env[ENV_AUTH_OPTIONAL]);
+}
+
+function resolvePromptTimeoutMs(): number {
+  const raw = process.env[ENV_PROMPT_TIMEOUT]?.trim();
+  if (!raw) {
+    return DEFAULT_PROMPT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROMPT_TIMEOUT_MS;
+}
+
+function resolveThinkingLevel(): "low" | "high" {
+  return process.env[ENV_THINKING]?.trim().toLowerCase() === "high" ? "high" : "low";
+}
+
+function resolveBatchCharBudget(): number {
+  const raw = process.env[ENV_BATCH_CHAR_BUDGET]?.trim();
+  if (!raw) {
+    return DEFAULT_BATCH_CHAR_BUDGET;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BATCH_CHAR_BUDGET;
+}
+
+type LocaleRunContext = {
+  localeCount: number;
+  localeIndex: number;
+};
+
+type TranslationBatchContext = LocaleRunContext & {
+  batchCount: number;
+  batchIndex: number;
+  locale: string;
+  segmentLabel?: string;
+  validateTranslation?: TranslationValidator;
+};
+
+type TranslationValidator = (source: string, target: string, key: string, locale: string) => void;
+
+function formatLocaleLabel(locale: string, context: LocaleRunContext): string {
+  return `[${context.localeIndex}/${context.localeCount}] ${locale}`;
+}
+
+function formatBatchLabel(context: TranslationBatchContext): string {
+  const suffix = context.segmentLabel ? `.${context.segmentLabel}` : "";
+  return `${formatLocaleLabel(context.locale, context)} batch ${context.batchIndex}/${context.batchCount}${suffix}`;
+}
+
+function buildTranslationBatches(items: readonly TranslationBatchItem[]): TranslationBatchItem[][] {
+  const batches: TranslationBatchItem[][] = [];
+  const budget = resolveBatchCharBudget();
+  let current: TranslationBatchItem[] = [];
+  let currentChars = 2;
+
+  for (const item of items) {
+    const itemChars = JSON.stringify(buildBatchPayload([item])).length;
+    const wouldOverflow = current.length > 0 && currentChars + itemChars > budget;
+    const reachedMaxItems = current.length >= MAX_BATCH_ITEMS;
+    if (wouldOverflow || reachedMaxItems) {
+      batches.push(current);
+      current = [];
+      currentChars = 2;
+    }
+    current.push(item);
+    currentChars += itemChars;
+  }
+
+  if (current.length > 0) {
+    batches.push(current);
+  }
+
+  return batches;
+}
+
+export function resolveTranslationModel(): Model {
+  const provider = resolveKnownTranslationProvider();
+  const modelId =
+    process.env[ENV_MODEL]?.trim() ||
+    (provider === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_OPENAI_MODEL);
+  return {
+    ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+    id: modelId,
+    name: modelId,
+  };
+}
+
+class TranslationClient {
+  private model: Model | undefined;
+  private readonly systemPrompt: string;
+
+  constructor(targetLocale: string) {
+    this.systemPrompt = buildSystemPrompt(targetLocale);
+  }
+
+  reset() {
+    this.model = undefined;
+  }
+
+  async prompt(message: string, label: string): Promise<string> {
+    let model = (this.model ??= resolveTranslationModel());
+    const timeoutMs = resolvePromptTimeoutMs();
+    const startedAt = Date.now();
+    const controller = new AbortController();
+
+    return await new Promise<string>((resolve, reject) => {
+      const heartbeat = setInterval(() => {
+        logProgress(
+          `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)})`,
+        );
+      }, PROGRESS_HEARTBEAT_MS);
+      const timer = setTimeout(() => {
+        clearInterval(heartbeat);
+        controller.abort();
+        reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      const complete = () =>
+        translationRuntime
+          .completeSimple(
+            model,
+            {
+              systemPrompt: this.systemPrompt,
+              messages: [{ role: "user", content: message, timestamp: Date.now() }],
+            },
+            {
+              maxTokens: 4096,
+              reasoning: resolveThinkingLevel(),
+              signal: controller.signal,
+              timeoutMs,
+            },
+          )
+          .then(extractTranslationResult);
+      complete()
+        .catch(async (error: unknown) => {
+          const fallback = process.env[ENV_FALLBACK_MODEL]?.trim();
+          if (
+            error instanceof TranslationProviderError &&
+            error.code === "model_not_found" &&
+            !controller.signal.aborted &&
+            model.provider === "openai" &&
+            fallback &&
+            fallback !== model.id
+          ) {
+            logProgress(`${label}: primary model unavailable; using configured fallback`);
+            this.model = model = { ...model, id: fallback, name: fallback };
+            return await complete();
+          }
+          throw error;
+        })
+        .then((translation) => {
+          clearTimeout(timer);
+          clearInterval(heartbeat);
+          resolve(translation);
+        })
+        .catch((error: unknown) => {
+          clearTimeout(timer);
+          clearInterval(heartbeat);
+          reject(
+            error instanceof TranslationProviderError
+              ? error
+              : new TranslationProviderError("provider_error"),
+          );
+        });
+    });
+  }
+}
+
+class TranslationProviderError extends Error {
+  readonly code: "model_not_found" | "authentication_error" | "provider_error";
+
+  constructor(code: TranslationProviderError["code"]) {
+    super(`translation provider failed (${code}); check the private provider configuration`);
+    this.code = code;
+  }
+}
+
+function extractTranslationResult(message: AssistantMessage): string {
+  if (message.errorMessage || message.stopReason === "error") {
+    // Provider prose can contain private model names. Only the explicit model
+    // availability code authorizes fallback; all public errors use fixed text.
+    throw new TranslationProviderError(
+      message.errorCode === "model_not_found"
+        ? "model_not_found"
+        : isProviderAuthError(new Error(message.errorMessage))
+          ? "authentication_error"
+          : "provider_error",
+    );
+  }
+  const text = message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("")
+    .trim();
+  if (!text) {
+    throw new Error("assistant translation not found");
+  }
+  return text;
+}
+
+// Models intermittently wrap the JSON reply in a Markdown code fence even
+// when told not to; strip it instead of burning a retry on a parse error.
+function parseTranslationReply(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
+  const json = fenced ? expectDefined(fenced[1], "fenced translation JSON body") : trimmed;
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new Error("translation provider returned invalid JSON");
+  }
+}
+
+export function parseTranslationBatchReply(
+  raw: string,
+  items: readonly TranslationBatchItem[],
+  locale: string,
+  validateTranslation?: TranslationValidator,
+): Map<string, string> {
+  const parsed = parseTranslationReply(raw);
+  const translated = new Map<string, string>();
+  for (const item of items) {
+    const value = parsed[item.key];
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`missing translation for ${item.key}`);
+    }
+    const privateModels = [process.env[ENV_MODEL], process.env[ENV_FALLBACK_MODEL]];
+    if (
+      privateModels.some(
+        (model) => model?.trim() && value.toLowerCase().includes(model.trim().toLowerCase()),
+      )
+    ) {
+      throw new TranslationProviderError("provider_error");
+    }
+    validateTranslation?.(item.text, value, item.key, locale);
+    translated.set(item.key, value);
+  }
+  assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
+  return translated;
+}
+
+async function translateBatch(
+  client: TranslationClient,
+  items: readonly TranslationBatchItem[],
+  context: TranslationBatchContext,
+): Promise<Map<string, string>> {
+  const batchLabel = formatBatchLabel(context);
+  let lastError: Error | null = null;
+  let validationError: string | undefined;
+  for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
+    const attemptNumber = attempt + 1;
+    const attemptLabel = `${batchLabel} attempt ${attemptNumber}/${TRANSLATE_MAX_ATTEMPTS}`;
+    const startedAt = Date.now();
+    logProgress(`${attemptLabel}: start keys=${items.length}`);
+    let promptCompleted = false;
+    try {
+      const raw = await client.prompt(buildBatchPrompt(items, validationError), attemptLabel);
+      promptCompleted = true;
+      const translated = parseTranslationBatchReply(
+        raw,
+        items,
+        context.locale,
+        context.validateTranslation,
+      );
+      logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
+      return translated;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (promptCompleted) {
+        validationError = lastError.message;
+      }
+      client.reset();
+      logProgress(
+        `${attemptLabel}: failed after ${formatDuration(Date.now() - startedAt)}: ${lastError.message}`,
+      );
+      if (isPromptTimeoutError(lastError) && items.length > 1) {
+        const midpoint = Math.ceil(items.length / 2);
+        logProgress(
+          `${batchLabel}: splitting timed out batch into ${midpoint} + ${items.length - midpoint} keys`,
+        );
+        const left = await translateBatch(client, items.slice(0, midpoint), {
+          ...context,
+          segmentLabel: `${context.segmentLabel ?? ""}a`,
+        });
+        const right = await translateBatch(client, items.slice(midpoint), {
+          ...context,
+          segmentLabel: `${context.segmentLabel ?? ""}b`,
+        });
+        return new Map([...left, ...right]);
+      }
+      if (isPromptTimeoutError(lastError)) {
+        break;
+      }
+      if (attempt + 1 < TRANSLATE_MAX_ATTEMPTS) {
+        const delayMs = TRANSLATE_BASE_DELAY_MS * attemptNumber;
+        logProgress(`${attemptLabel}: retrying in ${formatDuration(delayMs)}`);
+        await sleep(delayMs);
+      }
+    }
+  }
+  throw lastError ?? new Error("translation failed");
+}
+
+type NativeTranslationEntry = {
+  id: string;
+  source: string;
+  sourcePath: string;
+  sourceContext?: string;
+};
+
+export async function translateNativeEntries(
+  entries: readonly NativeTranslationEntry[],
+  targetLocale: string,
+  validateTranslation?: TranslationValidator,
+): Promise<Map<string, string>> {
+  if (!hasTranslationProvider()) {
+    throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
+  }
+  const pending = entries.map((entry) => ({
+    cacheKey: cacheKey(entry.id, hashControlUiTranslationText(entry.source), targetLocale),
+    key: entry.id,
+    text: entry.source,
+    textHash: hashControlUiTranslationText(entry.source),
+    sourcePath: entry.sourcePath,
+    sourceContext: entry.sourceContext,
+  }));
+  const batches = buildTranslationBatches(pending);
+  const client = new TranslationClient(targetLocale);
+  const translated = new Map<string, string>();
+  for (const [batchIndex, batch] of batches.entries()) {
+    const result = await translateBatch(client, batch, {
+      locale: targetLocale,
+      localeCount: 1,
+      localeIndex: 1,
+      batchCount: batches.length,
+      batchIndex: batchIndex + 1,
+      validateTranslation,
+    });
+    for (const [id, value] of result) {
+      translated.set(id, value);
+    }
+  }
+  return translated;
+}
+
+type SyncOutcome = {
+  changed: boolean;
+  fallbackCount: number;
+  locale: string;
+  wrote: boolean;
+};
+
+export function assertNoControlUiFallbacks(
+  outcomes: ReadonlyArray<Pick<SyncOutcome, "fallbackCount" | "locale">>,
+) {
+  const fallbackLocales = outcomes.filter((outcome) => outcome.fallbackCount > 0);
+  if (fallbackLocales.length === 0) {
+    return;
+  }
+  throw new Error(
+    [
+      "control-ui-i18n generated locales still contain English fallbacks.",
+      ...fallbackLocales.map(
+        (outcome) => `${outcome.locale}: ${outcome.fallbackCount} fallback keys`,
+      ),
+    ].join("\n"),
+  );
+}
+
+type LocaleCatalog = {
+  id: string;
+  sourceFlat: ReadonlyMap<string, string>;
+  sourceHash: string;
+  assetsDir: string;
+  sourcePath: string;
+  authored?: Record<string, TranslationMap>;
+};
+
+async function syncLocale(
+  entry: LocaleEntry,
+  options: {
+    allowTranslate: boolean;
+    checkOnly: boolean;
+    force: boolean;
+    write: boolean;
+    refreshKeys: ReadonlySet<string>;
+  },
+  context: LocaleRunContext,
+  catalog: LocaleCatalog,
+) {
+  const localeLabel = `${catalog.id}:${formatLocaleLabel(entry.locale, context)}`;
+  const localeStartedAt = Date.now();
+  const { sourceFlat, sourceHash, assetsDir } = catalog;
+  const tm = loadControlUiTranslationMemory(tmPath(entry, assetsDir));
+  const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
+  const existingFlat = flattenTranslations(existingMap);
+  // Placeholder changes invalidate the old translation even when the key stays
+  // stable. Treat it as pending so the locale bot can repair source-only PRs.
+  const reusableExistingFlat = filterPlaceholderCompatibleTranslations(sourceFlat, existingFlat);
+  const previousMeta = await loadMeta(metaPath(entry, assetsDir));
+  const allowTranslate = options.allowTranslate;
+  const plan = createControlUiLocaleSyncPlan({
+    allowTranslate,
+    cacheKeyFor: (key, textHash) => cacheKey(key, textHash, entry.locale),
+    entry,
+    existingFlat: reusableExistingFlat,
+    authoredFlat: catalog.authored && flattenTranslations(catalog.authored[entry.locale] ?? {}),
+    sourcePath: catalog.authored ? catalog.sourcePath : `ui/src/i18n/locales/${entry.fileName}`,
+    force: options.force,
+    refreshKeys: options.refreshKeys,
+    hashText: hashControlUiTranslationText,
+    previousMeta,
+    sourceFlat,
+    sourceHash,
+    translationMemory: tm,
+  });
+  if (options.refreshKeys.size > 0 && !allowTranslate) {
+    throw new Error("--refresh-key requires a configured translation provider");
+  }
+
+  // Writing NEW English fallbacks trips the shipped-fallback CI gate
+  // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
+  // by the control-ui-locale-refresh workflow. An unauthenticated local sync
+  // must fail here instead of silently recording fallback bundles; refreshing
+  // already-recorded fallback copy (force mode) stays allowed.
+  if (!allowTranslate && options.write && !options.checkOnly && !isProviderAuthOptional()) {
+    if (plan.newFallbackCount > 0) {
+      throw new Error(
+        `${localeLabel}: ${plan.newFallbackCount} new key(s) need translation but no provider is configured. ` +
+          `Commit only locales/en.ts and let the control-ui-locale-refresh workflow translate after merge, ` +
+          `or export ANTHROPIC_API_KEY/OPENAI_API_KEY and rerun. ` +
+          `Set ${ENV_AUTH_OPTIONAL}=1 to record English fallbacks anyway.`,
+      );
+    }
+  }
+
+  if (allowTranslate && plan.pending.length > 0) {
+    const batches = buildTranslationBatches(plan.pending);
+    const batchCount = batches.length;
+    logProgress(
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+    );
+    const client = new TranslationClient(entry.locale);
+    try {
+      for (const [batchIndex, batch] of batches.entries()) {
+        const translated = await translateBatch(client, batch, {
+          ...context,
+          batchCount,
+          batchIndex: batchIndex + 1,
+          locale: entry.locale,
+        });
+        plan.recordTranslations(batch, translated, {
+          sourceLocale: SOURCE_LOCALE,
+          updatedAt: () => new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (
+        options.refreshKeys.size === 0 &&
+        isProviderAuthOptional() &&
+        isProviderAuthError(failure)
+      ) {
+        logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
+        return {
+          changed: false,
+          fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
+          locale: `${catalog.id}:${entry.locale}`,
+          wrote: false,
+        } satisfies SyncOutcome;
+      }
+      throw failure;
+    }
+  } else if (allowTranslate) {
+    logProgress(
+      `${localeLabel}: no translation work needed (all keys reused from cache or existing files)`,
+    );
+  } else {
+    logProgress(`${localeLabel}: no provider configured, using English fallback for pending keys`);
+  }
+
+  // Do not infer fallback state from source-text equality alone.
+  // Product names, config keys, and other intentional carry-through strings may
+  // legitimately stay identical to English. Track fallback keys from actual
+  // fallback decisions and previous fallback metadata instead.
+
+  const artifacts = plan.render({
+    generatedAt: new Date().toISOString(),
+    workflow: CONTROL_UI_I18N_WORKFLOW,
+  });
+  assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
+
+  const expectedMeta = artifacts.meta;
+  const expectedTm = artifacts.translationMemory;
+
+  const currentMeta = existsSync(metaPath(entry, assetsDir))
+    ? await readFile(metaPath(entry, assetsDir), "utf8")
+    : "";
+  const currentTm = existsSync(tmPath(entry, assetsDir))
+    ? await readFile(tmPath(entry, assetsDir), "utf8")
+    : "";
+
+  const changed = currentMeta !== expectedMeta || currentTm !== expectedTm;
+
+  if (changed && !options.checkOnly && options.write) {
+    await mkdir(assetsDir, { recursive: true });
+    await writeFile(metaPath(entry, assetsDir), expectedMeta, "utf8");
+    if (expectedTm) {
+      await writeFile(tmPath(entry, assetsDir), expectedTm, "utf8");
+    } else if (existsSync(tmPath(entry, assetsDir))) {
+      await writeFile(tmPath(entry, assetsDir), "", "utf8");
+    }
+  }
+
+  logProgress(
+    `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
+  );
+  return {
+    changed,
+    fallbackCount: artifacts.fallbackCount,
+    locale: `${catalog.id}:${entry.locale}`,
+    wrote: !options.checkOnly && options.write && changed,
+  } satisfies SyncOutcome;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const {
+    flattenControlUiCatalog,
+    syncControlUiCatalogFallbackBaseline,
+    verifyControlUiPluginCatalogs,
+    verifyControlUiGeneratedCatalogs,
+    verifyRuntimeLocaleConfig,
+  } = await import("./control-ui-i18n-verify.ts");
+  if (args.command === "check") {
+    await verifyControlUiGeneratedCatalogs();
+  } else {
+    await verifyRuntimeLocaleConfig();
+    await verifyControlUiPluginCatalogs();
+  }
+  if (args.command === "sync" && args.write && !args.localeFilter) {
+    const { syncControlUiRawCopyBaseline } = await import("./lib/control-ui-i18n-raw-copy.ts");
+    await syncControlUiRawCopyBaseline({
+      checkOnly: false,
+      write: args.write,
+    });
+  }
+
+  const entries = args.localeFilter
+    ? LOCALE_ENTRIES.filter((entry) => entry.locale === args.localeFilter)
+    : [...LOCALE_ENTRIES];
+
+  if (entries.length === 0) {
+    throw new Error(`unknown locale: ${args.localeFilter}`);
+  }
+
+  const { loadControlUiSourceCatalog, readControlUiSourceCatalog } =
+    await import("./lib/control-ui-i18n-catalog.ts");
+  const plugins = await loadControlUiPluginCatalogs(ROOT);
+  const catalogs: LocaleCatalog[] = [
+    {
+      id: "core",
+      sourceFlat: flattenTranslations(loadControlUiSourceCatalog()),
+      sourceHash: sha256(await readControlUiSourceCatalog()),
+      assetsDir: I18N_ASSETS_DIR,
+      sourcePath: "ui/src/i18n/locales/en.ts",
+    },
+    ...plugins.map((plugin) => ({
+      id: plugin.id,
+      sourceFlat: flattenControlUiCatalog(plugin.source, `${plugin.id}:en`),
+      sourceHash: sha256(JSON.stringify(plugin.source)),
+      sourcePath: `${plugin.browserRoot}/i18n/locales/en.ts`,
+      assetsDir: path.join(ROOT, plugin.browserRoot, "i18n/.i18n"),
+      // Shape, supported locales, shared keys and placeholders were verified above.
+      authored: plugin.translations as Record<string, TranslationMap>,
+    })),
+  ];
+  for (const key of args.refreshKeys) {
+    if (!catalogs.some((catalog) => catalog.sourceFlat.has(key))) {
+      throw new Error(`unknown refresh key: ${key}`);
+    }
+  }
+
+  const allowTranslate = args.command === "sync" && hasTranslationProvider();
+  logProgress(
+    `command=${args.command} locales=${entries.length} translation=${allowTranslate ? "enabled" : "disabled"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+  );
+  const outcomes: SyncOutcome[] = [];
+  for (const catalog of catalogs) {
+    const refreshKeys = new Set([...args.refreshKeys].filter((key) => catalog.sourceFlat.has(key)));
+    if (args.refreshKeys.size > 0 && refreshKeys.size === 0) {
+      continue;
+    }
+    for (const [index, entry] of entries.entries()) {
+      outcomes.push(
+        await syncLocale(
+          entry,
+          {
+            allowTranslate,
+            checkOnly: args.command === "check",
+            force: args.force,
+            refreshKeys,
+            write: args.write,
+          },
+          { localeCount: entries.length, localeIndex: index + 1 },
+          catalog,
+        ),
+      );
+    }
+    if (!catalog.authored || args.localeFilter) {
+      continue;
+    }
+    // Only the aggregate run owns translated.json; workers emit disjoint memory patches.
+    const result = materializeControlUiPluginTranslations(
+      catalog.sourceFlat,
+      catalog.authored,
+      new Map(
+        entries.map((entry) => [
+          entry.locale,
+          loadControlUiTranslationMemory(tmPath(entry, catalog.assetsDir)),
+        ]),
+      ),
+    );
+    if (result.missing.length > 0 && (args.command === "check" || args.write)) {
+      throw new Error(`${catalog.id}: missing verified translations: ${result.missing.join(", ")}`);
+    }
+    if (result.added > 0) {
+      if (args.command === "check") {
+        throw new Error(`${catalog.id}: translated.json needs aggregate materialization`);
+      }
+      if (args.write) {
+        await writeFile(
+          path.join(catalog.assetsDir, "../locales/translated.json"),
+          `${JSON.stringify(result.translations, null, 2)}\n`,
+        );
+      }
+    }
+    let manifestChanged = false;
+    if (args.write) {
+      // Rebuild once after fan-in, even after an interrupted prior build. The native
+      // builder preserves unchanged manifests and repairs missing immutable assets.
+      const pluginRoot = path.join(ROOT, "extensions", catalog.id);
+      const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+      const before = await readFile(manifestPath, "utf8");
+      execFileSync(
+        process.execPath,
+        ["--import", "tsx", path.join(ROOT, "scripts/build-plugin-control-ui.mts"), pluginRoot],
+        { stdio: "inherit" },
+      );
+      manifestChanged = before !== (await readFile(manifestPath, "utf8"));
+    }
+    outcomes.push({
+      locale: `${catalog.id}:bundle`,
+      changed: result.added > 0 || manifestChanged,
+      fallbackCount: result.missing.length,
+      wrote: args.write && (result.added > 0 || manifestChanged),
+    });
+  }
+
+  const changed = outcomes.filter((outcome) => outcome.changed);
+  const summary = outcomes
+    .map(
+      (outcome) =>
+        `${outcome.locale}: ${outcome.changed ? "dirty" : "clean"} (fallbacks=${outcome.fallbackCount}${outcome.wrote ? ", wrote" : ""})`,
+    )
+    .join("\n");
+  process.stdout.write(`${summary}\n`);
+
+  if (args.command === "sync" && args.write) {
+    await syncControlUiCatalogFallbackBaseline({
+      // A scoped matrix worker can observe unsynced sibling locales. The final
+      // aggregate sync still rebuilds and validates the complete catalog.
+      allowCatalogDrift: Boolean(args.localeFilter),
+      checkOnly: false,
+      write: true,
+    });
+  }
+
+  if (args.command === "check") {
+    assertNoControlUiFallbacks(outcomes);
+    if (changed.length > 0) {
+      throw new Error(
+        [
+          "control-ui-i18n drift detected.",
+          "Run `node --import tsx scripts/control-ui-i18n.ts sync --write` and commit the results.",
+        ].join("\n"),
+      );
+    }
+  }
+
+  if (args.command === "sync" && !args.write && changed.length > 0) {
+    process.stdout.write(
+      "dry-run only. re-run with `node --import tsx scripts/control-ui-i18n.ts sync --write` to update files.\n",
+    );
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main().catch((error: unknown) => {
+    console.error(
+      formatErrorMessage(error, {
+        // Keep failure reporting independent of Gateway logging configuration.
+        redact: (text) => {
+          let redacted = text;
+          for (const name of [
+            ENV_MODEL,
+            ENV_FALLBACK_MODEL,
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+          ]) {
+            const secret = process.env[name]?.trim();
+            if (secret) {
+              redacted = redacted.replaceAll(new RegExp(escapeRegExp(secret), "gi"), "[redacted]");
+            }
+          }
+          return redacted;
+        },
+      }),
+    );
+    process.exit(1);
+  });
+}

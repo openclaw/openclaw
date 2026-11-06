@@ -1,0 +1,202 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table.js";
+import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
+import { defaultRuntime } from "../../runtime.js";
+import { parsePairingList } from "../../shared/node-list-parse.js";
+import type { PendingRequest } from "../../shared/node-list-types.js";
+import { formatCliCommand } from "../command-format.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { renderPendingPairingRequestsTable } from "./pairing-render.js";
+import {
+  callNodesGatewayCli,
+  callNodePairApprovalGatewayCli,
+  nodesCallOpts,
+  resolveCliNodeId,
+} from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
+
+const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
+async function resolveApproveScopesForRequest(
+  opts: NodesRpcOpts,
+  requestId: string,
+): Promise<{ scopes: OperatorScope[] }> {
+  let pending: PendingRequest[];
+  try {
+    const result = await callNodePairApprovalGatewayCli(
+      "node.pair.list",
+      opts,
+      {},
+      { scopes: DEFAULT_NODE_PAIR_APPROVE_SCOPES },
+    );
+    pending = parsePairingList(result).pending;
+  } catch {
+    return { scopes: [...DEFAULT_NODE_PAIR_APPROVE_SCOPES] };
+  }
+  const pendingRequestIds = pending
+    .map((request) => request.requestId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const request = pending.find((candidate) => candidate.requestId === requestId);
+  if (!request) {
+    throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
+  }
+  return {
+    scopes: resolveNodePairApprovalScopes(request.commands, request.requiredApproveScopes),
+  };
+}
+
+function isUnknownNodePairRequestIdError(
+  error: unknown,
+): error is Error & { gatewayCode: "INVALID_REQUEST" } {
+  const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
+  return (
+    requestError instanceof Error &&
+    requestError.name === "GatewayClientRequestError" &&
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    requestError.message === "unknown requestId"
+  );
+}
+
+function buildUnknownNodePairRequestIdMessage(
+  requestId: string,
+  opts: NodesRpcOpts,
+  pendingRequestIds?: string[],
+): string {
+  const lines = [`Unknown node pairing requestId: ${requestId}`];
+  if (pendingRequestIds !== undefined) {
+    if (pendingRequestIds.length > 0) {
+      lines.push(`Pending requestIds: ${pendingRequestIds.join(", ")}`);
+    } else {
+      lines.push("No pending node pairing requests are currently visible.");
+    }
+  }
+  lines.push(`Run ${formatCliCommand("openclaw nodes pending")} to inspect current requests.`);
+  const connectionReminder = formatConnectionFlagReminder(opts);
+  if (connectionReminder) {
+    lines.push(connectionReminder);
+  }
+  return lines.join("\n");
+}
+
+export function registerNodesPairingCommands(nodes: Command) {
+  nodesCallOpts(
+    nodes
+      .command("pending")
+      .description("List pending pairing requests")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("pending", async () => {
+          const result = await callNodesGatewayCli("node.pair.list", opts, {});
+          const { pending } = parsePairingList(result);
+          if (opts.json) {
+            defaultRuntime.writeJson(pending);
+            return;
+          }
+          if (pending.length === 0) {
+            const { muted } = getNodesTheme();
+            defaultRuntime.log(muted("No pending pairing requests."));
+            return;
+          }
+          const { heading, muted } = getNodesTheme();
+          const tableWidth = getTerminalTableWidth();
+          const now = Date.now();
+          const rendered = renderPendingPairingRequestsTable({
+            pending,
+            now,
+            tableWidth,
+            theme: { heading, muted },
+          });
+          defaultRuntime.log(rendered.heading);
+          defaultRuntime.log(rendered.table);
+        });
+      }),
+  );
+
+  for (const [action, description] of [
+    ["approve", "Approve a pending pairing request"],
+    ["reject", "Reject a pending pairing request"],
+  ] as const) {
+    nodesCallOpts(
+      nodes
+        .command(action)
+        .description(description)
+        .argument("<requestId>", "Pending request id")
+        .action(async (requestId: string, opts: NodesRpcOpts) => {
+          await runNodesCommand(action, async () => {
+            const approval =
+              action === "approve"
+                ? await resolveApproveScopesForRequest(opts, requestId)
+                : undefined;
+            let result: unknown;
+            try {
+              result = approval
+                ? await callNodePairApprovalGatewayCli(
+                    "node.pair.approve",
+                    opts,
+                    { requestId },
+                    approval,
+                  )
+                : await callNodesGatewayCli("node.pair.reject", opts, { requestId });
+            } catch (error) {
+              if (isUnknownNodePairRequestIdError(error)) {
+                // Preserve the gateway error without appending its raw cause.
+                error.name = "Error";
+                error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+              }
+              throw error;
+            }
+            defaultRuntime.writeJson(result);
+          });
+        }),
+    );
+  }
+
+  nodesCallOpts(
+    nodes
+      .command("remove")
+      .description("Remove a paired node entry")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("remove", async () => {
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const result = await callNodesGatewayCli("node.pair.remove", opts, { nodeId });
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          const { warn } = getNodesTheme();
+          defaultRuntime.log(warn(sanitizeTerminalText(`Removed paired node ${nodeId}`)));
+        });
+      }),
+  );
+
+  nodesCallOpts(
+    nodes
+      .command("rename")
+      .description("Rename a paired node (display name override)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .requiredOption("--name <displayName>", "New display name")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("rename", async () => {
+          const name = normalizeOptionalString(opts.name) ?? "";
+          if (!name) {
+            throw new Error(
+              `--name must not be empty. Run ${formatCliCommand("openclaw nodes list")} to see paired nodes, then rerun with --name <displayName>.`,
+            );
+          }
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const result = await callNodesGatewayCli("node.rename", opts, {
+            nodeId,
+            displayName: name,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          const { ok } = getNodesTheme();
+          defaultRuntime.log(ok(sanitizeTerminalText(`node rename ok: ${nodeId} -> ${name}`)));
+        });
+      }),
+  );
+}

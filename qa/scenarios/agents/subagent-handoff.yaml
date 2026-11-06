@@ -1,0 +1,96 @@
+title: Subagent handoff
+
+scenario:
+  id: subagent-handoff
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-subagents
+  objective: Verify the agent can delegate one task, yield until the child finishes, and report its result.
+  successCriteria:
+    - This requester receives an accepted child run, and that child completes successfully.
+    - The yielded requester receives the child's result, then reports the same text.
+    - Final answer attributes delegated work clearly.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/system-prompt.ts
+    - extensions/qa-lab/src/report.ts
+  execution:
+    kind: flow
+    summary: Follow the accepted child to completion and verify the yielded requester reports its result.
+    channel: qa-channel
+    config:
+      prompt: "Delegate one bounded QA task to a subagent. Once the child is accepted, use sessions_yield to wait for it to finish. Then reply in plain text, with these three labels at the start of lines: Delegated task:, Result:, Evidence:. Under Result, copy only the child's final reply exactly as delivered, not a spawn receipt or a progress update."
+
+flow:
+  steps:
+    - name: starts the requester
+      actions:
+        - call: reset
+        # A transport reset does not remove previous sessions or their children.
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:handoff:${randomUUID()}`"
+        # The first parent turn can yield. Follow its accepted child, then read the resumed reply.
+        - call: startAgentRun
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 90000)
+    - name: observes an accepted child run
+      actions:
+        - call: waitForCondition
+          saveAs: child
+          args:
+            - lambda:
+                async: true
+                expr: |-
+                  (async () => {
+                    const activity = await readSessionToolActivity(env, sessionKey, { allowEmpty: true });
+                    const spawn = activity.find((call) => call.toolName === 'sessions_spawn' && call.completed);
+                    if (!spawn) { return undefined; }
+                    const child = extractQaToolPayload(spawn.result);
+                    if (!spawn.successful || child?.status !== 'accepted' || !child.runId || !child.childSessionKey) {
+                      throw new Error('sessions_spawn did not return an accepted child run');
+                    }
+                    return child;
+                  })()
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 250
+    - name: observes the accepted child's terminal reply
+      actions:
+        # agent.wait retains the terminal reply even if normal cleanup retires the child.
+        - call: waitForAgentRun
+          saveAs: completion
+          args:
+            - ref: env
+            - expr: child.runId
+            - expr: liveTurnTimeoutMs(env, 90000)
+        - assert:
+            expr: |-
+              completion.runId === child.runId && completion.status === 'ok' &&
+              completion.yielded !== true && Number.isFinite(completion.endedAt) &&
+              completion.terminalReply?.disposition === 'visible' && completion.terminalReply.text.trim()
+            message: expected the accepted child to finish with a visible terminal reply
+    - name: observes the child's result in the requester's reply
+      actions:
+        # This tests yielded settlement. A result carried only in private runtime context
+        # cannot establish the delivery below; do not substitute matching public text alone.
+        - call: waitForAgentHistory
+          saveAs: reply
+          args:
+            - ref: env
+            - ref: sessionKey
+            - lambda:
+                params: [history]
+                expr: "readSubagentHandoffReply(env, sessionKey, child.childSessionKey, completion.terminalReply.text, history.messages ?? [])"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 250
+      detailsExpr: "({ reply, childRunId: child.runId, childSessionKey: child.childSessionKey })"

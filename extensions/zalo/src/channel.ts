@@ -1,0 +1,387 @@
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+  createScopedDmSecurityResolver,
+  mapAllowFromEntries,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import {
+  buildChannelConfigSchema,
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+  stripChannelTargetPrefix,
+  stripTargetKindPrefix,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
+import {
+  defineChannelMessageAdapter,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildOpenGroupPolicyRestrictSendersWarning,
+  buildOpenGroupPolicyWarning,
+  createConditionalWarningCollector,
+  createOpenProviderGroupPolicyWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
+  createAttachedChannelResultAdapter,
+  createEmptyChannelResult,
+} from "openclaw/plugin-sdk/channel-send-result";
+import {
+  buildTokenChannelStatusSummary,
+  PAIRING_APPROVED_MESSAGE,
+} from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createChannelDirectoryAdapter,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
+} from "openclaw/plugin-sdk/directory-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  convertMarkdownTables,
+  resolveMarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
+import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+  resolveEnabledConfiguredAccountId,
+  standardDmPolicyOpenIssue,
+} from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import {
+  inspectZaloAccount,
+  isZaloAccountConfigured,
+  listZaloAccountIds,
+  resolveDefaultZaloAccountId,
+  resolveZaloAccount,
+  type ResolvedZaloAccount,
+} from "./accounts.js";
+import { zaloApprovalAuth } from "./approval-auth.js";
+import { ZaloConfigSchema } from "./config-schema.js";
+import type { ZaloProbeResult } from "./probe.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
+
+const meta = {
+  id: "zalo",
+  label: "Zalo",
+  selectionLabel: "Zalo (Bot API)",
+  docsPath: "/channels/zalo",
+  docsLabel: "zalo",
+  blurb: "Vietnam-focused messaging platform with Bot API.",
+  aliases: ["zl"],
+  order: 80,
+  quickstartAllowFrom: true,
+};
+
+function normalizeZaloMessagingTarget(raw: string): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/^(zalo|zl):/i, "").trim();
+}
+
+const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const zaloSetupWizard = createZaloSetupWizardProxy(
+  async () => (await import("./setup-surface.js")).zaloSetupWizard,
+);
+const zaloTextChunkLimit = 2000;
+
+async function sendZaloDelivery(ctx: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string | null;
+  mediaUrl?: string;
+  assertDirectAdapterHandoff?: () => void;
+}): Promise<{ messageId: string; receipt: MessageReceipt }> {
+  return await (
+    await loadZaloChannelRuntime()
+  ).sendMessageZalo(ctx.to, ctx.text, {
+    accountId: ctx.accountId ?? undefined,
+    mediaUrl: ctx.mediaUrl,
+    cfg: ctx.cfg,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+  });
+}
+
+const zaloSendResultAdapter = createAttachedChannelResultAdapter({
+  channel: "zalo",
+  sendText: sendZaloDelivery,
+  sendMedia: sendZaloDelivery,
+});
+
+const zaloMessageAdapter = defineChannelMessageAdapter({
+  id: "zalo",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      messageSendingHooks: true,
+    },
+  },
+  send: {
+    text: sendZaloDelivery,
+    media: sendZaloDelivery,
+  },
+});
+
+const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
+  sectionKey: "zalo",
+  listAccountIds: listZaloAccountIds,
+  resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
+  defaultAccountId: resolveDefaultZaloAccountId,
+  clearBaseFields: ["botToken", "tokenFile", "name"],
+  resolveAllowFrom: (account: ResolvedZaloAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
+});
+
+const resolveZaloDmPolicy = createScopedDmSecurityResolver<ResolvedZaloAccount>({
+  channelKey: "zalo",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => raw.trim().replace(/^(zalo|zl):/i, ""),
+});
+
+const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollector<{
+  cfg: OpenClawConfig;
+  account: ResolvedZaloAccount;
+}>({
+  providerConfigPresent: (cfg) => cfg.channels?.zalo !== undefined,
+  resolveGroupPolicy: ({ account }) => account.config.groupPolicy,
+  collect: ({ account, groupPolicy }) => {
+    if (groupPolicy !== "open") {
+      return [];
+    }
+    const explicitGroupAllowFrom = mapAllowFromEntries(account.config.groupAllowFrom);
+    const dmAllowFrom = mapAllowFromEntries(account.config.allowFrom);
+    const effectiveAllowFrom =
+      explicitGroupAllowFrom.length > 0 ? explicitGroupAllowFrom : dmAllowFrom;
+    if (effectiveAllowFrom.length > 0) {
+      return [
+        buildOpenGroupPolicyRestrictSendersWarning({
+          surface: "Zalo groups",
+          openScope: "any member",
+          groupPolicyPath: "channels.zalo.groupPolicy",
+          groupAllowFromPath: "channels.zalo.groupAllowFrom",
+        }),
+      ];
+    }
+    return [
+      buildOpenGroupPolicyWarning({
+        surface: "Zalo groups",
+        openBehavior:
+          "with no groupAllowFrom/allowFrom allowlist; any member can trigger (mention-gated)",
+        remediation: 'Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom',
+      }),
+    ];
+  },
+});
+const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectZaloSecurityWarnings,
+  checkId: "channels.zalo.groups.open",
+  severity: "warn",
+  title: "Zalo security warning",
+});
+
+export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
+  createChatChannelPlugin({
+    base: {
+      id: "zalo",
+      meta,
+      setupContract: zaloSetupContract,
+      setupWizard: zaloSetupWizard,
+      capabilities: {
+        chatTypes: ["direct", "group"],
+        media: true,
+        reactions: false,
+        threads: false,
+        polls: false,
+        nativeCommands: false,
+        blockStreaming: true,
+      },
+      reload: { configPrefixes: ["channels.zalo"] },
+      configSchema: buildChannelConfigSchema(ZaloConfigSchema),
+      config: {
+        ...zaloConfigAdapter,
+        inspectAccount: adaptScopedAccountAccessor(inspectZaloAccount),
+        isConfigured: isZaloAccountConfigured,
+        describeAccount: (account): ChannelAccountSnapshot =>
+          describeWebhookAccountSnapshot({
+            account,
+            configured: isZaloAccountConfigured(account),
+            mode: account.config.webhookUrl ? "webhook" : "polling",
+            extra: {
+              tokenSource: account.tokenSource,
+              tokenStatus: account.tokenStatus,
+            },
+          }),
+      },
+      approvalCapability: zaloApprovalAuth,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
+      groups: {
+        resolveRequireMention: () => true,
+      },
+      actions: {
+        describeMessageTool: ({ cfg, accountId }) => {
+          const accounts = accountId
+            ? [inspectZaloAccount({ cfg, accountId })]
+            : listZaloAccountIds(cfg).map((listedAccountId) =>
+                inspectZaloAccount({ cfg, accountId: listedAccountId }),
+              );
+          return accounts.some((account) => account.enabled && account.tokenStatus === "available")
+            ? { actions: ["send"], capabilities: [] }
+            : null;
+        },
+        supportsAction: ({ action }) => action === "send",
+        extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
+      },
+      messaging: {
+        targetPrefixes: ["zalo", "zl"],
+        normalizeTarget: normalizeZaloMessagingTarget,
+        inferTargetChatType: ({ to }) => {
+          const target = normalizeZaloMessagingTarget(to);
+          return target ? (/^group:/i.test(target) ? "group" : "direct") : undefined;
+        },
+        resolveOutboundSessionRoute: (params) => {
+          const trimmed = stripChannelTargetPrefix(params.target, "zalo", "zl");
+          if (!trimmed) {
+            return null;
+          }
+          const normalizedTarget = normalizeLowercaseStringOrEmpty(trimmed);
+          const isGroup = normalizedTarget.startsWith("group:");
+          const recipientSessionExact = /^(?:group|user|dm):/.test(normalizedTarget);
+          const peerId = stripTargetKindPrefix(trimmed);
+          if (!peerId) {
+            return null;
+          }
+          return buildChannelOutboundSessionRoute({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            channel: "zalo",
+            accountId: params.accountId,
+            recipientSessionExact,
+            peer: {
+              kind: isGroup ? "group" : "direct",
+              id: peerId,
+            },
+            chatType: isGroup ? "group" : "direct",
+            from: isGroup ? `zalo:group:${peerId}` : `zalo:${peerId}`,
+            to: `zalo:${peerId}`,
+          });
+        },
+        targetResolver: {
+          looksLikeId: (raw, normalized) =>
+            Boolean(normalizeZaloMessagingTarget(normalized ?? raw)),
+          hint: "<chatId>",
+        },
+      },
+      directory: createChannelDirectoryAdapter({
+        listPeers: async (params) =>
+          listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedZaloAccount>({
+            ...params,
+            resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
+            resolveAllowFrom: (account) => account.config.allowFrom,
+            normalizeId: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
+          }),
+        listGroups: async () => [],
+      }),
+      status: createComputedAccountStatusAdapter<ResolvedZaloAccount, ZaloProbeResult>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        collectStatusIssues: (accounts) =>
+          accounts.flatMap((account) => {
+            const accountId = resolveEnabledConfiguredAccountId(account);
+            return accountId && account.dmPolicy === "open"
+              ? [
+                  standardDmPolicyOpenIssue({
+                    channel: "zalo",
+                    accountId,
+                    channelLabel: "Zalo",
+                    configPath: "channels.zalo",
+                  }),
+                ]
+              : [];
+          }),
+        buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+        probeAccount: async ({ account, timeoutMs }) =>
+          await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
+        resolveAccountSnapshot: ({ account }) => {
+          const configured = isZaloAccountConfigured(account);
+          return {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured,
+            extra: {
+              tokenSource: account.tokenSource,
+              tokenStatus: account.tokenStatus,
+              mode: account.config.webhookUrl ? "webhook" : "polling",
+              dmPolicy: account.config.dmPolicy ?? "pairing",
+            },
+          };
+        },
+      }),
+      gateway: {
+        startAccount: async (ctx) =>
+          await (await loadZaloChannelRuntime()).startZaloGatewayAccount(ctx),
+      },
+      message: zaloMessageAdapter,
+    },
+    security: {
+      resolveDmPolicy: resolveZaloDmPolicy,
+      collectWarnings: collectZaloOpenGroupFindings,
+    },
+    pairing: {
+      text: {
+        idLabel: "zaloUserId",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
+        notify: async (params) => {
+          await sendZaloDelivery({ ...params, to: params.id, text: params.message });
+        },
+      },
+    },
+    threading: {
+      resolveReplyToMode: createStaticReplyToModeResolver("off"),
+    },
+    outbound: {
+      deliveryMode: "direct",
+      chunker: chunkTextForOutbound,
+      chunkerMode: "text",
+      textChunkLimit: zaloTextChunkLimit,
+      // Core strips only conservative runtime markers. This delivery profile also
+      // removes model/tool XML and failed-tool traces before Zalo chunking.
+      sanitizeText: ({ text, cfg, accountId }) =>
+        convertMarkdownTables(
+          sanitizeAssistantVisibleText(text),
+          resolveMarkdownTableMode({ cfg, channel: "zalo", accountId }),
+        ),
+      sendPayload: async (ctx) =>
+        await sendPayloadWithChunkedTextAndMedia({
+          ctx,
+          textChunkLimit: zaloTextChunkLimit,
+          chunker: chunkTextForOutbound,
+          sendText: (nextCtx) => zaloSendResultAdapter.sendText!(nextCtx),
+          sendMedia: (nextCtx) => zaloSendResultAdapter.sendMedia!(nextCtx),
+          emptyResult: createEmptyChannelResult("zalo"),
+          onResult: ctx.onDeliveryResult,
+        }),
+      ...zaloSendResultAdapter,
+    },
+  });

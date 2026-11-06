@@ -1,0 +1,93 @@
+import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
+import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.js";
+
+type GraphConversationMember = {
+  displayName?: string;
+  userId?: string;
+  email?: string;
+  roles?: string[];
+};
+
+const MAX_TEAM_MEMBER_PAGES = 100;
+
+function normalizeUserId(value?: string | null): string {
+  return (
+    value
+      ?.replace(/^(msteams|teams|user):/i, "")
+      .trim()
+      .toLowerCase() ?? ""
+  );
+}
+
+export async function getMemberInfoMSTeams(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  userId: string;
+  currentRequesterId?: string | null;
+}) {
+  const isCurrentRequester =
+    normalizeUserId(params.userId) === normalizeUserId(params.currentRequesterId);
+  if (isCurrentRequester && resolveConversationPath(params.to).kind === "chat") {
+    return {
+      user: {
+        id: params.currentRequesterId ?? undefined,
+        displayName: undefined,
+        mail: undefined,
+        jobTitle: undefined,
+        userPrincipalName: undefined,
+        officeLocation: undefined,
+        roles: [],
+      },
+    };
+  }
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const conversation = resolveConversationPath(conversationId);
+  let member: GraphConversationMember | undefined;
+  if (conversation.kind === "channel") {
+    const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
+    if (conversation.teamId) {
+      const channel = await fetchGraphJson<{ membershipType?: string }>({
+        token,
+        path: `${conversation.basePath}?$select=membershipType`,
+      });
+      if (channel.membershipType !== "standard") {
+        throw new Error(
+          "Microsoft Teams member-info requires a standard channel when using the configured permission baseline.",
+        );
+      }
+      const requestedUserId = normalizeUserId(params.userId);
+      const result = await fetchAllGraphPages<GraphConversationMember>({
+        token,
+        path: `/teams/${encodeURIComponent(conversation.teamId)}/members`,
+        maxPages: MAX_TEAM_MEMBER_PAGES,
+        collectItems: false,
+        findOne: (candidate) =>
+          normalizeUserId(candidate.userId) === requestedUserId ||
+          normalizeUserId(candidate.email) === requestedUserId,
+      });
+      if (result.truncated) {
+        throw new Error("Microsoft Teams team member pagination limit exceeded");
+      }
+      member = result.found;
+    }
+  }
+  if (!member?.userId) {
+    throw new Error(`User ${params.userId} is not a member of this conversation`);
+  }
+  return {
+    user: {
+      id: member.userId,
+      displayName: member.displayName,
+      mail: member.email,
+      jobTitle: undefined,
+      userPrincipalName: member.email,
+      officeLocation: undefined,
+      roles: member.roles ?? [],
+    },
+  };
+}

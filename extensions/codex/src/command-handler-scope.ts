@@ -1,0 +1,230 @@
+import { isDeepStrictEqual } from "node:util";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { composeSessionEntryCommitGuards } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
+import {
+  resolveCodexSessionBinding,
+  sessionBindingIdentity,
+  type CodexAppServerBindingIdentity,
+} from "./app-server/session-binding.js";
+import { assertCodexHostOwnerCurrent, type CodexCommandContext } from "./command-authorization.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
+import { readCodexConversationBindingData } from "./conversation-binding-data.js";
+
+export async function resolveControlTarget(ctx: PluginCommandContext) {
+  const binding = await ctx.getCurrentConversationBinding();
+  const data = readCodexConversationBindingData(binding);
+  const scope = resolveCodexConversationControlScope(ctx);
+  if (data?.kind === "codex-app-server-session") {
+    return {
+      identity: conversationBindingIdentity(data.bindingId),
+      agentId: data.agentId ?? scope.agentId,
+      agentDir: data.agentDir ?? scope.agentDir,
+      requestedAuthProfileId: data.start?.authProfileId,
+    };
+  }
+  return ctx.sessionId
+    ? {
+        identity: sessionBindingIdentity({
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          agentId: scope.agentId,
+          config: ctx.config,
+        }),
+        agentId: scope.agentId,
+        agentDir: scope.agentDir,
+      }
+    : undefined;
+}
+
+type CommandAppServerScope = Pick<
+  CodexControlRequestOptions,
+  | "assertCurrent"
+  | "assertCurrentAsync"
+  | "authProfileId"
+  | "sessionId"
+  | "sessionKey"
+  | "startOptions"
+  | "storePath"
+> & { agentId: string; agentDir: string; release: () => void };
+
+export async function resolvePreparedCodexCommandAuthority(
+  deps: CodexCommandDeps,
+  ctx: CodexCommandContext,
+) {
+  const fallback = resolveCodexConversationControlScope(ctx);
+  const sessionId = ctx.sessionId;
+  const sessionKey = ctx.sessionKey;
+  const sessionAgentId = ctx.sessionTarget?.agentId ?? fallback.agentId;
+  const storePath =
+    ctx.sessionTarget?.storePath ??
+    (sessionKey
+      ? resolveStorePath(ctx.config.session?.store, { agentId: sessionAgentId })
+      : undefined);
+  const target = await resolveControlTarget(ctx);
+  const sessionIdentity = sessionId
+    ? sessionBindingIdentity({
+        sessionId,
+        sessionKey,
+        agentId: sessionAgentId,
+        config: ctx.config,
+      })
+    : undefined;
+  const currentSession = sessionIdentity
+    ? await resolveCodexSessionBinding({
+        reclaimStale: true,
+        bindingStore: deps.bindingStore,
+        identity: sessionIdentity,
+        config: ctx.config,
+        storePath,
+      })
+    : undefined;
+  let resolvedTarget = currentSession;
+  const release = () => {
+    if (resolvedTarget !== currentSession) {
+      resolvedTarget?.release();
+    }
+    currentSession?.release();
+  };
+  try {
+    // Direct checks stay synchronous; entry writes retain the authority's prepared predicates.
+    const assertHostCurrent =
+      currentSession?.authority.assertLegacyCurrent ?? composeSessionEntryCommitGuards([]);
+    resolvedTarget =
+      target && (!sessionIdentity || !isDeepStrictEqual(target.identity, sessionIdentity))
+        ? await resolveCodexSessionBinding({
+            bindingStore: deps.bindingStore,
+            identity: target.identity,
+            config: ctx.config,
+            storePath,
+            assertCurrent: assertHostCurrent,
+          })
+        : currentSession;
+    const binding = resolvedTarget?.binding;
+    const assertCurrent = composeSessionEntryCommitGuards([assertHostCurrent], (assertSource) => {
+      assertSource();
+      if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
+        throw new Error("Codex command binding changed before dispatch");
+      }
+      assertSource();
+    });
+    assertCurrent();
+    const assertCurrentAsync = async () => {
+      await ctx.assertNativePolicyCurrent?.();
+      await resolvedTarget?.authority.withCurrent(assertCurrent);
+      if (!resolvedTarget) {
+        assertCurrent();
+      }
+    };
+    return {
+      release,
+      target,
+      binding,
+      currentSessionBinding: currentSession?.binding,
+      sessionId,
+      sessionKey,
+      storePath,
+      assertHostCurrent,
+      assertCurrent,
+      assertCurrentAsync,
+      mutationSource: composeSessionEntryCommitGuards([assertCurrent, ctx.nativePolicySource]),
+      assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
+        assertCodexHostOwnerCurrent(ctx);
+        assertSource();
+      }),
+      assertHostMutationCurrent: composeSessionEntryCommitGuards(
+        [assertHostCurrent],
+        (assertSource) => {
+          assertCodexHostOwnerCurrent(ctx);
+          assertSource();
+        },
+      ),
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+export async function resolveCommandAppServerContext(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: CodexPluginConfig | undefined,
+) {
+  const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
+  try {
+    const { target, binding } = authority;
+    const fallback = resolveCodexConversationControlScope(ctx);
+    const agentDir = target?.agentDir ?? fallback.agentDir;
+    const authProfileId =
+      binding?.connectionScope === "supervision"
+        ? undefined
+        : await resolveCodexAppServerAuthProfileIdForAgent({
+            authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
+            agentDir,
+            config: ctx.config,
+          });
+    const connection = await resolveCodexBindingAppServerConnection({
+      binding,
+      authProfileId,
+      pluginConfig,
+      agentDir,
+      config: ctx.config,
+      assertCurrent: authority.assertCurrent,
+      assertCurrentAsync: authority.assertCurrentAsync,
+    });
+    const scope: CommandAppServerScope = {
+      agentId: target?.agentId ?? fallback.agentId,
+      agentDir,
+      ...(connection.clientAuthProfileId !== undefined
+        ? { authProfileId: connection.clientAuthProfileId }
+        : {}),
+      ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
+      ...(authority.sessionKey ? { sessionKey: authority.sessionKey } : {}),
+      ...(authority.sessionId ? { sessionId: authority.sessionId } : {}),
+      ...(authority.storePath ? { storePath: authority.storePath } : {}),
+      assertCurrent: authority.assertCurrent,
+      assertCurrentAsync: authority.assertCurrentAsync,
+      release: authority.release,
+    };
+    return { scope, target, binding };
+  } catch (error) {
+    authority.release();
+    throw error;
+  }
+}
+
+export async function resolveCommandAppServerScope(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: CodexPluginConfig | undefined,
+): Promise<CommandAppServerScope> {
+  return (await resolveCommandAppServerContext(deps, ctx, pluginConfig)).scope;
+}
+
+export function conversationBindingIdentity(
+  bindingId: string,
+): Extract<CodexAppServerBindingIdentity, { kind: "conversation" }> {
+  return { kind: "conversation", bindingId };
+}
+
+export function resolveCodexConversationControlScope(ctx: PluginCommandContext): {
+  agentId: string;
+  agentDir: string;
+} {
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
+    sessionKey: ctx.sessionKey,
+    agentId: ctx.agentId,
+    config: ctx.config,
+  });
+  return {
+    agentId: sessionAgentId,
+    agentDir: resolveAgentDir(ctx.config, sessionAgentId),
+  };
+}

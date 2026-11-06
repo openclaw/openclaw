@@ -1,0 +1,156 @@
+import {
+  ChannelBotLoopProtectionSchema,
+  ChannelImplicitMentionsSchema,
+  ChannelPreviewStreamingConfigSchema,
+  ChannelStreamingPreviewSchema,
+  ChannelStreamingProgressSchema,
+  ContextVisibilityModeSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+  MarkdownConfigSchema,
+  buildChannelAllowBotsSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
+  requireOpenAllowFrom,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
+import { z } from "zod";
+
+const MattermostGroupSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
+  allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+}).omit({
+  tools: true,
+  toolsBySender: true,
+  skills: true,
+  enabled: true,
+  allowFrom: true,
+  systemPrompt: true,
+});
+
+const DmChannelRetrySchema = z
+  .object({
+    /** Maximum number of retry attempts for DM channel creation (default: 3) */
+    maxRetries: z.number().int().min(0).max(10).optional(),
+    /** Initial delay in milliseconds before first retry (default: 1000) */
+    initialDelayMs: z.number().int().min(100).max(60000).optional(),
+    /** Maximum delay in milliseconds between retries (default: 10000) */
+    maxDelayMs: z.number().int().min(1000).max(60000).optional(),
+    /** Timeout for each individual DM channel creation request in milliseconds (default: 30000) */
+    timeoutMs: z.number().int().min(5000).max(120000).optional(),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (data.initialDelayMs !== undefined && data.maxDelayMs !== undefined) {
+        return data.initialDelayMs <= data.maxDelayMs;
+      }
+      return true;
+    },
+    {
+      message: "initialDelayMs must be less than or equal to maxDelayMs",
+      path: ["initialDelayMs"],
+    },
+  )
+  .optional();
+
+const MattermostSlashCommandsSchema = z
+  .object({
+    /** Enable native slash commands. "auto" resolves to false (opt-in). */
+    native: z.union([z.boolean(), z.literal("auto")]).optional(),
+    /** Also register skill-based commands. */
+    nativeSkills: z.union([z.boolean(), z.literal("auto")]).optional(),
+    /** Path for the callback endpoint on the gateway HTTP server. */
+    callbackPath: z.string().optional(),
+    /** Explicit callback URL (e.g. behind reverse proxy). */
+    callbackUrl: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const MattermostNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const MattermostStreamingSchema = ChannelPreviewStreamingConfigSchema.extend({
+  preview: ChannelStreamingPreviewSchema.omit({ chunk: true }).optional(),
+  progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
+});
+
+const MattermostReplyToModeSchema = z.enum(["off", "first", "all", "batched"]);
+const MattermostReplyToModeByChatTypeSchema = z
+  .object({
+    direct: MattermostReplyToModeSchema.optional(),
+    group: MattermostReplyToModeSchema.optional(),
+    channel: MattermostReplyToModeSchema.optional(),
+  })
+  .strict();
+
+export const MattermostAccountSchemaBase = z
+  .object({
+    name: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    dangerouslyAllowNameMatching: z.boolean().optional(),
+    markdown: MarkdownConfigSchema,
+    enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
+    historyLimit: z.number().int().min(0).optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    botToken: buildSecretInputSchema().optional(),
+    baseUrl: z.string().optional(),
+    chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
+    oncharPrefixes: z.array(z.string()).optional(),
+    requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    textChunkLimit: z.number().int().positive().optional(),
+    streaming: MattermostStreamingSchema.optional(),
+    replyToMode: MattermostReplyToModeSchema.optional(),
+    replyToModeByChatType: MattermostReplyToModeByChatTypeSchema.optional(),
+    responsePrefix: z.string().optional(),
+    actions: z
+      .object({
+        messages: z.boolean().optional(),
+        reactions: z.boolean().optional(),
+      })
+      .optional(),
+    commands: MattermostSlashCommandsSchema,
+    interactions: z
+      .object({
+        callbackBaseUrl: z.string().optional(),
+        allowedSourceIps: z.array(z.string()).optional(),
+      })
+      .optional(),
+    /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
+    groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
+    /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
+    network: MattermostNetworkSchema,
+    dmChannelRetry: DmChannelRetrySchema,
+  })
+  .strict();
+
+export const MattermostConfigSchema = buildMultiAccountChannelSchema(MattermostAccountSchemaBase, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+    });
+  },
+});

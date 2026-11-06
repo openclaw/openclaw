@@ -1,0 +1,176 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  appendTranscriptMessage,
+  listSessionEntriesCore,
+  loadExactSessionEntry,
+  loadTranscriptEvents,
+  resetSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import {
+  createInternalSessionEffectsCleanup,
+  prepareInternalSessionEffectsSession,
+} from "./internal-session-effects.js";
+
+describe("internal session effects", () => {
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-internal-session-effects-");
+  let dir: string;
+  let storePath: string;
+  beforeEach(() => {
+    dir = tempDirs.make();
+    storePath = path.join(dir, "sessions.json");
+  });
+  const scope = () => ({ agentId: "main", storePath });
+  const prepare = (runId: string) => prepareInternalSessionEffectsSession({ ...scope(), runId });
+  it("does not archive an incognito internal-effects transcript during rotation", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => {
+      storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+      try {
+        const target = await prepare("incognito-run");
+        expect(target.sessionKey).toMatch(
+          /^agent:main:internal-session-effects:incognito-incognito-run-/,
+        );
+        expect(loadExactSessionEntry(target)?.entry.incognito).toBe(true);
+        const previousTranscript = path.join(dir, "private-internal.jsonl");
+        const header = {
+          type: "session",
+          version: 3,
+          id: target.sessionId,
+          timestamp: new Date().toISOString(),
+        };
+        await fs.writeFile(previousTranscript, `${JSON.stringify(header)}\n`, "utf8");
+        const previousEntry = await upsertSessionEntryCore(target, {
+          ...target.sessionEntry,
+          sessionFile: previousTranscript,
+        });
+        if (!previousEntry) {
+          throw new Error("failed to seed incognito internal-effects entry");
+        }
+        const replacement = {
+          sessionFile: path.join(dir, "next-internal.jsonl"),
+          sessionId: "internal-session-effects-rotated",
+        };
+
+        const reset = await resetSessionEntryLifecycle({
+          ...scope(),
+          target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+          buildNextEntry: () => ({ ...previousEntry, ...replacement, updatedAt: Date.now() }),
+          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
+        });
+
+        expect(reset.archivedTranscripts).toEqual([]);
+        expect(loadExactSessionEntry(target)?.entry).toMatchObject(replacement);
+        expect(await fs.readdir(dir)).toContain("private-internal.jsonl");
+        expect((await fs.readdir(dir)).some((name) => name.includes(".reset."))).toBe(false);
+      } finally {
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+      }
+    });
+  });
+
+  it("creates a hidden deterministic SQLite session", async () => {
+    const request = { ...scope(), cwd: dir, runId: "run/with space" };
+    const target = await prepareInternalSessionEffectsSession(request);
+
+    expect(target.sessionKey).toMatch(/^agent:main:internal-session-effects:run_with_space-/);
+    expect(target.sessionId).toMatch(/^internal-session-effects-run_with_space-/);
+    expect(loadExactSessionEntry(target)?.entry).toMatchObject({
+      sessionId: target.sessionId,
+      createdVia: "internal",
+      createdActor: { type: "system" },
+      delivery: { kind: "internal" },
+      createdAt: expect.any(Number),
+    });
+    expect(listSessionEntriesCore(scope())).toEqual([]);
+    await expect(loadTranscriptEvents(target)).resolves.toEqual([
+      expect.objectContaining({ id: target.sessionId, type: "session" }),
+    ]);
+
+    const reopened = await prepareInternalSessionEffectsSession(request);
+    expect(reopened).toEqual(target);
+  });
+
+  it("escapes the reserved prefix for a durable internal-effects run id", async () => {
+    const target = await prepare("incognito-not-private");
+
+    expect(target.sessionKey).toMatch(
+      /^agent:main:internal-session-effects:legacy-incognito-not-private-/,
+    );
+  });
+
+  it.each(["copy", "reopen"] as const)("requires the current owner during %s", async (phase) => {
+    const source = await prepare("required-source");
+    await appendTranscriptMessage(source, {
+      message: { role: "assistant", content: "retained progress", timestamp: 1 },
+    });
+    const request = { ...scope(), runId: "required-successor", source };
+    if (phase === "reopen") {
+      await prepareInternalSessionEffectsSession(request);
+    }
+    let current = phase === "copy";
+    await expect(
+      prepareInternalSessionEffectsSession({
+        ...request,
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("recovery owner retired");
+          }
+          queueMicrotask(() => {
+            current = false;
+          });
+        },
+      }),
+    ).rejects.toThrow("recovery owner retired");
+    expect(JSON.stringify(await loadTranscriptEvents(source))).toContain("retained progress");
+  });
+
+  it.each([true, false])(
+    "cleans only the latest tracked hidden identities when enabled=%s",
+    async (enabled) => {
+      const errors: unknown[] = [];
+      const cleanup = createInternalSessionEffectsCleanup({
+        enabled,
+        ...scope(),
+        runId: "tracked-run",
+        onError: (error) => errors.push(error),
+      });
+      const initial = await prepare("tracked-run");
+      const rotated = { ...initial, sessionId: "rotated-hidden-session" };
+      await upsertSessionEntryCore(rotated, { sessionId: rotated.sessionId, updatedAt: 2 });
+      const additional = await prepare("additional-binding");
+      const untracked = await prepare("other-run");
+      const untrackedBefore = structuredClone(loadExactSessionEntry(untracked));
+      expect(untrackedBefore).toBeDefined();
+      for (const target of [rotated, additional]) {
+        await appendTranscriptMessage(target, {
+          message: { role: "assistant", content: "private", timestamp: 3 },
+        });
+        cleanup.track(target);
+      }
+
+      await cleanup.cleanup();
+
+      expect(errors).toEqual([]);
+      expect(loadExactSessionEntry(untracked)).toEqual(untrackedBefore);
+      for (const target of [rotated, additional]) {
+        if (enabled) {
+          expect(loadExactSessionEntry(target)).toBeUndefined();
+          await expect(loadTranscriptEvents(target)).resolves.toEqual([]);
+        } else {
+          expect(loadExactSessionEntry(target)?.entry.sessionId).toBe(target.sessionId);
+          await expect(loadTranscriptEvents(target)).resolves.toContainEqual(
+            expect.objectContaining({
+              message: expect.objectContaining({ role: "assistant", content: "private" }),
+            }),
+          );
+        }
+      }
+    },
+  );
+});

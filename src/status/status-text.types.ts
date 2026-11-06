@@ -1,0 +1,53 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../auto-reply/thinking.js";
+import type { SessionEntry, SessionScope } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
+
+// Input contract for buildStatusText. Most fields are already resolved by the
+// caller so status rendering can stay presentation-focused and side-effect-light.
+export type BuildStatusTextParams = {
+  cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
+  /** Prepared owner for bare session keys shared by multiple agents. */
+  agentId?: string;
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  parentSessionKey?: string;
+  sessionScope?: SessionScope;
+  storePath?: string;
+  statusChannel: string;
+  statusAccountId?: string;
+  workspaceDir?: string;
+  provider: string;
+  model: string;
+  contextTokens?: number;
+  /** Model metadata prepared by the caller; status rendering never loads a catalog. */
+  thinkingCatalog?: ThinkingCatalogEntry[];
+  resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: FastMode;
+  resolvedHarness?: string;
+  resolvedVerboseLevel: VerboseLevel;
+  resolvedReasoningLevel: ReasoningLevel;
+  resolvedElevatedLevel?: ElevatedLevel;
+  resolveDefaultThinkingLevel: (selection?: {
+    provider: string;
+    model: string;
+    agentRuntime?: string | null;
+  }) => Promise<ThinkLevel | undefined>;
+  isGroup: boolean;
+  defaultGroupActivation: () => "always" | "mention";
+  mediaDecisions?: MediaUnderstandingDecision[];
+  pluginHealthLineOverride?: string;
+  primaryModelLabelOverride?: string;
+  modelAuthOverride?: string;
+  activeModelAuthOverride?: string;
+  includeTranscriptUsage?: boolean;
+};

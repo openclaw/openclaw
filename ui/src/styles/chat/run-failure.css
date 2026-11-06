@@ -1,0 +1,276 @@
+/* A system event between two hairlines; its details float out of flow. */
+.chat-run-failure {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: var(--space-7) 0;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
+.chat-run-failure::before,
+.chat-run-failure::after {
+  content: "";
+  flex: 1 1 0;
+  min-width: 8px;
+  height: 1px;
+  background: var(--border);
+}
+
+.chat-run-failure__toggle {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding-block: 0;
+  padding-inline: 8px 6px;
+  border: 0;
+  border-radius: calc(13px * var(--openclaw-corner-radius-scale));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: var(--cursor-action);
+}
+
+.chat-run-failure__toggle:is(:hover, [aria-expanded="true"]) {
+  background: var(--bg-hover);
+}
+
+.chat-run-failure__toggle:focus-visible {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: var(--control-ui-focus-ring-offset);
+}
+
+.chat-run-failure__icon,
+.chat-run-failure__chevron {
+  display: inline-flex;
+  flex: none;
+}
+
+.chat-run-failure__icon {
+  color: var(--danger);
+}
+
+.chat-run-failure__icon svg,
+.chat-run-failure__chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-run-failure__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+}
+
+.chat-run-failure__repeat {
+  flex: none;
+}
+
+.chat-run-failure__chevron {
+  transition: rotate var(--duration-fast) var(--ease-out);
+}
+
+.chat-run-failure__chevron:dir(rtl) {
+  scale: -1 1;
+}
+
+/* The chevron points at the panel, whichever side it opened on. */
+.chat-run-failure__toggle[aria-expanded="true"] .chat-run-failure__chevron {
+  rotate: 90deg;
+}
+
+.chat-run-failure[data-placement="top"]
+  .chat-run-failure__toggle[aria-expanded="true"]
+  .chat-run-failure__chevron {
+  rotate: -90deg;
+}
+
+.chat-run-failure__toggle[aria-expanded="true"] .chat-run-failure__chevron:dir(rtl) {
+  rotate: -90deg;
+}
+
+.chat-run-failure[data-placement="top"]
+  .chat-run-failure__toggle[aria-expanded="true"]
+  .chat-run-failure__chevron:dir(rtl) {
+  rotate: 90deg;
+}
+
+.chat-run-failure .chat-run-failure__retry {
+  flex: none;
+  gap: 5px;
+  height: 26px;
+  padding-block: 0;
+  padding-inline: 8px 10px;
+  border-radius: calc(13px * var(--openclaw-corner-radius-scale));
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
+.chat-run-failure .chat-run-failure__retry svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2px;
+}
+
+.oc-popover.chat-run-failure__panel {
+  --oc-overlay-distance: 6px;
+  --oc-popover-padding: 12px;
+
+  width: min(460px, 100%);
+  gap: 10px;
+  white-space: normal;
+}
+
+.chat-run-failure__summary {
+  margin: 0;
+  padding: 2px 4px 0;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(18 / 13);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.chat-run-failure__well {
+  --chat-run-failure-copy-size: 26px;
+  --scrollbar-size: 10px;
+  --chat-run-failure-copy-clearance: calc(var(--chat-run-failure-copy-size) + 10px);
+
+  position: relative;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+@media (hover: none) {
+  .chat-run-failure__well {
+    --chat-run-failure-copy-size: 32px;
+  }
+}
+
+.chat-run-failure__log {
+  --chat-run-failure-fade-top: 0px;
+  --chat-run-failure-fade-bottom: 0px;
+
+  max-height: 170px;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-block: 10px;
+  padding-inline: 12px calc(var(--chat-run-failure-copy-size) + 4px);
+  color: var(--text);
+  font: calc(11.5px * var(--control-ui-text-scale)) / 1.65 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+}
+
+.chat-run-failure__log[data-fade-top] {
+  --chat-run-failure-fade-top: 28px;
+}
+
+.chat-run-failure__log[data-fade-bottom] {
+  --chat-run-failure-fade-bottom: 36px;
+}
+
+/* The fade stops at the scrollbar column, so the thumb is never dimmed. */
+.chat-run-failure__log:is([data-fade-top], [data-fade-bottom]) {
+  mask:
+    linear-gradient(
+        to bottom,
+        transparent,
+        black var(--chat-run-failure-fade-top),
+        black calc(100% - var(--chat-run-failure-fade-bottom)),
+        transparent
+      )
+      left top / calc(100% - var(--scrollbar-size)) 100% no-repeat,
+    linear-gradient(black, black) right top / var(--scrollbar-size) 100% no-repeat;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  /* Any non-auto scrollbar property would switch the styled thumb off. */
+  .chat-run-failure__panel .chat-run-failure__log {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .chat-run-failure__log::-webkit-scrollbar-track {
+    margin-block: var(--chat-run-failure-copy-clearance) 6px;
+  }
+}
+
+.chat-run-failure__copy {
+  position: absolute;
+  inset-block-start: 5px;
+  inset-inline-end: 5px;
+  display: inline-flex;
+}
+
+.chat-run-failure__copy .chat-copy-btn {
+  display: inline-grid;
+  place-items: center;
+  width: var(--chat-run-failure-copy-size);
+  height: var(--chat-run-failure-copy-size);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.chat-run-failure__copy .chat-copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-run-failure__copy .chat-copy-btn[data-copy-state="copied"] {
+  background: transparent;
+  color: var(--ok);
+}
+
+.chat-run-failure__copy .chat-copy-btn[data-copy-state="error"] {
+  background: transparent;
+  color: var(--danger);
+}
+
+.chat-run-failure__copy svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Phone columns give the cause its own line; actions wrap below it. */
+@media (max-width: 560px) {
+  .chat-run-failure {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .chat-run-failure::before,
+  .chat-run-failure::after {
+    display: none;
+  }
+
+  .chat-run-failure__toggle {
+    flex-basis: 100%;
+    justify-content: center;
+    gap: 4px;
+    padding-inline: 6px 4px;
+  }
+
+  .chat-run-failure .chat-run-failure__retry {
+    padding-inline: 6px 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-run-failure__chevron {
+    transition: none;
+  }
+}

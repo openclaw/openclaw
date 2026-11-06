@@ -1,0 +1,157 @@
+import { describe, expect, it } from "vitest";
+import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
+import {
+  normalizeSidebarSessionActivePanels,
+  normalizeSidebarSessionLayouts,
+  type SidebarSessionLayouts,
+  updateSidebarSessionActivePanel,
+  updateSidebarSessionLayout,
+} from "./sidebar-layout-persistence.ts";
+import {
+  activatePanel,
+  ensureSidebarConversation,
+  openSlot,
+  resizeSidebarPanel,
+  setSidebarExpanded,
+  setSidebarOpen,
+} from "./sidebar-layout.ts";
+
+describe("sidebar session layout settings", () => {
+  it("drops retired task panels and selections while preserving other panels", () => {
+    const saved = normalizeSidebarSessionLayouts({
+      main: {
+        columns: [
+          {
+            id: "side",
+            side: "right",
+            activePanelId: "tasks",
+            width: 600,
+            panels: [
+              { id: "tasks", slot: "tasks", taskId: "retired" },
+              { id: "old-review", slot: "detail", taskId: "retired" },
+              { id: "files", slot: "workspace", taskId: "ignored" },
+              { id: "review", slot: "detail" },
+            ],
+          },
+        ],
+      },
+    }).main!;
+    expect(saved.columns[0]!.panels).toEqual([
+      { id: "files", slot: "workspace" },
+      { id: "review", slot: "detail" },
+    ]);
+    expect(saved.columns[0]!.activePanelId).toBe("files");
+    expect(saved.columns[0]!.width).toBe(600);
+    expect(normalizeSidebarSessionLayouts({ main: saved }).main).toEqual(saved);
+  });
+
+  it.each(["split", "expanded", null, undefined] as const)(
+    "preserves the stored override %s during unrelated layout writes",
+    (override) => {
+      const layout = openSlot({ columns: [] }, "workspace");
+      const current = { main: { ...layout, dashboardPresentationOverride: override } };
+      const stale = {
+        ...layout,
+        dashboardPresentationOverride: override === "expanded" ? null : ("expanded" as const),
+      };
+      const next = updateSidebarSessionLayout(current, "main", openSlot(stale, "terminal"));
+      expect(next.main?.dashboardPresentationOverride).toBe(override);
+      expect(next.main?.columns[0]?.panels.some((panel) => panel.slot === "terminal")).toBe(true);
+    },
+  );
+
+  it("uses one persistence key for configured main-session aliases", () => {
+    const host = {
+      agentsList: { defaultId: "main", mainKey: "main" },
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:current",
+          },
+        },
+      },
+    } as never;
+    expect(canonicalUiSessionKeyForPersistence(host, "main")).toBe("agent:main:current");
+    expect(canonicalUiSessionKeyForPersistence(host, "agent:main:main")).toBe("agent:main:current");
+  });
+
+  it("normalizes every persisted session layout", () => {
+    expect(
+      normalizeSidebarSessionLayouts({
+        main: openSlot({ columns: [] }, "detail"),
+        broken: { columns: "nope" },
+        "": openSlot({ columns: [] }, "discussion"),
+      }),
+    ).toEqual({
+      main: { ...openSlot({ columns: [] }, "detail"), dock: "right", expanded: false },
+      broken: { columns: [], open: false, expanded: false },
+    });
+  });
+
+  it("persists tab order, active tab, width, visibility, and expanded state per session", () => {
+    let layout = openSlot(openSlot({ columns: [] }, "workspace"), "terminal");
+    layout = activatePanel(layout, layout.columns[0]!.panels[0]!.id);
+    layout = resizeSidebarPanel(layout, layout.columns[0]!.id, 512);
+    layout = setSidebarExpanded(ensureSidebarConversation(layout), true);
+    layout = setSidebarOpen(layout, false);
+
+    const persisted = updateSidebarSessionLayout({}, "main", layout).main;
+    expect(persisted).toEqual({ ...layout, dock: "right", dashboardPresentationOverride: null });
+    expect(persisted?.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "workspace",
+      "terminal",
+      "conversation",
+    ]);
+    expect(persisted?.columns[0]?.activePanelId).toBe("workspace");
+    expect(persisted?.columns[0]?.width).toBe(512);
+    expect(persisted).toMatchObject({ open: false, expanded: true });
+  });
+
+  it("retains the 500 most recently changed session layouts across reloads", () => {
+    let layouts: SidebarSessionLayouts = {};
+    for (let index = 0; index < 505; index += 1) {
+      layouts = updateSidebarSessionLayout(
+        layouts,
+        `session-${index}`,
+        openSlot({ columns: [] }, "discussion"),
+      );
+    }
+    const storedLayouts = JSON.stringify(layouts);
+    layouts = normalizeSidebarSessionLayouts(JSON.parse(storedLayouts));
+    expect(Object.keys(layouts)).toHaveLength(500);
+    expect(layouts["session-4"]).toBeUndefined();
+    expect(layouts["session-5"]).toBeDefined();
+    expect(layouts["session-504"]).toBeDefined();
+
+    layouts = updateSidebarSessionLayout(layouts, "session-5", layouts["session-5"]!);
+    layouts = updateSidebarSessionLayout(layouts, "session-505", layouts["session-5"]!);
+    expect(Object.keys(layouts)).toHaveLength(500);
+    expect(layouts["session-5"]).toBeDefined();
+    expect(layouts["session-6"]).toBeUndefined();
+  });
+
+  it("normalizes and caps collapsed active-panel selections", () => {
+    let selections = normalizeSidebarSessionActivePanels({
+      main: " discussion ",
+      broken: 42,
+      "": "detail",
+    });
+    expect(selections).toEqual({ main: "discussion" });
+
+    for (let index = 0; index < 505; index += 1) {
+      selections = updateSidebarSessionActivePanel(
+        selections,
+        `session-${index}`,
+        `panel-${index}`,
+      );
+    }
+    const storedSelections = JSON.stringify(selections);
+    selections = normalizeSidebarSessionActivePanels(JSON.parse(storedSelections));
+    expect(Object.keys(selections)).toHaveLength(500);
+    expect(selections["session-4"]).toBeUndefined();
+    expect(selections["session-5"]).toBe("panel-5");
+    expect(selections["session-504"]).toBe("panel-504");
+  });
+});

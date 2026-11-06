@@ -1,0 +1,403 @@
+import { omitUndefinedFields } from "../../packages/normalization-core/src/record-coerce.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "../../packages/normalization-core/src/string-normalization.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import {
+  normalizeCommandDescriptorName,
+  sanitizeCommandDescriptorDescription,
+} from "../cli/program/command-descriptor-utils.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { isRecord } from "../utils.js";
+import {
+  isPluginManifestOnboardingScope,
+  normalizeManifestObjectList,
+  normalizeNamedMetadataRecord,
+  normalizeProviderAssistantVisibility,
+  optionalManifestFields,
+} from "./manifest-capability-normalizers.js";
+import { normalizeManifestPlatforms } from "./manifest-platforms.js";
+import type {
+  PluginManifestActivation,
+  PluginManifestActivationCapability,
+  PluginManifestChannelCommandDefaults,
+  PluginManifestChannelConfig,
+  PluginManifestCliCommand,
+  PluginManifestDashboard,
+  PluginManifestDashboardActionVerb,
+  PluginManifestProviderAuthChoice,
+  PluginManifestQaRunner,
+  PluginManifestSetup,
+  PluginManifestSetupProvider,
+  PluginManifestSetupProviderAuthEvidence,
+  PluginConfigUiHint,
+} from "./manifest-types.js";
+import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
+
+export { normalizeManifestControlUi } from "./manifest-control-ui.js";
+
+export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const activation: PluginManifestActivation = {};
+  if (typeof value.onStartup === "boolean") {
+    activation.onStartup = value.onStartup;
+  }
+  for (const key of [
+    "onProviders",
+    "onAgentHarnesses",
+    "onCommands",
+    "onChannels",
+    "onRoutes",
+    "onConfigPaths",
+  ] as const) {
+    const entries = normalizeTrimmedStringList(value[key]);
+    if (entries.length > 0) {
+      activation[key] = entries;
+    }
+  }
+  const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
+    (capability): capability is PluginManifestActivationCapability =>
+      capability === "provider" ||
+      capability === "channel" ||
+      capability === "tool" ||
+      capability === "hook",
+  );
+
+  if (onCapabilities.length > 0) {
+    activation.onCapabilities = onCapabilities;
+  }
+
+  return Object.keys(activation).length > 0 ? activation : undefined;
+}
+
+export function normalizeChannelAccountKeyPolicies(
+  value: unknown,
+  channels: readonly string[],
+): Record<string, ChannelAccountKeyPolicy> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const policies: Record<string, ChannelAccountKeyPolicy> = Object.create(null);
+  for (const channel of channels) {
+    if (isBlockedObjectKey(channel) || !Object.hasOwn(value, channel)) {
+      continue;
+    }
+    const entry = value[channel];
+    const field = isRecord(entry)
+      ? normalizeOptionalString(entry.canonicalAliasesRequireOwnField)
+      : undefined;
+    if (field && !isBlockedObjectKey(field)) {
+      policies[channel] = { canonicalAliasesRequireOwnField: field };
+    }
+  }
+  return Object.keys(policies).length ? policies : undefined;
+}
+
+export function normalizeManifestCliCommands(
+  value: unknown,
+): PluginManifestCliCommand[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  return (
+    normalizeManifestObjectList(value, (entry) => {
+      if (typeof entry.name !== "string" || typeof entry.description !== "string") {
+        return undefined;
+      }
+      const name = normalizeCommandDescriptorName(entry.name);
+      const description = sanitizeCommandDescriptorDescription(entry.description);
+      if (!name || !description || typeof entry.hasSubcommands !== "boolean" || seen.has(name)) {
+        return undefined;
+      }
+      seen.add(name);
+      return { name, description, hasSubcommands: entry.hasSubcommands };
+    }) ?? []
+  );
+}
+
+export function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
+    ? omitUndefinedFields({
+        label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
+        legacyDefaultEnabled:
+          value.nativeSessionCatalog.legacyDefaultEnabled === true ? true : undefined,
+        nodeCommands: normalizeOptionalTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
+        description: normalizeOptionalString(value.nativeSessionCatalog.description),
+      })
+    : undefined;
+  return optionalManifestFields({
+    providers: normalizeManifestObjectList<PluginManifestSetupProvider>(
+      value.providers,
+      (entry) => {
+        const id = normalizeOptionalString(entry.id) ?? "";
+        if (!id) {
+          return undefined;
+        }
+        return omitUndefinedFields({
+          id,
+          authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
+          envVars: normalizeOptionalTrimmedStringList(entry.envVars),
+          authEvidence: normalizeManifestObjectList<PluginManifestSetupProviderAuthEvidence>(
+            entry.authEvidence,
+            (rawEvidence) => {
+              if (rawEvidence.type !== "local-file-with-env") {
+                return undefined;
+              }
+              const credentialMarker = normalizeOptionalString(rawEvidence.credentialMarker);
+              if (!credentialMarker) {
+                return undefined;
+              }
+              const fileEnvVar = normalizeOptionalString(rawEvidence.fileEnvVar);
+              const fallbackPaths = normalizeOptionalTrimmedStringList(rawEvidence.fallbackPaths);
+              if (!fileEnvVar && !fallbackPaths) {
+                return undefined;
+              }
+              return omitUndefinedFields<PluginManifestSetupProviderAuthEvidence>({
+                type: "local-file-with-env",
+                fileEnvVar,
+                fallbackPaths,
+                requiresAnyEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAnyEnv),
+                requiresAllEnv: normalizeOptionalTrimmedStringList(rawEvidence.requiresAllEnv),
+                credentialMarker,
+                source: normalizeOptionalString(rawEvidence.source),
+              });
+            },
+          ),
+        });
+      },
+    ),
+    cliBackends: normalizeOptionalTrimmedStringList(value.cliBackends),
+    configMigrations: normalizeOptionalTrimmedStringList(value.configMigrations),
+    nativeSessionCatalog: nativeSessionCatalog?.label ? nativeSessionCatalog : undefined,
+    requiresRuntime: typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined,
+  });
+}
+
+export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | undefined {
+  return normalizeManifestObjectList(value, (entry) => {
+    const commandName = normalizeOptionalString(entry.commandName) ?? "";
+    if (!commandName) {
+      return undefined;
+    }
+    return omitUndefinedFields({
+      commandName,
+      description: normalizeOptionalString(entry.description),
+    });
+  });
+}
+
+type DashboardManifestResult =
+  | { ok: true; dashboard?: PluginManifestDashboard }
+  | { ok: false; error: string };
+
+function normalizeDashboardCapabilityBase(
+  value: unknown,
+  field: string,
+  index: number,
+): { id: string; method: string; description: string } | string {
+  if (!isRecord(value)) {
+    return `${field}[${index}] must be an object`;
+  }
+  const id = normalizeOptionalString(value.id);
+  const method = normalizeOptionalString(value.method);
+  const description = normalizeOptionalString(value.description);
+  if (!id || !/^[a-z0-9][a-z0-9._-]*$/u.test(id)) {
+    return `${field}[${index}].id must be a lowercase capability id`;
+  }
+  if (!method) {
+    return `${field}[${index}].method must be a non-empty string`;
+  }
+  if (!description) {
+    return `${field}[${index}].description must be a non-empty string`;
+  }
+  return { id, method, description };
+}
+
+export function normalizeManifestDashboard(value: unknown): DashboardManifestResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, error: "dashboard must be an object" };
+  }
+  const groups: Array<{ field: keyof PluginManifestDashboard; entries: unknown[] }> = [];
+  // Validate both containers before entries to retain manifest error precedence.
+  for (const field of ["dataBindings", "actionVerbs"] as const) {
+    const entries = value[field];
+    if (entries !== undefined && !Array.isArray(entries)) {
+      return { ok: false, error: `dashboard.${field} must be an array` };
+    }
+    groups.push({ field, entries: entries ?? [] });
+  }
+  const dashboard: PluginManifestDashboard = {};
+  for (const group of groups) {
+    const { field } = group;
+    const entries: PluginManifestDashboardActionVerb[] = [];
+    for (const [index, entry] of group.entries.entries()) {
+      const normalized = normalizeDashboardCapabilityBase(entry, `dashboard.${field}`, index);
+      if (typeof normalized === "string") {
+        return { ok: false, error: normalized };
+      }
+      const rawParamShape =
+        field === "actionVerbs" && isRecord(entry) ? entry.paramShape : undefined;
+      if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
+        return {
+          ok: false,
+          error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
+        };
+      }
+      entries.push({
+        ...normalized,
+        ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+      });
+    }
+    if (entries.length > 0) {
+      dashboard[field] = entries;
+    }
+  }
+  return Object.keys(dashboard).length > 0 ? { ok: true, dashboard } : { ok: true };
+}
+
+function normalizeProviderChannelLogin(
+  value: unknown,
+): PluginManifestProviderAuthChoice["channelLogin"] | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "aliases")) {
+    return undefined;
+  }
+  if (
+    value.aliases !== undefined &&
+    (!Array.isArray(value.aliases) ||
+      value.aliases.some((alias) => typeof alias !== "string" || !alias.trim()))
+  ) {
+    return undefined;
+  }
+  const aliases = normalizeUniqueTrimmedStringList(value.aliases);
+  return aliases.length > 0 ? { aliases } : {};
+}
+
+export function normalizeProviderAuthChoices(
+  value: unknown,
+): PluginManifestProviderAuthChoice[] | undefined {
+  return normalizeManifestObjectList(value, (entry) => {
+    const provider = normalizeOptionalString(entry.provider) ?? "";
+    const method = normalizeOptionalString(entry.method) ?? "";
+    const choiceId = normalizeOptionalString(entry.choiceId) ?? "";
+    if (!provider || !method || !choiceId) {
+      return undefined;
+    }
+    const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
+      isPluginManifestOnboardingScope,
+    );
+    return omitUndefinedFields<PluginManifestProviderAuthChoice>({
+      provider,
+      method,
+      choiceId,
+      modelTarget: entry.modelTarget === "utility" ? "utility" : undefined,
+      platforms:
+        entry.platforms !== undefined ? normalizeManifestPlatforms(entry.platforms) : undefined,
+      choiceLabel: normalizeOptionalString(entry.choiceLabel),
+      choiceHint: normalizeOptionalString(entry.choiceHint),
+      icon: normalizeSetupPresentationHttpsUrl(entry.icon),
+      website: normalizeSetupPresentationHttpsUrl(entry.website),
+      docsUrl: normalizeSetupPresentationHttpsUrl(entry.docsUrl),
+      assistantPriority:
+        typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
+          ? entry.assistantPriority
+          : undefined,
+      assistantVisibility: normalizeProviderAssistantVisibility(entry.assistantVisibility),
+      deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
+      groupId: normalizeOptionalString(entry.groupId),
+      groupLabel: normalizeOptionalString(entry.groupLabel),
+      groupHint: normalizeOptionalString(entry.groupHint),
+      onboardingFeatured: entry.onboardingFeatured === true ? true : undefined,
+      appGuidedDiscovery: entry.appGuidedDiscovery === true ? true : undefined,
+      optionKey: normalizeOptionalString(entry.optionKey),
+      cliFlag: normalizeOptionalString(entry.cliFlag),
+      cliOption: normalizeOptionalString(entry.cliOption),
+      cliDescription: normalizeOptionalString(entry.cliDescription),
+      appGuidedSecret: entry.appGuidedSecret === true ? true : undefined,
+      personalAccount: entry.personalAccount === true ? true : undefined,
+      appGuidedActionLabel: normalizeOptionalString(entry.appGuidedActionLabel),
+      appGuidedAuth:
+        entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
+          ? entry.appGuidedAuth
+          : undefined,
+      credentialOnly: entry.credentialOnly === true ? true : undefined,
+      channelLogin: normalizeProviderChannelLogin(entry.channelLogin),
+      onboardingScopes: onboardingScopes.length > 0 ? onboardingScopes : undefined,
+    });
+  });
+}
+
+export function normalizeConfigUiHints(
+  value: unknown,
+): Record<string, PluginConfigUiHint> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginConfigUiHint> = Object.create(null);
+  for (const [hintPath, rawHint] of Object.entries(value)) {
+    if (!isRecord(rawHint)) {
+      continue;
+    }
+    const hint = { ...rawHint } as Record<string, unknown>;
+    if ("presentation" in hint && hint.presentation !== "phone-number") {
+      delete hint.presentation;
+    }
+    if ("multiline" in hint && typeof hint.multiline !== "boolean") {
+      delete hint.multiline;
+    }
+    normalized[hintPath] = hint as PluginConfigUiHint;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function normalizeChannelConfigs(
+  value: unknown,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  return normalizeNamedMetadataRecord(value, (rawEntry) => {
+    const schema = isRecord(rawEntry.schema) ? rawEntry.schema : null;
+    if (!schema) {
+      return undefined;
+    }
+    return omitUndefinedFields({
+      schema,
+      uiHints: normalizeConfigUiHints(rawEntry.uiHints),
+      runtime:
+        isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
+          ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
+          : undefined,
+      label: normalizeOptionalString(rawEntry.label),
+      description: normalizeOptionalString(rawEntry.description),
+      preferOver: normalizeOptionalTrimmedStringList(rawEntry.preferOver),
+      commands: normalizeManifestChannelCommandDefaults(rawEntry.commands),
+    });
+  });
+}
+
+export function normalizeManifestChannelCommandDefaults(
+  value: unknown,
+): PluginManifestChannelCommandDefaults | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const commands: PluginManifestChannelCommandDefaults = {};
+  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
+    if (typeof value[key] === "boolean") {
+      commands[key] = value[key];
+    }
+  }
+  return Object.keys(commands).length > 0 ? commands : undefined;
+}

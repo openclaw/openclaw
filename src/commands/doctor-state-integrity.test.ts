@@ -1,0 +1,533 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type * as BundledIds from "../channels/plugins/bundled-ids.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import {
+  deleteSessionEntryLifecycle,
+  loadSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as boundaryPath from "../infra/boundary-path.js";
+import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import {
+  detectStateIntegrityHealthIssues,
+  noteStateIntegrity as noteStateIntegrityRaw,
+  stateIntegrityIssueToHealthFinding,
+  stateIntegrityIssueToRepairEffect,
+} from "./doctor-state-integrity.js";
+import {
+  hasRepairPromptMessage,
+  noteMock,
+  noteStateIntegrity,
+  repairPromptCalls,
+  runStateIntegrityText,
+  stateIntegrityText,
+  withMainAgentRoster,
+} from "./doctor-state-integrity.test-support.js";
+import {
+  detectLinuxSdBackedStateDir,
+  detectMacCloudSyncedStateDir,
+  detectWindowsCloudSyncedStateDir,
+  formatLinuxSdBackedStateDirWarning,
+  formatWindowsCloudSyncedStateDirWarning,
+} from "./doctor-state-storage-platform.js";
+
+vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof BundledIds>()),
+  listBundledChannelIds: () => ["matrix", "whatsapp"],
+}));
+
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
+  return {
+    ...actual,
+    listBundledChannelIdsForPackageState: (
+      ...args: Parameters<typeof actual.listBundledChannelIdsForPackageState>
+    ) =>
+      args[0] === "persistedAuthState"
+        ? ["matrix", "whatsapp"]
+        : actual.listBundledChannelIdsForPackageState(...args),
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) =>
+      params.metadataKey !== "persistedAuthState" && actual.hasBundledChannelPackageState(params),
+  };
+});
+
+describe("doctor state integrity", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempHome = "";
+  let stateDir = "";
+  const decline = () => vi.fn(async (_params: { message: string }) => false);
+  function createAgentDir(agentId: string, nested = true) {
+    fs.mkdirSync(path.join(stateDir, "agents", agentId, ...(nested ? ["agent"] : [])), {
+      recursive: true,
+    });
+  }
+  const warning = (target: string, message: string) =>
+    expect.objectContaining({ severity: "warning", path: target, message });
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_HOME",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_OAUTH_DIR",
+      "OPENCLAW_AGENT_DIR",
+    ]);
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
+    stateDir = path.join(tempHome, ".openclaw");
+    setTestEnvValue("HOME", tempHome);
+    setTestEnvValue("OPENCLAW_HOME", tempHome);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    deleteTestEnvValue("OPENCLAW_PROFILE");
+    deleteTestEnvValue("OPENCLAW_OAUTH_DIR");
+    deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    noteMock.mockClear();
+    vi.spyOn(terminalNote, "note").mockImplementation(noteMock);
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanupSessionStateForTest({ stateDir, rootPath: tempHome });
+    envSnapshot.restore();
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("reports a missing state directory without skipping config permission findings", () => {
+    fs.rmdirSync(stateDir);
+    const configPath = path.join(tempHome, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n", { mode: 0o644 });
+    fs.chmodSync(configPath, 0o644);
+    const issues = detectStateIntegrityHealthIssues({}, { configPath });
+    const missing = issues.find((issue) => issue.kind === "missing-state-dir");
+    if (!missing) {
+      throw new Error("expected missing state directory issue");
+    }
+    expect(missing).toEqual({ kind: "missing-state-dir", path: stateDir });
+    expect(stateIntegrityIssueToHealthFinding(missing)).toMatchObject({
+      checkId: "core/doctor/state-integrity",
+      severity: "error",
+      path: stateDir,
+      fixHint: "Run `openclaw doctor --fix` to create the state directory.",
+    });
+    expect(stateIntegrityIssueToRepairEffect(missing)).toEqual({
+      kind: "state",
+      action: "would-create-state-dir",
+      target: stateDir,
+      dryRunSafe: false,
+    });
+    if (process.platform !== "win32") {
+      expect(issues.map(stateIntegrityIssueToHealthFinding)).toContainEqual(
+        warning(configPath, "Config file is group/world readable. Recommend chmod 600."),
+      );
+    }
+    expect(issues.some((issue) => issue.kind === "missing-runtime-dir")).toBe(false);
+  });
+
+  it("reports permissive state and config file permissions", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const configPath = path.join(tempHome, "openclaw.json");
+    fs.chmodSync(stateDir, 0o755);
+    fs.writeFileSync(configPath, "{}\n", { mode: 0o644 });
+    fs.chmodSync(configPath, 0o644);
+    const issues = detectStateIntegrityHealthIssues({}, { configPath });
+    expect(issues.map(stateIntegrityIssueToHealthFinding)).toEqual(
+      expect.arrayContaining([
+        warning(stateDir, "State directory permissions are too open. Recommend chmod 700."),
+        warning(configPath, "Config file is group/world readable. Recommend chmod 600."),
+      ]),
+    );
+  });
+
+  it("checks the source session store when process state is isolated", () => {
+    const sourceHome = path.join(tempHome, "source-home");
+    const sourceState = path.join(sourceHome, ".openclaw");
+    const storeDir = path.join(sourceHome, "custom-store");
+    fs.mkdirSync(sourceState, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+    const accessSync = fs.accessSync;
+    vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+      if (target === storeDir) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return accessSync(target, mode);
+    });
+    const readFileSync = fs.readFileSync;
+    // Source isolation must not depend on whether the test host uses tmpfs.
+    vi.spyOn(fs, "readFileSync").mockImplementation(
+      (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+        if (typeof options === "string") {
+          return target === "/proc/self/mountinfo" && options === "utf8"
+            ? "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw"
+            : readFileSync(target, options);
+        }
+        if (options == null) {
+          return readFileSync(target, options);
+        }
+        return readFileSync(target, options);
+      },
+    );
+    expect(
+      detectStateIntegrityHealthIssues(
+        withMainAgentRoster({ session: { store: "~/custom-store/sessions.json" } }),
+        {
+          env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState },
+        },
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "runtime-dir-not-writable",
+        label: "Session store dir",
+        path: storeDir,
+      }),
+    ]);
+  });
+
+  it("accepts lazy session storage and unpaired or unregistered channels", async () => {
+    const cfg = withMainAgentRoster({
+      channels: { whatsapp: {}, icenter: { enabled: true, dmPolicy: "pairing" } },
+    });
+    expect(
+      detectStateIntegrityHealthIssues(cfg).filter(
+        (issue) =>
+          "label" in issue &&
+          (issue.label === "Sessions dir" || issue.label === "Session store dir"),
+      ),
+    ).toEqual([]);
+    const confirmRuntimeRepair = decline();
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+    expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
+    const text = stateIntegrityText();
+    expect(text).toContain("OAuth dir not present");
+    expect(text).not.toContain("CRITICAL: OAuth dir missing");
+    expect(text).not.toMatch(/CRITICAL: (?:Sessions dir|Session store dir) missing/);
+    expect(repairPromptCalls(confirmRuntimeRepair)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringMatching(/^Create (?:Sessions dir|Session store dir) at/),
+        }),
+      ]),
+    );
+  });
+
+  it.each(["pairing", "explicit"])(
+    "warns without blocking readiness when legacy OAuth storage is missing for %s configuration",
+    async (mode) => {
+      if (mode === "explicit") {
+        setTestEnvValue("OPENCLAW_OAUTH_DIR", path.join(tempHome, ".oauth"));
+      }
+      const cfg: OpenClawConfig =
+        mode === "pairing" ? { channels: { telegram: { dmPolicy: "pairing" } } } : {};
+      const findings = detectStateIntegrityHealthIssues(cfg).map(
+        stateIntegrityIssueToHealthFinding,
+      );
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          message: "OAuth dir is missing.",
+          severity: "warning",
+        }),
+      );
+      expect(findings.some((finding) => finding.severity === "error")).toBe(false);
+      const confirmRuntimeRepair = decline();
+      await noteStateIntegrity(cfg, { confirmRuntimeRepair });
+      expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
+      expect(stateIntegrityText()).toContain("OAuth dir missing");
+      expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
+    },
+  );
+
+  it.each(["list", "entries"] as const)(
+    "distinguishes orphan directories from owned state with an agents.%s roster",
+    async (roster) => {
+      for (const id of ["main", "ops", "Research", "legacy", "openclaw", "crestodian"]) {
+        createAgentDir(id);
+      }
+      createAgentDir("staging", false);
+      const relocated = roster === "entries";
+      if (relocated) {
+        writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+        setTestEnvValue("OPENCLAW_AGENT_DIR", path.join(stateDir, "agents", "legacy", "agent"));
+      }
+      const researchReachable = fs.existsSync(path.join(stateDir, "agents", "research", "agent"));
+      const cfg: OpenClawConfigWithLegacyRoster = {
+        agents: relocated
+          ? { entries: { ops: { default: true }, research: {} } }
+          : { list: [{ id: "main", default: true }, { id: "ops" }, { id: "research" }] },
+      };
+      const text = await runStateIntegrityText(cfg);
+      const orphans = [
+        "legacy",
+        ...(relocated ? ["main"] : []),
+        ...(!researchReachable ? ["Research (id research)"] : []),
+      ];
+      expect(text).toContain(`Examples: ${orphans.join(", ")}`);
+      expect(text).toContain(
+        `Found ${orphans.length} agent director${orphans.length === 1 ? "y" : "ies"} on disk`,
+      );
+      expect(text).toContain(`without a matching agents.${roster} entry`);
+      expect(text).toContain(`Restore the missing agents.${roster} entries`);
+      expect(text).toContain(
+        "config-driven routing, identity, and model selection will ignore them",
+      );
+      expect(text).not.toContain(roster === "list" ? "agents.entries" : "agents.list");
+    },
+  );
+
+  it.each(["profile", "state-dir"])(
+    "does not inspect another profile's state with a %s override",
+    async (selector) => {
+      const defaultStateDir = stateDir;
+      stateDir = path.join(tempHome, selector === "profile" ? ".openclaw-work" : "custom-state");
+      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      if (selector === "profile") {
+        setTestEnvValue("OPENCLAW_PROFILE", "work");
+      }
+      const attemptedProbes: string[] = [];
+      const isDefaultState = (target: fs.PathLike) => {
+        const resolved = path.resolve(String(target));
+        return resolved === defaultStateDir || resolved.startsWith(`${defaultStateDir}${path.sep}`);
+      };
+      const readdir = fs.readdirSync,
+        exists = fs.existsSync,
+        stat = fs.statSync;
+      vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
+        if (isDefaultState(target)) {
+          attemptedProbes.push(`readdir ${String(target)}`);
+          throw new Error("another profile's state is outside integrity diagnostics");
+        }
+        // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent access-denial spy; preserve the Doctor caller options.
+        return readdir(target, options);
+      });
+      vi.spyOn(fs, "existsSync").mockImplementation((target) => {
+        if (isDefaultState(target)) {
+          attemptedProbes.push(`exists ${String(target)}`);
+          return false;
+        }
+        return exists(target);
+      });
+      vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+        if (isDefaultState(target)) {
+          attemptedProbes.push(`stat ${String(target)}`);
+          throw new Error("another profile's metadata is outside integrity diagnostics");
+        }
+        return stat(target, options);
+      });
+
+      const text = await runStateIntegrityText({});
+
+      expect(attemptedProbes).toEqual([]);
+      expect(text).not.toContain("Multiple state directories detected");
+      expect(text).toContain("OAuth dir not present");
+    },
+  );
+});
+
+describe("doctor retained session integrity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("leaves retired recovery state inert without restoring deleted retained rows", async () => {
+    await withOpenClawTestState({ label: "retained-session-integrity" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
+      const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+      for (const sessionKey of ["agent:main:kept", "agent:main:deleted"]) {
+        Object.assign(store[sessionKey], {
+          abortedLastRun: true,
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: 10,
+            lastRunId: `run-${sessionKey}`,
+            wedgedAt: 20,
+            wedgedReason: "recovery requires reconciliation",
+          },
+        });
+      }
+      fs.writeFileSync(storePath, JSON.stringify(store));
+      expect(
+        (await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" }))
+          .totals.importedEntries,
+      ).toBe(2);
+      const source = fs.readFileSync(storePath);
+      const receiptParams = {
+        cfg,
+        env: state.env,
+        target: { agentId: "main", storePath },
+        sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
+      };
+      const receipt = readDeferredPluginSessionImport(receiptParams);
+      expect(receipt).toBeDefined();
+      await deleteSessionEntryLifecycle({
+        ...scope,
+        target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      await recordDeferredPluginMigrations({
+        env: state.env,
+        pending: [],
+        resolvedPluginIds: ["fixture-plugin"],
+      });
+
+      vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+      await noteStateIntegrityRaw(cfg, {
+        confirmRuntimeRepair: async () => false,
+      });
+
+      expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.abortedLastRun).toBe(
+        true,
+      );
+      expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
+      expect(fs.readFileSync(storePath)).toEqual(source);
+      expect(readDeferredPluginSessionImport(receiptParams)).toEqual(receipt);
+    });
+  });
+});
+
+describe("state storage", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  describe("cloud-synced state directories", () => {
+    it.each([false, true])(
+      "resolves a missing macOS state leaf through its ancestor (local symlink=%s)",
+      (local) => {
+        const sandbox = fs.realpathSync(tempDirs.make("openclaw-cloud-storage-"));
+        const home = path.join(sandbox, "home");
+        const cloudRoot = path.join(home, "Library", "CloudStorage");
+        const syncedDir = path.join(cloudRoot, "OneDrive-Personal");
+        fs.mkdirSync(cloudRoot, { recursive: true });
+        if (local) {
+          const target = path.join(sandbox, "local-openclaw");
+          fs.mkdirSync(target);
+          fs.symlinkSync(target, syncedDir, process.platform === "win32" ? "junction" : "dir");
+        } else {
+          fs.mkdirSync(syncedDir);
+        }
+        const stateDir = path.join(syncedDir, "OpenClaw", ".openclaw");
+        expect(fs.existsSync(stateDir)).toBe(false);
+        vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+        vi.spyOn(os, "homedir").mockReturnValue(home);
+        expect(detectMacCloudSyncedStateDir(stateDir)).toEqual(
+          local ? null : { path: stateDir, storage: "CloudStorage provider" },
+        );
+      },
+    );
+
+    it("detects a missing OneDrive business leaf case-insensitively and explains service relocation", () => {
+      const personal = path.resolve("/Users/tester/OneDrive");
+      const business = path.resolve("/Users/tester/OneDrive - Contoso");
+      const root = path.join(business, "OpenClaw").toUpperCase();
+      const stateDir = path.join(root, ".openclaw");
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+        target === root ? root : null,
+      );
+      const result = detectWindowsCloudSyncedStateDir(
+        stateDir,
+        Object.freeze({
+          OneDrive: personal,
+          onedriveconsumer: personal,
+          oNeDrIvEcOmMeRcIaL: business,
+        }),
+      );
+      expect(result).toEqual({ path: stateDir, storage: "OneDrive for Business" });
+      if (!result) {
+        throw new Error("expected OneDrive warning");
+      }
+      const warning = formatWindowsCloudSyncedStateDirWarning(stateDir, result);
+      expect(warning).toContain("Windows cloud-synced storage");
+      expect(warning).toContain("OneDrive for Business");
+      expect(warning).toContain("stop the Gateway");
+      expect(warning).toContain("for the Gateway service");
+      expect(warning).toContain("re-run doctor");
+      expect(warning).not.toMatch(/(?:^|\s)OPENCLAW_STATE_DIR=\S+\s+\S*openclaw\b/m);
+      expect(warning).not.toContain("$env:OPENCLAW_STATE_DIR");
+      expect(warning).not.toContain('set "OPENCLAW_STATE_DIR=');
+    });
+
+    it("follows a junction out of OneDrive when the state leaf is absent", () => {
+      const root = path.resolve("/Users/tester/OneDrive/OpenClaw");
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+        target === root ? path.resolve("/local-openclaw") : null,
+      );
+      expect(
+        detectWindowsCloudSyncedStateDir(path.join(root, ".openclaw"), {
+          OneDrive: path.dirname(root),
+        }),
+      ).toBeNull();
+    });
+
+    it("does not infer a sync root from a OneDrive-named folder without the client's environment", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      expect(
+        detectWindowsCloudSyncedStateDir(path.resolve("/Users/tester/OneDrive/.openclaw"), {}),
+      ).toBeNull();
+    });
+  });
+
+  describe("Linux state storage", () => {
+    it("selects the deepest mount using the resolved state path", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        [
+          "24 19 259:2 / / rw,relatime - ext4 /dev/nvme0n1p2 rw",
+          "30 24 179:5 / /mnt/slow rw,relatime - ext4 /dev/mmcblk1p1 rw",
+          "25 24 0:22 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw",
+        ].join("\n"),
+      );
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockReturnValue("/mnt/slow/openclaw/.openclaw");
+      expect(detectLinuxSdBackedStateDir("/tmp/openclaw-state")).toEqual({
+        path: "/mnt/slow/openclaw/.openclaw",
+        mountPoint: "/mnt/slow",
+        fsType: "ext4",
+        source: "/dev/mmcblk1p1",
+      });
+    });
+
+    it("returns null outside Linux", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      expect(detectLinuxSdBackedStateDir("/Users/tester/.openclaw")).toBeNull();
+    });
+
+    it("resolves device aliases and escapes decoded mountinfo control characters in warnings", () => {
+      const stateDir = "/home/pi/mnt\nspoofed/.openclaw";
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        "30 24 179:2 / /home/pi/mnt\\012spoofed rw,relatime - ext4 /dev/disk/by-uuid/mmc\\012source rw",
+      );
+      vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+        target === "/dev/disk/by-uuid/mmc\nsource" ? "/dev/mmcblk0p2" : stateDir,
+      );
+      const result = detectLinuxSdBackedStateDir(stateDir);
+      if (!result) {
+        throw new Error("Expected Linux state storage warning details");
+      }
+      const warning = formatLinuxSdBackedStateDirWarning(stateDir, result);
+      expect(warning).toContain("device /dev/disk/by-uuid/mmc\\nsource");
+      expect(warning).toContain("mount /home/pi/mnt\\nspoofed");
+      expect(warning).not.toContain("device /dev/disk/by-uuid/mmc\nsource");
+      expect(warning).not.toContain("mount /home/pi/mnt\nspoofed");
+    });
+  });
+});

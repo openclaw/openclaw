@@ -1,0 +1,285 @@
+---
+summary: "Diagnostics flags for targeted debug logs"
+read_when:
+  - You need targeted debug logs without raising global logging levels
+  - You need to capture subsystem-specific logs for support
+title: "Diagnostics flags"
+---
+
+Diagnostics flags turn on extra logging for one subsystem without raising
+`logging.level` globally. A flag has no effect unless a subsystem checks it.
+
+## How it works
+
+- Flags are case-insensitive strings, resolved from `diagnostics.flags` in
+  config plus the `OPENCLAW_DIAGNOSTICS` env override, deduped and lowercased.
+- `name.*` matches `name` itself and anything under `name.` (for example
+  `telegram.*` matches `telegram.http`).
+- `*` or `all` enables every flag.
+- Restart the gateway after changing `diagnostics.flags` in config; it is not
+  hot-reloaded.
+
+## Known flags
+
+| Flag                   | Enables                                                       |
+| ---------------------- | ------------------------------------------------------------- |
+| `telegram.http`        | Telegram Bot API HTTP error logging                           |
+| `brave.http`           | Brave Search request/response/cache logging                   |
+| `profiler`             | Reply-stage profiler and Codex app-server profiler (both)     |
+| `reply.profiler`       | Reply-stage profiler only                                     |
+| `codex.profiler`       | Codex app-server profiler only                                |
+| `health`               | Gateway health check/account/binding debug details            |
+| `ingress.timing`       | Session load, model selection, and model catalog timings      |
+| `plugin.load-profile`  | Synchronous plugin module-load timings                        |
+| `sqlite.worker-timing` | SQLite writer request transport timestamps (environment only) |
+| `timeline`             | Structured JSONL timeline artifact (see below)                |
+
+## Enable via config
+
+```json
+{
+  "diagnostics": {
+    "flags": ["telegram.http"]
+  }
+}
+```
+
+Multiple flags:
+
+```json
+{
+  "diagnostics": {
+    "flags": ["telegram.http", "brave.http", "health"]
+  }
+}
+```
+
+## Env override (one-off)
+
+```bash
+OPENCLAW_DIAGNOSTICS=telegram.http,brave.http
+```
+
+Values split on commas or whitespace. Special values:
+
+| Value                       | Effect                                   |
+| --------------------------- | ---------------------------------------- |
+| `0`, `false`, `off`, `none` | Disable all flags, overriding config too |
+| `1`, `true`, `all`, `*`     | Enable every flag                        |
+
+`OPENCLAW_DIAGNOSTICS=0` disables flags from both env and config for that
+process, useful for temporarily silencing a profiler flag left on in config
+without editing the file.
+
+## Profiler flags
+
+Slow reply preparation and Codex startup are logged at the default log level
+without profiler flags: a stage taking at least 5 seconds or a tracked total
+taking at least 10 seconds emits a warning. Fast paths remain quiet. Profiler
+flags lower the timing thresholds to 500 milliseconds per stage and 1 second
+total, and enable additional detail.
+
+Enable all profiler-gated spans for one gateway run:
+
+```bash
+OPENCLAW_DIAGNOSTICS=profiler openclaw gateway run
+```
+
+Enable only reply-dispatch profiler spans:
+
+```bash
+OPENCLAW_DIAGNOSTICS=reply.profiler openclaw gateway run
+```
+
+Enable only Codex app-server startup/tool/thread profiler spans:
+
+```bash
+OPENCLAW_DIAGNOSTICS=codex.profiler openclaw gateway run
+```
+
+`profiler` enables both the reply profiler and the Codex profiler; use the
+scoped flag names to enable just one.
+
+Or set it in config:
+
+```json
+{
+  "diagnostics": {
+    "flags": ["reply.profiler", "codex.profiler"]
+  }
+}
+```
+
+Restart the gateway after changing config flags. To disable a profiler flag,
+remove it from `diagnostics.flags` and restart, or start the process with
+`OPENCLAW_DIAGNOSTICS=0` to override every diagnostics flag for that run.
+
+## Timeline artifacts
+
+The `timeline` flag (alias: `diagnostics.timeline`) writes structured startup
+and runtime timing events as JSONL, for external QA harnesses:
+
+```bash
+OPENCLAW_DIAGNOSTICS=timeline \
+OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=/tmp/openclaw-timeline.jsonl \
+openclaw gateway run
+```
+
+Or enable it in config:
+
+```json
+{
+  "diagnostics": {
+    "flags": ["timeline"]
+  }
+}
+```
+
+The output path always comes from `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, even
+when the flag itself is set in config; there is no config key for the path.
+See [Environment variables](/help/environment) for where OpenClaw reads
+`OPENCLAW_DIAGNOSTICS`, `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH`, and
+`OPENCLAW_DIAGNOSTICS_EVENT_LOOP` from, and in what precedence order.
+When `timeline` is enabled only from config, the earliest config-loading spans
+are missing because OpenClaw has not read config yet; subsequent startup spans
+are captured normally.
+
+Gateway client commands read timeline flags from source config without opening the shared
+state database. This also works when the Gateway is offline.
+
+`OPENCLAW_DIAGNOSTICS=1`, `=all`, and `=*` also enable the timeline, since they
+enable every flag. Prefer the scoped `timeline` flag when you only want the
+JSONL artifact and not every other diagnostics flag.
+
+Event-loop delay samples in the timeline need one more opt-in beyond
+`timeline`: set `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` (or `on`/`true`/`yes`) on
+top of enabling the timeline.
+
+Timeline records use the `openclaw.diagnostics.v1` envelope and can include
+process ids, phase names, span names, durations, plugin ids, dependency
+counts, event-loop delay samples, provider operation names, child-process exit
+state, and startup error names/messages. Treat timeline files as local
+diagnostics artifacts; review before sharing them outside your machine.
+
+Embedded and prepared simple model calls add a `provider.request.started` mark and one terminal
+`provider.request` record, correlated by run and call/span ids. While streaming,
+`provider.request.activity` marks sample observed chunks at most once per 30
+seconds using the existing stream-progress reporter. The terminal
+record keeps the request start in `timestamp` and reports `terminalAtMs`, the
+last observed provider callback/chunk time (`lastProviderActivityAtMs`, when
+observed), and a bounded `terminalReason`. Activity includes bookkeeping chunks;
+it does not prove visible output, and delayed result settlement does not refresh
+an already observed terminal chunk. An unknown reason or absent activity is not
+evidence of a provider, timeout, or CPU failure.
+
+These records identify a logical call, not a physical HTTP attempt. Terminal
+records include available normalized usage and its availability state. Explicit
+billed-zero usage is distinct from an unreported or unavailable observation.
+`model.usage` marks retain auxiliary or aggregate usage separately; they can
+mirror call usage and must not be summed with it. No prompt or response bodies
+are added by these accounting fields.
+
+`model.recovery.decision` marks report the existing attempt owner's accepted or
+rejected recovery branch alongside replay-safety and prior tool-settlement
+booleans. `model.retry.decision` marks explain the retry owner's budget, delay,
+and wait outcomes. These marks add no prompt, tool arguments, raw error text,
+model routes, or session identities. They do not change retry or timeout policy
+and are emitted only through the existing opt-in timeline.
+
+Timeline writes batch adjacent events with the same destination into a bounded
+64 KiB buffer, flushed on the next event-loop turn, at capacity, or on normal
+process exit. Event timestamps reflect emission time. Writes remain best-effort;
+a forced kill can lose pending output. External harnesses should read the final
+artifact after the process exits and must not truncate it while the process runs.
+
+Each writer capture adds `captureId`, consecutive `sequence`, and sticky
+`failedWrites` attributes. An exclusive Gateway marks `timeline.capture.started`
+before admitting work and `timeline.capture.completed` after canonical shutdown
+and retained cleanup join. Only a terminal `complete: true`, continuous rows,
+zero write failures, and a cleanly joined child can certify the observed logical
+call lifetime. A missing terminal, partial line, retained resource, or write loss
+cannot certify completeness. This does not extend coverage to provider-internal
+requests or external runtime billing.
+
+## Where logs go
+
+Flags emit logs into the standard diagnostics log file. By default:
+
+```
+/tmp/openclaw/openclaw-YYYY-MM-DD.log
+```
+
+Named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`; for
+example, `--dev` uses `openclaw-dev-YYYY-MM-DD.log`.
+
+If you set `logging.file`, use that path instead. Logs are JSONL (one JSON
+object per line). Redaction still applies; it is always on.
+See [Logging](/logging) for the full log-path resolution, rotation, and
+redaction model.
+
+## Extract logs
+
+Read the active profile's latest log file:
+
+```bash
+openclaw logs --plain
+# Named profile example:
+openclaw --profile work logs --plain
+```
+
+Filter for Telegram HTTP diagnostics:
+
+```bash
+openclaw logs --plain --limit 5000 | rg "telegram http error"
+```
+
+Filter for Brave Search HTTP diagnostics:
+
+```bash
+openclaw logs --plain --limit 5000 | rg "brave http"
+```
+
+Or tail while reproducing:
+
+```bash
+openclaw logs --follow --plain | rg "telegram http error"
+```
+
+For remote gateways, use `openclaw logs --follow` instead (see
+[/cli/logs](/cli/logs)).
+
+## Notes
+
+- If `logging.level` is set to `error`, `fatal`, or `silent`, flag-gated logs
+  may be suppressed. Default `info` is fine.
+- `brave.http` logs Brave Search request URLs/query params, response
+  status/timing, and cache hit/miss/write events. It does not log the API key
+  (sent as a request header) or response bodies, but search queries can be
+  sensitive.
+- Flags are safe to leave enabled; they only affect log volume for the
+  specific subsystem.
+- Use [/logging](/logging) to change log destinations, levels, and redaction.
+
+## SQLite worker timing
+
+SQLite writers attach monotonic millisecond timestamps to completed
+`worker.request` events when an internal diagnostic subscriber is interested in
+those events, including the Prometheus plugin. A subscriber can separate queueing,
+broker dispatch, `postMessage`, worker preparation, backend execution, result
+serialization, and reply delivery. Backend execution includes owner code and SQL;
+it is not a native SQL timer. `replyReceived` marks broker receipt, before the
+caller resumes. Measure caller latency separately.
+
+Framed requests retain the first receipt and backend execution timestamps through
+the final reply. `inputReady` marks complete command reconstruction before backend
+preparation. Failed requests omit stages they never reached. Timestamps contain no
+SQL text, bindings, or result payloads.
+
+`OPENCLAW_DIAGNOSTICS=sqlite.worker-timing` still forces timing capture and is
+sampled at process startup. Without that flag or an interested subscriber, requests
+carry no timing data.
+
+## Related
+
+- [Gateway diagnostics](/gateway/diagnostics)
+- [Gateway troubleshooting](/gateway/troubleshooting)

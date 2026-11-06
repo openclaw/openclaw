@@ -1,0 +1,215 @@
+import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { exists, isDirectory, readText, resolveHomePath } from "./helpers.js";
+
+export type HermesSource = {
+  root: string;
+  configPath?: string;
+  envPath?: string;
+  authPath?: string;
+  globalAuthPath?: string;
+  opencodeAuthPath?: string;
+  soulPath?: string;
+  agentsPath?: string;
+  memoryPath?: string;
+  userPath?: string;
+  skillsDir?: string;
+  archivePaths: HermesArchivePath[];
+};
+
+type HermesArchivePath = {
+  id: string;
+  path: string;
+  relativePath: string;
+};
+
+const HERMES_ARCHIVE_DIRS = [
+  "plugins",
+  "sessions",
+  "logs",
+  "cron",
+  "mcp-tokens",
+  "plans",
+  "workspace",
+  "skins",
+  "kanban",
+  "pairing",
+  "platforms",
+] as const;
+const HERMES_ARCHIVE_FILES = [
+  "state.db",
+  "hermes_state.db",
+  "projects.db",
+  "response_store.db",
+  "memory_store.db",
+  "verification_evidence.db",
+  "kanban.db",
+  "retaindb_queue.db",
+  "gateway_state.json",
+  "channel_directory.json",
+  "channel_aliases.json",
+  "processes.json",
+  "feishu_comment_pairing.json",
+] as const;
+const OPENCODE_AUTH_RELATIVE_PATH = path.join(".local", "share", "opencode", "auth.json");
+const HERMES_PROFILE_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+
+const HERMES_STATE_MARKERS = [
+  "config.yaml",
+  ".env",
+  "auth.json",
+  "active_profile",
+  "SOUL.md",
+  "AGENTS.md",
+  "skills",
+  "memories",
+  ...HERMES_ARCHIVE_DIRS,
+  ...HERMES_ARCHIVE_FILES,
+] as const;
+
+export async function discoverHermesSource(input?: string): Promise<HermesSource> {
+  const explicitInput = input?.trim();
+  const root = explicitInput ? resolveHomePath(explicitInput) : await resolveImplicitHermesRoot();
+  const includeFallback = !explicitInput;
+  const opencodeAuthPath = await (async (): Promise<string | undefined> => {
+    const env = process.env;
+    const rootParent = path.dirname(root);
+    const xdgDataHome = env.XDG_DATA_HOME?.trim();
+    const xdgAuthPath = xdgDataHome
+      ? path.join(resolveHomePath(xdgDataHome), "opencode", "auth.json")
+      : undefined;
+    const candidates = Array.from(
+      new Set([
+        ...(xdgAuthPath && (includeFallback || isPathInside(rootParent, xdgAuthPath))
+          ? [xdgAuthPath]
+          : []),
+        path.join(rootParent, OPENCODE_AUTH_RELATIVE_PATH),
+        ...(includeFallback
+          ? [
+              path.join(
+                path.resolve(env.HOME?.trim() || env.USERPROFILE?.trim() || resolveHomePath("~")),
+                OPENCODE_AUTH_RELATIVE_PATH,
+              ),
+            ]
+          : []),
+      ]),
+    );
+    for (const candidate of candidates) {
+      if (await exists(candidate)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  })();
+  const profileParent = path.dirname(root);
+  const globalRoot =
+    !explicitInput && path.basename(profileParent) === "profiles"
+      ? path.dirname(profileParent)
+      : undefined;
+  const globalAuthPath = globalRoot ? path.join(globalRoot, "auth.json") : undefined;
+  const archivePaths: HermesArchivePath[] = [];
+  for (const dir of HERMES_ARCHIVE_DIRS) {
+    const candidate = path.join(root, dir);
+    if (await isDirectory(candidate)) {
+      archivePaths.push({ id: `archive:${dir}`, path: candidate, relativePath: dir });
+    }
+  }
+  for (const file of HERMES_ARCHIVE_FILES) {
+    const candidate = path.join(root, file);
+    if (await exists(candidate)) {
+      archivePaths.push({ id: `archive:${file}`, path: candidate, relativePath: file });
+    }
+  }
+  const source: HermesSource = {
+    root,
+    archivePaths,
+    ...(opencodeAuthPath ? { opencodeAuthPath } : {}),
+  };
+  for (const [key, candidate, probe] of [
+    ["configPath", path.join(root, "config.yaml"), exists],
+    ["envPath", path.join(root, ".env"), exists],
+    ["authPath", path.join(root, "auth.json"), exists],
+    ["globalAuthPath", globalAuthPath, exists],
+    ["soulPath", path.join(root, "SOUL.md"), exists],
+    ["agentsPath", path.join(root, "AGENTS.md"), exists],
+    ["memoryPath", path.join(root, "memories", "MEMORY.md"), exists],
+    ["userPath", path.join(root, "memories", "USER.md"), exists],
+    ["skillsDir", path.join(root, "skills"), isDirectory],
+  ] as const) {
+    if (candidate && (await probe(candidate))) {
+      source[key] = candidate;
+    }
+  }
+  return source;
+}
+
+async function resolveImplicitHermesRoot(): Promise<string> {
+  const env = process.env;
+  const platform = process.platform;
+  // Hermes pins the reserved supervised default slot to the root profile and
+  // never follows active_profile there (hermes_cli/main.py:487). Mirror that so
+  // a migration launched from that process keeps the default profile.
+  const supervisedChild = Boolean(env.HERMES_S6_SUPERVISED_CHILD?.trim());
+  const configuredHome = env.HERMES_HOME?.trim();
+  if (configuredHome) {
+    const configuredRoot = resolveHomePath(configuredHome);
+    // Mirror Hermes itself (hermes-agent hermes_cli/main.py:461-473, issue #22502):
+    // trust HERMES_HOME verbatim only when it already names a profile dir
+    // (parent basename `profiles`); when it names the root (e.g. a hardcoded
+    // HERMES_HOME=~/.hermes) still honor active_profile.
+    if (supervisedChild || path.basename(path.dirname(configuredRoot)) === "profiles") {
+      return configuredRoot;
+    }
+    return await resolveActiveHermesProfile(configuredRoot);
+  }
+  const userHome =
+    (platform === "win32" ? env.USERPROFILE?.trim() : env.HOME?.trim()) || resolveHomePath("~");
+  let root: string;
+  if (platform === "win32") {
+    // Hermes stores both active_profile and profiles below LOCALAPPDATA on Windows.
+    const localAppData = env.LOCALAPPDATA?.trim() || path.join(userHome, "AppData", "Local");
+    const platformRoot = path.resolve(localAppData, "hermes");
+    const legacyRoot = path.resolve(userHome, ".hermes");
+    root = (await hasHermesState(platformRoot))
+      ? platformRoot
+      : (await hasHermesState(legacyRoot))
+        ? legacyRoot
+        : platformRoot;
+  } else {
+    root = path.resolve(userHome, ".hermes");
+  }
+  return supervisedChild ? root : await resolveActiveHermesProfile(root);
+}
+
+async function resolveActiveHermesProfile(root: string): Promise<string> {
+  const activeProfile = (await readText(path.join(root, "active_profile")))?.trim();
+  if (!activeProfile || activeProfile === "default" || !HERMES_PROFILE_RE.test(activeProfile)) {
+    return root;
+  }
+  const profileRoot = path.join(root, "profiles", activeProfile);
+  return (await isDirectory(profileRoot)) ? profileRoot : root;
+}
+
+async function hasHermesState(root: string): Promise<boolean> {
+  for (const marker of HERMES_STATE_MARKERS) {
+    if (await exists(path.join(root, marker))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasHermesSource(source: HermesSource): boolean {
+  return Boolean(
+    source.configPath ||
+    source.envPath ||
+    source.authPath ||
+    source.globalAuthPath ||
+    source.soulPath ||
+    source.agentsPath ||
+    source.memoryPath ||
+    source.userPath ||
+    source.skillsDir ||
+    source.archivePaths.length > 0,
+  );
+}

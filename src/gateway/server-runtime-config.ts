@@ -1,0 +1,254 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
+import type {
+  GatewayAuthConfig,
+  GatewayBindMode,
+  GatewayTailscaleConfig,
+} from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
+import {
+  assertGatewayAuthConfigured,
+  type ResolvedGatewayAuth,
+  resolveGatewayAuth,
+} from "./auth.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { commitHookTransformMappingReload } from "./hooks-mapping.js";
+import { resolveHooksConfig, UnresolvedHooksTokenError } from "./hooks.js";
+import {
+  defaultGatewayBindMode,
+  isLoopbackHost,
+  isValidIPv4,
+  resolveGatewayBindHost,
+} from "./net.js";
+import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
+
+type GatewayRuntimeConfig = {
+  bindHost: string;
+  controlUiEnabled: boolean;
+  controlUiBasePath: string;
+  controlUiRoot?: string;
+  resolvedAuth: ResolvedGatewayAuth;
+  authMode: ResolvedGatewayAuth["mode"];
+  tailscaleConfig: GatewayTailscaleConfig;
+  tailscaleMode: "off" | "serve" | "funnel";
+  hooksConfig: ReturnType<typeof resolveHooksConfig>;
+};
+
+const GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE = "GATEWAY_EFFECTIVE_CONFIG_CONFLICT";
+
+// Legacy env warnings are process-wide and intentionally one-shot so normal
+// gateway startup is noisy enough to notice but not spammed by repeated imports.
+const LEGACY_ENV_PREFIXES = ["CLAWDBOT_", "MOLTBOT_"] as const;
+type LegacyEnvPrefix = (typeof LEGACY_ENV_PREFIXES)[number];
+let warned = false;
+
+/**
+ * The effective bind/auth/Tailscale combination (after CLI and service overrides are
+ * applied) is invalid. A supervisor restart cannot fix this without operator action, so
+ * callers must classify it the same as a persisted-config validation failure rather than
+ * a transient startup error eligible for restart.
+ */
+class GatewayEffectiveConfigConflictError extends Error {
+  readonly code = GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayEffectiveConfigConflictError";
+  }
+}
+
+export function isGatewayEffectiveConfigConflictError(error: unknown): boolean {
+  return (
+    error instanceof GatewayEffectiveConfigConflictError ||
+    (error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE)
+  );
+}
+
+/** Startup and reload validate the same security policy against the serving listener. */
+export function assertGatewayRuntimeSecurityConfig(
+  params: Pick<
+    GatewayRuntimeConfig,
+    "bindHost" | "controlUiEnabled" | "resolvedAuth" | "tailscaleMode"
+  > & {
+    cfg: OpenClawConfig;
+    port: number;
+  },
+): void {
+  const { cfg, bindHost, controlUiEnabled, resolvedAuth, tailscaleMode } = params;
+  const authMode = resolvedAuth.mode;
+  const hasSharedSecret =
+    (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
+    (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
+  const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg).some((value) =>
+    value.trim(),
+  );
+  const dangerouslyAllowHostHeaderOriginFallback =
+    cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+
+  assertGatewayAuthConfigured(resolvedAuth, cfg.gateway?.auth);
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    throw new GatewayEffectiveConfigConflictError(
+      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+    );
+  }
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
+    throw new GatewayEffectiveConfigConflictError(
+      formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+    );
+  }
+  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
+    throw new GatewayEffectiveConfigConflictError(
+      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
+    );
+  }
+  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+    throw new GatewayEffectiveConfigConflictError(
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
+    );
+  }
+  if (
+    controlUiEnabled &&
+    !isLoopbackHost(bindHost) &&
+    !hasControlUiAllowedOrigins &&
+    !dangerouslyAllowHostHeaderOriginFallback
+  ) {
+    // Remote Control UI must use explicit origins unless the operator deliberately accepts
+    // Host-header fallback; otherwise any reachable host name can become a browser origin.
+    throw new GatewayEffectiveConfigConflictError(
+      "non-loopback Control UI requires gateway.controlUi.allowedOrigins or gateway.publicOrigin when the allowlist is omitted, or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+    );
+  }
+  if (authMode === "trusted-proxy" && !cfg.gateway?.trustedProxies?.length) {
+    throw new GatewayEffectiveConfigConflictError(
+      "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
+    );
+  }
+}
+
+export async function resolveGatewayRuntimeConfig(params: {
+  cfg: OpenClawConfig;
+  port: number;
+  bind?: GatewayBindMode;
+  host?: string;
+  controlUiEnabled?: boolean;
+  auth?: GatewayAuthConfig;
+  tailscale?: GatewayTailscaleConfig;
+}): Promise<GatewayRuntimeConfig> {
+  if (!warned && !isVitestRuntimeEnv(process.env)) {
+    const prefixCounts = new Map<LegacyEnvPrefix, number>();
+    for (const key of Object.keys(process.env)) {
+      // Count by prefix only; never print env names or values because some legacy
+      // names may still encode account/provider secrets.
+      const prefix = LEGACY_ENV_PREFIXES.find((candidate) => key.startsWith(candidate));
+      if (prefix) {
+        prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);
+      }
+    }
+    const legacyVarCount = [...prefixCounts.values()].reduce((total, count) => total + count, 0);
+    if (legacyVarCount > 0) {
+      const detectedPrefixes = LEGACY_ENV_PREFIXES.filter((prefix) => prefixCounts.has(prefix))
+        .map((prefix) => `${prefix}*`)
+        .join(", ");
+      process.emitWarning(
+        [
+          `Legacy ${detectedPrefixes} environment variables were detected (${legacyVarCount} total), but OpenClaw only reads OPENCLAW_* names now.`,
+          "Rename them by replacing the legacy prefix with OPENCLAW_; the old names are ignored.",
+        ].join("\n"),
+        { code: "OPENCLAW_LEGACY_ENV_VARS", type: "DeprecationWarning" },
+      );
+      warned = true;
+    }
+  }
+
+  // Tailscale serve/funnel hard-requires loopback.  When bind is not
+  // explicitly set, we must resolve Tailscale mode *before* choosing the
+  // bind default so that container auto-detection does not override the
+  // Tailscale loopback constraint.
+  const tailscaleModeEarly =
+    (params.tailscale?.mode ?? params.cfg.gateway?.tailscale?.mode) || "off";
+  const bindExplicit = params.bind ?? params.cfg.gateway?.bind;
+  const bindMode =
+    bindExplicit ?? (tailscaleModeEarly !== "off" ? "loopback" : defaultGatewayBindMode());
+  const customBindHost = params.cfg.gateway?.customBindHost;
+  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
+    throw new Error(
+      `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
+    );
+  }
+  if (bindMode === "tailnet" && bindHost === "0.0.0.0") {
+    throw new Error(
+      "gateway bind=tailnet could not resolve a Tailscale or loopback address; refusing wildcard fallback",
+    );
+  }
+  if (bindMode === "custom") {
+    const configuredCustomBindHost = customBindHost?.trim();
+    if (!configuredCustomBindHost) {
+      throw new Error("gateway.bind=custom requires gateway.customBindHost");
+    }
+    if (!isValidIPv4(configuredCustomBindHost)) {
+      throw new Error(
+        `gateway.bind=custom requires a valid IPv4 customBindHost (got ${configuredCustomBindHost})`,
+      );
+    }
+    if (bindHost !== configuredCustomBindHost) {
+      throw new Error(
+        `gateway bind=custom requested ${configuredCustomBindHost} but resolved ${bindHost}; refusing fallback`,
+      );
+    }
+  }
+  const controlUiEnabled =
+    params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
+  const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
+  const controlUiRoot = normalizeOptionalString(params.cfg.gateway?.controlUi?.root);
+  const tailscaleBase = params.cfg.gateway?.tailscale ?? {};
+  const tailscaleOverrides = params.tailscale ?? {};
+  const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
+  const tailscaleMode = tailscaleConfig.mode ?? "off";
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig: params.cfg.gateway?.auth,
+    authOverride: params.auth,
+    env: process.env,
+    tailscaleMode,
+  });
+  const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
+  let hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  try {
+    hooksConfig = resolveHooksConfig(params.cfg);
+  } catch (err) {
+    // Startup has no previous hooks generation to preserve. Disable only this
+    // ingress; reload still rejects invalid candidates and keeps its active generation.
+    if (!(err instanceof UnresolvedHooksTokenError)) {
+      throw err;
+    }
+    hooksConfig = null;
+    createSubsystemLogger("gateway/hooks").warn(
+      `External hooks disabled at startup: ${err.message}. Gateway startup continues.`,
+    );
+  }
+  const runtimeConfig = {
+    bindHost,
+    controlUiEnabled,
+    controlUiBasePath,
+    controlUiRoot,
+    resolvedAuth,
+    authMode,
+    tailscaleConfig,
+    tailscaleMode,
+    hooksConfig,
+  };
+  assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
+  if (hooksConfig) {
+    commitHookTransformMappingReload();
+  }
+  return runtimeConfig;
+}

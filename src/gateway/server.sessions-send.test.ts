@@ -1,0 +1,389 @@
+// sessions_send tests cover tool-driven agent-to-agent delivery, transcript
+// updates, gateway auth, plugin routing, and emitted agent events.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, type Mock } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import {
+  loadSessionEntry,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
+import { captureEnv } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import { runDirectSessionReplyScenario } from "./server.sessions-send.direct-reply.test-support.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  prepareGatewayReplyRuntimeForTest,
+  startTestGatewayServer,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+
+const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+
+installGatewayTestHooks({ scope: "suite" });
+
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+let resolveGatewayContext: GatewayContextResolver;
+let gatewayPort: number;
+const gatewayToken = "test-gateway-token-1234567890";
+let envSnapshot: ReturnType<typeof captureEnv>;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  }),
+);
+
+const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
+const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
+const allSessions: OpenClawConfig = { tools: { sessions: { visibility: "all" } } };
+
+function withSessionStore(config: OpenClawConfig): OpenClawConfig {
+  return { ...config, session: { ...config.session, store: testState.sessionStorePath } };
+}
+
+function writeMainSession(sessionId = "sess-main") {
+  return writeSessionStore({ entries: { main: { sessionId, updatedAt: Date.now() } } });
+}
+
+function loadSession(sessionKey: string) {
+  return loadSessionEntry({ sessionKey, storePath: testState.sessionStorePath });
+}
+
+function getSessionsSendTool(options?: Parameters<typeof createOpenClawTools>[0]) {
+  const config = options?.config;
+  return expectDefined(
+    createOpenClawTools(config ? { ...options, config: withSessionStore(config) } : options).find(
+      (candidate) => candidate.name === "sessions_send",
+    ),
+    "missing sessions_send tool",
+  );
+}
+
+function expectReply(result: { details?: unknown }, reply: string, sessionKey: string): void {
+  expect(result.details, JSON.stringify(result.details)).toMatchObject({
+    status: "ok",
+    reply,
+    sessionKey,
+  });
+}
+
+function send(
+  target: { sessionKey: string } | { label: string } | { agentId: string },
+  message: string,
+  options?: Parameters<typeof getSessionsSendTool>[0],
+  timeoutSeconds = 5,
+) {
+  return getSessionsSendTool(options).execute("send-proof", { ...target, message, timeoutSeconds });
+}
+
+async function writeConfig(config: OpenClawConfig) {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+  }
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(withSessionStore(config))}\n`, "utf-8");
+}
+
+function mockLifecycleReply(defaultSessionId: string, text: string, persistInput = false) {
+  const spy = agentCommandMock as unknown as Mock<
+    (opts: AgentCommandGatewayIngressOpts) => Promise<void>
+  >;
+  return spy.mockImplementation(async (commandParams) => {
+    if (persistInput) {
+      await commandParams.userTurnTranscriptRecorder?.persistApproved();
+    }
+    const sessionId = commandParams.sessionId ?? defaultSessionId;
+    const runId = commandParams.runId ?? sessionId;
+    if (!commandParams.sessionKey) {
+      throw new Error("expected session key for lifecycle reply");
+    }
+
+    const routing = {
+      runId,
+      sessionKey: commandParams.sessionKey,
+      sessionId,
+      agentId: commandParams.agentId,
+      lifecycleGeneration: commandParams.lifecycleGeneration,
+    };
+    const startedAt = Date.now();
+    emitAgentEvent({
+      ...routing,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt },
+    });
+
+    const message = {
+      role: "assistant",
+      phase: "final_answer",
+      stopReason: "stop",
+      content: [{ type: "text", text }],
+      ...(persistInput ? { timestamp: Date.now() } : {}),
+    };
+    await persistSessionTranscriptTurn(
+      {
+        sessionId,
+        sessionKey: commandParams.sessionKey,
+        ...(testState.sessionStorePath ? { storePath: testState.sessionStorePath } : {}),
+      },
+      {
+        cwd: "/tmp",
+        runId,
+        expectedSessionId: sessionId,
+        touchSessionEntry: false,
+        updateMode: "none",
+        messages: [{ message, now: Date.now() }],
+      },
+    );
+
+    emitAgentEvent({
+      ...routing,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt,
+        endedAt: Date.now(),
+        terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+      },
+    });
+  });
+}
+
+beforeAll(async () => {
+  envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
+  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+    await import("../infra/device-identity.js");
+  const identity = loadOrCreateDeviceIdentity();
+  const pending = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    clientId: "openclaw-cli",
+    clientMode: "cli",
+    role: "operator",
+    scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
+    silent: false,
+  });
+  await approveDevicePairing(pending.request.requestId, {
+    callerScopes: pending.request.scopes ?? ["operator.admin"],
+  });
+  testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  gatewayPort = portClaim.port;
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  server = await startTestGatewayServer(portClaim);
+  resolveGatewayContext = expectDefined(
+    getGatewayContextResolver(expectDefined(getGatewayLifecycleRuntime(), "Gateway runtime")),
+    "Gateway context resolver",
+  );
+  // Prepare real handlers before RPC deadlines; cold module loading is fixture setup.
+  await import("./server-methods/chat.js");
+  await import("./server-methods/sessions-create.js");
+});
+
+beforeEach(async () => {
+  testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
+  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  testState.sessionStorePath = path.join(
+    tempDirs.make("openclaw-sessions-send-case-"),
+    "sessions.json",
+  );
+  await writeSessionStore({ entries: {} });
+  await prepareGatewayReplyRuntimeForTest();
+});
+
+// Detached replies retain their selected store until the owner has settled.
+afterEach(
+  async () => {
+    await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
+  },
+  SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
+);
+
+afterAll(async () => {
+  await server.close();
+  envSnapshot.restore();
+});
+
+it("rejects a missing explicit key without creating or running a session", async () => {
+  const missingKey = "agent:main:missing";
+  await writeMainSession();
+  agentCommandMock.mockClear();
+  const result = await send(
+    { sessionKey: missingKey },
+    "ping",
+    { agentSessionKey: "agent:main:main", config: allSessions },
+    0,
+  );
+  expect(result.details).toMatchObject({
+    status: "error",
+    error: `No session found: ${missingKey}`,
+  });
+  expect(agentCommandMock).not.toHaveBeenCalled();
+  expect(loadSession(missingKey)).toBe(undefined);
+});
+
+it("returns reply when lifecycle ends before agent.wait", async () => {
+  const body = "    const first = 1;\n        const second = 2;";
+  await writeMainSession("main");
+  const spy = mockLifecycleReply("main", "pong", true);
+
+  const result = await send({ sessionKey: "main" }, body).catch((error: unknown) => {
+    throw new Error(`sessions_send tool execution failed: ${String(error)}`, { cause: error });
+  });
+  expectReply(result, "pong", "main");
+
+  const firstCall = spy.mock.calls.at(0)?.[0];
+  expect(firstCall?.lane).toMatch(/^nested(?::|$)/);
+  expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
+  expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
+  expect(firstCall?.runId).toBeTypeOf("string");
+  expect(result.details).toMatchObject({ runId: firstCall?.runId });
+  expect(firstCall?.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+
+  expect(spy).toHaveBeenCalledOnce();
+  const { callGateway } = await import("./call.js");
+  const history = await callGateway<{ messages?: unknown[] }>({
+    method: "chat.history",
+    params: { sessionKey: "main", limit: 10 },
+    timeoutMs: 5_000,
+  }).catch((error: unknown) => {
+    throw new Error(`sessions_send history read failed: ${String(error)}`, { cause: error });
+  });
+  // Observe both receiving and persisted body failures before ending the case.
+  expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);
+  expect.soft(history.messages).toContainEqual(
+    expect.objectContaining({
+      role: "assistant",
+      idempotencyKey: `${firstCall?.runId}:user`,
+      content: body,
+      provenance: expect.objectContaining({
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      }),
+    }),
+  );
+});
+
+it(
+  "delivers a same-session reply to an account-scoped DM without stored delivery context",
+  { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
+  async () => {
+    await runDirectSessionReplyScenario({
+      dir: tempDirs.make("openclaw-direct-reply-"),
+      resolveGatewayContext,
+      sessionKey: "agent:main:feishu:work:dm:ou_reply_recipient",
+      expectedAccountId: "work",
+    });
+  },
+);
+it(
+  "finds session by label and sends message",
+  { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+  async () => {
+    await writeConfig(allSessions);
+    mockLifecycleReply("test-labeled", "labeled response");
+
+    const { callGateway } = await import("./call.js");
+    await callGateway({
+      method: "sessions.patch",
+      params: { key: "test-labeled-session", label: "my-test-worker" },
+      timeoutMs: 5000,
+    });
+
+    const result = await send({ label: "my-test-worker" }, "hello labeled session", {
+      config: allSessions,
+    });
+    expectReply(result, "labeled response", "agent:main:test-labeled-session");
+  },
+);
+const sendDenied = "tools.agentToAgent.send";
+it.each<[string, OpenClawConfig["tools"], string[] | undefined, string | undefined]>([
+  ["default cross-agent access", undefined, undefined, undefined],
+  ["send-only, agent-scoped reads", { sessions: { visibility: "agent" } }, ["orion"], undefined],
+  ["empty send list, broad reads", allSessions.tools, [], sendDenied],
+  ["unlisted destination", allSessions.tools, ["different-agent"], sendDenied],
+  [
+    "disabled agent messaging",
+    { agentToAgent: { enabled: false } },
+    undefined,
+    "Agent-to-agent messaging is disabled",
+  ],
+  [
+    "restrictive allow list",
+    { agentToAgent: { allow: ["main"] } },
+    undefined,
+    "denied by tools.agentToAgent.allow",
+  ],
+])(
+  "sessions_send enforces %s when targeting a configured agent main session by agentId",
+  async (_name, tools, sendAllow, error) => {
+    const config: OpenClawConfig = {
+      ...(tools ? { tools } : {}),
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "main" },
+          sessionStore: { agentId: "main" },
+        },
+        entries: {
+          main: sendAllow ? { tools: { agentToAgent: { send: sendAllow } } } : {},
+          orion: {},
+        },
+      },
+    };
+
+    testState.agentsConfig = config.agents;
+    await writeConfig(config);
+    await writeMainSession();
+    await prepareGatewayReplyRuntimeForTest({ force: true });
+
+    const spy = mockLifecycleReply("orion-created", "orion response");
+    spy.mockClear();
+
+    const result = await send({ agentId: "orion" }, "hello orion", {
+      agentSessionKey: "agent:main:main",
+      config,
+    });
+    if (error) {
+      expect(spy.mock.calls.map(([opts]) => opts)).not.toContainEqual(
+        expect.objectContaining({ sessionKey: "agent:orion:main" }),
+      );
+      expect(loadSession("agent:orion:main")).toBeUndefined();
+      expect(result.details).toMatchObject({
+        status: "forbidden",
+        error: expect.stringContaining(error),
+      });
+      return;
+    }
+    expectReply(result, "orion response", "agent:orion:main");
+
+    const orionCall = spy.mock.calls
+      .map(([opts]) => opts as { sessionId?: string; sessionKey?: string })
+      .find((call) => call.sessionKey === "agent:orion:main");
+    expect(orionCall).toBeDefined();
+    expect(orionCall?.sessionId).toBeTypeOf("string");
+
+    const stored = loadSession("agent:orion:main");
+    expect(stored?.sessionId).toBe(orionCall?.sessionId);
+  },
+  SESSION_SEND_E2E_TIMEOUT_MS,
+);

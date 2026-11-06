@@ -1,0 +1,369 @@
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
+import { t } from "../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
+
+export type ApplicationStatusBanner = {
+  source?: "read";
+  tone: "danger" | "warn" | "info";
+  text: string;
+};
+
+export type RecordedUpdateAttempt = {
+  timestampMs: number;
+  status: string;
+  reason: string;
+  installKind: string | null;
+  beforeVersion: string | null;
+  beforeSha: string | null;
+  afterVersion: string | null;
+  afterSha: string | null;
+  failure: UpdateFailureCause | null;
+};
+
+export type UpdateFailureTriage = {
+  id: string;
+  outcome: "failed" | "unknown";
+  attempt: RecordedUpdateAttempt | null;
+  banner: ApplicationStatusBanner;
+  reconciledRecord?: UpdateOutcomeRecord;
+};
+
+type UpdateOutcomeRecord = { id: string | null; timestampMs: number | null };
+
+export type UpdateTriageAdmission = CustodianTurnAdmission;
+
+const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
+  dirty: "updates.failureReasons.dirty",
+  "no-upstream": "updates.failureReasons.noUpstream",
+  "not-git-install": "updates.failureReasons.notGitInstall",
+  "not-openclaw-root": "updates.failureReasons.notOpenclawRoot",
+  "deps-install-failed": "updates.failureReasons.depsInstallFailed",
+  "build-failed": "updates.failureReasons.buildFailed",
+  "build-dirty": "updates.failureReasons.buildDirty",
+  "ui-build-failed": "updates.failureReasons.uiBuildFailed",
+  "global-install-failed": "updates.failureReasons.globalInstallFailed",
+  "restart-disabled": "updates.failureReasons.restartDisabled",
+  "restart-unavailable": "updates.failureReasons.restartUnavailable",
+  "external-supervisor-update-required": "updates.failureReasons.externalSupervisorUpdateRequired",
+  "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
+  "restart-revision-mismatch": "updates.failureReasons.restartRevisionMismatch",
+  "restart-revision-unavailable": "updates.failureReasons.restartRevisionUnavailable",
+  "already-current": "updates.failureReasons.alreadyCurrent",
+  "managed-service-handoff-already-running":
+    "updates.failureReasons.managedServiceHandoffAlreadyRunning",
+  "managed-service-handoff-unavailable": "updates.failureReasons.managedServiceHandoffUnavailable",
+  "doctor-failed": "updates.failureReasons.doctorFailed",
+  // The detached helper owns these; its output never reaches the gateway log,
+  // so the default "see the gateway logs" guidance would send operators nowhere.
+  "managed-service-handoff-failed": "updates.failureReasons.managedServiceHandoffFailed",
+  "managed-service-handoff-spawn-failed": "updates.failureReasons.managedServiceHandoffSpawnFailed",
+  "managed-service-handoff-helper-failed": "updates.failureReasons.managedServiceHandoffFailed",
+  "managed-service-handoff-parent-timeout":
+    "updates.failureReasons.managedServiceHandoffParentTimeout",
+};
+// One line is enough to name the cause; the full tail belongs in the CLI.
+const MAX_UPDATE_FAILURE_CAUSE_CHARS = 180;
+
+type UpdateSentinelStep = {
+  name?: string | null;
+  log?: {
+    stdoutTail?: string | null;
+    stderrTail?: string | null;
+    exitCode?: number | null;
+  } | null;
+};
+
+export type UpdateRestartStatusResponse = {
+  activeRun?: UpdateRunRecord;
+  lastRun?: UpdateRunRecord;
+  sentinel?: {
+    kind?: string;
+    status?: string;
+    ts?: number;
+    stats?: {
+      mode?: string | null;
+      reason?: string | null;
+      runId?: string | null;
+      handoffId?: string | null;
+      before?: { sha?: string | null; version?: string | null } | null;
+      after?: { sha?: string | null; version?: string | null } | null;
+      steps?: UpdateSentinelStep[] | null;
+    } | null;
+  } | null;
+  updateAvailable?: UpdateAvailable | null;
+  schedule?: UpdateScheduleState;
+};
+
+type UpdateFailureCause = { step: string; detail: string };
+
+export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
+  attempt: RecordedUpdateAttempt | null;
+  banner: ApplicationStatusBanner | null;
+  failure: UpdateFailureTriage | null;
+} | null {
+  if (sentinel?.kind !== "update" || !sentinel.status) {
+    return null;
+  }
+  const stats = sentinel.stats;
+  const outcome = classifyUpdateOutcome({
+    status: sentinel.status,
+    reason: stats?.reason ?? undefined,
+  });
+  const showResult = outcome !== "succeeded" && outcome !== "pending";
+  let cause: UpdateFailureCause | null = null;
+  if (showResult) {
+    const steps = sentinel?.stats?.steps;
+    // The run stops at its first failure, so the last non-zero exit is the cause.
+    const failed = Array.isArray(steps)
+      ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
+      : undefined;
+    const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
+    const step = failed?.name?.trim();
+    cause = step && detail ? { step, detail } : null;
+  }
+  const attempt =
+    showResult && typeof sentinel.ts === "number"
+      ? {
+          timestampMs: sentinel.ts,
+          status: sentinel.status,
+          reason: stats?.reason?.trim() || "unexpected-error",
+          installKind: stats?.mode?.trim() || null,
+          beforeVersion: stats?.before?.version?.trim() || null,
+          beforeSha: stats?.before?.sha?.trim() || null,
+          afterVersion: stats?.after?.version?.trim() || null,
+          afterSha: stats?.after?.sha?.trim() || null,
+          failure: cause,
+        }
+      : null;
+  const banner = showResult
+    ? resolveUpdateStatusBanner({
+        status: sentinel.status,
+        reason: stats?.reason ?? undefined,
+        cause,
+      })
+    : null;
+  if (banner && outcome === "failed") {
+    banner.text += ` ${t("updates.triage.hostHint")}`;
+  }
+  const attemptId = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
+  const record = {
+    id:
+      (attemptId && attemptId.length <= 256 ? attemptId : null) ??
+      (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
+    timestampMs: sentinel.ts ?? null,
+  };
+  const failure: UpdateFailureTriage | null =
+    outcome === "failed" && record.id && banner
+      ? { id: record.id, outcome, attempt, banner, reconciledRecord: record }
+      : null;
+  return { attempt, banner, failure };
+}
+
+function lastLogLine(tail: string | null | undefined): string | null {
+  // Redact before clipping: a truncated URL can lose its credential delimiter.
+  const lines = formatUiExternalText(tail)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const last = lines.at(-1);
+  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+}
+
+export type UpdateRunResponse = {
+  runId?: string;
+  ok?: boolean;
+  result?: {
+    status?: string;
+    reason?: string;
+    before?: { sha?: string | null; version?: string | null } | null;
+    after?: { sha?: string | null; version?: string | null } | null;
+  };
+  handoff?: { status?: string };
+  restart?: { coalesced?: boolean } | null;
+  sentinel?: { payload?: UpdateRestartStatusResponse["sentinel"] } | null;
+};
+
+export function createUpdateStatusRefresher(params: {
+  getClient: () => GatewayBrowserClient | null;
+  getEpoch: () => number;
+  getAuthorization: () => GatewayHelloOk["auth"] | undefined;
+  canRefresh: () => boolean;
+  isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onRefreshing: (refreshing: boolean) => void;
+  onStatus: (
+    response: UpdateRestartStatusResponse,
+    isCurrent: () => boolean,
+  ) => void | Promise<void>;
+  onError: (error: unknown, mode: "manual" | "completion") => void;
+}) {
+  const refresh = async (
+    mode: "manual" | "background" | "completion" = "manual",
+  ): Promise<boolean> => {
+    const client = params.getClient();
+    const epoch = params.getEpoch();
+    // A later admin grant cannot authorize a response issued under a revoked grant.
+    const authorization = params.getAuthorization();
+    if (!client || !params.canRefresh() || !params.isCurrent(client, epoch)) {
+      return false;
+    }
+    const refreshCheckout = mode === "manual";
+    const isCurrent = () =>
+      params.isCurrent(client, epoch) &&
+      params.getAuthorization() === authorization &&
+      params.canRefresh();
+    if (refreshCheckout) {
+      params.onRefreshing(true);
+    }
+    try {
+      const pending = client.request<UpdateRestartStatusResponse>(
+        "update.status",
+        refreshCheckout ? { refreshCheckout: true } : {},
+        // Checkout discovery uses the Gateway's Git command budgets.
+        { timeoutMs: refreshCheckout ? null : 5_000 },
+      );
+      // Start discovery first, but do not make progress wait for network Git.
+      const progress = refreshCheckout ? refresh("background") : null;
+      const response = await pending;
+      if (response && isCurrent()) {
+        if (refreshCheckout) {
+          params.onError(null, "manual");
+          await params.onStatus(response, isCurrent);
+          // The fast read may predate the fetch. Reconcile the target before
+          // the caller opens confirmation.
+          await progress;
+          return isCurrent() && (await refresh("completion"));
+        }
+        params.onError(null, "completion");
+        await params.onStatus(response, isCurrent);
+        return isCurrent();
+      }
+      return false;
+    } catch (error) {
+      if (mode !== "background" && isCurrent()) {
+        params.onError(error, mode);
+      }
+      return false;
+    } finally {
+      if (refreshCheckout && params.isCurrent(client, epoch)) {
+        params.onRefreshing(false);
+      }
+    }
+  };
+  return refresh;
+}
+
+/** Retained pre-ledger sentinels remain readable across a stable upgrade. */
+export function projectUpdateStatusResponse(
+  response: UpdateRestartStatusResponse,
+  current: {
+    updateStatusBanner: ApplicationStatusBanner | null;
+    recordedUpdateAttempt: RecordedUpdateAttempt | null;
+    heldUpdateCampaignId: string | null;
+    updateSchedule?: UpdateScheduleState | null;
+  },
+) {
+  const result = projectUpdateSentinel(response.sentinel);
+  const failure = result?.failure ?? null;
+  const updateStatusBanner = result ? result.banner : current.updateStatusBanner;
+  const recordedUpdateAttempt = result ? result.attempt : current.recordedUpdateAttempt;
+  const updateSchedule = Object.hasOwn(response, "schedule")
+    ? (response.schedule ?? null)
+    : undefined;
+  return {
+    failure,
+    updateStatusBanner,
+    recordedUpdateAttempt,
+    ...(Object.hasOwn(response, "updateAvailable")
+      ? { updateAvailable: response.updateAvailable ?? null }
+      : {}),
+    ...(updateSchedule !== undefined
+      ? {
+          updateSchedule,
+          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
+            updateSchedule,
+            current.heldUpdateCampaignId,
+          ),
+        }
+      : {}),
+  };
+}
+
+export async function projectUpdateRunFailure(
+  run: UpdateRunRecord,
+): Promise<UpdateFailureTriage | null> {
+  if (
+    isAcknowledgedAbandonedUpdateRun(run) ||
+    (run.status !== "failed" && run.status !== "rolled-back")
+  ) {
+    return null;
+  }
+  const { renderUpdateRunReport } = await import("../../../src/infra/update-run-report.js");
+  const step = run.steps.findLast((entry) => entry.status === "failed");
+  return {
+    id: run.runId,
+    reconciledRecord: { id: run.runId, timestampMs: run.finishedAtMs ?? run.updatedAtMs },
+    outcome: "failed",
+    banner: {
+      tone: run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON ? "warn" : "danger",
+      text: renderUpdateRunReport(run).markdown,
+    },
+    attempt: {
+      timestampMs: run.finishedAtMs ?? run.updatedAtMs,
+      status: run.status,
+      reason: run.reason ?? "unexpected-error",
+      installKind: run.target.kind ?? null,
+      beforeVersion: run.before.version ?? null,
+      beforeSha: run.before.sha ?? null,
+      afterVersion: run.after.version ?? null,
+      afterSha: run.after.sha ?? null,
+      failure: step ? { step: step.step, detail: step.detail ?? "" } : null,
+    },
+  };
+}
+
+export function resolveUpdateStatusCheckBanner(error: unknown): ApplicationStatusBanner {
+  return {
+    tone: "warn",
+    text: t("updates.checkError", { error: formatUiError(error) }),
+  };
+}
+
+export function resolveUpdateStatusBanner(params: {
+  status?: string;
+  reason?: string;
+  cause?: UpdateFailureCause | null;
+}): ApplicationStatusBanner {
+  const status = (params.status ?? "error").trim() || "error";
+  const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
+  const guidanceKey = Object.hasOwn(UPDATE_FAILURE_REASON_KEYS, reason)
+    ? UPDATE_FAILURE_REASON_KEYS[reason]
+    : undefined;
+  const guidance = t(guidanceKey ?? "updates.failureReasons.default");
+  const cause = params.cause;
+  return {
+    tone: status === "skipped" ? "warn" : "danger",
+    // A recorded cause names what actually broke; the reason slug only names
+    // which step owned it.
+    text: cause
+      ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
+      : status === "error"
+        ? t("updates.error", { error: `${reason}. ${guidance}` })
+        : t("updates.status", { status, reason, guidance }),
+  };
+}
+
+export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
+  return {
+    tone: "danger",
+    text: t("updates.outcomeUnknown"),
+  };
+}

@@ -1,0 +1,87 @@
+import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
+import { isRepoRootRelativeRef } from "./repo-path.js";
+
+export function toRepoPath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
+export function toRepoRelativePath(repoRoot: string, filePath: string): string {
+  return toRepoPath(path.relative(repoRoot, filePath));
+}
+
+export function repoRootTokenArtifactPath(value: string): string | null {
+  const normalized = value.split(/[\\/]+/u).join("/");
+  return normalized.startsWith("<repo-root>/") ? normalized.slice("<repo-root>/".length) : null;
+}
+
+/** Retain the producer's known base when a bundle crosses output directories. */
+export function toRepoArtifactPath(repoRoot: string, filePath: string): string {
+  const absolutePath = path.resolve(filePath);
+  const relativePath = toRepoRelativePath(repoRoot, absolutePath);
+  return isRepoRootRelativeRef(relativePath) ? `<repo-root>/${relativePath}` : absolutePath;
+}
+
+export function resolveQaArtifactPath(repoRoot: string, evidenceDir: string, value: string) {
+  const repoPath = repoRootTokenArtifactPath(value);
+  return repoPath !== null ? path.resolve(repoRoot, repoPath) : path.resolve(evidenceDir, value);
+}
+
+export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
+  if (!outputDir) {
+    return undefined;
+  }
+  if (path.isAbsolute(outputDir)) {
+    throw new Error("--output-dir must be a relative path inside the repo root.");
+  }
+  const resolved = pathScope(repoRoot, { label: "repo root" }).resolve(outputDir);
+  if (!resolved.ok) {
+    throw new Error("--output-dir must stay within the repo root.");
+  }
+  return resolved.path;
+}
+
+export function resolveTimestampedQaOutputDir(
+  repoRoot: string,
+  outputDir: string | undefined,
+  startedAt: Date,
+  prefix: string,
+) {
+  const configured = resolveRepoRelativeOutputDir(repoRoot, outputDir);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
+  return path.join(repoRoot, ".artifacts", "qa-e2e", `${prefix}-${stamp}`);
+}
+
+export async function ensureRepoBoundDirectory(
+  repoRoot: string,
+  targetDir: string,
+  label: string,
+  opts?: { mode?: number },
+) {
+  const rootDir = path.resolve(repoRoot);
+  const targetPath = path.resolve(targetDir);
+  if (!isPathInside(rootDir, targetPath)) {
+    throw new Error(`${label} must stay within the repo root.`);
+  }
+  try {
+    await assertNoSymlinkParents({
+      rootDir,
+      targetPath,
+      messagePrefix: label,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("symlink")) {
+      throw new Error(`${label} must not traverse symlinks.`, { cause: error });
+    }
+    throw error;
+  }
+  const result = await pathScope(repoRoot, { label }).ensureDir(targetDir, { mode: opts?.mode });
+  if (!result.ok) {
+    throw new Error(`${label} must stay within the repo root.`);
+  }
+  return result.path;
+}

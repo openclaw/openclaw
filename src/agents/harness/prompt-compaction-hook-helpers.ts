@@ -1,0 +1,224 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
+import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
+import { resolvePluginTurnContext } from "../plugin-turn-context.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
+
+const log = createSubsystemLogger("agents/harness");
+
+const warnHookFailure = (hook: string) => (error: unknown) => {
+  log.warn(`${hook} hook failed: ${String(error)}`);
+  return undefined;
+};
+
+type AgentHarnessPromptBuildResult = {
+  prompt: string;
+  developerInstructions: string;
+  /** A before_prompt_build `systemPrompt`, including "", replaced the harness's own policy. */
+  systemPromptReplaced?: true;
+  /** Stable policy and per-turn context for harnesses with separate instruction carriers. */
+  threadDeveloperInstructions?: string;
+  turnDeveloperInstructions?: string;
+  /** Optional per-turn tool restriction requested by before_prompt_build hooks. */
+  toolsAllow?: string[];
+  /** Span within prompt containing the original prompt input. */
+  promptInputRange?: { start: number; end: number };
+};
+
+type AgentHarnessDeveloperInstructionBuilder = {
+  build: (params: { toolsAllow?: string[]; hasToolRestrictions: boolean }) => string | undefined;
+};
+
+export async function resolveAgentHarnessBeforePromptBuildResult(params: {
+  prompt: string;
+  currentInboundContext?: CurrentInboundPromptContext;
+  currentUserMessage?: string | Pick<PersistedUserTurnMessage, "content" | "idempotencyKey">;
+  currentUserMessageId?: string;
+  developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
+  messages: unknown[] | (() => Promise<unknown[]>);
+  ctx: AgentHarnessHookContext;
+  bootstrapContextRunKind?: BootstrapContextRunKind;
+  toolAuthority?: {
+    fingerprint?: string;
+    activeToolNames: () => readonly string[];
+    assertActive: () => void;
+  };
+}): Promise<AgentHarnessPromptBuildResult> {
+  const inputPrompt = buildCurrentInboundPrompt({
+    context: params.currentInboundContext,
+    prompt: params.prompt,
+  });
+  const hookRunner = getGlobalHookRunner();
+  const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
+  const hookCtx = buildAgentHookContext(params.ctx);
+  const currentUserMessage = params.currentUserMessage;
+  const currentUserMessageText =
+    typeof currentUserMessage === "string"
+      ? currentUserMessage
+      : currentUserMessage
+        ? typeof currentUserMessage.content === "string"
+          ? currentUserMessage.content
+          : currentUserMessage.content
+              .flatMap((part) => (part.type === "text" ? [part.text] : []))
+              .join("\n")
+        : undefined;
+  const currentUserMessageId =
+    params.currentUserMessageId ??
+    (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
+  const promptEvent = {
+    prompt: inputPrompt,
+    ...(currentUserMessageText !== undefined ? { currentUserMessage: currentUserMessageText } : {}),
+    ...(currentUserMessageId !== undefined ? { currentUserMessageId } : {}),
+    messages:
+      hasPromptBuildHooks || hookRunner?.hasHooks("agent_turn_prepare")
+        ? typeof params.messages === "function"
+          ? await params.messages()
+          : params.messages
+        : [],
+  };
+
+  const turnContext = await resolvePluginTurnContext({
+    config: params.ctx.config ?? {},
+    prompt: inputPrompt,
+    messages: promptEvent.messages,
+    hookCtx,
+    hookRunner,
+  });
+  const promptBuildResult =
+    hookRunner && hasPromptBuildHooks
+      ? await hookRunner
+          .runBeforePromptBuild(promptEvent, hookCtx)
+          .catch(warnHookFailure("before_prompt_build"))
+      : undefined;
+  const developerInstructions = resolveDeveloperInstructions(
+    params.developerInstructions,
+    promptBuildResult?.toolsAllow,
+  );
+  const toolAuthority = params.toolAuthority;
+  const toolAuthorityFingerprint = toolAuthority?.fingerprint?.trim();
+  const authorizedPromptBuildResult =
+    hookRunner && toolAuthorityFingerprint && toolAuthority
+      ? await hookRunner
+          .runAuthorizedPromptBuild(promptEvent, hookCtx, {
+            toolAuthorityFingerprint,
+            activeToolNames: toolAuthority.activeToolNames(),
+            assertHostActive: toolAuthority.assertActive,
+          })
+          .catch(warnHookFailure("authorized before_prompt_build"))
+      : undefined;
+  const replacementSystemPrompt = promptBuildResult?.systemPrompt;
+  const systemPromptReplaced = typeof replacementSystemPrompt === "string";
+  const systemPrompt = systemPromptReplaced ? replacementSystemPrompt : developerInstructions;
+  const promptPrefix = joinPresentTextSegments([
+    turnContext.prependContext,
+    promptBuildResult?.prependContext,
+    authorizedPromptBuildResult?.prependContext,
+  ]);
+  const promptSuffix = joinPresentTextSegments([
+    turnContext.appendContext,
+    promptBuildResult?.appendContext,
+    authorizedPromptBuildResult?.appendContext,
+  ]);
+  const prompt = joinPresentTextSegments([promptPrefix, inputPrompt, promptSuffix]) ?? inputPrompt;
+  const promptInputStart =
+    inputPrompt.length === 0
+      ? (promptPrefix?.length ?? 0)
+      : promptPrefix
+        ? promptPrefix.length + 2
+        : 0;
+  const prependSystemContext = wrapPluginSystemContextSection(
+    promptBuildResult?.prependSystemContext,
+  );
+  const appendSystemContext = wrapPluginSystemContextSection(
+    promptBuildResult?.appendSystemContext,
+  );
+  const turnDeveloperInstructions = joinPresentTextSegments([
+    prependSystemContext,
+    appendSystemContext,
+  ]);
+  return {
+    prompt,
+    ...(promptBuildResult?.toolsAllow !== undefined
+      ? { toolsAllow: promptBuildResult.toolsAllow }
+      : {}),
+    developerInstructions:
+      joinPresentTextSegments([prependSystemContext, systemPrompt, appendSystemContext]) ??
+      systemPrompt,
+    ...(systemPromptReplaced ? { systemPromptReplaced: true as const } : {}),
+    ...(turnDeveloperInstructions
+      ? { threadDeveloperInstructions: systemPrompt, turnDeveloperInstructions }
+      : {}),
+    promptInputRange: {
+      start: promptInputStart,
+      end: promptInputStart + inputPrompt.length,
+    },
+  };
+}
+
+function resolveDeveloperInstructions(
+  instructions: string | AgentHarnessDeveloperInstructionBuilder,
+  toolsAllow?: string[],
+): string {
+  return typeof instructions === "string"
+    ? instructions
+    : (instructions.build({
+        toolsAllow,
+        hasToolRestrictions:
+          toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*"),
+      }) ?? "");
+}
+
+/** Runs best-effort before-compaction hooks for a harness session. */
+export async function runAgentHarnessBeforeCompactionHook(params: {
+  sessionFile: string;
+  messages?: AgentMessage[];
+  ctx: AgentHarnessHookContext;
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_compaction")) {
+    return;
+  }
+  try {
+    await hookRunner.runBeforeCompaction(
+      {
+        messageCount: params.messages?.length ?? -1,
+        ...(params.messages ? { messages: params.messages } : {}),
+        sessionFile: params.sessionFile,
+      },
+      buildAgentHookContext(params.ctx),
+    );
+  } catch (error) {
+    log.warn(`before_compaction hook failed: ${String(error)}`);
+  }
+}
+
+/** Runs best-effort after-compaction hooks for a harness session. */
+export async function runAgentHarnessAfterCompactionHook(params: {
+  sessionFile: string;
+  messages?: AgentMessage[];
+  ctx: AgentHarnessHookContext;
+  compactedCount: number;
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("after_compaction")) {
+    return;
+  }
+  try {
+    await hookRunner.runAfterCompaction(
+      {
+        messageCount: params.messages?.length ?? -1,
+        compactedCount: params.compactedCount,
+        sessionFile: params.sessionFile,
+      },
+      buildAgentHookContext(params.ctx),
+    );
+  } catch (error) {
+    log.warn(`after_compaction hook failed: ${String(error)}`);
+  }
+}

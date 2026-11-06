@@ -1,0 +1,332 @@
+import { randomUUID } from "node:crypto";
+import {
+  parseQaTarget,
+  sanitizeQaBusToolCalls,
+  type QaBusConversation,
+  type QaBusCreateThreadInput,
+  type QaBusDeleteMessageInput,
+  type QaBusEditMessageInput,
+  type QaBusEvent,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
+  type QaBusOutboundMessageInput,
+  type QaBusPollInput,
+  type QaBusReadMessageInput,
+  type QaBusReactToMessageInput,
+  type QaBusSearchMessagesInput,
+  type QaBusSnapshotConversation,
+  type QaBusThread,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import {
+  buildQaBusSnapshot,
+  cloneMessage,
+  normalizeAccountId,
+  pollQaBusEvents,
+  requireQaBusMessageForAccount,
+  searchQaBusMessages,
+} from "./bus-queries.js";
+import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
+
+const DEFAULT_BOT_ID = "openclaw";
+const DEFAULT_BOT_NAME = "OpenClaw QA";
+
+function normalizeInboundConversation(conversation: QaBusConversation): QaBusConversation {
+  const rawKind = (conversation as { kind?: unknown }).kind;
+  const kind = rawKind === "dm" ? "direct" : rawKind;
+  if (kind !== "direct" && kind !== "channel" && kind !== "group") {
+    throw new Error(`invalid qa-channel conversation kind: ${String(rawKind)}`);
+  }
+  return kind === conversation.kind ? conversation : { ...conversation, kind };
+}
+
+type QaBusEventSeed = {
+  [Kind in QaBusEvent["kind"]]: Omit<Extract<QaBusEvent, { kind: Kind }>, "cursor">;
+}[QaBusEvent["kind"]];
+
+export function createQaBusState() {
+  const conversations = new Map<string, QaBusSnapshotConversation>();
+  const threads = new Map<string, QaBusThread>();
+  const messages = new Map<string, QaBusMessage>();
+  const events: QaBusEvent[] = [];
+  const inboundReceipts = new Map<
+    number,
+    { accountId: string; adopted: boolean; completed: boolean }
+  >();
+  let cursor = 0;
+  let assertWritable = () => {};
+  const getSnapshot = () =>
+    buildQaBusSnapshot({
+      cursor,
+      conversations,
+      threads,
+      messages,
+      events,
+    });
+  const waiters = createQaBusWaiterStore(getSnapshot);
+
+  const pushEvent = (event: QaBusEventSeed): void => {
+    cursor += 1;
+    events.push({ cursor, ...event });
+    if (event.kind === "inbound-message") {
+      inboundReceipts.set(cursor, {
+        accountId: event.accountId,
+        adopted: false,
+        completed: false,
+      });
+    }
+    waiters.settle();
+  };
+
+  const publishMessage = (
+    kind: "inbound-message" | "outbound-message" | "message-edited" | "message-deleted",
+    message: QaBusMessage,
+  ) => {
+    pushEvent({ kind, accountId: message.accountId, message: cloneMessage(message) });
+    return cloneMessage(message);
+  };
+
+  const ensureConversation = (
+    accountId: string,
+    conversation: QaBusConversation,
+  ): QaBusSnapshotConversation => {
+    const key = JSON.stringify([accountId, conversation.kind, conversation.id]);
+    const existing = conversations.get(key);
+    if (existing) {
+      if (!existing.title && conversation.title) {
+        existing.title = conversation.title;
+      }
+      return existing;
+    }
+    const created = { ...conversation, accountId };
+    conversations.set(key, created);
+    return created;
+  };
+
+  const requireActiveMessageForAccount = (
+    input: Pick<QaBusReadMessageInput, "accountId" | "messageId">,
+  ): QaBusMessage => {
+    assertWritable();
+    const message = requireQaBusMessageForAccount({ messages, input });
+    if (message.deleted) {
+      throw new Error(`qa-bus message was deleted: ${input.messageId}`);
+    }
+    return message;
+  };
+
+  const createMessage = (
+    params: QaBusInboundMessageInput & {
+      direction: QaBusMessage["direction"];
+      accountId: string;
+      messageId?: string;
+      isError?: boolean;
+    },
+  ): QaBusMessage => {
+    assertWritable();
+    const thread = params.threadId ? threads.get(params.threadId) : undefined;
+    if (
+      thread &&
+      (thread.accountId !== params.accountId ||
+        thread.conversationId !== params.conversation.id ||
+        params.conversation.kind !== "channel")
+    ) {
+      // Unknown ids can represent externally observed threads; owned records
+      // must never cross account, conversation, or channel-kind boundaries.
+      throw new Error("qa-bus thread not found in selected account and conversation");
+    }
+    const storedConversation = ensureConversation(params.accountId, params.conversation);
+    const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
+    const message: QaBusMessage = {
+      // Adopt native identity before indexing or publishing any message clone.
+      id: params.messageId ?? randomUUID(),
+      accountId: params.accountId,
+      direction: params.direction,
+      conversation: {
+        id: storedConversation.id,
+        kind: storedConversation.kind,
+        ...(storedConversation.title ? { title: storedConversation.title } : {}),
+      },
+      senderId: params.senderId,
+      senderName: params.senderName,
+      text: params.text,
+      ...(params.isError === true ? { isError: true } : {}),
+      timestamp: params.timestamp ?? Date.now(),
+      threadId: params.threadId,
+      threadTitle: params.threadTitle,
+      replyToId: params.replyToId,
+      attachments: params.attachments?.map((attachment) => ({ ...attachment })) ?? [],
+      ...(params.nativeCommand ? { nativeCommand: { ...params.nativeCommand } } : {}),
+      ...(toolCalls ? { toolCalls } : {}),
+      reactions: [],
+    };
+    // Provider IDs are conversation-local and must never replace another chat's message.
+    const { accountId, conversation, id } = message;
+    messages.set(JSON.stringify([accountId, conversation.kind, conversation.id, id]), message);
+    return message;
+  };
+
+  return {
+    reset(terminal = false) {
+      assertWritable = terminal ? throwQaBusClosed : assertWritable;
+      conversations.clear();
+      threads.clear();
+      messages.clear();
+      events.length = 0;
+      inboundReceipts.clear();
+      // Keep the cursor monotonic across resets so long-poll clients do not
+      // miss events; terminal reset also fences late waiter timers.
+      waiters.reset(undefined, terminal);
+    },
+    getSnapshot,
+    addInboundMessage(input: QaBusInboundMessageInput, messageId?: string) {
+      const accountId = normalizeAccountId(input.accountId);
+      const message = createMessage({
+        direction: "inbound",
+        accountId,
+        messageId,
+        // `dm:` is the canonical target spelling and is also used by manual
+        // QA-bus clients. Normalize its matching ingress alias before routing
+        // so a DM can never silently acquire group/channel privacy semantics.
+        conversation: normalizeInboundConversation(input.conversation),
+        senderId: input.senderId,
+        senderName: input.senderName,
+        text: input.text,
+        timestamp: input.timestamp,
+        threadId: input.threadId,
+        threadTitle: input.threadTitle,
+        replyToId: input.replyToId,
+        attachments: input.attachments,
+        nativeCommand: input.nativeCommand,
+        toolCalls: input.toolCalls,
+      });
+      return publishMessage("inbound-message", message);
+    },
+    addOutboundMessage(input: QaBusOutboundMessageInput) {
+      const accountId = normalizeAccountId(input.accountId);
+      const { conversationId, chatType, threadId } = parseQaTarget(input.to);
+      const message = createMessage({
+        direction: "outbound",
+        accountId,
+        conversation: { id: conversationId, kind: chatType },
+        senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
+        senderName: input.senderName?.trim() || DEFAULT_BOT_NAME,
+        text: input.text,
+        isError: input.isError,
+        timestamp: input.timestamp,
+        threadId: input.threadId ?? threadId,
+        replyToId: input.replyToId,
+        attachments: input.attachments,
+        toolCalls: input.toolCalls,
+      });
+      return publishMessage("outbound-message", message);
+    },
+    createThread(input: QaBusCreateThreadInput) {
+      assertWritable();
+      const accountId = normalizeAccountId(input.accountId);
+      const thread: QaBusThread = {
+        id: `thread-${randomUUID()}`,
+        accountId,
+        conversationId: input.conversationId,
+        title: input.title,
+        createdAt: input.timestamp ?? Date.now(),
+        createdBy: input.createdBy?.trim() || DEFAULT_BOT_ID,
+      };
+      threads.set(thread.id, thread);
+      ensureConversation(accountId, {
+        id: input.conversationId,
+        kind: "channel",
+      });
+      pushEvent({
+        kind: "thread-created",
+        accountId,
+        thread: { ...thread },
+      });
+      return { ...thread };
+    },
+    reactToMessage(input: QaBusReactToMessageInput) {
+      const accountId = normalizeAccountId(input.accountId);
+      const message = requireActiveMessageForAccount(input);
+      const reaction = {
+        emoji: input.emoji,
+        senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
+        timestamp: input.timestamp ?? Date.now(),
+      };
+      if (
+        message.reactions.some(
+          (existing) =>
+            existing.emoji === reaction.emoji && existing.senderId === reaction.senderId,
+        )
+      ) {
+        return cloneMessage(message);
+      }
+      message.reactions.push(reaction);
+      pushEvent({
+        kind: "reaction-added",
+        accountId,
+        message: cloneMessage(message),
+        emoji: reaction.emoji,
+        senderId: reaction.senderId,
+      });
+      return cloneMessage(message);
+    },
+    editMessage(input: QaBusEditMessageInput) {
+      const message = requireActiveMessageForAccount(input);
+      message.text = input.text;
+      message.editedAt = input.timestamp ?? Date.now();
+      return publishMessage("message-edited", message);
+    },
+    deleteMessage(input: QaBusDeleteMessageInput) {
+      const message = requireActiveMessageForAccount(input);
+      message.deleted = true;
+      return publishMessage("message-deleted", message);
+    },
+    readMessage(input: QaBusReadMessageInput) {
+      return cloneMessage(requireQaBusMessageForAccount({ messages, input }));
+    },
+    searchMessages(input: QaBusSearchMessagesInput) {
+      return searchQaBusMessages({ messages, input });
+    },
+    recordPollReceipts(input: QaBusPollInput = {}) {
+      assertWritable();
+      const accountId = normalizeAccountId(input.accountId);
+      // A confirmed adoption permits execution. Validate the entire batch first
+      // so a reset or foreign input cannot produce a false custody confirmation.
+      const adopted = (input.adoptedEventCursors ?? []).map((eventCursor) => {
+        const receipt = inboundReceipts.get(eventCursor);
+        if (receipt?.accountId !== accountId) {
+          throw new Error(
+            "adopted event must be a retained inbound input for the selected account",
+          );
+        }
+        return receipt;
+      });
+      for (const receipt of adopted) {
+        receipt.adopted = true;
+      }
+      // Completion is exact, including terminal no-turn outcomes. Late duplicate
+      // receipts after reset and claims outside this account are harmless.
+      for (const completedCursor of input.completedEventCursors ?? []) {
+        const receipt = inboundReceipts.get(completedCursor);
+        if (receipt?.accountId === accountId) {
+          receipt.adopted = true;
+          receipt.completed = true;
+        }
+      }
+    },
+    hasCompletedInboundEvent(accountId: string | undefined, eventCursor: number) {
+      const completion = inboundReceipts.get(eventCursor);
+      return completion?.accountId === normalizeAccountId(accountId) && completion.completed;
+    },
+    poll(input: QaBusPollInput = {}) {
+      return pollQaBusEvents({
+        events,
+        cursor,
+        input,
+        isAdoptedInbound: (eventCursor) => inboundReceipts.get(eventCursor)?.adopted === true,
+      });
+    },
+    waitFor: waiters.waitFor.bind(waiters),
+    waitForCursorAdvance: waiters.waitForCursorAdvance.bind(waiters),
+  };
+}
+
+export type QaBusState = ReturnType<typeof createQaBusState>;

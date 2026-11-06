@@ -1,0 +1,127 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { ensureMatrixCryptoRuntime } from "../deps.js";
+import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
+import type { EncryptedFile } from "./types.js";
+import type {
+  MatrixVerificationCryptoApi,
+  MatrixVerificationManager,
+} from "./verification-manager.js";
+
+type MatrixCryptoFacadeClient = {
+  getCrypto: () => MatrixVerificationCryptoApi | undefined;
+  getUserId: () => string | null;
+};
+
+// Keep native crypto bindings off the CLI startup graph; failed imports require a restart.
+const loadMatrixCryptoNodeRuntime = createLazyRuntimeModule(
+  () => import("./crypto-node.runtime.js"),
+);
+
+async function loadMatrixCryptoNodeBindings() {
+  await ensureMatrixCryptoRuntime();
+  const runtime = await loadMatrixCryptoNodeRuntime();
+  return runtime.loadMatrixCryptoNodeBindings();
+}
+
+export function createMatrixCryptoFacade(deps: {
+  client: MatrixCryptoFacadeClient;
+  verificationManager: MatrixVerificationManager;
+  recoveryKeyStore: MatrixRecoveryKeyStore;
+  downloadContent: (
+    mxcUrl: string,
+    opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
+  ) => Promise<Buffer>;
+}) {
+  const manager = deps.verificationManager;
+  function withTrackedVerifications<TArgs extends unknown[], TResult>(
+    run: (...args: TArgs) => TResult,
+  ) {
+    return async (...args: TArgs): Promise<Awaited<TResult>> => {
+      const crypto = deps.client.getCrypto();
+      const userId = deps.client.getUserId();
+      if (userId && crypto) {
+        for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
+          manager.trackVerificationRequest(request);
+        }
+      }
+      return await run(...args);
+    };
+  }
+
+  return {
+    encryptMedia: async (
+      buffer: Buffer,
+    ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {
+      const { Attachment } = await loadMatrixCryptoNodeBindings();
+      const encrypted = Attachment.encrypt(new Uint8Array(buffer));
+      const mediaInfoJson = encrypted.mediaEncryptionInfo;
+      if (!mediaInfoJson) {
+        throw new Error("Matrix media encryption failed: missing media encryption info");
+      }
+      const parsed = JSON.parse(mediaInfoJson) as EncryptedFile;
+      return {
+        buffer: Buffer.from(encrypted.encryptedData),
+        file: {
+          key: parsed.key,
+          iv: parsed.iv,
+          hashes: parsed.hashes,
+          v: parsed.v,
+        },
+      };
+    },
+    decryptMedia: async (
+      file: EncryptedFile,
+      opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
+    ): Promise<Buffer> => {
+      const encrypted = await deps.downloadContent(file.url, opts);
+      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeBindings();
+      const metadata: EncryptedFile = {
+        url: file.url,
+        key: file.key,
+        iv: file.iv,
+        hashes: file.hashes,
+        v: file.v,
+      };
+      const attachment = new EncryptedAttachment(
+        new Uint8Array(encrypted),
+        JSON.stringify(metadata),
+      );
+      const decrypted = Attachment.decrypt(attachment);
+      return Buffer.from(decrypted);
+    },
+    getRecoveryKey: async () => {
+      return deps.recoveryKeyStore.getRecoveryKeySummary();
+    },
+    listVerifications: withTrackedVerifications(manager.listVerifications.bind(manager)),
+    ensureVerificationDmTracked: async ({ roomId, userId }: { roomId: string; userId: string }) => {
+      const request = deps.client.getCrypto()?.findVerificationRequestDMInProgress(roomId, userId);
+      if (!request) {
+        return null;
+      }
+      return deps.verificationManager.trackVerificationRequest(request);
+    },
+    requestVerification: async (params: {
+      ownUser?: boolean;
+      userId?: string;
+      deviceId?: string;
+      roomId?: string;
+    }) => {
+      return await deps.verificationManager.requestVerification(deps.client.getCrypto(), params);
+    },
+    acceptVerification: withTrackedVerifications(manager.acceptVerification.bind(manager)),
+    cancelVerification: withTrackedVerifications(manager.cancelVerification.bind(manager)),
+    startVerification: withTrackedVerifications(manager.startVerification.bind(manager)),
+    generateVerificationQr: withTrackedVerifications(manager.generateVerificationQr.bind(manager)),
+    scanVerificationQr: withTrackedVerifications(manager.scanVerificationQr.bind(manager)),
+    confirmVerificationSas: withTrackedVerifications(manager.confirmVerificationSas.bind(manager)),
+    mismatchVerificationSas: withTrackedVerifications(
+      manager.mismatchVerificationSas.bind(manager),
+    ),
+    confirmVerificationReciprocateQr: withTrackedVerifications(
+      manager.confirmVerificationReciprocateQr.bind(manager),
+    ),
+    getVerificationSas: withTrackedVerifications(manager.getVerificationSas.bind(manager)),
+  };
+}
+
+export type MatrixCryptoFacade = ReturnType<typeof createMatrixCryptoFacade>;

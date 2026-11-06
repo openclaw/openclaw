@@ -1,0 +1,287 @@
+import type {
+  ChannelIngressContextBinding,
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveChannelContextVisibilityMode,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getMattermostRuntime } from "../runtime.js";
+import type { ResolvedMattermostAccount } from "./accounts.js";
+import type { MattermostChannel } from "./client.js";
+import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingress-identity.js";
+import type { ChatType, OpenClawConfig } from "./runtime-api.js";
+import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
+
+export const MATTERMOST_PAIRING_QUEUE_FULL_TEXT =
+  "DM pairing is full, so no pairing request was saved. Ask the bot owner to approve or dismiss pending requests in Settings → Channels → DM access requests, then try again.";
+
+export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
+  const normalized = entries
+    .map((entry) => normalizeMattermostAllowEntry(String(entry)))
+    .filter(Boolean);
+  return uniqueStrings(normalized);
+}
+
+export function formatMattermostDirectMessageDropLog(params: {
+  senderId: string;
+  dmPolicy: string;
+  reasonCode?: string;
+}): string {
+  const reason = params.reasonCode ? ` reason=${params.reasonCode}` : "";
+  const hint =
+    params.dmPolicy === "open" && params.reasonCode === "dm_policy_not_allowlisted"
+      ? " hint=add-allowFrom-wildcard"
+      : "";
+  return `mattermost: drop dm sender=${params.senderId} (dmPolicy=${params.dmPolicy}${reason}${hint})`;
+}
+
+export function isMattermostSenderAllowed(params: {
+  senderId: string;
+  senderName?: string;
+  allowFrom: string[];
+  allowNameMatching?: boolean;
+}): boolean {
+  const allowFrom = normalizeMattermostAllowList(params.allowFrom);
+  const match = resolveAllowlistMatchSimple({
+    allowFrom,
+    senderId: normalizeMattermostAllowEntry(params.senderId),
+    senderName: params.senderName ? normalizeMattermostAllowEntry(params.senderName) : undefined,
+    allowNameMatching: params.allowNameMatching,
+  });
+  return match.allowed;
+}
+
+export function resolveMattermostTrustedChatKind(params: {
+  channelType?: string | null;
+}): ChatType {
+  const normalized = params.channelType?.trim().toUpperCase();
+  if (!normalized) {
+    return "direct";
+  }
+  if (normalized === "D") {
+    return "direct";
+  }
+  if (normalized === "G" || normalized === "P") {
+    return "group";
+  }
+  return "channel";
+}
+
+type MattermostCommandDenyReason =
+  | "dm-disabled"
+  | "dm-pairing"
+  | "unauthorized"
+  | "channels-disabled"
+  | "channel-no-allowlist";
+
+export async function resolveMattermostMonitorInboundAccess(params: {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  senderId: string;
+  senderName: string;
+  channelId: string;
+  threadId?: string;
+  kind: "direct" | "group" | "channel";
+  groupPolicy: "allowlist" | "open" | "disabled";
+  storeAllowFrom?: Array<string | number> | null;
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
+  allowTextCommands: boolean;
+  hasControlCommand: boolean;
+  eventKind?: ChannelIngressEventInput["kind"];
+  mayPair?: boolean;
+  contextBinding?: ChannelIngressContextBinding;
+}) {
+  const {
+    account,
+    cfg,
+    senderId,
+    senderName,
+    channelId,
+    kind,
+    groupPolicy,
+    storeAllowFrom,
+    allowTextCommands,
+    hasControlCommand,
+  } = params;
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
+  const configAllowFrom = account.config.allowFrom ?? [];
+  const configGroupAllowFrom = account.config.groupAllowFrom ?? [];
+  const readStoreAllowFrom =
+    params.readStoreAllowFrom ??
+    (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
+  return await getMattermostRuntime().channel.inbound.ingress.resolveStable({
+    channelId: "mattermost",
+    accountId: account.accountId,
+    contextBinding: params.contextBinding,
+    identity: mattermostIngressIdentity,
+    cfg,
+    ...(readStoreAllowFrom ? { readStoreAllowFrom } : {}),
+    useDefaultPairingStore: params.readStoreAllowFrom === undefined && storeAllowFrom == null,
+    subject: {
+      stableId: senderId,
+      aliases: { "sender-name": senderName },
+    },
+    conversation: {
+      kind,
+      id: channelId,
+      threadId: params.threadId,
+    },
+    event: {
+      kind: params.eventKind ?? "message",
+      authMode: "inbound",
+      mayPair: params.mayPair ?? true,
+    },
+    dmPolicy,
+    groupPolicy,
+    policy: {
+      groupAllowFromFallbackToAllowFrom: true,
+      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+    },
+    allowFrom: configAllowFrom,
+    groupAllowFrom: configGroupAllowFrom,
+    command: {
+      allowTextCommands,
+      hasControlCommand: allowTextCommands && hasControlCommand,
+      directGroupAllowFrom: kind === "direct" ? "effective" : "none",
+    },
+  });
+}
+
+/** Live and recovered history share the same trigger-versus-visibility policy. */
+export function shouldRetainMattermostSenderHistory(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  kind: ChatType;
+  ingress: ChannelIngressDecision;
+}): boolean {
+  return (
+    params.ingress.decision === "allow" ||
+    (params.kind !== "direct" &&
+      params.ingress.reasonCode === "group_policy_not_allowlisted" &&
+      shouldIncludeSupplementalContext({
+        mode: resolveChannelContextVisibilityMode({
+          cfg: params.cfg,
+          channel: "mattermost",
+          accountId: params.accountId,
+        }),
+        kind: "history",
+        senderAllowed: false,
+      }))
+  );
+}
+
+function resolveMattermostCommandDenyReason(params: {
+  decision: ChannelIngressDecision;
+  kind: "direct" | "group" | "channel";
+  dmPolicy: string;
+}): MattermostCommandDenyReason | null {
+  if (params.decision.decision === "allow") {
+    return null;
+  }
+  if (params.kind === "direct") {
+    if (params.decision.reasonCode === "dm_policy_disabled") {
+      return "dm-disabled";
+    }
+    if (
+      params.dmPolicy === "pairing" &&
+      (params.decision.admission === "pairing-required" ||
+        params.decision.reasonCode === "dm_policy_pairing_required")
+    ) {
+      return "dm-pairing";
+    }
+    return "unauthorized";
+  }
+  if (params.decision.reasonCode === "group_policy_disabled") {
+    return "channels-disabled";
+  }
+  if (params.decision.reasonCode === "group_policy_empty_allowlist") {
+    return "channel-no-allowlist";
+  }
+  return "unauthorized";
+}
+
+export async function authorizeMattermostCommandInvocation(params: {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  senderId: string;
+  senderName: string;
+  channelId: string;
+  channelInfo: MattermostChannel | null;
+  storeAllowFrom?: Array<string | number> | null;
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
+  allowTextCommands: boolean;
+  hasControlCommand: boolean;
+}) {
+  const {
+    account,
+    cfg,
+    senderId,
+    senderName,
+    channelId,
+    channelInfo,
+    storeAllowFrom,
+    readStoreAllowFrom,
+    allowTextCommands,
+    hasControlCommand,
+  } = params;
+
+  if (!channelInfo?.type) {
+    return {
+      ok: false as const,
+      denyReason: "unknown-channel" as const,
+      commandAuthorized: false as const,
+      channelInfo,
+      kind: "channel" as const,
+      chatType: "channel" as const,
+      channelName: "",
+      channelDisplay: "",
+      roomLabel: `#${channelId}`,
+    };
+  }
+
+  const kind = resolveMattermostTrustedChatKind({ channelType: channelInfo.type });
+  const chatType = kind;
+  const channelName = channelInfo.name ?? "";
+  const channelDisplay = channelInfo.display_name ?? channelName;
+  const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
+
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+
+  const ingress = await resolveMattermostMonitorInboundAccess({
+    account,
+    cfg,
+    senderId,
+    senderName,
+    channelId,
+    kind,
+    groupPolicy,
+    storeAllowFrom,
+    readStoreAllowFrom,
+    allowTextCommands,
+    hasControlCommand,
+    eventKind: "native-command",
+    mayPair: true,
+  });
+  const denyReason = resolveMattermostCommandDenyReason({
+    decision: ingress.ingress,
+    kind,
+    dmPolicy: account.config.dmPolicy ?? "pairing",
+  });
+
+  return {
+    channelInfo,
+    kind,
+    chatType,
+    channelName,
+    channelDisplay,
+    roomLabel,
+    ...(denyReason
+      ? { ok: false as const, denyReason, commandAuthorized: false as const }
+      : { ok: true as const, commandAuthorized: ingress.commandAccess.authorized }),
+  };
+}

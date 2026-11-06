@@ -1,0 +1,651 @@
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
+import { INCLUDE_KEY } from "../config/includes.js";
+import { parseConfigJson5 } from "../config/io.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { redactConfigObject } from "../config/redact-snapshot.js";
+import { buildConfigSchemaCore } from "../config/schema.js";
+import { isMissingPathError } from "../infra/errors.js";
+import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { collectRuntimeCapabilities } from "../infra/runtime-capabilities.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
+import { parseBooleanValue } from "../utils/boolean.js";
+import { VERSION } from "../version.js";
+import {
+  readDiagnosticStabilityBundleFileSync,
+  readLatestDiagnosticStabilityBundleSync,
+  type ReadDiagnosticStabilityBundleResult,
+} from "./diagnostic-stability-bundle.js";
+import {
+  jsonSupportBundleFile,
+  jsonlSupportBundleFile,
+  supportBundleContents,
+  textSupportBundleFile,
+  writeSupportBundleZip,
+  type DiagnosticSupportBundleFile,
+} from "./diagnostic-support-bundle.js";
+import { sanitizeSupportLogRecord } from "./diagnostic-support-log-redaction.js";
+import {
+  redactPathForSupport,
+  redactSupportString,
+  redactTextForSupport,
+  sanitizeSupportConfigValue,
+  sanitizeSupportSnapshotValue,
+  type SupportRedactionContext,
+} from "./diagnostic-support-redaction.js";
+import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
+
+const DEFAULT_LOG_LIMIT = 5000;
+const DEFAULT_LOG_MAX_BYTES = 1_000_000;
+// Support export must remain usable when the config is corrupt or unexpectedly
+// large. This defensive ceiling is not the product's general config-file limit.
+const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
+const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
+const SUPPORT_EXPORT_SUFFIX = ".zip";
+type SupportSnapshotReader = () => unknown;
+
+type DiagnosticSupportExportOptions = {
+  outputPath?: string;
+  logLimit?: number;
+  logMaxBytes?: number;
+  stabilityBundle?: string | false;
+  readStatusSnapshot?: SupportSnapshotReader;
+  readHealthSnapshot?: SupportSnapshotReader;
+  readGatewayCapabilities?: SupportSnapshotReader;
+};
+
+type ConfigShape = {
+  path: string;
+  exists: boolean;
+  parseOk: boolean;
+  bytes?: number;
+  mtime?: string;
+  error?: string;
+  topLevelKeys: string[];
+  gateway?: {
+    mode?: unknown;
+    bind?: unknown;
+    port?: unknown;
+    authMode?: unknown;
+    tailscale?: unknown;
+  };
+  discovery?: {
+    mdnsMode?: unknown;
+    bonjourEnvOverride: "unset" | "force-enabled" | "force-disabled" | "unrecognized";
+  };
+  channels?: {
+    count: number;
+    ids: string[];
+  };
+  plugins?: {
+    count: number;
+    ids: string[];
+  };
+  agents?: {
+    count: number;
+  };
+};
+
+type ConfigExport = {
+  shape: ConfigShape;
+  sanitized?: unknown;
+};
+
+type SanitizedLogTail = ReturnType<typeof sanitizeLogTail> | ReturnType<typeof failedLogTail>;
+
+type BonjourLogSummary = {
+  count: number;
+  warnings: number;
+  last?: {
+    time?: string;
+    level?: string;
+    kind: "disabled" | "restarted" | "ciao_suppressed" | "conflict" | "watchdog" | "other";
+  };
+  flags: {
+    disabled: boolean;
+    restarted: boolean;
+    ciaoSuppressed: boolean;
+  };
+};
+
+type SupportSnapshotStatus = Awaited<ReturnType<typeof collectSupportSnapshot>>["summary"];
+
+function safeScalar(value: unknown): unknown {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const redacted = redactTextForSupport(value);
+    return redacted === value && /^[A-Za-z0-9_.:-]{1,120}$/u.test(value) ? value : "<redacted>";
+  }
+  return undefined;
+}
+
+function sortedConfigEntryKeys(value: unknown): string[] {
+  return Object.keys(asOptionalRecord(value) ?? {})
+    .filter((key) => key !== INCLUDE_KEY)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function configShapeReadFailure(params: {
+  configPath: string;
+  redaction: SupportRedactionContext;
+  stat?: fs.Stats;
+  error?: string;
+}): ConfigShape {
+  const shape: ConfigShape = {
+    path: params.configPath,
+    exists: Boolean(params.stat),
+    parseOk: false,
+    topLevelKeys: [],
+  };
+  if (params.stat) {
+    shape.bytes = params.stat.size;
+    shape.mtime = params.stat.mtime.toISOString();
+  }
+  if (params.error) {
+    shape.error = redactSupportString(params.error, params.redaction);
+  }
+  return shape;
+}
+
+function readConfigExport(configPath: string, options: SupportRedactionContext): ConfigExport {
+  const redactedConfigPath = redactPathForSupport(configPath, options);
+  let stat: fs.Stats | undefined;
+  try {
+    assertNotUpdateCapturePath(configPath, options.stateDir);
+    stat = fs.statSync(configPath);
+    const { buffer } = readRegularFileSync({
+      filePath: configPath,
+      maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
+    });
+    const parsed = parseConfigJson5(buffer.toString("utf8"));
+    if (!parsed.ok) {
+      return {
+        shape: configShapeReadFailure({
+          configPath: redactedConfigPath,
+          redaction: options,
+          stat,
+          error: parsed.error,
+        }),
+      };
+    }
+    const env = options.env;
+    const root = asOptionalRecord(parsed.parsed) ?? {};
+    const gateway = asOptionalRecord(root.gateway);
+    const auth = asOptionalRecord(gateway?.auth);
+    const discovery = asOptionalRecord(root.discovery);
+    const mdns = asOptionalRecord(discovery?.mdns);
+    const channels = asOptionalRecord(root.channels);
+    const plugins = asOptionalRecord(root.plugins);
+    const agents = asOptionalRecord(asOptionalRecord(root.agents)?.entries);
+
+    const shape: ConfigShape = {
+      path: redactedConfigPath,
+      exists: true,
+      parseOk: true,
+      bytes: stat.size,
+      mtime: stat.mtime.toISOString(),
+      topLevelKeys: Object.keys(root).toSorted((a, b) => a.localeCompare(b)),
+    };
+
+    if (gateway) {
+      shape.gateway = {
+        mode: safeScalar(gateway.mode),
+        bind: safeScalar(gateway.bind),
+        port: safeScalar(gateway.port),
+        authMode: safeScalar(auth?.mode),
+        tailscale: safeScalar(asOptionalRecord(gateway.tailscale)?.mode),
+      };
+    }
+
+    const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
+    const disabled = raw ? parseBooleanValue(raw) : undefined;
+    const bonjourEnvOverride = !raw
+      ? "unset"
+      : disabled === true
+        ? "force-disabled"
+        : disabled === false
+          ? "force-enabled"
+          : "unrecognized";
+    if (mdns || bonjourEnvOverride !== "unset") {
+      shape.discovery = {
+        mdnsMode: safeScalar(mdns?.mode),
+        bonjourEnvOverride,
+      };
+    }
+
+    if (channels) {
+      const ids = sortedConfigEntryKeys(channels).filter((key) => !isChannelConfigMetadataKey(key));
+      shape.channels = { count: ids.length, ids };
+    }
+
+    if (plugins) {
+      const ids = sortedConfigEntryKeys(plugins.entries);
+      shape.plugins = { count: ids.length, ids };
+    }
+
+    if (agents) {
+      shape.agents = { count: sortedConfigEntryKeys(agents).length };
+    }
+
+    return {
+      shape,
+      sanitized: sanitizeSupportConfigValue(
+        redactConfigObject(parsed.parsed, buildConfigSchemaCore().uiHints),
+        options,
+      ),
+    };
+  } catch (error) {
+    return {
+      shape: configShapeReadFailure({
+        configPath: redactedConfigPath,
+        redaction: options,
+        stat,
+        error:
+          !stat && isMissingPathError(error)
+            ? undefined
+            : error instanceof Error
+              ? error.message
+              : String(error),
+      }),
+    };
+  }
+}
+
+function redactErrorForSupport(error: unknown, redaction: SupportRedactionContext): string {
+  return redactSupportString(error instanceof Error ? error.message : String(error), redaction);
+}
+
+async function collectSupportSnapshot(params: {
+  path: string;
+  reader?: SupportSnapshotReader;
+  generatedAt: string;
+  redaction: SupportRedactionContext;
+}) {
+  if (!params.reader) {
+    return { summary: { status: "skipped" as const } };
+  }
+  try {
+    const data = await params.reader();
+    return {
+      summary: {
+        status: "included" as const,
+        path: params.path,
+      },
+      file: jsonSupportBundleFile(params.path, {
+        status: "ok",
+        capturedAt: params.generatedAt,
+        data: sanitizeSupportSnapshotValue(data, params.redaction),
+      }),
+    };
+  } catch (error) {
+    const redactedError = redactErrorForSupport(error, params.redaction);
+    return {
+      summary: {
+        status: "failed" as const,
+        path: params.path,
+        error: redactedError,
+      },
+      file: jsonSupportBundleFile(params.path, {
+        status: "failed",
+        capturedAt: params.generatedAt,
+        error: redactedError,
+      }),
+    };
+  }
+}
+
+function readStabilityBundle(
+  target: DiagnosticSupportExportOptions["stabilityBundle"],
+  stateDir: string,
+): ReadDiagnosticStabilityBundleResult {
+  if (target === false) {
+    return { status: "missing", dir: "$OPENCLAW_STATE_DIR/logs/stability" };
+  }
+  try {
+    if (target !== undefined && target !== "latest") {
+      assertNotUpdateCapturePath(target, stateDir);
+    }
+    const result =
+      target === undefined || target === "latest"
+        ? readLatestDiagnosticStabilityBundleSync({ stateDir })
+        : readDiagnosticStabilityBundleFileSync(target);
+    if (result.status === "found") {
+      assertNotUpdateCapturePath(result.path, stateDir);
+    }
+    return result;
+  } catch (error) {
+    return { status: "failed", error };
+  }
+}
+
+function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext) {
+  return {
+    status: "included" as const,
+    file: redactPathForSupport(tail.file, options),
+    cursor: tail.cursor,
+    size: tail.size,
+    lineCount: tail.lines.length,
+    truncated: tail.truncated,
+    reset: tail.reset,
+    lines: tail.lines.map((line) => sanitizeSupportLogRecord(line, options)),
+  };
+}
+
+function failedLogTail(error: unknown, redaction: SupportRedactionContext) {
+  const redactedError = redactErrorForSupport(error, redaction);
+  return {
+    status: "failed" as const,
+    file: "unavailable",
+    cursor: 0,
+    size: 0,
+    lineCount: 0,
+    truncated: false,
+    reset: false,
+    error: redactedError,
+    lines: [
+      {
+        omitted: "log-tail-read-failed",
+        error: redactedError,
+      },
+    ],
+  };
+}
+
+function logString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function classifyBonjourLogKind(
+  normalizedMsg: string,
+): NonNullable<BonjourLogSummary["last"]>["kind"] {
+  if (normalizedMsg.includes("disabling")) {
+    return "disabled";
+  }
+  if (normalizedMsg.includes("restarting")) {
+    return "restarted";
+  }
+  if (normalizedMsg.includes("suppressing ciao")) {
+    return "ciao_suppressed";
+  }
+  if (normalizedMsg.includes("conflict")) {
+    return "conflict";
+  }
+  if (normalizedMsg.includes("watchdog")) {
+    return "watchdog";
+  }
+  return "other";
+}
+
+function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
+  const summary: BonjourLogSummary = {
+    count: 0,
+    warnings: 0,
+    flags: {
+      disabled: false,
+      restarted: false,
+      ciaoSuppressed: false,
+    },
+  };
+  for (const record of logTail.lines) {
+    const sourceFields = ["subsystem", "logger", "module", "pluginId", "component"];
+    if (
+      !sourceFields.some((field) => logString(record, field)?.toLowerCase().includes("bonjour")) &&
+      logString(record, "msg")?.toLowerCase().startsWith("bonjour:") !== true
+    ) {
+      continue;
+    }
+    summary.count += 1;
+    const level = logString(record, "level")?.toLowerCase();
+    if (level === "warn" || level === "error") {
+      summary.warnings += 1;
+    }
+    const msg = logString(record, "msg");
+    const normalizedMsg = msg?.toLowerCase() ?? "";
+    summary.flags.disabled ||= normalizedMsg.includes("disabling");
+    summary.flags.restarted ||= normalizedMsg.includes("restarting");
+    summary.flags.ciaoSuppressed ||= normalizedMsg.includes("suppressing ciao");
+    summary.last = {
+      ...(logString(record, "time") ? { time: logString(record, "time") } : {}),
+      ...(logString(record, "level") ? { level: logString(record, "level") } : {}),
+      kind: classifyBonjourLogKind(normalizedMsg),
+    };
+  }
+  return summary;
+}
+
+export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
+  const env = process.env;
+  const stateDir = resolveStateDir(env);
+  const now = new Date();
+  const configuredOutputPath = options.outputPath;
+  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
+  const raw = readNonBlankString(configuredOutputPath);
+  let outputPath: string;
+  if (!raw) {
+    outputPath = path.join(stateDir, "logs", "support", filename);
+  } else {
+    const resolved = raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
+    outputPath = resolved;
+    try {
+      if (fs.statSync(resolved).isDirectory()) {
+        outputPath = path.join(resolved, filename);
+      }
+    } catch {
+      // Non-existing output paths are treated as files.
+    }
+  }
+  const generatedAt = now.toISOString();
+  const configPath = resolveConfigPath(env, stateDir);
+  const stability = readStabilityBundle(options.stabilityBundle, stateDir);
+  const redaction = { env, stateDir };
+  const limit = options.logLimit ?? DEFAULT_LOG_LIMIT;
+  const maxBytes = options.logMaxBytes ?? DEFAULT_LOG_MAX_BYTES;
+  let logTail: SanitizedLogTail;
+  try {
+    const tail = await readConfiguredLogTail({ limit, maxBytes });
+    assertNotUpdateCapturePath(tail.file, redaction.stateDir);
+    logTail = sanitizeLogTail(tail, redaction);
+  } catch (error) {
+    logTail = failedLogTail(error, redaction);
+  }
+  const config = readConfigExport(configPath, redaction);
+  const [statusSnapshot, healthSnapshot, runtimeCapabilities, gatewayCapabilities] =
+    await Promise.all([
+      collectSupportSnapshot({
+        path: "status/gateway-status.json",
+        reader: options.readStatusSnapshot,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "health/gateway-health.json",
+        reader: options.readHealthSnapshot,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "runtime/capabilities.json",
+        reader: collectRuntimeCapabilities,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "runtime/gateway-capabilities.json",
+        reader: options.readGatewayCapabilities,
+        generatedAt,
+        redaction,
+      }),
+    ]);
+  const diagnostics = {
+    generatedAt,
+    openclawVersion: VERSION,
+    process: {
+      platform: process.platform,
+      arch: process.arch,
+      node: process.versions.node,
+      pid: process.pid,
+    },
+    stateDir: redactPathForSupport(stateDir, redaction),
+    config: config.shape,
+    logs: {
+      file: logTail.file,
+      cursor: logTail.cursor,
+      size: logTail.size,
+      lineCount: logTail.lineCount,
+      truncated: logTail.truncated,
+      reset: logTail.reset,
+    },
+    stability:
+      stability.status === "found"
+        ? {
+            status: "found" as const,
+            path: redactPathForSupport(stability.path, redaction),
+            mtimeMs: stability.mtimeMs,
+            eventCount: stability.bundle.snapshot.count,
+            reason: stability.bundle.reason,
+            generatedAt: stability.bundle.generatedAt,
+          }
+        : stability.status === "missing"
+          ? {
+              status: "missing" as const,
+              dir: redactPathForSupport(stability.dir, redaction),
+            }
+          : {
+              status: "failed" as const,
+              path: stability.path ? redactPathForSupport(stability.path, redaction) : undefined,
+              error: redactErrorForSupport(stability.error, redaction),
+            },
+    bonjour: summarizeBonjourLogs(logTail),
+    status: statusSnapshot.summary,
+    health: healthSnapshot.summary,
+    runtimeCapabilities: runtimeCapabilities.summary,
+    gatewayCapabilities: gatewayCapabilities.summary,
+  };
+  const files: DiagnosticSupportBundleFile[] = [
+    jsonSupportBundleFile("diagnostics.json", diagnostics),
+    jsonSupportBundleFile("config/shape.json", config.shape),
+    jsonSupportBundleFile("config/sanitized.json", config.sanitized ?? null),
+    jsonlSupportBundleFile(
+      "logs/openclaw-sanitized.jsonl",
+      logTail.lines.map((line) => JSON.stringify(line)),
+    ),
+  ];
+  for (const snapshot of [
+    statusSnapshot,
+    healthSnapshot,
+    runtimeCapabilities,
+    gatewayCapabilities,
+  ]) {
+    if (snapshot.file) {
+      files.push(snapshot.file);
+    }
+  }
+
+  if (stability.status === "found") {
+    files.push(jsonSupportBundleFile("stability/latest.json", stability.bundle));
+  }
+
+  const stabilityLine =
+    stability.status === "found"
+      ? `included latest stability bundle (${stability.bundle.snapshot.count} event(s))`
+      : `no stability bundle included (${stability.status})`;
+  const configLine = config.shape.exists
+    ? `config shape included (${config.shape.parseOk ? "parsed" : "parse failed"})`
+    : (config.shape.error ?? "config file not found");
+  const logTailLine =
+    logTail.status === "failed"
+      ? `sanitized log tail unavailable (${logTail.error})`
+      : `sanitized log tail (${logTail.lineCount} line(s), inspected ${logTail.size} byte(s), raw messages omitted)`;
+  const supportSnapshotLine = (label: string, snapshot: SupportSnapshotStatus) => {
+    if (snapshot.status === "included") {
+      return `${label} snapshot included (${snapshot.path})`;
+    }
+    if (snapshot.status === "failed") {
+      return `${label} snapshot failed (${snapshot.error})`;
+    }
+    return `${label} snapshot skipped`;
+  };
+  const summary = [
+    "# OpenClaw Diagnostics Export",
+    "",
+    "Attach this zip to the bug report. It is designed for maintainers to inspect without asking for raw logs first.",
+    "",
+    "## Generated",
+    "",
+    `Generated: ${generatedAt}`,
+    `OpenClaw: ${VERSION}`,
+    "",
+    "## Contents",
+    "",
+    `- ${stabilityLine}`,
+    `- ${logTailLine}`,
+    `- ${configLine}`,
+    `- ${supportSnapshotLine("gateway status", statusSnapshot.summary)}`,
+    `- ${supportSnapshotLine("gateway health", healthSnapshot.summary)}`,
+    `- ${supportSnapshotLine("exporting process capabilities", runtimeCapabilities.summary)}`,
+    `- ${supportSnapshotLine("gateway capabilities", gatewayCapabilities.summary)}`,
+    "",
+    "## Maintainer Quick Read",
+    "",
+    "- `manifest.json`: file inventory and privacy notes",
+    "- `diagnostics.json`: top-level summary of config, logs, Bonjour/mDNS, stability, status, and health",
+    "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
+    "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
+    "- `health/gateway-health.json`: sanitized Gateway health snapshot",
+    "- `runtime/capabilities.json`: exporting process capabilities and build identity",
+    "- `runtime/gateway-capabilities.json`: serving Gateway capabilities, when reachable",
+    "- `logs/openclaw-sanitized.jsonl`: sanitized log summaries and metadata",
+    "- `stability/latest.json`: newest payload-free stability bundle, when available",
+    "",
+    "## Privacy",
+    "",
+    "- raw chat text, webhook bodies, tool outputs, tokens, cookies, and secrets are not included intentionally",
+    "- log records keep operational summaries and safe metadata fields",
+    "- status, health, and capability snapshots redact secret fields, payload-like fields, and account/message identifiers",
+    "- config output keeps useful settings but redacts secrets, private identifiers, and prompt text",
+  ].join("\n");
+  files.push(textSupportBundleFile("summary.md", summary));
+
+  const manifest = {
+    version: 1 as const,
+    generatedAt,
+    openclawVersion: VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    stateDir: redactPathForSupport(stateDir, redaction),
+    contents: supportBundleContents(files),
+    privacy: {
+      payloadFree: true as const,
+      rawLogsIncluded: false as const,
+      notes: [
+        "Stability bundles are payload-free diagnostic snapshots.",
+        "Logs keep operational summaries and safe metadata fields; payload-like fields are omitted.",
+        "Status and health snapshots redact secrets, payload-like fields, and account/message identifiers.",
+        "Config output includes useful settings with credentials, private identifiers, and prompt text redacted.",
+      ],
+    },
+  };
+
+  const published = await writeSupportBundleZip({
+    outputPath,
+    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
+  });
+  return {
+    path: published.path,
+    bytes: published.bytes,
+    manifest,
+  };
+}

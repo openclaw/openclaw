@@ -1,0 +1,371 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { formatChannelStatusState } from "../channels/plugins/status-state.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import { isGatewayTransportError } from "../gateway/transport-error.js";
+import { formatDurationHuman } from "../infra/format-time/format-duration.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+
+function formatHealthDiagnosticText(text: string): string {
+  // Mask complete values before splitting; terminal cleanup can join secret fragments.
+  const redacted = redactToolPayloadText(text);
+  return redactToolPayloadText(
+    redacted
+      .split(/\r?\n|[\u2028\u2029]/u)
+      .map(sanitizeTerminalText)
+      .join("\n"),
+  );
+}
+
+export function formatHealthDiagnosticNote(text: string): string {
+  // The note renderer collapses whitespace, which can reconstruct a registered secret.
+  return redactToolPayloadText(formatHealthDiagnosticText(text).replace(/[^\S\n]+/gu, " "));
+}
+
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
+
+export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
+  if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
+    return undefined;
+  }
+  const message = formatHealthDiagnosticNote(err.message).split("\n", 1)[0] ?? "";
+  return redactToolPayloadText(`Gateway connect failed: ${message}`);
+}
+
+const formatKv = (line: string, rich: boolean) => {
+  const idx = line.indexOf(": ");
+  if (idx <= 0) {
+    return colorize(rich, theme.muted, line);
+  }
+  const key = line.slice(0, idx);
+  const value = line.slice(idx + 2);
+
+  const valueColor =
+    key === "Gateway target" || key === "Config"
+      ? theme.command
+      : key === "Source"
+        ? theme.muted
+        : theme.info;
+
+  return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
+};
+
+export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
+  const rich = opts.rich ?? isRich();
+  const raw = String(err);
+
+  if (!rich) {
+    return redactToolPayloadText(`Health check failed: ${formatHealthDiagnosticText(raw)}`);
+  }
+
+  const message = formatHealthDiagnosticText(err instanceof Error ? err.message : raw);
+  const lines = message
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter(Boolean);
+  const detailsIdx = lines.findIndex((l) => l.startsWith("Gateway target: "));
+
+  const summaryLines = (detailsIdx >= 0 ? lines.slice(0, detailsIdx) : lines)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const detailLines = detailsIdx >= 0 ? lines.slice(detailsIdx) : [];
+
+  const summary = summaryLines.length > 0 ? summaryLines.join(" ") : message;
+  const header = colorize(rich, theme.error.bold, "Health check failed");
+
+  const out: string[] = [`${header}: ${summary}`];
+  for (const line of detailLines) {
+    out.push(`  ${formatKv(line, rich)}`);
+  }
+  return redactToolPayloadText(out.join("\n"));
+}
+
+const formatProbeLine = (
+  probe: unknown,
+  accounts?: readonly ChannelAccountHealthSummary[],
+): string | null => {
+  const record = asNullableRecord(probe);
+  if (!record) {
+    return null;
+  }
+  if (record.timedOut === true) {
+    const error = typeof record.error === "string" ? record.error : "health collection timed out";
+    return `warning - ${sanitizeTerminalText(error)}`;
+  }
+  const ok = typeof record.ok === "boolean" ? record.ok : undefined;
+  if (ok === undefined) {
+    return null;
+  }
+  if (!ok) {
+    const status = typeof record.status === "number" ? record.status : null;
+    const error = typeof record.error === "string" ? record.error : null;
+    return `failed (${status ?? "unknown"})${error ? ` - ${error}` : ""}`;
+  }
+
+  const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
+  const webhook = asNullableRecord(record.webhook);
+  const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
+  const usernames = new Set<string>();
+  for (const candidate of [probe, ...(accounts ?? []).map((account) => account.probe)]) {
+    const bot = asNullableRecord(asNullableRecord(candidate)?.bot);
+    if (bot && typeof bot.username === "string" && bot.username) {
+      usernames.add(bot.username);
+    }
+  }
+
+  let label = "ok";
+  if (usernames.size > 0) {
+    label += ` (@${Array.from(usernames).join(", @")})`;
+  }
+  if (elapsedMs != null) {
+    label += ` (${elapsedMs}ms)`;
+  }
+  if (webhookUrl) {
+    label += ` - webhook ${webhookUrl}`;
+  }
+  return label;
+};
+
+const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string | null => {
+  const probe = asNullableRecord(summary.probe);
+  if (!probe) {
+    return null;
+  }
+  const elapsedMs = typeof probe.elapsedMs === "number" ? Math.round(probe.elapsedMs) : null;
+  const ok = typeof probe.ok === "boolean" ? probe.ok : null;
+  if (elapsedMs == null && ok !== true) {
+    return null;
+  }
+
+  const accountId = summary.accountId || "default";
+  const botRecord = asNullableRecord(probe.bot);
+  const botUsername =
+    botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
+  const handle = botUsername ? `@${botUsername}` : accountId;
+  const timing = elapsedMs != null ? `${elapsedMs}ms` : "ok";
+
+  return `${handle}:${accountId}:${timing}`;
+};
+
+function formatPluginDiagnostic(text: string, maxChars: number): string {
+  // Terminal cleanup can join fragments into a secret; mask both complete forms before truncating.
+  const normalized = sanitizeTerminalText(redactToolPayloadText(text)).replace(
+    /[\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu,
+    "",
+  );
+  return truncateUtf16Safe(redactToolPayloadText(normalized), maxChars);
+}
+
+export const formatHealthChannelLines = (
+  summary: HealthSummary,
+  opts: {
+    accountMode?: "default" | "all";
+    accountIdsByChannel?: Record<string, string[] | undefined>;
+  } = {},
+): string[] => {
+  const channels = summary.channels ?? {};
+  const channelOrder =
+    summary.channelOrder?.length > 0 ? summary.channelOrder : Object.keys(channels);
+  const accountMode = opts.accountMode ?? "default";
+
+  const lines: string[] = [];
+  for (const channelId of channelOrder) {
+    const channelSummary = channels[channelId];
+    if (!channelSummary) {
+      continue;
+    }
+    const label = summary.channelLabels?.[channelId] ?? channelId;
+    const accountSummaries = channelSummary.accounts ?? {};
+    const accountIds = accountMode === "all" ? undefined : opts.accountIdsByChannel?.[channelId];
+    const listSummaries = accountIds?.length
+      ? accountIds.flatMap((accountId) => accountSummaries[accountId] ?? [])
+      : Object.values(accountSummaries);
+    const preferredSummary = accountIds?.length
+      ? (listSummaries[0] ?? channelSummary)
+      : channelSummary;
+    const activeSummaries = listSummaries.filter(
+      (account) =>
+        account.enabled !== false &&
+        account.configured !== false &&
+        account.linked !== false &&
+        account.statusState !== "disabled" &&
+        account.statusState !== "unconfigured",
+    );
+    // Preserve active preferred order without letting inactive defaults mask other probes.
+    const selectedSummary =
+      activeSummaries.find(
+        (account) =>
+          (account.healthState && account.healthState !== "healthy") ||
+          (account.statusState &&
+            account.statusState !== "linked" &&
+            account.statusState !== "configured"),
+      ) ??
+      activeSummaries.find((account) => account.accountId === preferredSummary.accountId) ??
+      activeSummaries[0] ??
+      preferredSummary;
+    const statusState =
+      typeof selectedSummary.statusState === "string" ? selectedSummary.statusState : null;
+    const healthState =
+      typeof selectedSummary.healthState === "string" && selectedSummary.healthState
+        ? selectedSummary.healthState
+        : null;
+    const { linked, configured } = selectedSummary;
+    const inactiveState =
+      selectedSummary.enabled === false
+        ? "disabled"
+        : statusState === "disabled" || statusState === "unconfigured"
+          ? formatChannelStatusState(statusState)
+          : configured === false
+            ? "not configured"
+            : null;
+    // Explicit inactive/degraded facts outrank probes; passive success waits until after them.
+    // Otherwise a live probe can be hidden behind stale "healthy", "linked", or "configured".
+    const preProbeState = inactiveState
+      ? inactiveState
+      : healthState && healthState !== "healthy"
+        ? healthState
+        : statusState && statusState !== "linked" && statusState !== "configured"
+          ? formatChannelStatusState(statusState)
+          : linked === false
+            ? "not linked"
+            : null;
+    if (preProbeState) {
+      const error =
+        typeof selectedSummary.lastError === "string"
+          ? sanitizeTerminalText(selectedSummary.lastError)
+          : "";
+      lines.push(`${label}: ${preProbeState}${error ? ` (${error})` : ""}`);
+      continue;
+    }
+
+    const failedSummary =
+      activeSummaries.find((account) => {
+        const probe = asNullableRecord(account.probe);
+        return probe?.ok === false && probe.timedOut !== true;
+      }) ?? activeSummaries.find((account) => asNullableRecord(account.probe)?.timedOut === true);
+    if (failedSummary) {
+      const failureLine = formatProbeLine(failedSummary.probe);
+      if (failureLine) {
+        lines.push(`${label}: ${failureLine}`);
+        continue;
+      }
+    }
+
+    const accountTimings =
+      accountMode === "all"
+        ? activeSummaries
+            .map((account) => formatAccountProbeTiming(account))
+            .filter((value): value is string => Boolean(value))
+        : [];
+
+    if (accountTimings.length > 0) {
+      lines.push(`${label}: ok (${accountTimings.join(", ")})`);
+      continue;
+    }
+
+    const probeLine = formatProbeLine(selectedSummary.probe, activeSummaries);
+    if (probeLine) {
+      lines.push(`${label}: ${probeLine}`);
+      continue;
+    }
+
+    const authAgeMs =
+      typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
+    const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+    const passiveState = healthState
+      ? healthState
+      : statusState
+        ? `${formatChannelStatusState(statusState)}${statusState === "linked" ? authLabel : ""}`
+        : linked === true
+          ? `linked${authLabel}`
+          : configured === true
+            ? "configured"
+            : "unknown";
+    lines.push(`${label}: ${passiveState}`);
+  }
+  const pluginWarnings = [
+    ...(summary.plugins?.errors ?? [])
+      .filter(
+        (plugin) =>
+          plugin.activated ||
+          plugin.activationSource === "explicit" ||
+          plugin.activationSource === "auto" ||
+          plugin.activationSource === "default",
+      )
+      .map(({ id, error }) => ({ id, state: "failed", detail: error })),
+    ...(summary.plugins?.unavailable ?? []).map(({ id, diagnostic }) => ({
+      id,
+      state: "unavailable",
+      detail: diagnostic.detail ? `${diagnostic.reason}: ${diagnostic.detail}` : diagnostic.reason,
+    })),
+  ];
+  for (const plugin of pluginWarnings.slice(0, 20)) {
+    const id = formatPluginDiagnostic(plugin.id, 120);
+    const diagnostic = formatPluginDiagnostic(plugin.detail, 500);
+    // Deep status splits at the first colon, so plugin IDs must not become its state prefix.
+    const label = id.includes(":") ? "Plugin" : `Plugin ${id}`;
+    const detail = id.includes(":") ? `${id}: ${diagnostic}` : diagnostic;
+    lines.push(`${label}: ${plugin.state} - ${detail}; run openclaw doctor`);
+  }
+  if (pluginWarnings.length > 20) {
+    lines.push(
+      `Plugins: warning - ${pluginWarnings.length - 20} additional plugin warnings; run openclaw doctor`,
+    );
+  }
+  return lines;
+};
+
+export function formatDeliveryQueueHealthLine(
+  summary: HealthSummary,
+  now = Date.now(),
+): string | null {
+  const failed = summary.deliveryQueues?.failed ?? [];
+  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
+  const ingressPressure = summary.deliveryQueues?.ingressPressure ?? [];
+  const warnings: string[] = [];
+  const deadLetterCounts = [
+    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
+    ...ingressFailed.map(
+      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
+    ),
+  ].join(", ");
+  const oldest = [...failed, ...ingressFailed]
+    .map((queue) => queue.oldestFailedAt)
+    .filter((value): value is number => typeof value === "number");
+  const oldestNote =
+    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
+  if (deadLetterCounts) {
+    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
+  }
+  if (ingressPressure.length > 0) {
+    const pressureCounts = ingressPressure
+      .map(
+        (queue) =>
+          `inbound ${queue.channelId}/${queue.accountId}: ${queue.laneCount} pressured ${
+            queue.laneCount === 1 ? "lane" : "lanes"
+          }, ${queue.pendingCount} pending, ${queue.claimedCount} claimed, ${queue.blockedCount} blocked`,
+      )
+      .join(", ");
+    const oldestPressure = Math.min(...ingressPressure.map((queue) => queue.oldestReceivedAt));
+    warnings.push(
+      `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
+    );
+  }
+  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
+}

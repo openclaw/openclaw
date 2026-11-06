@@ -1,0 +1,127 @@
+import { parseJsonPreservingUnsafeIntegers } from "@openclaw/ai/transports";
+import { Type } from "typebox";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
+import type { SwarmStructuredOutputState } from "../subagents/registry/subagent-registry.types.js";
+import type { AnyAgentTool } from "./common.js";
+import { jsonResult, ToolInputError } from "./common.js";
+
+const states = new Map<string, SwarmStructuredOutputState>();
+const pendingExecutions = new KeyedAsyncQueue();
+
+export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
+  return states.get(runId);
+}
+
+export function consumeSwarmStructuredOutput(
+  runId: string,
+): SwarmStructuredOutputState | undefined {
+  const state = peekSwarmStructuredOutput(runId);
+  states.delete(runId);
+  return state;
+}
+
+export function createStructuredOutputTool(params: {
+  runId: string;
+  schema: Record<string, unknown>;
+  initialState?: SwarmStructuredOutputState;
+  onStateChange?: (state: SwarmStructuredOutputState) => void | Promise<void>;
+}): AnyAgentTool {
+  const requestedSchema = JSON.stringify(params.schema);
+  if (params.initialState && !states.has(params.runId)) {
+    states.set(params.runId, params.initialState);
+  }
+  const commitState = async (next: SwarmStructuredOutputState) => {
+    try {
+      await params.onStateChange?.(next);
+    } catch (error) {
+      throw new ToolInputError(
+        `Failed to persist structured_output: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    states.set(params.runId, next);
+  };
+  return {
+    label: "Structured Output",
+    name: "structured_output",
+    // Per-run collector contract: must be callable without discovery, and its
+    // schema-dump description would only pollute the search index.
+    catalogMode: "direct-only",
+    displaySummary: "Record the collector result.",
+    description: `Call exactly once as {"result": ...}, where result matches this JSON Schema: ${requestedSchema}`,
+    // Runtime argument validation must reach execute so invalid attempts consume
+    // the durable one-retry budget. Providers still require every tool property to
+    // declare a JSON type before they will send the request.
+    parameters: Type.Object(
+      {
+        result: Type.Unsafe({
+          type: ["object", "array", "string", "number", "boolean", "null"],
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (_toolCallId, args) => {
+      return await pendingExecutions.enqueue(params.runId, async () => {
+        const prior = states.get(params.runId);
+        if (prior?.structured !== undefined) {
+          throw new ToolInputError("structured_output already recorded for this run");
+        }
+        if (prior && prior.invalidAttempts >= 2) {
+          // The one-retry budget is spent, so this payload is not validated; the
+          // reply must say so instead of presenting the earlier attempt's error
+          // as a verdict on it.
+          return jsonResult({
+            status: "rejected",
+            success: false,
+            reason: "retry_budget_exhausted",
+            error: `structured_output retry budget exhausted: this call was not evaluated and the run completes without a structured result. Last validation error: ${prior.schemaError}`,
+          });
+        }
+        let validation: ReturnType<typeof validateJsonSchemaValue>;
+        try {
+          const input = {
+            schema: params.schema as JsonSchemaObject,
+            cacheKey: `swarm-structured-output:${params.runId}`,
+            value: (args as { result: unknown }).result,
+          };
+          validation = validateJsonSchemaValue(input);
+          // Preserve valid string results; decode only a rejected nested JSON string.
+          if (!validation.ok && typeof input.value === "string") {
+            try {
+              const decoded = validateJsonSchemaValue({
+                ...input,
+                value: parseJsonPreservingUnsafeIntegers(input.value),
+              });
+              if (decoded.ok) {
+                validation = decoded;
+              }
+            } catch {
+              // Keep the original validation error when the string is not JSON.
+            }
+          }
+        } catch (error) {
+          throw new ToolInputError(
+            `Invalid sessions_spawn outputSchema: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (validation.ok) {
+          await commitState({ structured: validation.value, invalidAttempts: 0 });
+          return jsonResult({ status: "recorded" });
+        }
+        const invalidAttempts = (prior?.invalidAttempts ?? 0) + 1;
+        const schemaError = validation.errors
+          .slice(0, 3)
+          .map((error) => error.text)
+          .join("; ");
+        await commitState({ structured: undefined, invalidAttempts, schemaError });
+        if (invalidAttempts === 1) {
+          throw new ToolInputError(
+            `structured_output validation failed: ${schemaError}. Retry once with a corrected final result.`,
+          );
+        }
+        return jsonResult({ status: "rejected", success: false, schemaError });
+      });
+    },
+  };
+}

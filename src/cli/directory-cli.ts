@@ -1,0 +1,293 @@
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { parseAccountSelector } from "../commands/channels/account-selector.js";
+import { parseChannelSelector } from "../commands/channels/channel-selector.js";
+import { requireValidConfigForWrite } from "../commands/config-validation.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
+import { defaultRuntime } from "../runtime.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
+
+const DIRECTORY_LIST_LABELS = {
+  listPeers: ["Peers", "No peers found", "directory peers"],
+  listGroups: ["Groups", "No groups found", "directory groups"],
+  listGroupMembers: ["Group Members", "No group members found", "group members listing"],
+} as const;
+
+function formatDirectoryTable(
+  entries: Array<{ id: string; name?: string | undefined }>,
+  width: number,
+) {
+  return renderTerminalSafeTable({
+    width,
+    columns: [
+      { key: "ID", header: "ID", minWidth: 16, flex: true },
+      { key: "Name", header: "Name", minWidth: 18, flex: true },
+    ],
+    rows: entries.map((entry) => ({
+      ID: entry.id,
+      Name: normalizeOptionalString(entry.name) ?? "",
+    })),
+  }).trimEnd();
+}
+
+function formatDirectoryScope(channelId: string, accountId: string): string {
+  const channel = JSON.stringify(sanitizeTerminalText(channelId));
+  const account = JSON.stringify(sanitizeTerminalText(accountId));
+  return `channel ${channel}, account ${account}`;
+}
+
+/** Register directory lookup commands and shared channel/account resolution. */
+export function registerDirectoryCli(program: Command) {
+  const directory = program
+    .command("directory")
+    .description("Lookup contact and group IDs (self, peers, groups) for supported chat channels")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw directory self --channel slack", "Show the connected account identity."],
+          [
+            'openclaw directory peers list --channel slack --query "alice"',
+            "Search contact/user IDs by name.",
+          ],
+          ["openclaw directory groups list --channel discord", "List available groups/channels."],
+          [
+            "openclaw directory groups members --channel discord --group-id <id>",
+            "List members for a specific group.",
+          ],
+        ])}\n${formatDocsHelp("/cli/directory")}`,
+    )
+    .action(() => {
+      directory.help({ error: true });
+    });
+
+  const withChannel = (cmd: Command) =>
+    cmd
+      .option(
+        "--channel <name>",
+        "Channel (auto when only one is configured)",
+        parseChannelSelector,
+      )
+      .option("--account <id>", "Account id (accountId)", parseAccountSelector)
+      .option("--json", "Output JSON", false);
+
+  const resolve = async (opts: { channel?: string; account?: string }) => {
+    const writeSnapshot = await requireValidConfigForWrite(defaultRuntime);
+    if (!writeSnapshot) {
+      return null;
+    }
+    const autoEnabled = applyPluginAutoEnable({
+      config: writeSnapshot.snapshot.sourceConfig,
+      env: process.env,
+    });
+    const sourceConfig = autoEnabled.config;
+    const explicitChannel = opts.channel?.trim();
+    const resolvedExplicit = explicitChannel
+      ? await resolveInstallableChannelPlugin({
+          cfg: sourceConfig,
+          runtime: defaultRuntime,
+          rawChannel: explicitChannel,
+          allowInstall: true,
+          preferRegisteredPlugin: true,
+          supports: (plugin) => Boolean(plugin.directory),
+        })
+      : null;
+    if (resolvedExplicit?.configChanged || autoEnabled.changes.length > 0) {
+      // Commit install records and enablement before directory calls consume the new runtime.
+      await commitConfigWithPendingPluginInstalls({
+        sourceConfig: resolvedExplicit?.cfg ?? sourceConfig,
+        baseHash: writeSnapshot.snapshot.hash,
+        writeOptions: writeSnapshot.writeOptions,
+      });
+    }
+    // Config writes refresh the active runtime snapshot. Directory execution must use that
+    // prepared view, never the authored config that was just persisted.
+    const runtimeConfig = await captureRuntimeConfigAsyncReader()();
+    const selection = explicitChannel
+      ? {
+          channel: resolvedExplicit?.channelId,
+          plugin: resolvedExplicit?.plugin,
+        }
+      : await resolveMessageChannelSelection({
+          cfg: runtimeConfig,
+          channel: opts.channel ?? null,
+          accountResolution: "read_only",
+        });
+    const selectedChannelId = selection.channel;
+    const plugin = selection.plugin;
+    if (!plugin) {
+      throw new Error(`Unsupported channel: ${String(selectedChannelId)}`);
+    }
+    const channelId = selectedChannelId ?? plugin.id;
+    const accountId =
+      normalizeOptionalString(opts.account) ||
+      resolveChannelDefaultAccountId({ plugin, cfg: runtimeConfig });
+    const secretTargets = getScopedChannelsCommandSecretTargets({
+      config: runtimeConfig,
+      channel: channelId,
+      accountId,
+    });
+    const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+      config: runtimeConfig,
+      commandName: "directory",
+      targetIds: secretTargets.targetIds,
+      ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
+      mode: "read_only_operational",
+      runtime: defaultRuntime,
+    });
+    return { cfg: effectiveConfig, channelId, accountId, plugin };
+  };
+
+  const runDirectoryList = async (
+    opts: {
+      channel?: string;
+      account?: string;
+      query?: string;
+      limit?: unknown;
+      json?: unknown;
+      groupId?: unknown;
+    },
+    action: keyof typeof DIRECTORY_LIST_LABELS,
+  ) => {
+    const [title, emptyMessage, unsupported] = DIRECTORY_LIST_LABELS[action];
+    const limit = parseOptionalPositiveInteger(opts.limit ?? undefined, "--limit", ".") ?? null;
+    const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
+    if (action === "listGroupMembers" && !groupId) {
+      throw new Error("Missing --group-id");
+    }
+    const resolved = await resolve(opts);
+    if (!resolved) {
+      return;
+    }
+    const { cfg, channelId, accountId, plugin } = resolved;
+    const lookupOptions = { cfg, accountId, limit, runtime: defaultRuntime };
+    const lookup =
+      action === "listGroupMembers"
+        ? plugin.directory?.listGroupMembers?.bind(undefined, { ...lookupOptions, groupId })
+        : (action === "listPeers"
+            ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
+            : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups)
+          )?.bind(undefined, { ...lookupOptions, query: opts.query ?? null });
+    if (!lookup) {
+      throw new Error(`Channel ${channelId} does not support ${unsupported}`);
+    }
+    const result = await lookup();
+    if (opts.json) {
+      defaultRuntime.writeJson(result);
+      return;
+    }
+    const scopedEmptyMessage = `${emptyMessage} for ${
+      action === "listGroupMembers"
+        ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
+        : ""
+    }${formatDirectoryScope(channelId, accountId)}.`;
+    if (result.length === 0) {
+      defaultRuntime.log(theme.muted(scopedEmptyMessage));
+      return;
+    }
+    const tableWidth = getTerminalTableWidth();
+    defaultRuntime.log(`${theme.heading(title)} ${theme.muted(`(${result.length})`)}`);
+    defaultRuntime.log(formatDirectoryTable(result, tableWidth));
+  };
+
+  const runDirectoryAction = async (opts: { json?: unknown }, action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (err) {
+      if (opts.json) {
+        throw err;
+      }
+      defaultRuntime.error(danger(formatErrorMessage(err)));
+      defaultRuntime.exit(1);
+    }
+  };
+
+  withChannel(directory.command("self").description("Show the current account user")).action(
+    (opts) =>
+      runDirectoryAction(opts, async () => {
+        const resolved = await resolve({
+          channel: opts.channel as string | undefined,
+          account: opts.account as string | undefined,
+        });
+        if (!resolved) {
+          return;
+        }
+        const { cfg, channelId, accountId, plugin } = resolved;
+        const fn = plugin.directory?.self;
+        if (!fn) {
+          throw new Error(`Channel ${channelId} does not support directory self`);
+        }
+        const result = await fn({ cfg, accountId, runtime: defaultRuntime });
+        if (!result) {
+          const unsupported = fn === nullChannelDirectorySelf;
+          if (opts.json) {
+            defaultRuntime.writeJson({
+              status: "unavailable",
+              channel: channelId,
+              accountId,
+              reason: unsupported
+                ? "self-identity-unsupported"
+                : "plugin-returned-no-self-identity",
+            });
+          } else {
+            defaultRuntime.log(
+              theme.muted(
+                unsupported
+                  ? `Channel ${JSON.stringify(sanitizeTerminalText(channelId))} does not expose a self identity.`
+                  : `No self identity was returned for ${formatDirectoryScope(channelId, accountId)}. Verify the account is configured and authenticated, then retry.`,
+              ),
+            );
+          }
+          return;
+        }
+        if (opts.json) {
+          defaultRuntime.writeJson(result);
+          return;
+        }
+        const tableWidth = getTerminalTableWidth();
+        defaultRuntime.log(theme.heading("Self"));
+        defaultRuntime.log(formatDirectoryTable([result], tableWidth));
+      }),
+  );
+
+  const peers = directory.command("peers").description("Peer directory (contacts/users)");
+  const groups = directory.command("groups").description("Group directory");
+  for (const [command, action, kind] of [
+    [peers, "listPeers", "peers"],
+    [groups, "listGroups", "groups"],
+  ] as const) {
+    withChannel(command.command("list").description(`List ${kind}`))
+      .option("--query <text>", "Optional search query")
+      .option("--limit <n>", "Limit results")
+      .action((opts) => runDirectoryAction(opts, () => runDirectoryList(opts, action)));
+  }
+
+  withChannel(
+    groups
+      .command("members")
+      .description("List group members")
+      .requiredOption("--group-id <id>", "Group id"),
+  )
+    .option("--limit <n>", "Limit results")
+    .action((opts) => runDirectoryAction(opts, () => runDirectoryList(opts, "listGroupMembers")));
+}

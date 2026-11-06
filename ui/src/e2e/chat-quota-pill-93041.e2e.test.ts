@@ -1,0 +1,557 @@
+// Regression #93041: provider usage stays in the desktop composer's context popover.
+import path from "node:path";
+import type { Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
+import { installControlUiMockBootstrapDocument } from "../test-helpers/control-ui-bootstrap-fixture.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  controlUiSessionUrl,
+  createControlUiMockBootstrapConfig,
+  installMockGateway,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+
+const suite = createControlUiE2eSuite({
+  name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
+});
+
+const baseTime = Date.UTC(2026, 9, 21, 12);
+let artifactDir: string;
+
+function providerStatus<Usage extends { authProfileId: string }>(
+  provider: string,
+  displayName: string,
+  usage: Usage,
+  type = "oauth",
+) {
+  return {
+    provider,
+    displayName,
+    status: "ok",
+    profiles: [{ profileId: usage.authProfileId, type, status: "ok" }],
+    usage,
+  };
+}
+
+const authStatusWithUsage = {
+  ts: baseTime,
+  providers: [
+    providerStatus("openai", "OpenAI", {
+      providerId: "openai",
+      authProfileId: "openai:main",
+      windows: [{ label: "Week", usedPercent: 71, resetAt: baseTime + 4 * 86_400_000 }],
+    }),
+    providerStatus(
+      "github-copilot",
+      "Copilot",
+      {
+        providerId: "github-copilot",
+        authProfileId: "github-copilot:main",
+        windows: [{ label: "Day", usedPercent: 41 }],
+      },
+      "token",
+    ),
+  ],
+};
+
+const gatewayInjectedSessions = {
+  count: 1,
+  defaults: { contextTokens: 200_000, model: "gateway-injected", modelProvider: "openai" },
+  path: "",
+  sessions: [
+    {
+      contextTokens: 200_000,
+      key: "main",
+      kind: "direct",
+      model: "gateway-injected",
+      modelProvider: "openai",
+      totalTokens: 46_000,
+      totalTokensFresh: true,
+      updatedAt: Date.now(),
+    },
+  ],
+  ts: Date.now(),
+};
+
+const highPressureSessions = {
+  ...gatewayInjectedSessions,
+  sessions: [{ ...gatewayInjectedSessions.sessions[0], totalTokens: 190_000 }],
+};
+
+const agentsList = agentRoster({ main: "Main", work: "Work" }, "main", "global");
+
+function agentAuthStatus(agentId: "main" | "work") {
+  const isMain = agentId === "main";
+  return {
+    ts: baseTime + (isMain ? 1 : 2),
+    providers: [
+      providerStatus("openai", isMain ? "Main OpenAI" : "Work OpenAI", {
+        providerId: "openai",
+        authProfileId: `openai:${agentId}`,
+        plan: isMain ? "Main Pro" : "Work Team",
+        accountEmail: `${agentId}@example.test`,
+        windows: [
+          {
+            label: "Week",
+            usedPercent: isMain ? 81 : 24,
+            resetAt: Date.now() + 4 * 86_400_000,
+          },
+        ],
+      }),
+    ],
+  };
+}
+
+const selectedGlobalSessions = {
+  ...gatewayInjectedSessions,
+  sessions: [
+    {
+      ...gatewayInjectedSessions.sessions[0],
+      key: "global",
+      kind: "global",
+    },
+  ],
+};
+
+const workGlobalSession = {
+  ...selectedGlobalSessions.sessions[0],
+  agentId: "work",
+  sessionId: "session:work:global",
+  contextTokens: 300_000,
+  totalTokens: 90_000,
+};
+
+const claudeSubscriptionAuthStatus = {
+  ts: baseTime,
+  providers: [
+    providerStatus("claude-cli", "Claude", {
+      providerId: "anthropic",
+      authProfileId: "claude-cli:main",
+      plan: "Max (20x)",
+      windows: [
+        { label: "5h", usedPercent: 22, resetAt: baseTime + 4 * 3_600_000 + 48 * 60_000 },
+        { label: "Week", usedPercent: 25, resetAt: baseTime + 2 * 86_400_000 },
+        { label: "Fable", usedPercent: 45 },
+      ],
+      billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+    }),
+  ],
+};
+
+const claudeSubscriptionSessions = {
+  ...gatewayInjectedSessions,
+  defaults: {
+    contextTokens: 1_000_000,
+    model: "claude-fable-5",
+    modelProvider: "anthropic",
+  },
+  sessions: [
+    {
+      ...gatewayInjectedSessions.sessions[0],
+      contextTokens: 1_000_000,
+      estimatedCostUsd: 0.02,
+      inputTokens: 2_400,
+      model: "claude-fable-5",
+      // sessions.list canonicalizes CLI aliases; plan matching goes through
+      // the auth row's usage.providerId.
+      modelProvider: "anthropic",
+      outputTokens: 830,
+      totalTokens: 78_700,
+    },
+  ],
+};
+
+async function withChat(
+  authStatus: unknown,
+  sessions: unknown,
+  authProfileId: string,
+  run: (page: Page) => Promise<void>,
+) {
+  await suite.withPage(
+    { ...createControlUiE2eContextOptions(), locale: "en-US", timezoneId: "UTC" },
+    async ({ page }) => {
+      await page.clock.setFixedTime(baseTime);
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "models.authStatus": authStatus,
+          "models.list": {
+            models: [],
+            accountSelection: { kind: "shared", label: "Selected account", authProfileId },
+          },
+          "sessions.list": sessions,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("models.authStatus");
+      await run(page);
+    },
+  );
+}
+
+function expectTextExcludes(text: string, ...excluded: string[]) {
+  for (const value of excluded) {
+    expect(text).not.toContain(value);
+  }
+}
+
+const visiblePaneSelector = "openclaw-chat-pane.chat-pane-cache__pane--visible";
+type ChatPane = HTMLElement & {
+  state?: {
+    assistantAgentId?: string | null;
+    assistantName?: string;
+    assistantAvatar?: string | null;
+    chatAvatarUrl?: string | null;
+    modelAuthStatusResult?: {
+      ts?: number;
+      providers?: Array<{ displayName?: string; usage?: { accountEmail?: string; plan?: string } }>;
+    } | null;
+  };
+};
+
+async function setSelectedAgent(page: Page, name: string): Promise<void> {
+  const sidebar = page.locator("openclaw-app-sidebar");
+  await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+  await sidebar.getByRole("menuitem", { name, exact: true }).click();
+}
+
+async function replyToAgentMetadata(gateway: MockGatewayControls, agentId: "main" | "work") {
+  for (const method of ["models.authStatus", "agent.identity.get"]) {
+    const requests = (await gateway.getRequests(method)).filter((request) => {
+      const params = request.params;
+      return (
+        typeof params === "object" &&
+        params !== null &&
+        "agentId" in params &&
+        params.agentId === agentId
+      );
+    });
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      await gateway.deliverLatest({
+        type: "res",
+        id: request.id,
+        ok: true,
+        payload:
+          method === "models.authStatus"
+            ? agentAuthStatus(agentId)
+            : { agentId, name: `${agentId === "main" ? "Stale Main" : "Work"} Agent` },
+      });
+    }
+  }
+}
+
+async function visibleAuthState(page: Page) {
+  return await page.evaluate((selector) => {
+    const pane = document.querySelector<ChatPane>(selector);
+    const provider = pane?.state?.modelAuthStatusResult?.providers?.[0];
+    return {
+      account: provider?.usage?.accountEmail ?? null,
+      agentId: pane?.state?.assistantAgentId ?? null,
+      displayName: provider?.displayName ?? null,
+      plan: provider?.usage?.plan ?? null,
+      ts: pane?.state?.modelAuthStatusResult?.ts ?? null,
+      name: pane?.state?.assistantName ?? null,
+      avatar: pane?.state?.assistantAvatar ?? null,
+      renderedAvatar: pane?.state?.chatAvatarUrl ?? null,
+    };
+  }, visiblePaneSelector);
+}
+
+async function openVisibleQuotaPopover(page: Page) {
+  const visiblePane = page.locator(visiblePaneSelector);
+  const popover = visiblePane.locator(".context-usage__popover");
+  if (!(await popover.isVisible())) {
+    await visiblePane.locator(".context-ring").click();
+  }
+  await popover.waitFor({ state: "visible" });
+  return popover;
+}
+
+suite.define(() => {
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
+  });
+  it("shows high context pressure without a compact action", async () => {
+    await withChat(authStatusWithUsage, highPressureSessions, "openai:main", async (page) => {
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
+      expect(await contextRing.getAttribute("aria-label")).toBe(
+        "Session context usage: 190k of 200k (95%)",
+      );
+      expect(
+        await contextRing.evaluate((element) =>
+          element.classList.contains("context-ring--warning"),
+        ),
+      ).toBe(true);
+      expect(await page.locator(".context-usage button").count()).toBe(0);
+      await page.screenshot({
+        path: path.join(artifactDir, "00-high-context-without-compact-action.png"),
+      });
+    });
+  });
+
+  it("renders provider usage inside the desktop context popover", async () => {
+    await withChat(authStatusWithUsage, gatewayInjectedSessions, "openai:main", async (page) => {
+      const contextRing = page.locator(".context-ring");
+      const usageLinks = page.locator('[data-chat-provider-usage="true"]');
+      const usageLink = usageLinks.first();
+      await contextRing.waitFor({ state: "visible" });
+      expect(await usageLink.isVisible()).toBe(false);
+      await contextRing.click();
+      await usageLink.waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(artifactDir, "01-chat-with-context-usage.png") });
+      await page.locator(".context-usage__popover").screenshot({
+        path: path.join(artifactDir, "02-context-usage-popover.png"),
+      });
+
+      expect(await usageLinks.count()).toBe(1);
+      expect(await usageLink.getAttribute("href")).toBe("/usage");
+      const popover = page.locator(".context-usage__popover");
+      const quota = popover.getByRole("progressbar", { name: "Weekly", exact: true });
+      expect(await popover.getByRole("progressbar").count()).toBe(1);
+      expect(await quota.getAttribute("aria-valuenow")).toBe("71");
+      expect(await quota.getAttribute("aria-valuetext")).toBe("71%");
+      expect(await quota.locator(".context-usage__limit-reset").textContent()).toBe("Sun");
+      expect(await quota.locator(".context-usage__limit-reset").getAttribute("title")).toBe(
+        "Resets Sun",
+      );
+      expect((await popover.textContent()) ?? "").not.toContain("Copilot");
+      expect(await popover.locator('[data-chat-usage-account="true"]').textContent()).toBe(
+        "OpenAI",
+      );
+      const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
+      expectTextExcludes(popoverText, "openclaw", "gateway-injected", "Model:");
+    });
+  });
+
+  it("shows plan bars, credits, and no dollar estimates for subscription sessions", async () => {
+    await withChat(
+      claudeSubscriptionAuthStatus,
+      claudeSubscriptionSessions,
+      "claude-cli:main",
+      async (page) => {
+        const popover = await openVisibleQuotaPopover(page);
+        await popover.screenshot({
+          path: path.join(artifactDir, "03-claude-subscription-popover.png"),
+        });
+
+        expect(await page.locator(".context-usage__plan-badge").textContent()).toBe("Max (20x)");
+        expect(await popover.getByRole("progressbar").count()).toBe(4);
+        for (const [label, percent, value, reset] of [
+          ["5-hour", "22", "22%", "4:48 PM"],
+          ["Weekly", "25", "25%", "Fri"],
+          ["Fable", "45", "45%", "—"],
+          ["Usage credits", "39", "$157.85 of $400.00", null],
+        ] as const) {
+          const quota = popover.getByRole("progressbar", { name: label, exact: true });
+          expect(await quota.getAttribute("aria-valuenow")).toBe(percent);
+          expect(await quota.getAttribute("aria-valuetext")).toBe(value);
+          expect(await quota.locator(".context-usage__limit-value").textContent()).toBe(value);
+          if (reset === null) {
+            expect(await quota.locator(".context-usage__limit-reset").count()).toBe(0);
+          } else {
+            expect(await quota.locator(".context-usage__limit-reset").textContent()).toBe(reset);
+            expect(await quota.locator(".context-usage__limit-reset").getAttribute("title")).toBe(
+              `Resets ${reset}`,
+            );
+          }
+        }
+        const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
+        expectTextExcludes(popoverText, "Est. cost", "Cost by Type");
+        const latest = (await popover.locator(".context-usage__latest").textContent()) ?? "";
+        expect(latest).toContain("Latest run");
+        expect(latest).toMatch(/In\s*2.4k/);
+        expect(latest).toMatch(/Out\s*830/);
+        expectTextExcludes(latest, "Cost", "$0.02");
+      },
+    );
+  });
+
+  it("shows no plan usage when no provider usage windows are present", async () => {
+    await withChat(
+      { ts: baseTime, providers: [] },
+      gatewayInjectedSessions,
+      "openai:main",
+      async (page) => {
+        const contextRing = page.locator(".context-ring");
+        await contextRing.waitFor({ state: "visible" });
+        await page.waitForFunction(() => {
+          const pane = document.querySelector<ChatPane>("openclaw-chat-pane");
+          return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
+        });
+        await contextRing.click();
+        const popover = page.locator(".context-usage__popover");
+        await popover.waitFor({ state: "visible" });
+        await popover.screenshot({ path: path.join(artifactDir, "04-usage-unavailable.png") });
+        expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+        const popoverText = (await popover.textContent()) ?? "";
+        expectTextExcludes(popoverText, "openclaw", "gateway-injected", "Model:");
+      },
+    );
+  });
+
+  it.each(["scoped", "unscoped"])("scopes auth, quota, and %s identity", async (bootstrapScope) => {
+    const loadingWorkAuth = {
+      account: null,
+      agentId: "work",
+      displayName: null,
+      plan: null,
+      ts: null,
+      name: bootstrapScope === "unscoped" ? "OpenClaw" : "",
+      avatar: null,
+      renderedAvatar: null,
+    };
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "main",
+        defaultAgentId: "main",
+        subscriptionInitialHistory: false,
+        heldMethods: ["models.authStatus", "agent.identity.get"],
+        // The selected agent's session metrics may not have arrived; its transcript
+        // still identifies which provider's quota belongs in the popover.
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Ready." }],
+            provider: "openai",
+          },
+        ],
+        methodResponses: {
+          "agents.list": agentsList,
+          "models.list": {
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: {
+                  models: [],
+                  accountSelection: {
+                    kind: "shared",
+                    label: "Work account",
+                    authProfileId: "openai:work",
+                  },
+                },
+              },
+              {
+                response: {
+                  models: [],
+                  accountSelection: {
+                    kind: "shared",
+                    label: "Main account",
+                    authProfileId: "openai:main",
+                  },
+                },
+              },
+            ],
+          },
+          "sessions.list": {
+            // Static rows seed Main; response cases never seed canonical fixture state.
+            ...selectedGlobalSessions,
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: { ...selectedGlobalSessions, sessions: [workGlobalSession] },
+              },
+              { response: selectedGlobalSessions },
+            ],
+          },
+          // A Work main alias resolves to Work's canonical global history on
+          // the Gateway; it must not borrow the Main-owned list projection.
+          "chat.startup": {
+            cases: [
+              {
+                match: { sessionKey: "agent:work:main", agentId: "work" },
+                response: {
+                  messages: [],
+                  sessionId: workGlobalSession.sessionId,
+                  sessionInfo: workGlobalSession,
+                },
+              },
+            ],
+          },
+        },
+        sessionKey: "global",
+        sessionScope: "global",
+      });
+      if (bootstrapScope === "unscoped") {
+        const bootstrap = createControlUiMockBootstrapConfig();
+        delete bootstrap.assistantAgentId;
+        await page.route("**/control-ui-config.json", (route) =>
+          route.fulfill({ json: bootstrap }),
+        );
+        await installControlUiMockBootstrapDocument(page, bootstrap);
+      }
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
+      const connectRequest = await gateway.waitForRequest("connect");
+      const { client: connectedClient } = connectRequest.params as {
+        client: { instanceId: string };
+      };
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
+
+      expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
+        sessionKey: "global",
+        agentId: "main",
+      });
+      let popover = await openVisibleQuotaPopover(page);
+      const visiblePane = page.locator(visiblePaneSelector);
+      expect(await visiblePane.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+
+      await page.evaluate((selector) => {
+        const pane = document.querySelector<ChatPane>(selector);
+        if (pane?.state) {
+          pane.state.assistantName = "Main Agent";
+          pane.state.assistantAvatar = "M";
+          pane.state.chatAvatarUrl = "https://example.test/main-avatar.png";
+        }
+      }, visiblePaneSelector);
+      await setSelectedAgent(page, "Work");
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "work" } });
+      await expect.poll(() => visibleAuthState(page)).toEqual(loadingWorkAuth);
+      await gateway.emitGatewayEvent("presence", {
+        presence: [
+          {
+            instanceId: connectedClient.instanceId,
+            user: { id: "operator", name: "Operator" },
+            ts: Date.now(),
+          },
+        ],
+      });
+      await expect.poll(() => visibleAuthState(page)).toEqual(loadingWorkAuth);
+
+      await replyToAgentMetadata(gateway, "main");
+      await page.waitForTimeout(100);
+      expect(await visibleAuthState(page)).toEqual(loadingWorkAuth);
+
+      await replyToAgentMetadata(gateway, "work");
+      await expect
+        .poll(() => visibleAuthState(page))
+        .toEqual({
+          account: "work@example.test",
+          agentId: "work",
+          displayName: "Work OpenAI",
+          plan: "Work Team",
+          ts: baseTime + 2,
+          name: "Work Agent",
+          avatar: null,
+          renderedAvatar: null,
+        });
+      popover = await openVisibleQuotaPopover(page);
+      expect(
+        await page.locator(`${visiblePaneSelector} .context-ring`).getAttribute("aria-label"),
+      ).toBe("Session context usage: 90k of 300k (30%)");
+      expect((await gateway.getRequests("chat.startup")).at(-1)?.params).toMatchObject({
+        sessionKey: "agent:work:main",
+        agentId: "work",
+      });
+      await expect.poll(async () => popover.textContent()).toContain("24%");
+      const settledText = (await popover.textContent()) ?? "";
+      expect(settledText).toContain("work@example.test");
+      expect(settledText).toContain("Work Team");
+      expectTextExcludes(settledText, "Main Pro", "main@example.test");
+    });
+  });
+});

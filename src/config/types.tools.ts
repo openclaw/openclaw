@@ -1,0 +1,149 @@
+import type { z } from "zod";
+import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { AgentElevatedAllowFromConfig } from "./types.base.js";
+import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type {
+  AgentEntrySchema,
+  ToolsSchema,
+  ToolPolicySchema,
+} from "./zod-schema.agent-runtime.js";
+type SchemaToolsConfig = NonNullable<z.input<typeof ToolsSchema>>;
+// The web security preprocess erases input inference; parsed output retains its optional authoring shape.
+type ParsedToolsConfig = NonNullable<z.output<typeof ToolsSchema>>;
+type SchemaMediaConfig = NonNullable<SchemaToolsConfig["media"]>;
+type SchemaAudioConfig = NonNullable<SchemaMediaConfig["audio"]>;
+
+export type { MemorySearchConfig } from "./types.memory.js";
+
+export type MediaUnderstandingScopeConfig = NonNullable<SchemaAudioConfig["scope"]>;
+
+export type MediaUnderstandingCapability = "image" | "audio" | "video";
+
+export type MediaUnderstandingAttachmentsConfig = NonNullable<SchemaAudioConfig["attachments"]>;
+
+export type MediaUnderstandingModelConfig = Omit<
+  NonNullable<NonNullable<SchemaMediaConfig["models"]>[number]>,
+  "request"
+> & { request?: ConfiguredProviderRequest };
+
+export type MediaUnderstandingConfig = Omit<SchemaAudioConfig, "scope" | "request"> & {
+  scope?: MediaUnderstandingScopeConfig;
+  request?: ConfiguredProviderRequest;
+  /** Ordered model list (fallbacks in order). */
+  models?: MediaUnderstandingModelConfig[];
+};
+
+/** Per-capability defaults and policy. Models live only in tools.media.models. */
+export type MediaUnderstandingCapabilityConfig = Omit<MediaUnderstandingConfig, "models">;
+
+export type LinkModelConfig = NonNullable<
+  NonNullable<NonNullable<SchemaToolsConfig["links"]>["models"]>[number]
+>;
+
+export type LinkToolsConfig = Omit<NonNullable<SchemaToolsConfig["links"]>, "scope"> & {
+  scope?: MediaUnderstandingScopeConfig;
+};
+
+export type MediaToolsConfig = {
+  /** Canonical model list for image/audio/video, selected by capability tags. */
+  models?: MediaUnderstandingModelConfig[];
+  /** Max concurrent media understanding runs. */
+  concurrency?: number;
+  image?: MediaUnderstandingCapabilityConfig;
+  audio?: MediaUnderstandingCapabilityConfig;
+  video?: MediaUnderstandingCapabilityConfig;
+};
+
+export type ToolProfileId = NonNullable<SchemaToolsConfig["profile"]>;
+
+export type ToolLoopDetectionConfig = NonNullable<SchemaToolsConfig["loopDetection"]>;
+
+export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;
+export type ToolSearchSelector = NonNullable<Exclude<ToolSearchConfig, boolean>["include"]>[number];
+
+export type CodeModeConfig = NonNullable<SchemaToolsConfig["codeMode"]>;
+
+export type ToolAllowDenyPolicyConfig = NonNullable<z.input<typeof ToolPolicySchema>>;
+
+export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
+  /** Built-in profile used as the base policy before allow/deny merges. */
+  profile?: ToolProfileId;
+  /** Provider/model exec ceiling (`tools.byProvider` only); tightens, never loosens. */
+  exec?: { mode?: ExecToolConfig["mode"] };
+};
+
+export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
+
+export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
+export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
+
+export function parseToolsBySenderTypedKey(
+  rawKey: string,
+): { type: ToolsBySenderKeyType; value: string } | undefined {
+  const trimmed = rawKey.trim();
+  const lowered = trimmed.toLowerCase();
+  for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    // Preserve the original value casing after the typed prefix; usernames and
+    // display names can be case-sensitive in channel-specific matching code.
+    return {
+      type,
+      value: trimmed.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Per-sender overrides.
+ *
+ * Use explicit key prefixes:
+ * - channel:<channelId>:<senderId>
+ * - id:<senderId>
+ * - e164:<phone>
+ * - username:<handle>
+ * - name:<display-name>
+ * - * (wildcard)
+ *
+ * Doctor migrates retired unprefixed config keys to id: entries before runtime use.
+ */
+export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
+
+export type ExecToolConfig = Omit<NonNullable<SchemaToolsConfig["exec"]>, "safeBinProfiles"> & {
+  /** Preserve readonly authoring fixtures accepted by the safe-bin policy owner. */
+  safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+};
+
+export type GitHubToolIdentityConfig = NonNullable<SchemaToolsConfig["github"]>;
+
+export type AgentToolsConfig = Omit<
+  NonNullable<z.input<typeof AgentEntrySchema>["tools"]>,
+  "toolsBySender" | "exec" | "elevated"
+> & {
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  exec?: ExecToolConfig;
+  elevated?: {
+    enabled?: boolean;
+    allowFrom?: AgentElevatedAllowFromConfig;
+  };
+};
+
+export type ToolsConfig = Omit<
+  SchemaToolsConfig,
+  "toolsBySender" | "media" | "web" | "exec" | "elevated" | "links"
+> & {
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  media?: MediaToolsConfig;
+  exec?: ExecToolConfig;
+  elevated?: AgentToolsConfig["elevated"];
+  links?: LinkToolsConfig;
+  web?: NonNullable<ParsedToolsConfig["web"]>;
+};
+
+export type MessageToolsConfig = NonNullable<SchemaToolsConfig["message"]>;
+
+/** Required Gateway model-tool ceiling, separate from ordinary additive tool grants. */
+export type GatewayToolPolicyConfig = NonNullable<SchemaToolsConfig["gatewayPolicy"]>;

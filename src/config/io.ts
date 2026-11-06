@@ -1,0 +1,64 @@
+// Stable public facade for config loading, snapshots, recovery, and writes.
+export { createConfigIO } from "./io.factory.js";
+export {
+  parseConfigJson5,
+  resolveConfigSnapshotHash,
+  restoreEnvChangesIfUnchanged,
+  snapshotEnv,
+} from "./io.read-helpers.js";
+export type {
+  ConfigIoDeps,
+  ConfigSnapshotReadMeasure,
+  ParseConfigJson5Result,
+} from "./io.read.types.js";
+export {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  getRuntimeConfig,
+  loadConfig,
+  promoteConfigSnapshotToLastKnownGood,
+  readBestEffortConfig,
+  readBestEffortConfigSnapshot,
+  readConfigFileSnapshot,
+  readCurrentConfigForPolicyCheck,
+  readConfigFileSnapshotForRuntimeTransaction,
+  readConfigFileSnapshotForWrite,
+  readConfigFileSnapshotWithPluginMetadata,
+  readSourceConfigBestEffort,
+  readSourceConfigSnapshot,
+  readSourceConfigSnapshotForWrite,
+  recoverConfigFromJsonRootSuffix,
+  recoverConfigFromLastKnownGood,
+  registerConfigWriteListener,
+  writeConfigFile,
+} from "./io.runtime.js";
+export {
+  ConfigRuntimeRefreshError,
+  type BestEffortConfigSnapshot,
+  type ConfigSnapshotReadOptions,
+  type ConfigWriteAuditOrigin,
+  type ConfigWriteNotification,
+  type ConfigWriteOptions,
+  type ConfigWriteResult,
+  type ReadConfigFileSnapshotForWriteResult,
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "./io.types.js";
+export { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
+export {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSourceSnapshot,
+  readRuntimeConfig,
+  registerManagedRuntimeConfigWriteOwner,
+  resetConfigRuntimeState,
+  resolveRuntimeConfigCacheKey,
+  selectApplicableRuntimeConfig,
+  selectLiveRuntimeConfig,
+  setAppliedRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshotRefreshHandler,
+} from "./runtime-snapshot.js";
+export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
+export { MissingEnvVarError } from "./env-substitution.js";
+export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";

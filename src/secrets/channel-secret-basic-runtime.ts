@@ -1,0 +1,503 @@
+/** Basic channel secret runtime helpers for account/root credential collection. */
+import { coerceSecretRef } from "../config/types.secrets.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
+import {
+  collectSecretInputAssignment,
+  hasOwnProperty,
+  isChannelAccountEffectivelyEnabled,
+  isEnabledFlag,
+  type ResolverContext,
+  type SecretAssignmentOwner,
+  type SecretDefaults,
+} from "./runtime-shared.js";
+import { isRecord } from "./shared.js";
+import type {
+  SecretTargetExpected,
+  SecretTargetRegistryEntry,
+  SecretTargetShape,
+} from "./target-registry-types.js";
+
+export type ChannelSecretTargetPathSpec = {
+  path: string;
+  refPath?: string;
+  targetType?: string;
+  targetTypeAliases?: string[];
+  secretShape?: SecretTargetShape;
+  expectedResolvedValue?: SecretTargetExpected;
+  accountIdPathSegmentIndex?: number;
+};
+
+function buildChannelSecretTargetRegistryEntry(params: {
+  channelKey: string;
+  scope: "account" | "channel";
+  spec: string | ChannelSecretTargetPathSpec;
+}): SecretTargetRegistryEntry {
+  const spec = typeof params.spec === "string" ? { path: params.spec } : params.spec;
+  const scopePrefix =
+    params.scope === "account"
+      ? `channels.${params.channelKey}.accounts.*`
+      : `channels.${params.channelKey}`;
+  const pathPattern = `${scopePrefix}.${spec.path}`;
+  return {
+    id: pathPattern,
+    targetType: spec.targetType ?? pathPattern,
+    ...(spec.targetTypeAliases ? { targetTypeAliases: spec.targetTypeAliases } : {}),
+    configFile: "openclaw.json",
+    pathPattern,
+    ...(spec.refPath ? { refPathPattern: `${scopePrefix}.${spec.refPath}` } : {}),
+    secretShape: spec.secretShape ?? "secret_input",
+    expectedResolvedValue: spec.expectedResolvedValue ?? "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    ...(spec.accountIdPathSegmentIndex !== undefined
+      ? { accountIdPathSegmentIndex: spec.accountIdPathSegmentIndex }
+      : {}),
+  };
+}
+
+// Builds standard channel/account secret registry rows without repeating fixed metadata.
+export function createChannelSecretTargetRegistryEntries(params: {
+  channelKey: string;
+  account?: readonly (string | ChannelSecretTargetPathSpec)[];
+  channel?: readonly (string | ChannelSecretTargetPathSpec)[];
+}): SecretTargetRegistryEntry[] {
+  const entriesForScope = (scope: "account" | "channel") =>
+    (params[scope] ?? []).map((spec) =>
+      buildChannelSecretTargetRegistryEntry({
+        channelKey: params.channelKey,
+        scope,
+        spec,
+      }),
+    );
+  return [...entriesForScope("account"), ...entriesForScope("channel")];
+}
+
+type ChannelSecretCollectorParams = {
+  config: { channels?: Record<string, unknown> };
+  defaults?: SecretDefaults;
+  context: ResolverContext;
+};
+
+/** Keeps registry discovery and account-surface resolution shared while channels own activation. */
+export function createChannelSecretContract(
+  params: Parameters<typeof createChannelSecretTargetRegistryEntries>[0] & {
+    hasImplicitDefaultAccount?: (
+      params: ChannelSecretCollectorParams & { channel: Record<string, unknown> },
+    ) => boolean;
+    collect: (
+      params: ChannelSecretCollectorParams & {
+        channelKey: string;
+        channel: Record<string, unknown>;
+        surface: ChannelAccountSurface;
+        defaults: SecretDefaults | undefined;
+      },
+    ) => void;
+  },
+) {
+  return {
+    secretTargetRegistryEntries: createChannelSecretTargetRegistryEntries(params),
+    collectRuntimeConfigAssignments(
+      this: void,
+      collectorParams: ChannelSecretCollectorParams,
+    ): void {
+      const channel = getChannelRecord(collectorParams.config, params.channelKey);
+      if (!channel) {
+        return;
+      }
+      params.collect({
+        ...collectorParams,
+        channelKey: params.channelKey,
+        channel,
+        surface: resolveChannelAccountSurface(
+          channel,
+          params.hasImplicitDefaultAccount?.({ ...collectorParams, channel }),
+        ),
+        defaults: collectorParams.defaults,
+      });
+    },
+  };
+}
+
+/** Builds the common registry and runtime collector used by simple channel secrets. */
+export function createSimpleChannelSecretContract(params: {
+  channelKey: string;
+  label: string;
+  accountFields: readonly string[];
+  channelFields: readonly string[];
+  mode:
+    | "account-inheritance"
+    | "channel-surface"
+    | "channel-only"
+    | { kind: "surface-inheritance"; collectionFields: readonly string[] };
+}): {
+  secretTargetRegistryEntries: SecretTargetRegistryEntry[];
+  collectRuntimeConfigAssignments: (params: {
+    config: { channels?: Record<string, unknown> };
+    defaults?: SecretDefaults;
+    context: ResolverContext;
+  }) => void;
+} {
+  const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+    channelKey: params.channelKey,
+    account: params.accountFields,
+    channel: params.channelFields,
+  });
+  const collectionFields =
+    typeof params.mode === "object"
+      ? params.mode.collectionFields
+      : [...new Set([...params.accountFields, ...params.channelFields])];
+
+  const collectRuntimeConfigAssignments = (collectorParams: ChannelSecretCollectorParams): void => {
+    const channelOnly = params.mode === "channel-only";
+    const channel = getChannelRecord(collectorParams.config, params.channelKey);
+    if (!channel) {
+      return;
+    }
+    if (channelOnly) {
+      for (const field of collectionFields) {
+        collectSecretInputAssignment({
+          value: channel[field],
+          path: `channels.${params.channelKey}.${field}`,
+          expected: "string",
+          defaults: collectorParams.defaults,
+          context: collectorParams.context,
+          active: channel.enabled !== false,
+          inactiveReason: `${params.label} channel is disabled.`,
+          // Direct-record channels bind the full config as one atomic owner contract.
+          owner: {
+            ownerKind: "account",
+            ownerId: `${params.channelKey}:default`,
+            requiredForGateway: false,
+            disposition: "isolate",
+            contract: channel,
+          },
+          apply: (value) => {
+            channel[field] = value;
+          },
+        });
+      }
+      return;
+    }
+
+    const surface = resolveChannelAccountSurface(channel);
+    for (const field of collectionFields) {
+      const topInactiveReason =
+        params.mode === "channel-surface"
+          ? `${params.label} channel is disabled.`
+          : params.mode === "account-inheritance"
+            ? `no enabled account inherits this top-level ${params.label} ${field}.`
+            : `no enabled ${params.label} surface inherits this top-level ${field}.`;
+      collectSimpleChannelFieldAssignments({
+        channelKey: params.channelKey,
+        field,
+        channel,
+        surface,
+        defaults: collectorParams.defaults,
+        context: collectorParams.context,
+        topInactiveReason,
+        accountInactiveReason:
+          params.mode === "channel-surface"
+            ? `${params.label} channel is disabled.`
+            : `${params.label} account is disabled.`,
+      });
+    }
+  };
+
+  return { secretTargetRegistryEntries, collectRuntimeConfigAssignments };
+}
+
+export type ChannelAccountEntry = {
+  accountId: string;
+  account: Record<string, unknown>;
+  enabled: boolean;
+};
+
+/** Resolved view of a channel config, including synthetic default-account fallback. */
+export type ChannelAccountSurface = {
+  hasExplicitAccounts: boolean;
+  channelEnabled: boolean;
+  accounts: ChannelAccountEntry[];
+};
+
+/** Predicate used by channel helpers to decide whether an account-owned secret is active. */
+export type ChannelAccountPredicate = (entry: ChannelAccountEntry) => boolean;
+
+/** Stable owner identity shared by SecretRef collection and channel activation. */
+export function createChannelAccountSecretOwner(
+  channelKey: string,
+  accountId: string,
+  channel: Record<string, unknown>,
+  account: Record<string, unknown>,
+  contract?: unknown,
+): SecretAssignmentOwner {
+  const { accounts: _accounts, ...channelDefaults } = channel;
+  return {
+    ownerKind: "account",
+    ownerId: `${channelKey}:${normalizeAccountId(accountId)}`,
+    requiredForGateway: false,
+    disposition: "isolate",
+    contract: contract ?? { channel: channelDefaults, account },
+  };
+}
+
+/** Reads a channel config block when it exists as an object. */
+export function getChannelRecord(
+  config: { channels?: Record<string, unknown> },
+  channelKey: string,
+): Record<string, unknown> | undefined {
+  const channels = config.channels;
+  if (!isRecord(channels)) {
+    return undefined;
+  }
+  const channel = channels[channelKey];
+  return isRecord(channel) ? channel : undefined;
+}
+
+/** Reads a channel config and its resolved account surface in one step. */
+export function getChannelSurface(
+  config: { channels?: Record<string, unknown> },
+  channelKey: string,
+): { channel: Record<string, unknown>; surface: ChannelAccountSurface } | null {
+  const channel = getChannelRecord(config, channelKey);
+  if (!channel) {
+    return null;
+  }
+  return {
+    channel,
+    surface: resolveChannelAccountSurface(channel),
+  };
+}
+
+/** Resolves explicit channel accounts or creates a default account backed by the channel root. */
+export function resolveChannelAccountSurface(
+  channel: Record<string, unknown>,
+  hasImplicitDefaultAccount = false,
+): ChannelAccountSurface {
+  const channelEnabled = isEnabledFlag(channel);
+  const accounts = channel.accounts;
+  if (!isRecord(accounts) || Object.keys(accounts).length === 0) {
+    return {
+      hasExplicitAccounts: false,
+      channelEnabled,
+      accounts: [{ accountId: "default", account: channel, enabled: channelEnabled }],
+    };
+  }
+  const accountEntries: ChannelAccountEntry[] = [];
+  for (const [accountId, account] of Object.entries(accounts)) {
+    if (!isRecord(account)) {
+      continue;
+    }
+    accountEntries.push({
+      accountId,
+      account,
+      enabled: isChannelAccountEffectivelyEnabled(channel, account),
+    });
+  }
+  if (
+    hasImplicitDefaultAccount &&
+    !Object.keys(accounts).some((accountId) => normalizeAccountId(accountId) === "default")
+  ) {
+    accountEntries.push({ accountId: "default", account: {}, enabled: channelEnabled });
+  }
+  return {
+    hasExplicitAccounts: true,
+    channelEnabled,
+    accounts: accountEntries,
+  };
+}
+
+export function isBaseFieldActiveForChannelSurface(
+  surface: ChannelAccountSurface,
+  rootKey: string,
+): boolean {
+  if (!surface.channelEnabled) {
+    return false;
+  }
+  if (!surface.hasExplicitAccounts) {
+    return true;
+  }
+  // Top-level channel fields are inherited by enabled accounts that do not override that field.
+  return surface.accounts.some(
+    ({ account, enabled }) => enabled && !hasOwnProperty(account, rootKey),
+  );
+}
+
+/** Normalizes optional channel secret strings before deciding whether a value is configured. */
+export function normalizeSecretStringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Returns true when a channel value contains plaintext or a SecretRef-compatible value. */
+export function hasConfiguredSecretInputValue(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+): boolean {
+  return normalizeSecretStringValue(value).length > 0 || coerceSecretRef(value, defaults) !== null;
+}
+
+/** Collects root/account channel field SecretRef assignments for one credential path. */
+export function collectSimpleChannelFieldAssignments(params: {
+  channelKey: string;
+  field: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topInactiveReason: string;
+  accountInactiveReason: string;
+}): void {
+  collectConditionalChannelFieldAssignments({
+    ...params,
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, params.field),
+    accountActive: ({ enabled }) => enabled,
+  });
+}
+
+/** Collects a channel field whose active state depends on caller-provided account predicates. */
+export function collectConditionalChannelFieldAssignments(params: {
+  channelKey: string;
+  field: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topLevelActiveWithoutAccounts: boolean;
+  topLevelInheritedAccountActive: ChannelAccountPredicate;
+  accountActive: ChannelAccountPredicate;
+  topInactiveReason: string;
+  accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
+}): void {
+  collectChannelFieldAssignments({
+    ...params,
+    nestedKey: undefined,
+    topLevelActiveWithoutAccounts:
+      params.surface.channelEnabled && params.topLevelActiveWithoutAccounts,
+  });
+}
+
+/** Collects a nested channel field from root and account-specific nested config blocks. */
+export function collectNestedChannelFieldAssignments(params: {
+  channelKey: string;
+  nestedKey: string;
+  field: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topLevelActive: boolean;
+  topLevelInheritedAccountActive?: ChannelAccountPredicate;
+  topInactiveReason: string;
+  accountActive: ChannelAccountPredicate;
+  accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
+}): void {
+  collectChannelFieldAssignments({
+    ...params,
+    topLevelActiveWithoutAccounts: params.topLevelActive,
+    topLevelInheritedAccountActive:
+      params.topLevelInheritedAccountActive ??
+      (({ account, enabled }) =>
+        params.topLevelActive && enabled && !hasOwnProperty(account, params.nestedKey)),
+  });
+}
+
+function collectChannelFieldAssignments(
+  params: Parameters<typeof collectConditionalChannelFieldAssignments>[0] & { nestedKey?: string },
+): void {
+  const fieldPath =
+    params.nestedKey === undefined ? params.field : `${params.nestedKey}.${params.field}`;
+  const targetFor = (record: Record<string, unknown>) => {
+    const target = params.nestedKey === undefined ? record : record[params.nestedKey];
+    return isRecord(target) ? target : undefined;
+  };
+  const topLevel = targetFor(params.channel);
+  if (topLevel) {
+    const { channelKey, channel } = params;
+    const value = topLevel[params.field];
+    const topLevelFieldPath = `channels.${params.channelKey}.${fieldPath}`;
+    const { surface, defaults, context } = params;
+    const activeWithoutAccounts = params.topLevelActiveWithoutAccounts;
+    const inheritedAccountActive = params.topLevelInheritedAccountActive;
+    const inactiveReason = params.topInactiveReason;
+    const apply = (resolvedValue: unknown) => {
+      topLevel[params.field] = resolvedValue;
+    };
+    const owners = surface.hasExplicitAccounts
+      ? surface.accounts.filter(inheritedAccountActive)
+      : activeWithoutAccounts
+        ? [{ accountId: "default", account: {}, enabled: true }]
+        : [];
+    if (owners.length === 0) {
+      collectSecretInputAssignment({
+        value,
+        path: topLevelFieldPath,
+        expected: "string",
+        defaults,
+        context,
+        active: false,
+        inactiveReason,
+        apply,
+      });
+    } else {
+      // One inherited ref can own several accounts. Duplicate only the assignment metadata so a
+      // failed shared credential degrades every consumer without collapsing unrelated accounts.
+      const { accounts: _accounts, ...channelDefaults } = channel;
+      const inheritedContract = {
+        channel: channelDefaults,
+        consumers: owners
+          .map(({ accountId, account }) => ({ accountId: normalizeAccountId(accountId), account }))
+          .toSorted((left, right) => left.accountId.localeCompare(right.accountId)),
+      };
+      for (const { accountId, account } of owners) {
+        collectSecretInputAssignment({
+          value,
+          path: topLevelFieldPath,
+          expected: "string",
+          defaults,
+          context,
+          owner: createChannelAccountSecretOwner(
+            channelKey,
+            accountId,
+            channel,
+            account,
+            inheritedContract,
+          ),
+          apply,
+        });
+      }
+    }
+  }
+  if (!params.surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const entry of params.surface.accounts) {
+    const target = targetFor(entry.account);
+    if (!target || (params.nestedKey === undefined && !hasOwnProperty(target, params.field))) {
+      continue;
+    }
+    collectSecretInputAssignment({
+      value: target[params.field],
+      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${fieldPath}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.accountActive(entry),
+      inactiveReason:
+        typeof params.accountInactiveReason === "function"
+          ? params.accountInactiveReason(entry)
+          : params.accountInactiveReason,
+      owner: createChannelAccountSecretOwner(
+        params.channelKey,
+        entry.accountId,
+        params.channel,
+        entry.account,
+      ),
+      apply: (value) => {
+        target[params.field] = value;
+      },
+    });
+  }
+}

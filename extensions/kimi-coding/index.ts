@@ -1,0 +1,131 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-metadata";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyKimiCodeConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
+import {
+  isKimiK3ModelId,
+  KIMI_K3_THINKING_EFFORTS,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
+
+const PLUGIN_ID = "kimi";
+const PROVIDER_ID = "kimi";
+const PROVIDER_ALIASES = ["kimi-code", "kimi-coding"];
+const loadStreamRuntime = createLazyRuntimeModule(() => import("./stream.js"));
+
+function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
+  const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
+    runtime.wrapKimiProviderStream(ctx),
+  );
+  return async (model, context, options) => {
+    options?.signal?.throwIfAborted();
+    const stream = await loadStream();
+    options?.signal?.throwIfAborted();
+    return stream(model, context, options);
+  };
+}
+
+export default defineSingleProviderPluginEntry({
+  id: PLUGIN_ID,
+  name: "Kimi Provider",
+  description: "Bundled Kimi provider plugin",
+  manifest,
+  provider: {
+    id: PROVIDER_ID,
+    label: "Kimi",
+    aliases: PROVIDER_ALIASES,
+    docsPath: "/providers/moonshot",
+    envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+    manifestAuth: {
+      promptMessage: "Enter Kimi API key",
+      expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
+      applyConfig: applyKimiCodeConfig,
+      noteMessage: [
+        "Kimi uses a dedicated coding endpoint and API key.",
+        "Get your API key at: https://www.kimi.com/code/console",
+      ].join("\n"),
+      noteTitle: "Kimi",
+    },
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+        if (!apiKey) {
+          return null;
+        }
+        const explicitProviderKey = findNormalizedProviderKey(
+          ctx.config.models?.providers,
+          PROVIDER_ID,
+        );
+        const explicitProvider =
+          explicitProviderKey === undefined
+            ? undefined
+            : ctx.config.models?.providers?.[explicitProviderKey];
+        const builtInProvider = buildKimiCodingProvider();
+        const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
+        const explicitHeaders = isRecord(explicitProvider?.headers)
+          ? explicitProvider.headers
+          : undefined;
+        return {
+          provider: {
+            ...builtInProvider,
+            ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+            ...(explicitHeaders
+              ? {
+                  headers: {
+                    ...builtInProvider.headers,
+                    ...explicitHeaders,
+                  },
+                }
+              : {}),
+            apiKey,
+          },
+        };
+      },
+    },
+    classifyFailoverReason: ({ provider, status, errorMessage }) => {
+      if (!provider || status !== 403) {
+        return undefined;
+      }
+      const providerId = normalizeProviderId(provider);
+      if (providerId !== PROVIDER_ID && !PROVIDER_ALIASES.includes(providerId)) {
+        return undefined;
+      }
+      return /\b(?:weekly(?:\s+\(7-day\))?|(?:7|seven)[ -]day)\s+(?:usage\s+)?limit\b/i.test(
+        errorMessage,
+      ) || /\bquota\s+will\s+reset\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined;
+    },
+    buildReplayPolicy: () => ({ preserveSignatures: false }),
+    normalizeResolvedModel: ({ model }) => {
+      const normalizedId = normalizeKimiCodingModelId(model.id);
+      if (isKimiK3ModelId(normalizedId)) {
+        // Session setup clamps before the stream wrapper can map the selected effort, and
+        // hosted catalog rows such as K3.1 do not carry the bundled K3 map.
+        return {
+          ...model,
+          id: normalizedId,
+          thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap },
+        };
+      }
+      return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
+    },
+    normalizeModelId: ({ modelId }) => normalizeKimiCodingModelId(modelId),
+    resolveThinkingProfile,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,
+    wrapStreamFn: wrapKimiProviderStream,
+  },
+});

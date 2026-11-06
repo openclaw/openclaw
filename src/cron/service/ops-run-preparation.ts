@@ -1,0 +1,221 @@
+import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import type { CronJob } from "../types.js";
+import { normalizeCronRunErrorText } from "./execution-errors.js";
+import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
+import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
+import { assertExternalSourceScheduleSupport, assertSupportedJobSpec } from "./jobs-validation.js";
+import type { ManualRunOptions } from "./run-options.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
+import { refreshCronScheduler } from "./scheduler-actor.js";
+import { recordSkippedCronRuns } from "./skipped-runs.js";
+import type { CronRunMode, CronServiceState } from "./state.js";
+import { assertCronHostExecutionAllowed, isImmediateCronRunMode } from "./state.js";
+import {
+  captureCronServiceMutationSource,
+  ensureLoaded,
+  runPostPersistCronNotifications,
+  warnIfDisabled,
+} from "./store.js";
+import { emitCronRunFinished } from "./timer-outcome-events.js";
+import { isRunnableJob } from "./timer-runnable.js";
+
+type ManualRunSkipped = {
+  ok: true;
+  ran: false;
+  reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped" | "ownerless";
+};
+
+type ManualRunPreflightResult =
+  | { ok: false }
+  | ManualRunSkipped
+  | {
+      ok: true;
+      runnable: true;
+      job: CronJob;
+    };
+
+function admitsStreamSourceRun(
+  job: CronJob,
+  streamScheduleKey?: string,
+  streamSourceIdentity?: string,
+): boolean {
+  if (streamScheduleKey === undefined && streamSourceIdentity === undefined) {
+    return true;
+  }
+  return (
+    streamScheduleKey !== undefined &&
+    streamSourceIdentity !== undefined &&
+    isJobEnabled(job) &&
+    ownsCronSource(job, streamScheduleKey, streamSourceIdentity)
+  );
+}
+
+async function skipInvalidPersistedManualRun(params: {
+  state: CronServiceState;
+  source: ReturnType<typeof captureCronServiceMutationSource>;
+  job: CronJob;
+  mode?: CronRunMode;
+  runId?: string;
+  terminalTracker?: { emitted: boolean };
+  error: unknown;
+}) {
+  const endedAt = params.state.deps.nowMs();
+  const errorText = normalizeCronRunErrorText(params.error);
+  const diagnostics = createCronRunDiagnosticsFromError("cron-preflight", errorText, {
+    severity: "warn",
+    nowMs: params.state.deps.nowMs,
+  });
+  await recordSkippedCronRuns({
+    state: params.state,
+    source: params.source,
+    nowMs: endedAt,
+    change: {
+      kind: "invalid-manual",
+      jobId: params.job.id,
+      configRevision: resolveCronJobConfigRevision(params.job),
+      error: errorText,
+      diagnostics,
+      scheduleMode: isImmediateCronRunMode(params.mode) ? "preserve" : "advance",
+    },
+    async afterCommit(outcome, historySource) {
+      const job = outcome.jobs[0];
+      if (!job) {
+        refreshCronScheduler(params.state);
+        return;
+      }
+      applyCronRuntimeRowsToState(params.state, [job]);
+      for (const entry of outcome.logs) {
+        params.state.deps.log[entry.level](entry.fields, entry.message);
+      }
+      await emitCronRunFinished(
+        params.state,
+        {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "skipped",
+          error: errorText,
+          diagnostics,
+          runId: params.runId,
+          runAtMs: endedAt,
+          durationMs: job.state.lastDurationMs,
+          nextRunAtMs: job.state.nextRunAtMs,
+          deliveryStatus: job.state.lastDeliveryStatus,
+          deliveryError: job.state.lastDeliveryError,
+          failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
+        },
+        params.terminalTracker,
+        undefined,
+        { historySource },
+      );
+      for (const notification of outcome.notifications) {
+        await runPostPersistCronNotifications(params.state, [notification]);
+      }
+      refreshCronScheduler(params.state);
+    },
+  });
+}
+
+async function recomputeManualRunPreflight(
+  state: CronServiceState,
+  id: string,
+  mode?: CronRunMode,
+) {
+  await recomputeUnownedCronSchedules(state, {
+    ...(isImmediateCronRunMode(mode) ? { preserveDisabledJobId: id } : {}),
+    skipScheduleErrorHandling: true,
+  });
+}
+
+// The caller holds the store lock through preflight and request submission.
+export async function inspectManualRunPreflight(
+  state: CronServiceState,
+  id: string,
+  source: ReturnType<typeof captureCronServiceMutationSource>,
+  mode?: CronRunMode,
+  opts?: ManualRunOptions,
+): Promise<ManualRunPreflightResult> {
+  warnIfDisabled(state, "run");
+  if (state.stopped) {
+    return { ok: true, ran: false, reason: "stopped" };
+  }
+  // Classify source retirement before the generic service-generation fence.
+  opts?.commitGuard?.();
+  source.assertCurrent();
+  await ensureLoaded(state);
+  opts?.commitGuard?.();
+  source.assertCurrent();
+  if (state.stopped) {
+    return { ok: true, ran: false, reason: "stopped" };
+  }
+  // Normalize stale tick state before eligibility checks (#17554). Revalidate
+  // after notifications too: synchronous owner callbacks can close the caller.
+  await recomputeManualRunPreflight(state, id, mode);
+  opts?.commitGuard?.();
+  if (state.stopped) {
+    return { ok: true, ran: false, reason: "stopped" };
+  }
+  const job =
+    opts?.onExit || opts?.event
+      ? state.store?.jobs.find((entry) => entry.id === id)
+      : findJobOrThrow(state, id);
+  if (
+    !job ||
+    (opts?.onExit &&
+      (job.schedule.kind !== "on-exit" ||
+        job.schedule.command !== opts.onExit.schedule.command ||
+        job.schedule.cwd !== opts.onExit.schedule.cwd))
+  ) {
+    return { ok: true, ran: false, reason: "not-due" };
+  }
+  if (
+    opts?.event &&
+    (job.schedule.kind !== "event" || cronSourceIdentity(job) !== opts.event.input.sourceIdentity)
+  ) {
+    return { ok: true, ran: false, reason: "not-due" };
+  }
+  assertCronHostExecutionAllowed(state, job);
+  assertCanonicalCronDeliveryMode(job.delivery);
+  if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
+    return { ok: true, ran: false, reason: "disabled" };
+  }
+  if (mode === "if-enabled" && (!isJobEnabled(job) || job.state.autoDisabled)) {
+    return { ok: true, ran: false, reason: "disabled" };
+  }
+  if (!admitsStreamSourceRun(job, opts?.streamScheduleKey, opts?.streamSourceIdentity)) {
+    return { ok: true, ran: false, reason: "not-due" };
+  }
+  try {
+    assertExternalSourceScheduleSupport(job);
+    assertSupportedJobSpec(job);
+  } catch (error) {
+    await skipInvalidPersistedManualRun({
+      state,
+      job,
+      mode,
+      source,
+      runId: opts?.runId,
+      terminalTracker: opts?.terminalTracker,
+      error,
+    });
+    return { ok: true, ran: false, reason: "invalid-spec" };
+  }
+  if (hasActiveCronRun(job)) {
+    return { ok: true, ran: false, reason: "already-running" };
+  }
+  const now = state.deps.nowMs();
+  if (
+    !isRunnableJob({
+      job,
+      nowMs: now,
+      forced: isImmediateCronRunMode(mode),
+    })
+  ) {
+    return { ok: true, ran: false, reason: "not-due" };
+  }
+  return { ok: true, runnable: true, job };
+}

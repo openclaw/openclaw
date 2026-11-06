@@ -1,0 +1,202 @@
+import { join } from "node:path";
+import {
+  parseFiniteNumber,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
+type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
+type OptionalEmbeddingFields = "apiKey" | "baseUrl" | "dimensions";
+export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemoryFields> &
+  Partial<Pick<ProducedMemoryConfig, OptionalMemoryFields>> & {
+    embedding: Omit<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields> &
+      Partial<Pick<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields>>;
+  };
+
+export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
+export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
+
+const DEFAULT_MODEL = "text-embedding-3-small";
+export const DEFAULT_CAPTURE_MAX_CHARS = 500;
+export const DEFAULT_RECALL_MAX_CHARS = 1000;
+
+export function resolveDefaultDbPath(stateDir: string = resolveStateDir()): string {
+  return join(stateDir, "memory", "lancedb");
+}
+
+const EMBEDDING_DIMENSIONS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+};
+const EMBEDDING_CONFIG_KEYS = ["provider", "apiKey", "model", "baseUrl", "dimensions"] as const;
+
+function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length === 0) {
+    return;
+  }
+  throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
+}
+
+export function vectorDimsForModel(model: string): number {
+  const dims = EMBEDDING_DIMENSIONS[model];
+  if (!dims) {
+    throw new Error(`Unsupported embedding model: ${model}`);
+  }
+  return dims;
+}
+
+export function resolveEnvVars(value: string, env: NodeJS.ProcessEnv = process.env): string {
+  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
+    const envValue = env[envVar];
+    if (!envValue) {
+      throw new Error(`Environment variable ${envVar} is not set`);
+    }
+    return envValue;
+  });
+}
+
+function resolveEmbeddingModel(
+  embedding: Record<string, unknown>,
+  dimensions: number | undefined,
+): string {
+  const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
+  if (dimensions === undefined) {
+    vectorDimsForModel(model);
+  }
+  return model;
+}
+
+function resolveTextLimit(value: unknown, fallback: number, label: string): number {
+  const resolved = resolveOptionalIntegerOption(value) ?? fallback;
+  if (resolved < 100 || resolved > 10_000) {
+    throw new Error(`${label} must be between 100 and 10000`);
+  }
+  return resolved;
+}
+
+function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number | undefined {
+  if (embedding.dimensions === undefined) {
+    return undefined;
+  }
+  const dimensions =
+    typeof embedding.dimensions === "number" ? parseFiniteNumber(embedding.dimensions) : undefined;
+  if (dimensions === undefined || !Number.isInteger(dimensions) || dimensions < 1) {
+    throw new Error("embedding.dimensions must be a positive integer");
+  }
+  return dimensions;
+}
+
+export const memoryConfigSchema = {
+  parse(value: unknown) {
+    if (!isRecord(value)) {
+      throw new Error("memory config required");
+    }
+    const cfg = value;
+    assertAllowedKeys(
+      cfg,
+      [
+        "embedding",
+        "dreaming",
+        "dbPath",
+        "autoCapture",
+        "autoRecall",
+        "captureMaxChars",
+        "customTriggers",
+        "recallMaxChars",
+        "storageOptions",
+      ],
+      "memory config",
+    );
+
+    const embedding = cfg.embedding;
+    if (!isRecord(embedding)) {
+      throw new Error("embedding config required");
+    }
+    assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
+    if (Object.keys(embedding).length === 0) {
+      throw new Error("embedding config must include at least one setting");
+    }
+
+    const dimensions = resolveEmbeddingDimensions(embedding);
+    const model = resolveEmbeddingModel(embedding, dimensions);
+    const provider = typeof embedding.provider === "string" ? embedding.provider.trim() : "openai";
+    if (!provider) {
+      throw new Error("embedding.provider must not be empty");
+    }
+
+    const captureMaxChars = resolveTextLimit(
+      cfg.captureMaxChars,
+      DEFAULT_CAPTURE_MAX_CHARS,
+      "captureMaxChars",
+    );
+    const recallMaxChars = resolveTextLimit(
+      cfg.recallMaxChars,
+      DEFAULT_RECALL_MAX_CHARS,
+      "recallMaxChars",
+    );
+    let customTriggers: string[] | undefined;
+    if (cfg.customTriggers !== undefined) {
+      if (!Array.isArray(cfg.customTriggers)) {
+        throw new Error("customTriggers must be an array of strings");
+      }
+      customTriggers = cfg.customTriggers.map((trigger, index) => {
+        if (typeof trigger !== "string") {
+          throw new Error(`customTriggers.${index} must be a string`);
+        }
+        const normalized = trigger.trim();
+        if (!normalized) {
+          throw new Error(`customTriggers.${index} must not be empty`);
+        }
+        if (normalized.length > 100) {
+          throw new Error(`customTriggers.${index} must be at most 100 characters`);
+        }
+        return normalized;
+      });
+      if (customTriggers.length > 50) {
+        throw new Error("customTriggers must include at most 50 entries");
+      }
+    }
+
+    const dreaming = cfg.dreaming;
+    if (dreaming !== undefined && !isRecord(dreaming)) {
+      throw new Error("dreaming config must be an object");
+    }
+
+    let storageOptions: Record<string, string> | undefined;
+    const storageOpts = cfg.storageOptions;
+    if (storageOpts !== undefined && storageOpts !== null) {
+      if (!isRecord(storageOpts)) {
+        throw new Error("storageOptions must be an object");
+      }
+      storageOptions = {};
+      for (const [key, valueLocal] of Object.entries(storageOpts)) {
+        if (typeof valueLocal !== "string") {
+          throw new Error(`storageOptions.${key} must be a string`);
+        }
+        storageOptions[key] = resolveEnvVars(valueLocal);
+      }
+    }
+
+    return {
+      embedding: {
+        provider,
+        model,
+        apiKey: typeof embedding.apiKey === "string" ? resolveEnvVars(embedding.apiKey) : undefined,
+        baseUrl:
+          typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
+        dimensions,
+      },
+      dreaming,
+      dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : resolveDefaultDbPath(),
+      autoCapture: cfg.autoCapture === true,
+      autoRecall: cfg.autoRecall !== false,
+      captureMaxChars,
+      ...(customTriggers ? { customTriggers } : {}),
+      recallMaxChars,
+      ...(storageOptions ? { storageOptions } : {}),
+    };
+  },
+};

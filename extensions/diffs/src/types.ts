@@ -1,0 +1,126 @@
+import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
+
+export const DIFF_LAYOUTS = ["unified", "split"] as const;
+export const DIFF_MODES = ["view", "image", "file", "both"] as const;
+export const DIFF_THEMES = ["light", "dark"] as const;
+export const DIFF_INDICATORS = ["bars", "classic", "none"] as const;
+export const DIFF_IMAGE_QUALITY_PRESETS = ["standard", "hq", "print"] as const;
+export const DIFF_OUTPUT_FORMATS = ["png", "pdf"] as const;
+
+export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
+type DiffMode = (typeof DIFF_MODES)[number];
+export type DiffTheme = (typeof DIFF_THEMES)[number];
+type DiffIndicators = (typeof DIFF_INDICATORS)[number];
+export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
+export type DiffOutputFormat = (typeof DIFF_OUTPUT_FORMATS)[number];
+export type DiffRenderTarget = "viewer" | "image" | "both";
+
+type DiffPresentationDefaults = {
+  fontFamily: string;
+  fontSize: number;
+  lineSpacing: number;
+  layout: DiffLayout;
+  showLineNumbers: boolean;
+  diffIndicators: DiffIndicators;
+  wordWrap: boolean;
+  background: boolean;
+  theme: DiffTheme;
+};
+
+export type DiffFileDefaults = {
+  fileFormat: DiffOutputFormat;
+  fileQuality: DiffImageQualityPreset;
+  fileScale: number;
+  fileMaxWidth: number;
+};
+
+export type DiffToolDefaults = DiffPresentationDefaults &
+  DiffFileDefaults & {
+    mode: DiffMode;
+    ttlSeconds: number;
+  };
+
+export type DiffInput =
+  | {
+      kind: "before_after";
+      before: string;
+      after: string;
+      path?: string;
+      lang?: string;
+      title?: string;
+    }
+  | {
+      kind: "patch";
+      patch: string;
+      title?: string;
+    };
+
+export type DiffRenderOptions = {
+  presentation: DiffPresentationDefaults;
+  image: {
+    format: DiffOutputFormat;
+    qualityPreset: DiffImageQualityPreset;
+    scale: number;
+    maxWidth: number;
+    maxPixels: number;
+  };
+  expandUnchanged: boolean;
+  languagePackAvailable?: boolean;
+};
+
+export type DiffViewerOptions = {
+  theme: {
+    light: "pierre-light";
+    dark: "pierre-dark";
+  };
+  diffStyle: DiffLayout;
+  diffIndicators: DiffIndicators;
+  disableLineNumbers: boolean;
+  expandUnchanged: boolean;
+  themeType: DiffTheme;
+  backgroundEnabled: boolean;
+  overflow: "scroll" | "wrap";
+  unsafeCSS: string;
+};
+
+export type DiffViewerPayload = {
+  prerenderedHTML: string;
+  options: DiffViewerOptions;
+  langs: SupportedLanguages[];
+  oldFile?: FileContents;
+  newFile?: FileContents;
+  fileDiff?: FileDiffMetadata;
+};
+
+export type DiffArtifactContext = {
+  agentId?: string;
+  sessionId?: string;
+  messageChannel?: string;
+  agentAccountId?: string;
+};
+
+export type DiffViewerArtifactMetadata = {
+  version: 1;
+  kind: "viewer";
+  encoding: "gzip";
+  tokenHash: string;
+  title: string;
+  inputKind: DiffInput["kind"];
+  fileCount: number;
+  decodedBytes: number;
+  context?: DiffArtifactContext;
+};
+
+export type DiffRenderedFileArtifactMetadata = {
+  version: 1;
+  kind: "rendered_file";
+  format: DiffOutputFormat;
+  context?: DiffArtifactContext;
+};
+
+export type DiffArtifactBlobMetadata =
+  | DiffViewerArtifactMetadata
+  | DiffRenderedFileArtifactMetadata;
+
+export const DIFF_ARTIFACT_ID_PATTERN = /^[0-9a-f]{20}$/;
+export const DIFF_ARTIFACT_TOKEN_PATTERN = /^[0-9a-f]{48}$/;

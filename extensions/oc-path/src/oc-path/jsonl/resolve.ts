@@ -1,0 +1,49 @@
+/**
+ * Resolve an `OcPath` against a `JsonlAst`.
+ *
+ * Convention for JSONL OcPaths:
+ *
+ *   oc://session-events/L42                  → entire line 42 value
+ *   oc://session-events/L42/result           → field on line 42's value
+ *   oc://session-events/L42/result.detail    → dotted descent
+ *   oc://session-events/$last                → final non-blank value
+ *
+ * `Lnnn` (line address) and `$last` are the addressing primitives
+ * unique to JSONL — they're how forensics / replay refers to a
+ * specific entry without committing to a content key.
+ *
+ * @module @openclaw/oc-path/jsonl/resolve
+ */
+
+import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
+import type { OcPath } from "../oc-path.js";
+import { splitOcPathSlots } from "../oc-path.js";
+import type { JsonlAst } from "./ast.js";
+import { pickJsonlLine } from "./line.js";
+
+export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath) {
+  // The first non-file segment is the line address (Lnnn or $last).
+  const head = path.section;
+  if (head === undefined) {
+    return { kind: "root", node: ast } as const;
+  }
+
+  const lineEntry = pickJsonlLine(ast, head);
+  if (lineEntry === null) {
+    return null;
+  }
+
+  if (path.item === undefined && path.field === undefined) {
+    return { kind: "line", node: lineEntry } as const;
+  }
+
+  if (lineEntry.kind !== "value") {
+    return null;
+  }
+
+  const match = resolveJsoncValueOcPath(lineEntry.value, splitOcPathSlots(path.item, path.field));
+  if (match === null) {
+    return null;
+  }
+  return { ...match, line: lineEntry.line } as const;
+}

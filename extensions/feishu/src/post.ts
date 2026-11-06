@@ -1,0 +1,304 @@
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
+
+const FALLBACK_POST_TEXT = "[Rich text message]";
+const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
+
+type PostFileAttachment = {
+  kind: "file";
+  key: string;
+  fileName?: string;
+  // Top-level files[] are documents even without file_name; inline media is not.
+  origin?: "top-level";
+};
+
+type PostParseResult = {
+  textContent: string;
+  attachments: Array<{ kind: "image"; key: string } | PostFileAttachment>;
+  mentionedOpenIds: string[];
+};
+
+type PostPayload = {
+  title: string;
+  content: unknown[];
+  files?: unknown;
+};
+
+function toStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function escapeMarkdownText(text: string): string {
+  return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
+}
+
+function wrapInlineCode(text: string): string {
+  const maxRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(maxRun + 1);
+  const needsPadding = text.startsWith("`") || text.endsWith("`");
+  const body = needsPadding ? ` ${text} ` : text;
+  return `${fence}${body}${fence}`;
+}
+
+function applyInlineStyles(text: string, style: unknown): string {
+  // Keep boundary whitespace outside Markdown emphasis delimiters.
+  const content = text.trim();
+  if (!content || !Array.isArray(style)) {
+    return text;
+  }
+  let rendered = content;
+  if (style.includes("bold")) {
+    rendered = `**${rendered}**`;
+  }
+  if (style.includes("italic")) {
+    rendered = `*${rendered}*`;
+  }
+  if (style.includes("underline")) {
+    rendered = `<u>${rendered}</u>`;
+  }
+  if (style.includes("lineThrough")) {
+    rendered = `~~${rendered}~~`;
+  }
+  return text.replace(content, () => rendered);
+}
+
+function renderLinkElement(element: Record<string, unknown>): string {
+  const href = toStringOrEmpty(element.href).trim();
+  const rawText = toStringOrEmpty(element.text);
+  const text = rawText || href;
+  if (!text) {
+    return "";
+  }
+  if (!href) {
+    return escapeMarkdownText(text);
+  }
+  return `[${escapeMarkdownText(text)}](${href})`;
+}
+
+function renderMentionElement(element: Record<string, unknown>): string {
+  const mention =
+    toStringOrEmpty(element.user_name) ||
+    toStringOrEmpty(element.user_id) ||
+    toStringOrEmpty(element.open_id);
+  if (!mention) {
+    return "";
+  }
+  return `@${escapeMarkdownText(mention)}`;
+}
+
+function renderElement(
+  element: unknown,
+  attachments: PostParseResult["attachments"],
+  mentionedOpenIds: string[],
+  renderMediaPlaceholders: boolean,
+): string {
+  if (!isRecord(element)) {
+    return escapeMarkdownText(toStringOrEmpty(element));
+  }
+
+  const tag = normalizeLowercaseStringOrEmpty(element.tag);
+  switch (tag) {
+    case "text":
+      return applyInlineStyles(escapeMarkdownText(toStringOrEmpty(element.text)), element.style);
+    case "a":
+      return applyInlineStyles(renderLinkElement(element), element.style);
+    case "at":
+      {
+        const mentioned = toStringOrEmpty(element.open_id) || toStringOrEmpty(element.user_id);
+        const normalizedMention = normalizeFeishuExternalKey(mentioned);
+        if (normalizedMention) {
+          mentionedOpenIds.push(normalizedMention);
+        }
+      }
+      return applyInlineStyles(renderMentionElement(element), element.style);
+    case "img": {
+      const imageKey = normalizeFeishuExternalKey(element.image_key);
+      if (imageKey) {
+        attachments.push({ kind: "image", key: imageKey });
+      }
+      return renderMediaPlaceholders ? "![image]" : "";
+    }
+    case "media": {
+      const fileKey = normalizeFeishuExternalKey(element.file_key);
+      if (fileKey) {
+        const fileName = toStringOrEmpty(element.file_name) || undefined;
+        attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
+      }
+      return renderMediaPlaceholders ? "[media]" : "";
+    }
+    case "emotion": {
+      const text =
+        toStringOrEmpty(element.emoji) ||
+        toStringOrEmpty(element.text) ||
+        toStringOrEmpty(element.emoji_type);
+      return escapeMarkdownText(text);
+    }
+    case "md":
+    case "lark_md":
+      return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
+    case "br":
+      return "\n";
+    case "hr":
+      return "\n\n---\n\n";
+    case "code": {
+      const code = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
+      return code ? wrapInlineCode(code) : "";
+    }
+    case "code_block":
+    case "pre": {
+      const language = (toStringOrEmpty(element.language) || toStringOrEmpty(element.lang))
+        .trim()
+        .replace(/[^A-Za-z0-9_+#.-]/g, "");
+      const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
+        /\r\n/g,
+        "\n",
+      );
+      const trailingNewline = code.endsWith("\n") ? "" : "\n";
+      // The enclosing fence must outlast any literal backtick run in the code.
+      let fenceLength = 3;
+      for (const run of code.matchAll(/`+/g)) {
+        fenceLength = Math.max(fenceLength, run[0].length + 1);
+      }
+      const fence = "`".repeat(fenceLength);
+      return `${fence}${language}\n${code}${trailingNewline}${fence}`;
+    }
+    default:
+      return escapeMarkdownText(toStringOrEmpty(element.text));
+  }
+}
+
+function appendTopLevelPostFiles(
+  attachments: PostParseResult["attachments"],
+  files: unknown,
+): void {
+  if (!Array.isArray(files)) {
+    return;
+  }
+  const seenFileKeys = new Set(
+    attachments
+      .filter((attachment) => attachment.kind === "file")
+      .map((attachment) => attachment.key),
+  );
+  for (const entry of files) {
+    if (!isRecord(entry) || entry.is_folder === true) {
+      continue;
+    }
+    const fileKey = normalizeFeishuExternalKey(entry.file_key);
+    if (!fileKey || seenFileKeys.has(fileKey)) {
+      continue;
+    }
+    seenFileKeys.add(fileKey);
+    const fileName = toStringOrEmpty(entry.file_name) || undefined;
+    attachments.push({
+      kind: "file",
+      key: fileKey,
+      origin: "top-level",
+      ...(fileName ? { fileName } : {}),
+    });
+  }
+}
+
+function toPostPayload(candidate: unknown): PostPayload | null {
+  if (!isRecord(candidate) || !Array.isArray(candidate.content)) {
+    return null;
+  }
+  return {
+    title: toStringOrEmpty(candidate.title),
+    content: candidate.content,
+    ...(Array.isArray(candidate.files) ? { files: candidate.files } : {}),
+  };
+}
+
+function resolveLocalePayload(candidate: unknown): PostPayload | null {
+  const direct = toPostPayload(candidate);
+  if (direct) {
+    return direct;
+  }
+  if (!isRecord(candidate)) {
+    return null;
+  }
+  for (const value of Object.values(candidate)) {
+    const localePayload = toPostPayload(value);
+    if (localePayload) {
+      return localePayload;
+    }
+  }
+  return null;
+}
+
+type PostParseOptions = {
+  renderMediaPlaceholders?: boolean;
+  emptyTextFallback?: string;
+  // Download collects top-level files[]; replay identity stays on inline media.
+  includeTopLevelFiles?: boolean;
+};
+
+export function parsePostContent(content: string, options: PostParseOptions = {}): PostParseResult {
+  try {
+    return renderPostContent(JSON.parse(content), options);
+  } catch {
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
+  }
+}
+
+export function renderPostContent(
+  parsed: unknown,
+  options: PostParseOptions = {},
+): PostParseResult {
+  try {
+    const payload =
+      toPostPayload(parsed) ??
+      (isRecord(parsed)
+        ? (resolveLocalePayload(parsed.post) ?? resolveLocalePayload(parsed))
+        : null);
+    if (!payload) {
+      return {
+        textContent: FALLBACK_POST_TEXT,
+        attachments: [],
+        mentionedOpenIds: [],
+      };
+    }
+
+    const attachments: PostParseResult["attachments"] = [];
+    const mentionedOpenIds: string[] = [];
+    const paragraphs: string[] = [];
+
+    for (const paragraph of payload.content) {
+      if (!Array.isArray(paragraph)) {
+        continue;
+      }
+      let renderedParagraph = "";
+      for (const element of paragraph) {
+        renderedParagraph += renderElement(
+          element,
+          attachments,
+          mentionedOpenIds,
+          options.renderMediaPlaceholders !== false,
+        );
+      }
+      paragraphs.push(renderedParagraph);
+    }
+
+    if (options.includeTopLevelFiles !== false) {
+      appendTopLevelPostFiles(attachments, payload.files);
+      if (isRecord(parsed)) {
+        appendTopLevelPostFiles(attachments, parsed.files);
+      }
+    }
+
+    const title = escapeMarkdownText(payload.title.trim());
+    const body = paragraphs.join("\n").trim();
+    const textContent = [title, body].filter(Boolean).join("\n\n");
+
+    return {
+      textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
+      attachments,
+      mentionedOpenIds,
+    };
+  } catch {
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
+  }
+}

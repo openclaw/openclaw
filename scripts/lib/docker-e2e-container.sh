@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+#
+# Shared helpers for Docker E2E scripts that keep a named container running
+# while polling readiness from the host.
+
+DOCKER_E2E_CONTAINER_LIB_DIR="${BASH_SOURCE[0]}"
+if [[ "$DOCKER_E2E_CONTAINER_LIB_DIR" == */* ]]; then
+  DOCKER_E2E_CONTAINER_LIB_DIR="${DOCKER_E2E_CONTAINER_LIB_DIR%/*}"
+else
+  DOCKER_E2E_CONTAINER_LIB_DIR=.
+fi
+DOCKER_E2E_CONTAINER_LIB_DIR="$(cd "$DOCKER_E2E_CONTAINER_LIB_DIR" && pwd)"
+source "$DOCKER_E2E_CONTAINER_LIB_DIR/docker-e2e-resource-diagnostics.sh"
+
+docker_e2e_timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf '%s\n' timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf '%s\n' gtimeout
+  else
+    return 1
+  fi
+}
+
+docker_e2e_timeout_cmd() {
+  local timeout_value="$1"
+  shift
+  local timeout_bin
+  local owner_args=()
+  # A retained CID belongs to the scheduler's bounded group. Keep the launcher
+  # there too, so group settlement cannot precede a delayed CID write/start.
+  if [ -n "${DOCKER_E2E_CONTAINER_CIDFILE:-}" ]; then
+    owner_args=(--foreground)
+  fi
+  if ! timeout_bin="$(docker_e2e_timeout_bin)"; then
+    if command -v node >/dev/null 2>&1; then
+      echo "timeout command not found; using Node watchdog for Docker command timeout ${timeout_value}" >&2
+      # Keep argv unchanged: Node historically parses option-like timeout values.
+      local helper_source="$DOCKER_E2E_CONTAINER_LIB_DIR/docker-e2e-watchdog.mjs"
+      helper_source="${helper_source//\\/\\\\}"
+      helper_source="${helper_source//\"/\\\"}"
+      helper_source="${helper_source//$'\n'/\\n}"
+      helper_source="${helper_source//$'\r'/\\r}"
+      node --input-type=module -e "
+import { pathToFileURL } from 'node:url';
+const { runWatchdog } = await import(pathToFileURL(\"$helper_source\").href);
+const [, timeoutValue, ...args] = process.argv;
+await runWatchdog('docker', timeoutValue, args);
+" "$timeout_value" "$@"
+      return "$?"
+    fi
+    echo "timeout command not found; cannot bound Docker command after ${timeout_value}" >&2
+    return 127
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" ${owner_args[@]+"${owner_args[@]}"} --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" ${owner_args[@]+"${owner_args[@]}"} "$timeout_value" "$@"
+  fi
+}
+
+docker_e2e_docker_cmd() {
+  docker_e2e_docker_with_timeout "${DOCKER_COMMAND_TIMEOUT:-600s}" "$@"
+}
+
+docker_e2e_docker_run_cmd() {
+  docker_e2e_docker_with_timeout "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" "$@"
+}
+
+docker_e2e_docker_with_timeout() {
+  local timeout_value="$1"
+  shift
+  if [ "${1:-}" = "run" ]; then
+    shift
+    docker_e2e_docker_run_resource_args "$@" || return $?
+    docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
+    # A bare return in an EXIT trap can restore the trap's original status.
+    return "$?"
+  fi
+  docker_e2e_timeout_cmd "$timeout_value" docker "$@"
+}
+
+docker_e2e_cleanup_container_run() {
+  docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
+  rm -f "$2"
+}
+
+docker_e2e_settle_container_cidfile() {
+  # Call only inside a bounded process owner (scheduler finalizer or lane).
+  # Direct Docker children stay in that group; a nested watchdog could escape it.
+  local cidfile="$1" container_id remaining
+  if [ -L "$cidfile" ] || { [ -e "$cidfile" ] && [ ! -f "$cidfile" ]; }; then
+    echo "Docker producer CID must be a host-owned regular file" >&2
+    return 1
+  fi
+  # Docker writes the CID before ContainerStart. After its host group joins,
+  # a retained missing/empty CID means this invocation never started a writer.
+  [ -s "$cidfile" ] || return 0
+  if [ "$(wc -c < "$cidfile")" -ne 64 ]; then
+    echo "Docker producer CID is incomplete" >&2
+    return 1
+  fi
+  container_id="$(cat "$cidfile")" || return 1
+  if ! [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Docker producer CID is invalid" >&2
+    return 1
+  fi
+  docker rm -f "$container_id" >/dev/null 2>&1 || true
+  # A failed inspect is not absence. Require a successful daemon query after
+  # removal, including when another cleanup already removed this exact ID.
+  remaining="$(docker ps -a --no-trunc --filter "id=$container_id" --format '{{.ID}}')" || return 1
+  if [ -n "$remaining" ]; then
+    echo "Docker producer remains after cleanup; evidence publication refused" >&2
+    return 1
+  fi
+}
+
+docker_e2e_resource_limits_disabled() {
+  case "${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_e2e_resource_value_disabled() {
+  case "${1:-}" in
+    "" | 0 | none | NONE | off | OFF | false | FALSE)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_e2e_detect_available_cpus() {
+  local available="${1:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}"
+  if [ -n "$available" ]; then
+    printf '%s\n' "$available"
+    return 0
+  fi
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return 0
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+    return 0
+  fi
+  return 1
+}
+
+docker_e2e_resolve_cpus() {
+  local requested="$1"
+  local available=""
+  available="$(docker_e2e_detect_available_cpus "${2:-}" 2>/dev/null || true)"
+  if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
+    printf '%s\n' "$available"
+    return 0
+  fi
+  printf '%s\n' "$requested"
+}
+
+docker_e2e_run_arg_present() {
+  local option="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [ "$arg" = "$option" ] || [[ "$arg" == "$option="* ]]; then
+      return 0
+    fi
+    case "$option:$arg" in
+      --memory:-m | --memory:-m=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+docker_e2e_resolve_pids_limit() {
+  local pids_limit="$1"
+  local env_name="${2:-OPENCLAW_DOCKER_E2E_PIDS_LIMIT}"
+  if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
+    echo "invalid $env_name: $pids_limit" >&2
+    return 2
+  fi
+  printf '%s\n' "$((10#$pids_limit))"
+}
+
+docker_e2e_docker_run_resource_args() {
+  DOCKER_E2E_RUN_RESOURCE_ARGS=()
+  docker_e2e_append_update_check_suppression "$@"
+  if docker_e2e_resource_limits_disabled; then
+    return 0
+  fi
+
+  local memory="${OPENCLAW_DOCKER_E2E_MEMORY:-8g}"
+  local cpus="${OPENCLAW_DOCKER_E2E_CPUS:-16}"
+  local pids_limit="${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}"
+  cpus="$(docker_e2e_resolve_cpus "$cpus")"
+
+  if ! docker_e2e_resource_value_disabled "$memory" && ! docker_e2e_run_arg_present --memory "$@"; then
+    DOCKER_E2E_RUN_RESOURCE_ARGS+=(--memory "$memory")
+  fi
+  if ! docker_e2e_resource_value_disabled "$cpus" && ! docker_e2e_run_arg_present --cpus "$@"; then
+    DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
+  fi
+  if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
+    pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit")" || return $?
+    DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
+  fi
+
+}
+
+docker_e2e_run_env_present() {
+  local name="$1"
+  shift
+  local arg
+  local expect_value=0
+  for arg in "$@"; do
+    if [ "$expect_value" = 1 ]; then
+      expect_value=0
+      case "$arg" in
+        "$name" | "$name"=*)
+          return 0
+          ;;
+      esac
+      continue
+    fi
+    case "$arg" in
+      -e | --env)
+        expect_value=1
+        ;;
+      -e"$name" | -e"$name"=* | --env="$name" | --env="$name"=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+# CI containers are not installations. The runner's own CI variable does not
+# cross into `docker run`, so without this every E2E container reports a daily
+# update check and drowns real operators in the telemetry aggregates. Callers
+# that exercise update behavior pass their own value and keep it.
+docker_e2e_append_update_check_suppression() {
+  if docker_e2e_run_env_present OPENCLAW_NO_AUTO_UPDATE "$@"; then
+    return 0
+  fi
+  DOCKER_E2E_RUN_RESOURCE_ARGS+=(-e OPENCLAW_NO_AUTO_UPDATE=1)
+}
+
+docker_e2e_container_running() {
+  local container_name="$1"
+  [ "$(docker_e2e_docker_cmd inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || echo false)" = "true" ]
+}
+
+docker_e2e_container_exec_bash() {
+  local container_name="$1"
+  shift
+  docker_e2e_docker_cmd exec "$container_name" bash -lc "$*"
+}
+
+docker_e2e_wait_for_proof() {
+  local container_name="$1"
+  local attempts="$2"
+  for _ in $(seq 1 "$attempts"); do
+    if docker exec "$container_name" test -f /tmp/openclaw-proof-ready; then
+      return 0
+    fi
+    if [ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != "true" ]; then
+      docker logs "$container_name" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  docker logs "$container_name" >&2
+  return 1
+}
+
+docker_e2e_wait_container_bash() {
+  local container_name="$1"
+  shift
+  docker_e2e_wait_container_bash_while_running "$container_name" "$container_name" "$@"
+}
+
+docker_e2e_wait_container_bash_while_running() {
+  local running_container_name="$1"
+  local exec_container_name="$2"
+  local attempts="$3"
+  local sleep_seconds="$4"
+  shift 4
+  local probe="$*"
+
+  for _ in $(seq 1 "$attempts"); do
+    if ! docker_e2e_container_running "$running_container_name"; then
+      return 1
+    fi
+    if docker_e2e_container_exec_bash "$exec_container_name" "$probe" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$sleep_seconds"
+  done
+  return 1
+}
+
+docker_e2e_tail_container_file_if_running() {
+  local container_name="$1"
+  local file_path="$2"
+  local lines="${3:-120}"
+  if docker_e2e_container_running "$container_name"; then
+    docker_e2e_container_exec_bash "$container_name" "tail -n $lines $file_path" || true
+  else
+    docker_e2e_docker_cmd logs "$container_name" 2>&1 | tail -n "$lines" || true
+  fi
+}

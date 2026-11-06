@@ -1,0 +1,236 @@
+import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeZeroUsageSnapshot } from "../../agents/usage.js";
+import {
+  persistSessionTranscriptTurn,
+  type SessionTranscriptTurnPersistOptions,
+} from "../../config/sessions/session-accessor.js";
+import { appendAbortedSessionTranscriptPartial } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  projectAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../../shared/assistant-display-content.js";
+import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
+
+type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+
+export type GatewayInjectedTranscriptAppendResult = {
+  ok: boolean;
+  messageId?: string;
+  message?: Record<string, unknown>;
+  /** Set when the idempotency key matched an existing transcript message. */
+  replayed?: true;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
+  error?: string;
+};
+
+/** Hash marker used to dedupe companion TTS text/audio supplements. */
+export type GatewayInjectedTtsSupplementMarker = {
+  textSha256: string;
+};
+
+function resolveInjectedAssistantContent(params: {
+  message: string;
+  label?: string;
+  content?: Array<Record<string, unknown>>;
+}): Array<Record<string, unknown>> {
+  const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  // Preserve rich content arrays when callers already prepared media blocks;
+  // only the first text block is rewritten so block ordering stays intact.
+  if (params.content && params.content.length > 0) {
+    if (!labelPrefix) {
+      return params.content;
+    }
+    const first = params.content[0];
+    if (first?.type === "text" && typeof first.text === "string") {
+      return [{ ...first, text: `${labelPrefix}${first.text}` }, ...params.content.slice(1)];
+    }
+    return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
+  }
+  return [{ type: "text", text: `${labelPrefix}${params.message}` }];
+}
+
+/** Append a gateway-authored assistant message while preserving transcript parent links. */
+export async function appendInjectedAssistantMessageToTranscript(params: {
+  storePath: string | undefined;
+  sessionId: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+  sessionKey: string;
+  agentId?: string;
+  message: string;
+  label?: string;
+  /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
+  content?: Array<Record<string, unknown>>;
+  idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
+  /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
+  abortMeta?: {
+    aborted: true;
+    origin: ChatAbortOrigin;
+    runId: string;
+    /** The registered native producer has finished its canonical transcript writes. */
+    producerSettled?: true;
+  };
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
+  /** Trusted Gateway selections bound to UTF-16 offsets in `message`; never client input. */
+  humanMentions?: readonly HumanMention[];
+  /** Host-authored text kept as written; model-output delivery directives are not parsed. */
+  literal?: true;
+  /** Caller authority rechecked at the durable transcript commit. */
+  assertCurrent?: () => void;
+  config?: OpenClawConfig;
+  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+}): Promise<GatewayInjectedTranscriptAppendResult> {
+  if (!params.sessionKey.trim() || !params.sessionId.trim() || !params.storePath) {
+    return { ok: false, error: "transcript identity not resolved" };
+  }
+  const now = Date.now();
+  const resolvedContent = resolveInjectedAssistantContent(params);
+  const displayMessage: {
+    role: "assistant";
+    content: Array<Record<string, unknown>>;
+    openclawDelivery?: unknown;
+  } = {
+    role: "assistant",
+    content: resolvedContent.map((block) => Object.assign({}, block)),
+  };
+  const displayContent = params.literal
+    ? displayMessage.content
+    : applyAssistantDeliveryDirectives(displayMessage).content;
+  const first = displayContent[0];
+  if (
+    params.humanMentions?.length &&
+    (displayContent.length !== 1 || first?.type !== "text" || first.text !== params.message)
+  ) {
+    // Mention offsets are bound to the exact displayed bytes.
+    return { ok: false, error: "mentioned message text must be plain displayed text" };
+  }
+  const openclawMeta = {
+    ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
+    ...(params.humanMentions?.length
+      ? { humanMentions: params.humanMentions.map((mention) => ({ ...mention })) }
+      : {}),
+  };
+  const messageBody: AppendMessageArg & Record<string, unknown> = {
+    role: "assistant",
+    content: retainAssistantModelContent(displayContent),
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
+    timestamp: now,
+    // Runtime projections retain their terminal state; host-authored partials
+    // keep their replayable default and carry cancellation in openclawAbort.
+    stopReason: params.stopReason ?? "stop",
+    usage: {
+      ...makeZeroUsageSnapshot(),
+      ...(params.abortMeta
+        ? {
+            usageReport: { state: "unavailable" } as const,
+            contextUsage: { state: "unavailable" } as const,
+          }
+        : {}),
+    },
+    // Make these explicit so downstream tooling never treats this as model output.
+    api: "openai-responses",
+    provider: "openclaw",
+    model: "gateway-injected",
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
+    ...(params.contextFreeCommand === true ? { excludeFromContext: true } : {}),
+    ...(Object.keys(openclawMeta).length ? { __openclaw: openclawMeta } : {}),
+    ...(params.abortMeta
+      ? {
+          openclawAbort: {
+            aborted: true,
+            origin: params.abortMeta.origin,
+            runId: params.abortMeta.runId,
+          },
+        }
+      : {}),
+  };
+  if (displayMessage.openclawDelivery) {
+    messageBody.openclawDelivery = displayMessage.openclawDelivery;
+  }
+
+  const scope = {
+    storePath: params.storePath,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
+  try {
+    if (params.abortMeta?.producerSettled) {
+      const result = await appendAbortedSessionTranscriptPartial(scope, {
+        runId: params.abortMeta.runId,
+        message: messageBody,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        now,
+        config: params.config,
+      });
+      if (!result.ok) {
+        return { ok: false, error: result.error.code };
+      }
+      if (result.value.skipped) {
+        return { ok: true, skipped: true };
+      }
+      const { append } = result.value;
+      return {
+        ok: true,
+        messageId: append.messageId,
+        message: projectAssistantDisplayContent(append.message),
+      };
+    }
+    const turn = await persistSessionTranscriptTurn(scope, {
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      updateMode: "inline",
+      onMessageCommitted: params.onMessageCommitted,
+      ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
+      touchSessionEntry: true,
+      ...(params.config ? { config: params.config } : {}),
+      messages: [
+        {
+          message: messageBody,
+          idempotencyLookup: "scan-assistant",
+          ...(params.abortMeta
+            ? {
+                predicate: {
+                  kind: "latest-assistant-differs" as const,
+                  runId: params.abortMeta.runId,
+                  text: params.message.trim(),
+                },
+              }
+            : {}),
+          now,
+          useRawWhenLinear: true,
+        },
+      ],
+    });
+    if (turn.rejectedReason) {
+      return { ok: false, error: turn.rejectedReason };
+    }
+    const appended = turn.messages[0];
+    if (!appended) {
+      // A declined predicate is a decision, not a failure: no row was wanted.
+      if (turn.predicateSkipped) {
+        return { ok: true, skipped: true };
+      }
+      return { ok: false, error: "gateway-injected assistant message was not appended" };
+    }
+    return {
+      ok: true,
+      messageId: appended.messageId,
+      message: projectAssistantDisplayContent(appended.message as Record<string, unknown>),
+      ...(appended.appended ? {} : { replayed: true as const }),
+    };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
+  }
+}

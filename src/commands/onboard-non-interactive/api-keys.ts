@@ -1,0 +1,144 @@
+import {
+  ensureAuthProfileStoreAsync,
+  resolveApiKeyForProfile,
+  resolveAuthProfileOrder,
+} from "../../agents/auth-profiles.js";
+import { isMalformedApiKeyInput } from "../../agents/auth-profiles/credential-state.js";
+import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderNonInteractiveApiKeyResult } from "../../plugins/provider-authentication.types.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
+import { rejectOnboardingOption } from "../onboard-options.js";
+import type { SecretInputMode } from "../onboard-types.js";
+
+async function resolveApiKeyFromProfiles(params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): Promise<string | null> {
+  const store = await ensureAuthProfileStoreAsync(params.agentDir);
+  const order = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: params.provider,
+  });
+  for (const profileId of order) {
+    const cred = store.profiles[profileId];
+    if (cred?.type !== "api_key") {
+      continue;
+    }
+    // Profile order already reflects config preference and store defaults; use
+    // the first resolvable API-key profile to match interactive auth behavior.
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store,
+      profileId,
+      agentDir: params.agentDir,
+    });
+    if (resolved?.apiKey) {
+      return resolved.apiKey;
+    }
+  }
+  return null;
+}
+
+export async function resolveNonInteractiveApiKey(params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  flagValue?: string;
+  flagName: string;
+  envVar: string;
+  envVarName?: string;
+  runtime: RuntimeEnv;
+  agentDir?: string;
+  workspaceDir?: string;
+  allowProfile?: boolean;
+  required?: boolean;
+  secretInputMode?: SecretInputMode;
+  json?: boolean;
+}): Promise<ProviderNonInteractiveApiKeyResult | null> {
+  const reject = (message: string): null => {
+    rejectOnboardingOption(params, params.runtime, message);
+    return null;
+  };
+  const flagKey = normalizeOptionalSecretInput(params.flagValue);
+  const explicitEnvVar = params.envVarName?.trim() || params.envVar.trim();
+  const returnOperatorKey = (key: string, source: "flag" | "env", envVarName?: string) => {
+    if (!isMalformedApiKeyInput(key)) {
+      return envVarName ? { key, source, envVarName } : { key, source };
+    }
+    const envHint = source === "env" ? ` Check ${envVarName ?? params.envVar}.` : "";
+    return reject(`Paste the API key value, not an OpenClaw onboarding command.${envHint}`);
+  };
+
+  const useSecretRefMode = params.secretInputMode === "ref"; // pragma: allowlist secret
+  if (useSecretRefMode && flagKey) {
+    const explicitEnvKey = normalizeOptionalSecretInput(process.env[explicitEnvVar]);
+    if (explicitEnvKey) {
+      return returnOperatorKey(explicitEnvKey, "env", explicitEnvVar);
+    }
+    // A literal flag value cannot be converted into a durable secret reference;
+    // require an env var so the stored config can reference a stable name.
+    return reject(
+      [
+        `${params.flagName} cannot be used with --secret-input-mode ref unless ${params.envVar} is set in env.`,
+        `Set ${params.envVar} in env and omit ${params.flagName}, or use --secret-input-mode plaintext.`,
+      ].join("\n"),
+    );
+  }
+
+  if (flagKey) {
+    return returnOperatorKey(flagKey, "flag");
+  }
+
+  const envResolved = resolveEnvApiKey(params.provider, process.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const explicitEnvKey = explicitEnvVar
+    ? normalizeOptionalSecretInput(process.env[explicitEnvVar])
+    : undefined;
+  const resolvedEnv = {
+    key: envResolved?.apiKey ?? explicitEnvKey,
+    envVarName:
+      /^(?:shell env: |env: )([A-Z][A-Z0-9_]*)$/.exec(envResolved?.source?.trim() ?? "")?.[1] ??
+      explicitEnvVar,
+  };
+  if (resolvedEnv.key) {
+    if (useSecretRefMode && !resolvedEnv.envVarName) {
+      // Ref mode needs a concrete env var name for the stored reference.
+      return reject(
+        [
+          `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+          `Set ${params.envVar} in env and retry, or use --secret-input-mode plaintext.`,
+        ].join("\n"),
+      );
+    }
+    return returnOperatorKey(resolvedEnv.key, "env", resolvedEnv.envVarName);
+  }
+
+  // Stored profiles are pre-existing state: doctor diagnoses them, while a new
+  // flag or env value must remain able to replace them during onboarding.
+  if (params.allowProfile ?? true) {
+    const profileKey = await resolveApiKeyFromProfiles({
+      provider: params.provider,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+    if (profileKey) {
+      return { key: profileKey, source: "profile" };
+    }
+  }
+
+  if (params.required === false) {
+    return null;
+  }
+
+  const profileHint =
+    params.allowProfile === false ? "" : `, or existing ${params.provider} API-key profile`;
+  return reject(
+    `Missing ${params.flagName} (or ${params.envVar} in env${profileHint}). Export ${params.envVar}, pass ${params.flagName}, or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+  );
+}

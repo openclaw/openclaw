@@ -1,0 +1,4 @@
+interface:
+  display_name: "Control UI E2E"
+  short_description: "Control UI browser proof and performance audits"
+  default_prompt: "Use $control-ui-e2e to choose and run the appropriate Control UI browser tests, visual proof, or interaction profiling workflow."

@@ -1,0 +1,31 @@
+{
+  "id": "cua-computer",
+  "categories": ["computer-use"],
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "CUA Computer",
+  "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
+  "configGroups": [
+    {
+      "id": "legacy-settings",
+      "title": "Legacy settings",
+      "order": 10,
+      "properties": ["driverPath"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "driverPath": {
+        "type": "string"
+      }
+    }
+  },
+  "recommendedPrompts": [
+    "Check whether computer use is ready on the machine I choose.",
+    "Inspect an app on my chosen desktop and suggest a next step without controlling it."
+  ]
+}

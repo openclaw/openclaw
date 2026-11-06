@@ -1,0 +1,148 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+    - cron: "17 9,15,21 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill_stale_closures:
+        description: "Close currently stale-eligible issues and PRs with the Barnacle app"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "List matching stale-eligible items without closing them"
+        required: false
+        type: boolean
+        default: true
+      include_issues:
+        description: "Include stale-eligible issues in the backfill"
+        required: false
+        type: boolean
+        default: true
+      include_prs:
+        description: "Include stale-eligible pull requests in the backfill"
+        required: false
+        type: boolean
+        default: true
+      item_numbers:
+        description: "Up to 1000 issue or PR numbers; same policy, grace and shared caps; no broad cursor"
+        required: false
+        type: string
+        default: ""
+      max_closures:
+        description: "Maximum items to close when dry_run is false"
+        required: false
+        type: number
+        default: 50
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions: {}
+
+jobs:
+  stale-lifecycle:
+    if: ${{ github.repository == 'openclaw/openclaw' }}
+    concurrency:
+      group: barnacle-stale-lifecycle
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: read
+      pull-requests: read
+    outputs:
+      remaining-closures: ${{ steps.evaluate.outputs.remaining-closures }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/github
+            scripts/lib
+            test/scripts
+            .github/workflows/stale.yml
+      - name: Test issue/PR lifecycle policy
+        run: node --test test/scripts/stale-lifecycle.node.mjs
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token-fallback
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
+      # Cache holds only scan position. GitHub comments own warning/head facts.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: pr-cursor
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.item_numbers == '' }}
+        with:
+          path: .cache/barnacle-lifecycle-scan.json
+          key: barnacle-lifecycle-scan-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: barnacle-lifecycle-scan-v2-
+      - name: Evaluate issue/PR inactivity
+        id: evaluate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != false }}
+          ITEM_NUMBERS: ${{ inputs.item_numbers }}
+          INCLUDE_ISSUES: ${{ github.event_name != 'workflow_dispatch' || inputs.include_issues != false }}
+          INCLUDE_PRS: ${{ github.event_name != 'workflow_dispatch' || inputs.include_prs != false }}
+          MAX_CLOSURES: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.max_closures) || '50' }}
+          RESTORED_CURSOR: ${{ steps.pr-cursor.outputs.cache-matched-key }}
+          BARNACLE_TOKEN: ${{ (inputs.backfill_stale_closures && steps.app-token-fallback.outputs.token) || steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          BARNACLE_APP_ID: ${{ inputs.backfill_stale_closures && steps.app-token-fallback.outputs.token && '2971289' || steps.app-token.outputs.token && '2729701' || '2971289' }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { runStaleLifecycle, auditRecentBugClosures } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/github/stale-lifecycle.mjs`);
+            const rawTargets = process.env.ITEM_NUMBERS;
+            if (rawTargets && !/^\d+(?:\s*,\s*\d+)*$/.test(rawTargets.trim())) {
+              throw new Error("item_numbers must contain comma-separated positive issue/PR numbers");
+            }
+            core.info(`Restored issue/PR scan: ${process.env.RESTORED_CURSOR || "start"}`);
+            if (!process.env.BARNACLE_TOKEN) throw new Error("No Barnacle installation token available");
+            const barnacle = getOctokit(process.env.BARNACLE_TOKEN);
+            const result = await runStaleLifecycle({
+              github: barnacle, checksGithub: github, mutationGithub: barnacle,
+              expectedAppId: Number(process.env.BARNACLE_APP_ID), context, core,
+              dryRun: process.env.DRY_RUN === "true",
+              includeIssues: process.env.INCLUDE_ISSUES === "true",
+              includePrs: process.env.INCLUDE_PRS === "true",
+              targetKind: "auto",
+              targets: rawTargets ? rawTargets.split(",").map(value => Number(value.trim())) : [],
+              maxClosures: Number(process.env.MAX_CLOSURES),
+              cursorPath: ".cache/barnacle-lifecycle-scan.json",
+            });
+            core.setOutput("remaining-closures", result.remainingClosures);
+            await auditRecentBugClosures({ github: barnacle, context, core });
+
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.item_numbers == '' }}
+        with:
+          path: .cache/barnacle-lifecycle-scan.json
+          key: barnacle-lifecycle-scan-v2-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify issue/PR scan checkpoint persistence
+        if: ${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.item_numbers == '' }}
+        # Verify through the same runtime-token/ref scope used to save the cache,
+        # not GitHub's separate REST cache list.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/barnacle-lifecycle-scan.json
+          key: barnacle-lifecycle-scan-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          lookup-only: true
+          fail-on-cache-miss: true

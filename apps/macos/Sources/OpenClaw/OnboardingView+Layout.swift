@@ -1,0 +1,468 @@
+import AppKit
+import SwiftUI
+
+extension OnboardingView {
+    var body: some View {
+        GeometryReader { windowGeometry in
+            let contentHeight = Self.contentHeight(for: windowGeometry.size.height)
+            VStack(spacing: 0) {
+                GlowingOpenClawIcon(
+                    size: 130,
+                    mood: self.mascotMood,
+                    accessory: self.mascotAccessory)
+                    .offset(y: 10)
+                    .frame(height: 145)
+
+                GeometryReader { _ in
+                    HStack(spacing: 0) {
+                        ForEach(self.pageOrder, id: \.self) { pageIndex in
+                            self.pageView(for: pageIndex, contentHeight: contentHeight)
+                                .frame(width: self.pageWidth)
+                        }
+                    }
+                    .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
+                    .animation(
+                        .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+                        value: self.currentPage)
+                    .frame(height: contentHeight, alignment: .top)
+                    .clipped()
+                }
+                .frame(height: contentHeight)
+
+                Spacer(minLength: 0)
+                self.navigationBar
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .frame(
+            minWidth: pageWidth,
+            maxWidth: pageWidth,
+            minHeight: Self.minimumWindowHeight,
+            maxHeight: .infinity)
+        .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            self.onboardingDidAppear()
+        }
+        .onChange(of: currentPage) { _, newValue in
+            self.updateMonitoring(for: self.activePageIndex(for: newValue))
+        }
+        .onChange(of: state.connectionMode) { _, _ in
+            self.handleConnectionModeChange()
+        }
+        .onChange(of: cliInstalled) { _, installed in
+            guard installed else { return }
+            self.updateMonitoring(for: self.activePageIndex)
+        }
+        .onChange(of: GatewayProcessManager.shared.status) { _, status in
+            self.reviseCLIActivationFailureIfGatewayReady(status)
+        }
+        .onDisappear {
+            self.onboardingDidDisappear()
+        }
+        .task {
+            await self.refreshCLIStatus()
+        }
+        .task {
+            await self.configuredGatewayProbe.consumeReconnects {
+                self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
+            }
+        }
+    }
+
+    @discardableResult
+    func onboardingDidAppear() -> Task<Void, Never>? {
+        onboardingVisible = true
+        currentPage = pageOrder.firstIndex(of: initialPage.rawValue) ?? 0
+        updateMonitoring(for: self.activePageIndex)
+        // App launch may have connected and emitted its snapshot before this
+        // view subscribed. Always inspect the selected route once on appear.
+        return self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent, knownVisible: true)
+    }
+
+    func onboardingDidDisappear() {
+        onboardingVisible = false
+        self.resetGatewayBoundAIState()
+        stopDiscovery()
+    }
+
+    func activePageIndex(for pageCursor: Int) -> Int {
+        guard !pageOrder.isEmpty else { return 0 }
+        let clamped = Self.visiblePageCursor(pageCursor, pageCount: pageOrder.count)
+        return pageOrder[clamped]
+    }
+
+    func reconcilePageForModeChange(previousActivePageIndex: Int) {
+        let page = pageOrder.firstIndex(of: previousActivePageIndex) ??
+            pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) ??
+            max(0, pageOrder.count - 1)
+        withAnimation {
+            self.currentPage = page
+        }
+    }
+
+    func handleConnectionModeChange(updatePageMonitoring: ((Int) -> Void)? = nil) {
+        self.resetGatewayBoundAIState()
+        let oldActive = self.activePageIndex
+        self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
+        Task { await self.refreshCLIStatus() }
+        self.returnToInferenceSetupIfNeeded()
+        // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
+        (updatePageMonitoring ?? self.updateMonitoring(for:))(self.activePageIndex)
+        self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
+    }
+
+    func resetGatewayBoundAIState() {
+        configuredGatewayProbe.invalidate()
+        // The UI attempt belongs to one route, but its durable activation lease
+        // must survive A -> B -> A while the old Gateway can still be mutating.
+        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+    }
+
+    @discardableResult
+    func probeConfiguredGatewayForDashboard(
+        intent: OnboardingAISetupModel.SetupIntent = .resumePending,
+        knownVisible: Bool = false,
+        knownAISetupPage: Bool = false) -> Task<Void, Never>?
+    {
+        // onAppear itself is authoritative even before SwiftUI commits the
+        // @State write; probe invalidation still rejects post-disappear results.
+        guard knownVisible || onboardingVisible else { return nil }
+        // `Check connection` temporarily borrows remote mode without selecting
+        // that Gateway. Its successful handshake must never complete onboarding.
+        guard !configuredGatewayProbe.isSuppressedForTemporaryConnectionCheck else { return nil }
+        // Persist the latest selection before GatewayEndpointStore resolves the
+        // route, so an immediate probe cannot attach to the previous endpoint.
+        guard gatewaySelectionPersister() else {
+            self.aiSetup.showConfiguredGatewayProbeUnavailable(
+                summary: "Could not save Gateway settings. Check your connection settings and try again.")
+            return nil
+        }
+        let expectedMode = state.connectionMode
+        let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
+        let expectedPendingState = OnboardingSystemAgentResumeStore.pendingState(
+            for: expectedRouteIdentity,
+            defaults: systemAgentDefaults)
+        let expectedActivationOwner = OnboardingSystemAgentResumeStore.activationOwner(
+            for: expectedRouteIdentity,
+            defaults: systemAgentDefaults)
+        let probeAttempt = configuredGatewayProbe.beginProbe()
+        return Task { @MainActor in
+            let outcome = await self.configuredGatewayProbe.probe(
+                connectionMode: expectedMode,
+                attempt: probeAttempt,
+                routeIdentity: expectedRouteIdentity)
+            guard await self.isCurrentConfiguredGatewayProbeOutcome(
+                outcome,
+                attempt: probeAttempt,
+                expectedMode: expectedMode,
+                expectedRouteIdentity: expectedRouteIdentity,
+                knownVisible: knownVisible)
+            else { return }
+            let pendingState = OnboardingSystemAgentResumeStore.pendingState(
+                for: expectedRouteIdentity,
+                defaults: self.systemAgentDefaults)
+            if intent != .inspectOnly {
+                self.schedulePendingActivationRecheckIfNeeded(pendingState, routeIdentity: expectedRouteIdentity)
+            }
+
+            switch outcome {
+            case let .configured(modelRef, modelTarget, _):
+                switch pendingState {
+                case .activating, .activationExpired, .completed:
+                    // A live setup/verification already owns this marker. A
+                    // reconnect must not downgrade connected state or fork a
+                    // second resume operation.
+                    guard !self.aiSetup.connected else { return }
+                    // Reopening a receipt authorizes observation, never another automatic test.
+                    let recoveryIntent = intent == .inspectOnly ? intent : .resumePending
+                    await self.resumePendingSystemAgent(
+                        modelRef: modelRef, modelTarget: modelTarget, intent: recoveryIntent).value
+                    return
+                case .verified:
+                    // Inference was observed, but the dropped activation can
+                    // still be mutating until the same durable deadline.
+                    self.waitForPendingInferenceSetup()
+                    return
+                case .none:
+                    break
+                }
+            case .missing:
+                // A route-bound activation/verification can complete while the
+                // earlier agents.list request is suspended. Never let that
+                // stale absence reset connected inference or its handoff marker.
+                guard !self.aiSetup.connected else { return }
+                switch pendingState {
+                case .activating, .verified:
+                    // A dropped activation may still be committing. Keep this
+                    // route read-only until its durable maximum deadline.
+                    self.waitForPendingInferenceSetup()
+                    return
+                case .activationExpired, .completed:
+                    // The absence result was dispatched for the receipt visible
+                    // at probe start. A replacement attempt owns its own retry.
+                    guard intent != .inspectOnly,
+                          expectedPendingState != .none,
+                          let expectedRouteIdentity,
+                          OnboardingSystemAgentResumeStore.clear(
+                              ifOwnedBy: expectedRouteIdentity,
+                              activationOwner: expectedActivationOwner,
+                              defaults: self.systemAgentDefaults)
+                    else { return }
+                    self.resumePendingInferenceSetup()
+                    return
+                case .none:
+                    break
+                }
+            case .unavailable, .authIssue:
+                self.showConfiguredGatewayProbeBlocker(outcome)
+                return
+            case .superseded:
+                return
+            }
+            // Both configured and empty Gateways enter the picker only after
+            // native receipt recovery. A configured label never authorizes a live test.
+            if intent != .inspectOnly,
+               knownAISetupPage || self.activePageIndex == self.aiPageIndex
+            {
+                self.aiSetup.startIfNeeded()
+            }
+        }
+    }
+
+    private func showConfiguredGatewayProbeBlocker(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome)
+    {
+        switch outcome {
+        case .unavailable:
+            // Transport/protocol failure is not evidence that inference is
+            // absent. Preserve every lease and wait for reconnect/retry.
+            self.aiSetup.showConfiguredGatewayProbeUnavailable()
+        case let .authIssue(issue):
+            // Authentication is actionable at the Gateway page and never
+            // evidence that Gateway-owned inference setup is missing.
+            self.aiSetup.showConfiguredGatewayAuthIssue(issue)
+        case .configured, .missing, .superseded:
+            assertionFailure("Expected a configured Gateway probe blocker")
+        }
+    }
+
+    private func isCurrentConfiguredGatewayProbeOutcome(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome,
+        attempt: OnboardingConfiguredGatewayProbe.Attempt,
+        expectedMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        knownVisible: Bool) async -> Bool
+    {
+        if let boundRoute = outcome.boundRoute {
+            guard boundRoute.identity == expectedRouteIdentity,
+                  await self.configuredGatewayProbe.isCurrent(boundRoute)
+            else { return false }
+        }
+        let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
+        return self.configuredGatewayProbe.isCurrent(attempt) &&
+            Self.isCurrentConfiguredGatewayProbe(
+                onboardingVisible: knownVisible || self.onboardingVisible,
+                expectedMode: expectedMode,
+                currentMode: self.state.connectionMode) &&
+            currentRouteIdentity == expectedRouteIdentity
+    }
+
+    private func schedulePendingActivationRecheckIfNeeded(
+        _ pendingState: OnboardingSystemAgentResumeStore.PendingState,
+        routeIdentity: String?)
+    {
+        switch pendingState {
+        case let .activating(deadline), let .verified(deadline):
+            self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
+                guard self.aiSetupRouteIdentityProvider() == routeIdentity else { return }
+                self.probeConfiguredGatewayForDashboard(intent: .resumePending)
+            }
+        case .activationExpired, .completed, .none:
+            break
+        }
+    }
+
+    static func isCurrentConfiguredGatewayProbe(
+        onboardingVisible: Bool,
+        expectedMode: AppState.ConnectionMode,
+        currentMode: AppState.ConnectionMode) -> Bool
+    {
+        onboardingVisible &&
+            expectedMode != .unconfigured &&
+            expectedMode == currentMode
+    }
+
+    private func returnToInferenceSetupIfNeeded() {
+        let targetPage = Self.pageCursorAfterGatewayReset(
+            currentPage: currentPage,
+            pageOrder: pageOrder,
+            aiPageIndex: aiPageIndex)
+        guard targetPage != currentPage else { return }
+        withAnimation { self.currentPage = targetPage }
+    }
+
+    static func pageCursorAfterGatewayReset(
+        currentPage: Int,
+        pageOrder: [Int],
+        aiPageIndex: Int) -> Int
+    {
+        let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex) ?? currentPage
+        return min(currentPage, aiPageCursor)
+    }
+
+    var navigationBar: some View {
+        let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
+        let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
+        let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
+        let remoteGatewayDecision = Self.remoteGatewayAdvanceDecision(
+            connectionMode: state.connectionMode,
+            activePageIndex: self.activePageIndex,
+            connectionPageIndex: connectionPageIndex,
+            authIssue: remoteAuthIssue,
+            probeState: remoteProbeState,
+            input: remoteGatewayProbeInput)
+        return HStack(spacing: 20) {
+            ZStack(alignment: .leading) {
+                Color.clear
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
+
+                if self.currentPage > 0 {
+                    Button(action: self.handleBack, label: {
+                        Label("Back", systemImage: "chevron.left")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    })
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .opacity(0.8)
+                    .disabled(self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .frame(minWidth: 80, alignment: .leading)
+
+            Spacer()
+
+            HStack(spacing: 0) {
+                ForEach(0..<self.pageCount, id: \.self) { index in
+                    let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
+                        index != self.currentPage
+                    let isConnectionLocked = (self.isConnectionSelectionBlocking || !remoteGatewayDecision
+                        .canAdvance) &&
+                        index > (connectionLockIndex ?? 0)
+                    let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
+                    // Dots must honor the same setup gate as Next: no jumping
+                    // past the AI page before a candidate passed its live test.
+                    let isAILocked = aiLockIndex != nil &&
+                        self.state.connectionMode != .unconfigured &&
+                        !self.aiSetup.connected &&
+                        index > (aiLockIndex ?? 0)
+                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked || isAILocked
+                    Button {
+                        withAnimation { self.currentPage = index }
+                    } label: {
+                        Circle()
+                            .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
+                            .frame(width: 8, height: 8)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(self.navigationTitle(for: self.pageOrder[index]))
+                    .accessibilityAddTraits(index == self.currentPage ? .isSelected : [])
+                    .help(self.navigationTitle(for: self.pageOrder[index]))
+                    .disabled(isLocked)
+                    .opacity(isLocked ? 0.3 : 1)
+                }
+            }
+
+            Spacer()
+
+            Button(action: self.handleNext) {
+                Text(self.buttonTitle)
+                    .frame(minWidth: 88)
+            }
+            // KeyEquivalent.return defaults to Command-Return; defaultAction is plain Return.
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+            .disabled(!self.canAdvance)
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 13)
+        .frame(minHeight: 60, alignment: .bottom)
+    }
+
+    private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {
+        switch pageIndex {
+        case self.connectionPageIndex: "Where should your assistant live?"
+        case self.cliPageIndex: "Getting things ready"
+        case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
+            ? "Connect your AI" : "Authenticate with your Gateway"
+        case self.readyPageIndex: "You’re all set!"
+        default: "Welcome to OpenClaw"
+        }
+    }
+
+    func onboardingPage(@ViewBuilder _ content: @escaping () -> some View) -> some View {
+        let scrollIndicatorGutter: CGFloat = 18
+        return GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 16) {
+                    content()
+                }
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: geometry.size.height, alignment: .center)
+                .padding(.trailing, scrollIndicatorGutter)
+            }
+            .scrollIndicators(.automatic)
+            .padding(.horizontal, 28)
+            .frame(width: pageWidth, alignment: .top)
+        }
+    }
+
+    func onboardingCard(
+        spacing: CGFloat = 12,
+        padding: CGFloat = 16,
+        @ViewBuilder _ content: () -> some View) -> some View
+    {
+        VStack(alignment: .leading, spacing: spacing) {
+            content()
+        }
+        .padding(padding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
+    }
+
+    func featureRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        buttonTitle: String? = nil,
+        action: (() -> Void)? = nil) -> some View
+    {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let buttonTitle, let action {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.link)
+                        .padding(.top, 2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+    }
+}

@@ -1,0 +1,1028 @@
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
+/**
+ * Compatibility tools for the retired Codex Supervisor plugin.
+ *
+ * Read operations and active-turn controls use the Codex plugin's canonical
+ * shared app-server client. Idle threads are never resumed or started here:
+ * continuation belongs to the Codex harness, which installs approval and tool
+ * handlers before it starts or resumes the harness-owned Codex thread.
+ */
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { readStringParam } from "openclaw/plugin-sdk/param-readers";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
+import { Type } from "typebox";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
+import type { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
+import type {
+  CodexAppServerStartOptions,
+  CodexPluginConfig,
+} from "./app-server/config-contracts.js";
+import {
+  codexAppServerStartOptionsKey,
+  type createCodexAppServerConfig,
+} from "./app-server/config-options.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
+import { requestCodexAppServerJson } from "./app-server/request.js";
+import { normalizeEndpoints, type NormalizedSupervisionEndpoint } from "./supervision-endpoints.js";
+
+class CodexSupervisionPolicyError extends Error {}
+
+export const CODEX_SUPERVISION_COMPAT_TOOL_NAMES = [
+  "codex_endpoint_probe",
+  "codex_sessions_list",
+  "codex_session_read",
+  "codex_session_send",
+  "codex_session_interrupt",
+] as const;
+
+const EmptyParamsSchema = Type.Object({}, { additionalProperties: false });
+
+const SessionsListParamsSchema = Type.Object(
+  {
+    include_stored: Type.Optional(Type.Boolean()),
+    max_stored_sessions: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+  },
+  { additionalProperties: false },
+);
+
+const SessionReadParamsSchema = Type.Object(
+  {
+    endpoint_id: Type.Optional(Type.String()),
+    thread_id: Type.String(),
+    include_turns: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+const SessionSendParamsSchema = Type.Object(
+  {
+    endpoint_id: Type.Optional(Type.String()),
+    thread_id: Type.String(),
+    text: Type.String(),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("auto"), Type.Literal("start"), Type.Literal("steer")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const SessionInterruptParamsSchema = Type.Object(
+  {
+    endpoint_id: Type.Optional(Type.String()),
+    thread_id: Type.String(),
+    turn_id: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const ALL_CODEX_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+] as const;
+const DEFAULT_MAX_STORED_SESSIONS = 200;
+const PAGE_LIMIT = 100;
+const MAX_COMPAT_PAGINATION_PAGES = 100;
+const MAX_COMPAT_CURSOR_LENGTH = 4096;
+const MAX_COMPAT_THREAD_ID_LENGTH = 4096;
+
+type CodexSupervisorTurnMode = "auto" | "start" | "steer";
+type CodexSupervisionRequestPolicy = "enabled" | "raw-transcripts" | "write-controls";
+
+type ResolvedSupervisionEndpoint = NormalizedSupervisionEndpoint & {
+  connectionKey: string;
+  authProfileId?: string;
+};
+
+type CodexSupervisorSession = NonNullable<ReturnType<typeof toSession>>;
+
+type CodexSupervisorEndpointHealth = {
+  endpointId: string;
+  ok: boolean;
+  detail?: string;
+};
+
+type CodexSupervisorSessionListResult = {
+  sessions: CodexSupervisorSession[];
+  errors: CodexSupervisorEndpointHealth[];
+};
+
+type EndpointRequest = <T = unknown>(
+  endpoint: ResolvedSupervisionEndpoint,
+  method: string,
+  requestParams?: unknown,
+) => Promise<T>;
+
+type CodexSupervisionToolsOptions = {
+  getPluginConfig: () => unknown;
+  resolveAuthProfileId: ReturnType<
+    typeof createCodexAuthProfileSelection
+  >["resolveCodexAppServerAuthProfileIdForAgent"];
+  withAuthProfileIdAtEffect: ReturnType<
+    typeof createCodexAuthProfileSelection
+  >["withCodexAppServerAuthProfileIdAtEffect"];
+  resolveRuntimeOptions: ReturnType<
+    typeof createCodexAppServerConfig
+  >["resolveCodexSupervisionAppServerRuntimeOptions"];
+  getRuntimeConfig?: () => OpenClawConfig | undefined;
+  /** Trusted owner bit supplied by the plugin tool context. */
+  senderIsOwner: boolean;
+  assertInvocationCurrent?: () => void;
+  env?: NodeJS.ProcessEnv;
+  /** Test seam; production omits this to use the canonical shared client. */
+  request?: EndpointRequest;
+};
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function isCompatString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+}
+
+function readCompatNextCursor(value: unknown, method: string): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (!isCompatString(value, MAX_COMPAT_CURSOR_LENGTH)) {
+    throw new Error(`Codex ${method} returned an invalid nextCursor`);
+  }
+  return value;
+}
+
+function readCompatThreadId(value: unknown, method: string, index: number): string {
+  if (!isCompatString(value, MAX_COMPAT_THREAD_ID_LENGTH)) {
+    throw new Error(`Codex ${method} returned an invalid thread id at data[${index}]`);
+  }
+  return value;
+}
+
+function readLoadedThreadIds(data: unknown[]): string[] {
+  if (data.length > PAGE_LIMIT) {
+    throw new Error(`Codex thread/loaded/list returned more than ${PAGE_LIMIT} entries`);
+  }
+  return data.map((entry, index) => readCompatThreadId(entry, "thread/loaded/list", index));
+}
+
+function readStoredThreads(data: unknown[], maxEntries: number): Record<string, unknown>[] {
+  if (data.length > maxEntries) {
+    throw new Error(`Codex thread/list returned more than ${maxEntries} entries`);
+  }
+  return data.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`Codex thread/list returned an invalid entry at data[${index}]`);
+    }
+    readCompatThreadId(entry.id, "thread/list", index);
+    return entry;
+  });
+}
+
+function readIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${key} must be an integer`);
+  }
+  if (value < 1 || value > 1000) {
+    throw new Error(`${key} must be between 1 and 1000`);
+  }
+  return value;
+}
+
+function readModeParam(params: Record<string, unknown>): CodexSupervisorTurnMode | undefined {
+  const mode = readStringParam(params, "mode");
+  if (!mode) {
+    return undefined;
+  }
+  if (mode === "auto" || mode === "start" || mode === "steer") {
+    return mode;
+  }
+  throw new Error("mode must be auto, start, or steer");
+}
+
+async function resolveEndpoints(
+  pluginConfig: CodexPluginConfig,
+  options: CodexSupervisionToolsOptions,
+): Promise<ResolvedSupervisionEndpoint[]> {
+  const env = options.env ?? process.env;
+  const runtimeConfig = options.getRuntimeConfig?.();
+  const { resolveAuthProfileId, resolveRuntimeOptions } = options;
+  return await Promise.all(
+    normalizeEndpoints(pluginConfig, options).map(async (endpoint) =>
+      Object.assign(
+        {},
+        endpoint,
+        await resolveSupervisionEndpointConnection({
+          endpoint,
+          pluginConfig,
+          env,
+          runtimeConfig,
+          resolveAuthProfileId,
+          resolveRuntimeOptions,
+        }),
+      ),
+    ),
+  );
+}
+
+function resolveEndpointStartOptions(params: {
+  endpoint: NormalizedSupervisionEndpoint;
+  pluginConfig: CodexPluginConfig;
+  env: NodeJS.ProcessEnv;
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
+  validateSecurity?: boolean;
+}): CodexAppServerStartOptions {
+  const base = params.resolveRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+    env: params.env,
+  }).start;
+  const configured = params.endpoint.configured;
+  if (!configured) {
+    return base;
+  }
+  if (!("url" in configured)) {
+    return {
+      transport: "stdio",
+      homeScope: "user",
+      command: configured.command?.trim() || "codex",
+      commandSource: "config",
+      args: configured.args?.length ? [...configured.args] : ["app-server", "--listen", "stdio://"],
+      ...(configured.cwd !== undefined ? { cwd: configured.cwd } : {}),
+      headers: {},
+    };
+  }
+  const tokenEnv = configured.authTokenEnv?.trim();
+  const authToken = tokenEnv ? params.env[tokenEnv]?.trim() : undefined;
+  const startOptions: CodexAppServerStartOptions = {
+    transport: configured.url.startsWith("unix://") ? "unix" : "websocket",
+    ...(configured.url.startsWith("unix://") ? { homeScope: "user" as const } : {}),
+    command: base.command,
+    ...(base.commandSource ? { commandSource: base.commandSource } : {}),
+    ...(base.managedFallbackCommandPaths
+      ? { managedFallbackCommandPaths: [...base.managedFallbackCommandPaths] }
+      : {}),
+    args: [...base.args],
+    url: configured.url,
+    ...(authToken ? { authToken } : {}),
+    headers: {},
+  };
+  if (params.validateSecurity !== false) {
+    assertCodexAppServerConnectionSecurity(startOptions);
+  }
+  return startOptions;
+}
+
+type EndpointConnectionParams = {
+  endpoint: NormalizedSupervisionEndpoint;
+  pluginConfig: CodexPluginConfig;
+  env: NodeJS.ProcessEnv;
+  runtimeConfig: OpenClawConfig | undefined;
+  resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"];
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
+};
+
+function endpointConnectionContext(params: EndpointConnectionParams) {
+  // Endpoint probes report unsafe connections as unhealthy; the actual request path still
+  // validates security before connecting, while this path only fingerprints live ownership.
+  const startOptions = resolveEndpointStartOptions({ ...params, validateSecurity: false });
+  const usesNativeAuth =
+    params.endpoint.configured !== undefined || startOptions.homeScope === "user";
+  const agentDir = usesNativeAuth ? undefined : resolveDefaultAgentDir(params.runtimeConfig ?? {});
+  return { startOptions, usesNativeAuth, agentDir };
+}
+
+async function resolveSupervisionEndpointConnection(params: EndpointConnectionParams) {
+  const { startOptions, usesNativeAuth, agentDir } = endpointConnectionContext(params);
+  const authProfileId = usesNativeAuth
+    ? undefined
+    : await params.resolveAuthProfileId({ agentDir, config: params.runtimeConfig });
+  return {
+    connectionKey: encodeEndpointConnectionKey(startOptions, agentDir, authProfileId),
+    authProfileId,
+  };
+}
+
+function encodeEndpointConnectionKey(
+  startOptions: CodexAppServerStartOptions,
+  agentDir: string | undefined,
+  authProfileId: string | undefined,
+): string {
+  const fallbackApiKeyCacheKey = authProfileId
+    ? undefined
+    : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions });
+  return JSON.stringify({
+    homeScope: startOptions.homeScope ?? null,
+    startOptions: codexAppServerStartOptionsKey(startOptions, {
+      authProfileId,
+      agentDir,
+      fallbackApiKeyCacheKey,
+    }),
+  });
+}
+
+function createPolicyGuardedRequest(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+): EndpointRequest {
+  return async <T>(
+    endpoint: ResolvedSupervisionEndpoint,
+    method: string,
+    requestParams?: unknown,
+  ) => {
+    const currentEndpoint = await requireCurrentEndpoint(options, policy, endpoint);
+    if (options.request) {
+      return await options.request<T>(currentEndpoint, method, requestParams);
+    }
+    const pluginConfig = readCodexPluginConfig(options.getPluginConfig());
+    const env = options.env ?? process.env;
+    const runtime = options.resolveRuntimeOptions({ pluginConfig, env });
+    const config = options.getRuntimeConfig?.();
+    const startOptions = resolveEndpointStartOptions({
+      endpoint: currentEndpoint,
+      pluginConfig,
+      env,
+      resolveRuntimeOptions: options.resolveRuntimeOptions,
+    });
+    return withCurrentEndpointAtEffect(options, policy, currentEndpoint, (guards) =>
+      requestCodexAppServerJson<T>({
+        method,
+        requestParams,
+        timeoutMs: runtime.requestTimeoutMs,
+        startOptions,
+        // Client acquisition and queued writes can outlive the policy that admitted this request.
+        ...guards,
+        ...(endpoint.configured || startOptions.homeScope === "user"
+          ? { authProfileId: null }
+          : {}),
+        ...(config ? { config } : {}),
+      }),
+    );
+  };
+}
+
+function statusType(thread: Record<string, unknown>): string {
+  const status = isRecord(thread.status) ? thread.status.type : thread.status;
+  return typeof status === "string" ? status : "unknown";
+}
+
+function sourceLabel(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (typeof value.custom === "string") {
+    return `custom:${value.custom}`;
+  }
+  return Object.keys(value).toSorted()[0];
+}
+
+function toSession(endpointId: string, thread: Record<string, unknown>, humanAttached?: boolean) {
+  if (typeof thread.id !== "string") {
+    return undefined;
+  }
+  const source = sourceLabel(thread.source);
+  return {
+    endpointId,
+    threadId: thread.id,
+    status: statusType(thread),
+    ...(typeof thread.sessionId === "string" ? { sessionId: thread.sessionId } : {}),
+    ...(typeof thread.cwd === "string" ? { cwd: thread.cwd } : {}),
+    ...(typeof thread.preview === "string" ? { preview: thread.preview } : {}),
+    ...(typeof thread.name === "string" || thread.name === null ? { name: thread.name } : {}),
+    ...(source ? { source } : {}),
+    ...(typeof thread.updatedAt === "number" ? { updatedAt: thread.updatedAt } : {}),
+    ...(humanAttached !== undefined ? { humanAttached } : {}),
+  };
+}
+
+function isLoadedThreadReadMiss(error: unknown): boolean {
+  const message = coerceErrorMessage(error);
+  return message.includes("thread not found") || message.includes("thread not loaded");
+}
+
+async function readThread(params: {
+  request: EndpointRequest;
+  endpoint: ResolvedSupervisionEndpoint;
+  threadId: string;
+  includeTurns: boolean;
+}): Promise<Record<string, unknown>> {
+  const read = async (includeTurns: boolean, errorOptions?: ErrorOptions) => {
+    const response = await params.request(params.endpoint, "thread/read", {
+      threadId: params.threadId,
+      includeTurns,
+    });
+    if (!isRecord(response) || !isRecord(response.thread)) {
+      throw new Error("Codex thread/read returned an invalid response", errorOptions);
+    }
+    return response.thread;
+  };
+  try {
+    return await read(params.includeTurns);
+  } catch (error) {
+    if (!params.includeTurns || !String(error).includes("not materialized yet")) {
+      throw error;
+    }
+    return await read(false, { cause: error });
+  }
+}
+
+async function listSessions(
+  request: EndpointRequest,
+  endpoint: ResolvedSupervisionEndpoint,
+  storedLimit?: number,
+): Promise<CodexSupervisorSession[]> {
+  const loaded = storedLimit === undefined;
+  const method = loaded ? "thread/loaded/list" : "thread/list";
+  const limit = storedLimit ?? Infinity;
+  const sessions: CodexSupervisorSession[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let pageIndex = 0; pageIndex < MAX_COMPAT_PAGINATION_PAGES; pageIndex += 1) {
+    const remaining = limit - sessions.length;
+    if (remaining <= 0) {
+      break;
+    }
+    const pageLimit = Math.min(PAGE_LIMIT, remaining);
+    const listed = await request(endpoint, method, {
+      ...(loaded
+        ? {}
+        : {
+            archived: false,
+            sourceKinds: [...ALL_CODEX_THREAD_SOURCE_KINDS],
+            modelProviders: [],
+            sortKey: "recency_at",
+            sortDirection: "desc",
+            useStateDbOnly: true,
+          }),
+      limit: pageLimit,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (!isRecord(listed) || !Array.isArray(listed.data)) {
+      throw new Error(`Codex ${method} returned an invalid response`);
+    }
+    const entries = loaded
+      ? readLoadedThreadIds(listed.data)
+      : readStoredThreads(listed.data, pageLimit);
+    for (const entry of entries) {
+      if (typeof entry === "string" && sessions.some((session) => session.threadId === entry)) {
+        continue;
+      }
+      try {
+        const thread =
+          typeof entry === "string"
+            ? await readThread({ request, endpoint, threadId: entry, includeTurns: false })
+            : entry;
+        const session = toSession(endpoint.id, thread, loaded ? true : undefined);
+        if (
+          session &&
+          (loaded || !sessions.some((existing) => existing.threadId === session.threadId))
+        ) {
+          sessions.push(session);
+        }
+      } catch (error) {
+        if (!loaded || !isLoadedThreadReadMiss(error)) {
+          throw error;
+        }
+      }
+    }
+    const nextCursor = readCompatNextCursor(listed.nextCursor, method);
+    if (nextCursor && sessions.length < limit && seenCursors.has(nextCursor)) {
+      throw new Error(`Codex ${method} returned repeated cursor ${nextCursor}`);
+    }
+    if (nextCursor) {
+      seenCursors.add(nextCursor);
+    }
+    cursor = nextCursor;
+    if (!cursor || sessions.length >= limit) {
+      break;
+    }
+  }
+  if (cursor && sessions.length < limit) {
+    throw new Error(
+      `Codex ${method} exceeded ${MAX_COMPAT_PAGINATION_PAGES} pages with a continuation cursor`,
+    );
+  }
+  return sessions;
+}
+
+async function listSessionSnapshot(params: {
+  endpoints: ResolvedSupervisionEndpoint[];
+  request: EndpointRequest;
+  includeStored: boolean;
+  maxStoredSessions?: number;
+}): Promise<CodexSupervisorSessionListResult> {
+  const sessions: CodexSupervisorSession[] = [];
+  const errors: CodexSupervisorEndpointHealth[] = [];
+  for (const endpoint of params.endpoints) {
+    try {
+      const loaded = await listSessions(params.request, endpoint);
+      sessions.push(...loaded);
+      if (params.includeStored) {
+        const stored = await listSessions(
+          params.request,
+          endpoint,
+          params.maxStoredSessions ?? DEFAULT_MAX_STORED_SESSIONS,
+        );
+        for (const session of stored) {
+          if (
+            !sessions.some(
+              (entry) => entry.endpointId === endpoint.id && entry.threadId === session.threadId,
+            )
+          ) {
+            sessions.push(session);
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof CodexSupervisionPolicyError) {
+        throw error;
+      }
+      errors.push({
+        endpointId: endpoint.id,
+        ok: false,
+        detail: coerceErrorMessage(error),
+      });
+    }
+  }
+  return { sessions, errors };
+}
+
+async function resolveEndpointForThread(params: {
+  endpoints: ResolvedSupervisionEndpoint[];
+  request: EndpointRequest;
+  endpointId?: string;
+  threadId: string;
+}): Promise<ResolvedSupervisionEndpoint> {
+  if (params.endpointId) {
+    const endpoint = params.endpoints.find((entry) => entry.id === params.endpointId);
+    if (!endpoint) {
+      throw new Error(`Unknown Codex supervisor endpoint: ${params.endpointId}`);
+    }
+    return endpoint;
+  }
+  const matches: ResolvedSupervisionEndpoint[] = [];
+  for (const endpoint of params.endpoints) {
+    try {
+      const thread = await readThread({
+        request: params.request,
+        endpoint,
+        threadId: params.threadId,
+        includeTurns: false,
+      });
+      if (thread.id === params.threadId) {
+        matches.push(endpoint);
+      }
+    } catch (error) {
+      if (error instanceof CodexSupervisionPolicyError) {
+        throw error;
+      }
+    }
+  }
+  if (matches.length === 1) {
+    return expectDefined(matches[0], "single matching Codex supervision endpoint");
+  }
+  if (matches.length > 1) {
+    throw new Error(`Codex thread id is ambiguous across endpoints: ${params.threadId}`);
+  }
+  throw new Error(`Codex thread not found: ${params.threadId}`);
+}
+
+function findInProgressTurnId(thread: Record<string, unknown>): string | undefined {
+  const turns = asRecordArray(thread.turns);
+  for (const turn of turns.toReversed()) {
+    if (turn.status === "inProgress" && typeof turn.id === "string") {
+      return turn.id;
+    }
+  }
+  return undefined;
+}
+
+async function resolveInProgressTurnId(params: {
+  request: EndpointRequest;
+  endpoint: ResolvedSupervisionEndpoint;
+  thread: Record<string, unknown>;
+  threadId: string;
+}): Promise<string | undefined> {
+  const inline = findInProgressTurnId(params.thread);
+  if (inline) {
+    return inline;
+  }
+  try {
+    const response = await params.request(params.endpoint, "thread/turns/list", {
+      threadId: params.threadId,
+      limit: 10,
+      sortDirection: "desc",
+      itemsView: "summary",
+    });
+    return isRecord(response) ? findInProgressTurnId({ turns: response.data }) : undefined;
+  } catch (error) {
+    if (error instanceof CodexSupervisionPolicyError) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
+function redactEndpointUrl(value: string): string {
+  if (value.startsWith("unix://")) {
+    return "unix://";
+  }
+  const url = URL.parse(value);
+  if (!url) {
+    return "[redacted]";
+  }
+  url.username = "";
+  url.password = "";
+  if (url.search) {
+    url.search = "?[redacted]";
+  }
+  return url.toString();
+}
+
+function endpointResult(
+  endpoint: ResolvedSupervisionEndpoint,
+  pluginConfig: CodexPluginConfig,
+  env: NodeJS.ProcessEnv,
+  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
+): Record<string, unknown> {
+  const start = endpoint.configured ?? resolveRuntimeOptions({ pluginConfig, env }).start;
+  const remote =
+    start.transport === "websocket" || start.transport === "unix"
+      ? {
+          url: redactEndpointUrl(start.url ?? (start.transport === "unix" ? "unix://" : "")),
+        }
+      : undefined;
+  return {
+    id: endpoint.id,
+    transport: remote ? "websocket" : "stdio-proxy",
+    ...(endpoint.label ? { label: endpoint.label } : {}),
+    ...remote,
+  };
+}
+
+function projectSessionListResult(
+  result: CodexSupervisorSessionListResult,
+  includeTranscriptDerivedFields: boolean,
+): CodexSupervisorSessionListResult {
+  if (includeTranscriptDerivedFields) {
+    return result;
+  }
+  return {
+    sessions: result.sessions.map(({ preview: _preview, name: _name, ...session }) => session),
+    errors: result.errors.map(({ endpointId, ok }) => ({ endpointId, ok })),
+  };
+}
+
+async function requireLiveToolPolicy(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+): Promise<{ pluginConfig: CodexPluginConfig; endpoints: ResolvedSupervisionEndpoint[] }> {
+  const pluginConfig = requireLiveToolPolicyConfig(options, policy);
+  return { pluginConfig, endpoints: await resolveEndpoints(pluginConfig, options) };
+}
+
+function requireLiveToolPolicyConfig(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+): CodexPluginConfig {
+  options.assertInvocationCurrent?.();
+  if (!options.senderIsOwner) {
+    throw new CodexSupervisionPolicyError(
+      "Codex supervision compatibility tools require an owner-authorized sender.",
+    );
+  }
+  const pluginConfig = readCodexPluginConfig(options.getPluginConfig());
+  const config = pluginConfig.supervision;
+  const error =
+    config?.enabled !== true
+      ? "Codex supervision is disabled in the codex plugin config."
+      : policy === "raw-transcripts" && config.allowRawTranscripts !== true
+        ? "Codex session reads are disabled for this codex plugin supervision config."
+        : policy === "write-controls" && config.allowWriteControls !== true
+          ? "Codex write controls are disabled for this codex plugin supervision config."
+          : undefined;
+  if (error) {
+    throw new CodexSupervisionPolicyError(error);
+  }
+  return pluginConfig;
+}
+
+async function requireCurrentEndpoint(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+  endpoint: ResolvedSupervisionEndpoint,
+): Promise<ResolvedSupervisionEndpoint> {
+  const { endpoints } = await requireLiveToolPolicy(options, policy);
+  const currentEndpoint = endpoints.find((candidate) => candidate.id === endpoint.id);
+  if (!currentEndpoint || currentEndpoint.connectionKey !== endpoint.connectionKey) {
+    throw new CodexSupervisionPolicyError(
+      `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
+    );
+  }
+  return currentEndpoint;
+}
+
+function currentEndpointConnection(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+  endpoint: ResolvedSupervisionEndpoint,
+) {
+  const pluginConfig = requireLiveToolPolicyConfig(options, policy);
+  const current = normalizeEndpoints(pluginConfig, options).find(
+    (candidate) => candidate.id === endpoint.id,
+  );
+  if (!current) {
+    throw new CodexSupervisionPolicyError(
+      `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
+    );
+  }
+  const runtimeConfig = options.getRuntimeConfig?.();
+  return {
+    runtimeConfig,
+    ...endpointConnectionContext({
+      endpoint: current,
+      pluginConfig,
+      env: options.env ?? process.env,
+      runtimeConfig,
+      resolveAuthProfileId: options.resolveAuthProfileId,
+      resolveRuntimeOptions: options.resolveRuntimeOptions,
+    }),
+  };
+}
+
+type EndpointEffectGuards = { assertCurrent(): void; assertDispatchCurrentAsync(): Promise<void> };
+
+async function withCurrentEndpointAtEffect<T>(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+  endpoint: ResolvedSupervisionEndpoint,
+  consume: (guards: EndpointEffectGuards) => Promise<T>,
+): Promise<T> {
+  const captured = currentEndpointConnection(options, policy, endpoint);
+  const run = async (reader?: { read(): Promise<string | undefined>; assertCurrent(): void }) => {
+    let authProfileId = endpoint.authProfileId;
+    const assertCurrent = () => {
+      const current = currentEndpointConnection(options, policy, endpoint);
+      reader?.assertCurrent();
+      if (
+        current.runtimeConfig !== captured.runtimeConfig ||
+        encodeEndpointConnectionKey(current.startOptions, current.agentDir, authProfileId) !==
+          endpoint.connectionKey
+      ) {
+        throw new CodexSupervisionPolicyError(
+          `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
+        );
+      }
+    };
+    assertCurrent();
+    return consume({
+      assertCurrent,
+      assertDispatchCurrentAsync: async () => {
+        if (reader) {
+          authProfileId = await reader.read();
+        }
+        assertCurrent();
+      },
+    });
+  };
+  return captured.usesNativeAuth
+    ? run()
+    : options.withAuthProfileIdAtEffect(
+        {
+          agentDir: captured.agentDir,
+          config: captured.runtimeConfig,
+        },
+        run,
+      );
+}
+
+function withCurrentEndpointSet<T>(
+  options: CodexSupervisionToolsOptions,
+  expected: ResolvedSupervisionEndpoint[],
+  consume: (pluginConfig: CodexPluginConfig) => T,
+): Promise<T> {
+  const guards: EndpointEffectGuards[] = [];
+  const visit = async (index: number): Promise<T> => {
+    const endpoint = expected[index];
+    if (endpoint) {
+      return withCurrentEndpointAtEffect(options, "enabled", endpoint, async (guard) => {
+        await guard.assertDispatchCurrentAsync();
+        guards.push(guard);
+        return visit(index + 1);
+      });
+    }
+    const pluginConfig = requireLiveToolPolicyConfig(options, "enabled");
+    const current = normalizeEndpoints(pluginConfig, options);
+    if (
+      current.length !== expected.length ||
+      expected.some((item) => !current.some((candidate) => candidate.id === item.id))
+    ) {
+      throw new CodexSupervisionPolicyError(
+        "Codex supervision endpoint configuration changed during the request.",
+      );
+    }
+    for (const guard of guards) {
+      guard.assertCurrent();
+    }
+    return consume(pluginConfig);
+  };
+  return visit(0);
+}
+
+function idleContinuationError(threadId: string): Error {
+  return new Error(
+    `Codex thread ${threadId} is idle. Continue it from Codex Sessions so OpenClaw can install the Codex harness approval and tool handlers before resume.`,
+  );
+}
+
+export function createCodexSupervisionTools(options: CodexSupervisionToolsOptions): AnyAgentTool[] {
+  const request = createPolicyGuardedRequest(options, "enabled");
+  const rawTranscriptRequest = createPolicyGuardedRequest(options, "raw-transcripts");
+  const writeRequest = createPolicyGuardedRequest(options, "write-controls");
+  // Recheck owner authorization when directly constructed tools execute.
+  const controlActiveTurn = async (rawParams: unknown, action: "steer" | "interrupt") => {
+    const { endpoints } = await requireLiveToolPolicy(options, "write-controls");
+    const params = isRecord(rawParams) ? rawParams : {};
+    const threadId = readStringParam(params, "thread_id", { required: true });
+    const input =
+      action === "steer"
+        ? [
+            {
+              type: "text",
+              text: readStringParam(params, "text", { required: true, allowEmpty: false }),
+              text_elements: [],
+            },
+          ]
+        : undefined;
+    if (input && (readModeParam(params) ?? "auto") === "start") {
+      throw idleContinuationError(threadId);
+    }
+    const endpoint = await resolveEndpointForThread({
+      endpoints,
+      request: writeRequest,
+      endpointId: readStringParam(params, "endpoint_id"),
+      threadId,
+    });
+    const thread = await readThread({
+      request: writeRequest,
+      endpoint,
+      threadId,
+      includeTurns: true,
+    });
+    await requireCurrentEndpoint(options, "write-controls", endpoint);
+    if (statusType(thread) !== "active") {
+      throw action === "steer"
+        ? idleContinuationError(threadId)
+        : new Error(`Codex thread ${threadId} has no active turn to interrupt`);
+    }
+    const turnId =
+      (action === "interrupt" ? readStringParam(params, "turn_id") : undefined) ??
+      (await resolveInProgressTurnId({ request: writeRequest, endpoint, thread, threadId }));
+    if (!turnId) {
+      throw new Error(
+        action === "steer"
+          ? `Codex thread ${threadId} is active but no in-progress turn is readable`
+          : `Codex thread ${threadId} has no readable in-progress turn`,
+      );
+    }
+    await writeRequest(
+      endpoint,
+      `turn/${action}`,
+      input ? { threadId, expectedTurnId: turnId, input } : { threadId, turnId },
+    );
+    const result = {
+      endpointId: endpoint.id,
+      threadId,
+      ...(input ? { mode: "steer" as const } : {}),
+      turnId,
+    };
+    return jsonResult({ summary: `codex ${input ? "steer" : "interrupted"}: ${turnId}`, result });
+  };
+
+  return [
+    {
+      name: "codex_endpoint_probe",
+      label: "Codex Endpoint Check",
+      description: "Check configured Codex app-server endpoints.",
+      parameters: EmptyParamsSchema,
+      execute: async () => {
+        const { endpoints } = await requireLiveToolPolicy(options, "enabled");
+        const health: CodexSupervisorEndpointHealth[] = [];
+        for (const endpoint of endpoints) {
+          try {
+            await request(endpoint, "thread/loaded/list", { limit: 1 });
+            health.push({ endpointId: endpoint.id, ok: true });
+          } catch (error) {
+            if (error instanceof CodexSupervisionPolicyError) {
+              throw error;
+            }
+            health.push({ endpointId: endpoint.id, ok: false });
+          }
+        }
+        return withCurrentEndpointSet(options, endpoints, (pluginConfig) =>
+          jsonResult({
+            summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
+            endpoints: endpoints.map((endpoint) =>
+              endpointResult(
+                endpoint,
+                pluginConfig,
+                options.env ?? process.env,
+                options.resolveRuntimeOptions,
+              ),
+            ),
+            health,
+          }),
+        );
+      },
+    },
+    {
+      name: "codex_sessions_list",
+      label: "Codex Sessions List",
+      description: "List Codex sessions visible to the OpenClaw supervisor.",
+      parameters: SessionsListParamsSchema,
+      execute: async (_toolCallId, rawParams) => {
+        const params = isRecord(rawParams) ? rawParams : {};
+        const { endpoints } = await requireLiveToolPolicy(options, "enabled");
+        const result = await listSessionSnapshot({
+          endpoints,
+          request,
+          includeStored: params.include_stored === true,
+          maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
+        });
+        return withCurrentEndpointSet(options, endpoints, (pluginConfig) =>
+          jsonResult({
+            summary: `codex sessions: ${result.sessions.length}`,
+            ...projectSessionListResult(
+              result,
+              pluginConfig.supervision?.allowRawTranscripts === true,
+            ),
+          }),
+        );
+      },
+    },
+    {
+      name: "codex_session_read",
+      label: "Codex Session Read",
+      description: "Read one Codex session transcript from app-server.",
+      parameters: SessionReadParamsSchema,
+      execute: async (_toolCallId, rawParams) => {
+        const { endpoints } = await requireLiveToolPolicy(options, "raw-transcripts");
+        const params = isRecord(rawParams) ? rawParams : {};
+        const threadId = readStringParam(params, "thread_id", { required: true });
+        const endpoint = await resolveEndpointForThread({
+          endpoints,
+          request: rawTranscriptRequest,
+          endpointId: readStringParam(params, "endpoint_id"),
+          threadId,
+        });
+        const thread = await readThread({
+          request: rawTranscriptRequest,
+          endpoint,
+          threadId,
+          includeTurns: params.include_turns === true,
+        });
+        return withCurrentEndpointAtEffect(options, "raw-transcripts", endpoint, async (guard) => {
+          await guard.assertDispatchCurrentAsync();
+          guard.assertCurrent();
+          return jsonResult({
+            summary: `codex session: ${threadId}`,
+            response: { thread },
+          });
+        });
+      },
+    },
+    {
+      name: "codex_session_send",
+      label: "Codex Session Send",
+      description:
+        "Steer an active Codex turn. Idle sessions must be continued through Codex Sessions.",
+      parameters: SessionSendParamsSchema,
+      execute: (_toolCallId, rawParams) => controlActiveTurn(rawParams, "steer"),
+    },
+    {
+      name: "codex_session_interrupt",
+      label: "Codex Session Interrupt",
+      description: "Interrupt an active Codex turn.",
+      parameters: SessionInterruptParamsSchema,
+      execute: (_toolCallId, rawParams) => controlActiveTurn(rawParams, "interrupt"),
+    },
+  ];
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

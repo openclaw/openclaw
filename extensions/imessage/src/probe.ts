@@ -1,0 +1,313 @@
+import path from "node:path";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { detectBinary } from "openclaw/plugin-sdk/setup";
+import {
+  filterStringEntries,
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { expandIMessageUserPath } from "./cli-path.js";
+import { createIMessageRpcClient } from "./client.js";
+import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+  type IMessagePrivateApiStatus,
+} from "./private-api-status.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
+import {
+  IMESSAGE_INSTALL_COMMAND,
+  IMESSAGE_UPDATE_COMMAND,
+  isAutoManagedIMessageCliPath,
+} from "./setup-core.js";
+
+export type IMessageProbe = BaseProbeResult & {
+  fatal?: boolean;
+  privateApi?: IMessagePrivateApiStatus;
+};
+
+export type IMessageProbeOptions = {
+  cliPath?: string;
+  dbPath?: string;
+  remoteHost?: string;
+  forceRefresh?: boolean;
+  platform?: NodeJS.Platform;
+  runtime?: RuntimeEnv;
+};
+
+type RpcSupportResult = {
+  supported: boolean;
+  error?: string;
+  fatal?: boolean;
+};
+
+// 5-minute TTL on the rpc-support cache lets us cope with `brew upgrade imsg`
+// happening mid-process without forcing a gateway restart.
+const RPC_SUPPORT_CACHE_TTL_MS = 5 * 60 * 1000;
+// 10-second negative TTL on the private-api status cache lets a flurry of
+// agent actions during a bridge outage avoid serializing on probe RPC.
+const PRIVATE_API_NEGATIVE_TTL_MS = 10 * 1000;
+
+type RpcSupportCacheEntry = { result: RpcSupportResult; expiresAt: number };
+
+const rpcSupportCache = new Map<string, RpcSupportCacheEntry>();
+
+function cacheIMessagePrivateApiStatus(
+  cliPath: string,
+  status: NonNullable<IMessageProbe["privateApi"]>,
+): void {
+  setCachedIMessagePrivateApiStatus(
+    cliPath,
+    status,
+    status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+  );
+}
+
+function setCachedRpcSupport(cliPath: string, result: RpcSupportResult): void {
+  rpcSupportCache.set(cliPath, { result, expiresAt: Date.now() + RPC_SUPPORT_CACHE_TTL_MS });
+}
+
+async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
+  const cached = rpcSupportCache.get(cliPath);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+    rpcSupportCache.delete(cliPath);
+  }
+  try {
+    const result = await runCommandWithTimeout([expandIMessageUserPath(cliPath), "rpc", "--help"], {
+      timeoutMs,
+    });
+    const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(combined);
+    if (normalized.includes("unknown command") && normalized.includes("rpc")) {
+      const fatal = {
+        supported: false,
+        fatal: true,
+        error: `imsg CLI does not support the "rpc" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      };
+      setCachedRpcSupport(cliPath, fatal);
+      return fatal;
+    }
+    if (result.code === 0) {
+      const supported = { supported: true };
+      setCachedRpcSupport(cliPath, supported);
+      return supported;
+    }
+    return {
+      supported: false,
+      error: combined || `imsg rpc --help failed (code ${String(result.code ?? "unknown")})`,
+    };
+  } catch (err) {
+    return { supported: false, error: String(err) };
+  }
+}
+
+// Inspect help without sending; failed probes leave the capability disabled.
+async function probeIMessageCliFlag(
+  cliPath: string,
+  timeoutMs: number,
+  command: string[],
+  flag: RegExp,
+): Promise<boolean> {
+  try {
+    const result = await runCommandWithTimeout(
+      [expandIMessageUserPath(cliPath), ...command, "--help"],
+      { timeoutMs },
+    );
+    if (result.code !== 0) {
+      return false;
+    }
+    const combined = `${result.stdout}\n${result.stderr}`;
+    return flag.test(combined);
+  } catch {
+    return false;
+  }
+}
+
+export async function probeIMessagePrivateApi(
+  cliPath: string,
+  timeoutMs: number,
+  options: { forceRefresh?: boolean } = {},
+): Promise<NonNullable<IMessageProbe["privateApi"]>> {
+  const key = cliPath.trim() || "imsg";
+  if (!options.forceRefresh) {
+    const cached = getCachedIMessagePrivateApiStatus(key);
+    if (cached) {
+      return cached;
+    }
+  }
+  const unavailable = (error: string) => {
+    const status: NonNullable<IMessageProbe["privateApi"]> = {
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      rpcMethods: [],
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
+      error,
+    };
+    cacheIMessagePrivateApiStatus(key, status);
+    return status;
+  };
+
+  try {
+    const result = await runCommandWithTimeout([expandIMessageUserPath(key), "status", "--json"], {
+      timeoutMs,
+    });
+    const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(combined);
+    if (
+      result.code !== 0 &&
+      normalized.includes("unknown subcommand") &&
+      normalized.includes("status")
+    ) {
+      return unavailable(
+        `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      );
+    }
+    const lines = normalizeStringEntries(result.stdout.split(/\r?\n/));
+    let payload: Record<string, unknown> | null = null;
+    for (const line of lines.toReversed()) {
+      try {
+        const value = JSON.parse(line);
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          payload = value as Record<string, unknown>;
+          break;
+        }
+      } catch {
+        // Continue scanning earlier JSONL records.
+      }
+    }
+    // Preserve a bounded diagnostic when no status record can be read.
+    const firstLineSnippet = !payload && lines[0] ? truncateUtf16Safe(lines[0], 120) : undefined;
+    const rawSelectors = payload?.selectors;
+    const selectors: Record<string, boolean> = {};
+    if (rawSelectors && typeof rawSelectors === "object" && !Array.isArray(rawSelectors)) {
+      for (const [selector, value] of Object.entries(rawSelectors)) {
+        if (typeof value === "boolean") {
+          selectors[selector] = value;
+        }
+      }
+    }
+    const rpcMethods = filterStringEntries(payload?.rpc_methods);
+    const advancedFeatures = payload?.advanced_features === true;
+    const v2Ready = payload?.v2_ready === true;
+    // imsg explains an unavailable bridge here (SIP, library validation, macOS
+    // 26 AMFI gate). Carry it forward so blocked actions can show the reason.
+    const statusMessage = typeof payload?.message === "string" ? payload.message : undefined;
+    // CLI flags remain discoverable while the native bridge is unavailable.
+    const sendRichSupportsAttachment = await probeIMessageCliFlag(
+      key,
+      timeoutMs,
+      ["send-rich"],
+      /(?:^|\s)--file\b/m,
+    );
+    // Caption suppression is required for approval polls because OpenClaw
+    // renders the details first. Published imsg 0.13.1 lacks --no-comment, so
+    // probe the exact CLI contract instead of inferring it from poll selectors.
+    const pollSendSupportsNoComment = await probeIMessageCliFlag(
+      key,
+      timeoutMs,
+      ["poll", "send"],
+      /(?:^|\s)--no-comment\b/m,
+    );
+    const status: NonNullable<IMessageProbe["privateApi"]> = {
+      available: result.code === 0 && advancedFeatures && v2Ready,
+      v2Ready,
+      selectors,
+      rpcMethods,
+      cliCapabilities: { sendRichSupportsAttachment, pollSendSupportsNoComment },
+      ...(statusMessage ? { statusMessage } : {}),
+      ...(result.code === 0
+        ? !payload && firstLineSnippet
+          ? {
+              error:
+                `imsg status --json returned no parseable JSONL ` +
+                `(first line: "${firstLineSnippet}") — output schema may have changed`,
+            }
+          : {}
+        : { error: combined || `imsg status --json failed (code ${String(result.code)})` }),
+    };
+    cacheIMessagePrivateApiStatus(key, status);
+    return status;
+  } catch (err) {
+    return unavailable(String(err));
+  }
+}
+
+export async function probeIMessage(
+  timeoutMs?: number,
+  opts: IMessageProbeOptions = {},
+): Promise<IMessageProbe> {
+  const cfg = opts.cliPath || opts.dbPath ? undefined : await captureRuntimeConfigAsyncReader()();
+  const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
+  const cliPath = explicitCliPath || "imsg";
+  const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
+  const remoteHost = await resolveIMessageRemoteHost({
+    cliPath,
+    remoteHost: opts.remoteHost ?? cfg?.channels?.imessage?.remoteHost,
+  });
+  const effectiveTimeout =
+    timeoutMs ?? cfg?.channels?.imessage?.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+
+  if (
+    (opts.platform ?? process.platform) !== "darwin" &&
+    (cliPath === "imsg" || (!cliPath.includes("/") && path.basename(cliPath) === "imsg"))
+  ) {
+    return {
+      ok: false,
+      fatal: true,
+      error:
+        "iMessage via the default imsg CLI must run on macOS. Run OpenClaw on the signed-in Messages Mac, or set channels.imessage.cliPath to an SSH wrapper that runs imsg on that Mac.",
+    };
+  }
+
+  const detected = await detectBinary(expandIMessageUserPath(cliPath));
+  if (!detected) {
+    const error = isAutoManagedIMessageCliPath(cliPath, {
+      explicit: explicitCliPath !== undefined,
+    })
+      ? `imsg not found (${cliPath}). Install imsg on the Messages Mac: ${IMESSAGE_INSTALL_COMMAND}`
+      : `imsg command not found (${cliPath}). Check the configured iMessage cliPath or wrapper.`;
+    return {
+      ok: false,
+      error,
+    };
+  }
+
+  const rpcSupport = await probeRpcSupport(cliPath, effectiveTimeout);
+  if (!rpcSupport.supported) {
+    return {
+      ok: false,
+      error: rpcSupport.error ?? "imsg rpc unavailable",
+      fatal: rpcSupport.fatal,
+    };
+  }
+
+  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout, {
+    forceRefresh: opts.forceRefresh,
+  });
+
+  const client = await createIMessageRpcClient({
+    cliPath,
+    dbPath,
+    remoteHost,
+    runtime: opts.runtime,
+  });
+  try {
+    await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
+    return { ok: true, privateApi };
+  } catch (err) {
+    return { ok: false, error: String(err), privateApi };
+  } finally {
+    await client.stop();
+  }
+}

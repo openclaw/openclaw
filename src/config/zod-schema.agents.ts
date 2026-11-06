@@ -1,0 +1,168 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
+import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
+
+export { BroadcastSchema } from "./zod-schema.messages.js";
+
+/** Config map key naming one agent; agent ids normalize case-insensitively. */
+export const AgentIdKeySchema = z
+  .string()
+  .regex(/^[a-z0-9_][a-z0-9_-]{0,63}$/i, "Invalid agent id");
+
+/**
+ * Rejects agent-keyed map keys that resolve to the same agent id (`ops` and
+ * `OPS`): lookups normalize case, so one entry would silently shadow the other.
+ */
+export function addDuplicateAgentIdKeyIssues(
+  keys: readonly string[],
+  ctx: z.RefinementCtx,
+  params: { label: string; path: readonly string[] },
+): void {
+  const firstKeyByAgentId = new Map<string, string>();
+  for (const key of keys) {
+    const agentId = normalizeAgentId(key);
+    const firstKey = firstKeyByAgentId.get(agentId);
+    if (!firstKey) {
+      firstKeyByAgentId.set(agentId, key);
+      continue;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...params.path, key],
+      message: `${params.label} keys "${firstKey}" and "${key}" resolve to the same agent id "${agentId}"; rename one key so each agent has a unique id`,
+    });
+  }
+}
+
+const AgentEntryConfigSchema = z.preprocess(
+  (value, ctx) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const key of Object.getOwnPropertyNames(value)) {
+        if (!isBlockedObjectKey(key)) {
+          continue;
+        }
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: "agent entries must not contain blocked object keys",
+        });
+        return z.NEVER;
+      }
+    }
+    return value;
+  },
+  AgentEntrySchema.omit({ id: true }).extend({ default: z.boolean().optional() }),
+);
+
+export const AgentsSchema = z
+  .strictObject({
+    ownership: z.literal("explicit").optional(),
+    defaults: z.lazy(() => AgentDefaultsSchema).optional(),
+    entries: z.record(AgentIdKeySchema, AgentEntryConfigSchema).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const entries = Object.entries(value.entries ?? {});
+    if (entries.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: "agents.entries must contain at least one configured agent",
+      });
+    }
+    addDuplicateAgentIdKeyIssues(
+      entries.map(([key]) => key),
+      ctx,
+      { label: "agents.entries", path: ["entries"] },
+    );
+    const marked = entries.filter(([, entry]) => entry.default === true);
+    if (marked.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: `agents.entries must contain at most one default=true entry (found ${marked.length})`,
+      });
+    }
+    if (value.ownership === "explicit" && marked.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message: "agents.ownership=explicit cannot be combined with a legacy default=true marker",
+      });
+    }
+    if (entries.length > 1 && marked.length === 0 && value.ownership !== "explicit") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message:
+          'multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor',
+      });
+    }
+  })
+  .optional();
+
+const BindingMatchSchema = z.strictObject({
+  channel: z.string(),
+  /**
+   * Channel account to match.
+   * - Omitted/empty: matches only the channel default account.
+   * - "*": matches every account on the channel.
+   * - Any other string: matches that specific account id.
+   */
+  accountId: z.string().optional(),
+  peer: z
+    .strictObject({
+      kind: z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]),
+      id: z.string(),
+    })
+    .optional(),
+  guildId: z.string().optional(),
+  teamId: z.string().optional(),
+  /** Discord role IDs used for role-based routing. */
+  roles: z.array(z.string()).optional(),
+});
+
+const BindingSessionSchema = z.strictObject({
+  /** Optional session scoping override for conversations matched by this binding. */
+  dmScope: z.enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"]).optional(),
+  groupScope: z.enum(["main", "per-group"]).optional(),
+});
+
+const RouteBindingSchema = z.strictObject({
+  /** Missing type is interpreted as route for backward compatibility. */
+  type: z.literal("route").optional(),
+  agentId: z.string(),
+  comment: z.string().optional(),
+  match: BindingMatchSchema,
+  session: BindingSessionSchema.optional(),
+});
+
+const AcpBindingSchema = z
+  .strictObject({
+    type: z.literal("acp"),
+    agentId: z.string(),
+    comment: z.string().optional(),
+    match: BindingMatchSchema,
+    acp: z
+      .strictObject({
+        mode: z.enum(["persistent", "oneshot"]).optional(),
+        label: z.string().optional(),
+        cwd: z.string().optional(),
+        backend: z.string().optional(),
+      })
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    const peerId = normalizeOptionalString(value.match.peer?.id) ?? "";
+    if (!peerId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["match", "peer"],
+        message: "ACP bindings require match.peer.id to target a concrete conversation.",
+      });
+    }
+  });
+
+export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();

@@ -1,0 +1,103 @@
+import type { AgentHarnessAttemptTimeout } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import type {
+  AgentMessage,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexSystemPromptReport } from "./attempt-context.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+
+export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
+  return result.assistantTexts.join("\n\n").trim();
+}
+
+/** Reports the owner's deadline without guessing whether native work finished. */
+export function buildCodexAppServerPromptTimeoutOutcome(
+  timeout: AgentHarnessAttemptTimeout | undefined,
+): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
+  if (!timeout) {
+    return undefined;
+  }
+  return {
+    message:
+      timeout.kind === "execution"
+        ? "Codex reached the configured execution time limit. Some work may already have been performed; verify the current state before continuing."
+        : "Codex finished its turn, but OpenClaw could not finish processing the result. Some work may already have been performed; verify the current state before continuing.",
+    replayInvalid: true,
+    livenessState: "abandoned",
+  };
+}
+
+export function resolveCodexAppServerReplayBlockedReason(
+  result: EmbeddedRunAttemptResult,
+):
+  | NonNullable<EmbeddedRunAttemptResult["codexAppServerFailure"]>["replayBlockedReason"]
+  | undefined {
+  if (result.replayMetadata.hadPotentialSideEffects) {
+    return "potential_side_effect";
+  }
+  if (result.assistantTexts.some((text) => text.trim().length > 0)) {
+    return "assistant_output";
+  }
+  if (
+    result.toolMetas.length > 0 ||
+    result.clientToolCalls ||
+    result.lastToolError ||
+    result.didSendDeterministicApprovalPrompt
+  ) {
+    return "tool_activity";
+  }
+  if (result.itemLifecycle.startedCount > 0 || result.itemLifecycle.activeCount > 0) {
+    return "active_item";
+  }
+  return undefined;
+}
+
+export function buildCodexTurnStartFailureResult(params: {
+  params: EmbeddedRunAttemptParams;
+  message: string;
+  promptError?: unknown;
+  messagesSnapshot: AgentMessage[];
+  systemPromptReport: CodexSystemPromptReport;
+}): EmbeddedRunAttemptResult {
+  return {
+    terminal: attemptTerminal.normalize({
+      promptError: params.promptError ?? params.message,
+      promptErrorSource: "prompt",
+    }),
+    sessionIdUsed: params.params.sessionId,
+    messagesSnapshot: params.messagesSnapshot,
+    assistantTexts: [],
+    toolMetas: [],
+    lastAssistant: undefined,
+    currentAttemptAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    messagingToolSourceReplyPayloads: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: {
+      hadPotentialSideEffects: false,
+      replaySafe: true,
+    },
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    systemPromptReport: params.systemPromptReport,
+  };
+}
+
+export function isInvalidCodexImagePayloadError(message: unknown): boolean {
+  if (typeof message !== "string" || !message.trim()) {
+    return false;
+  }
+  const normalizedMessage = message.replace(/[_-]+/gu, " ");
+  return (
+    /\b(?:invalid|malformed)\b[\s\S]{0,120}\b(?:image|image url|base64)\b/iu.test(
+      normalizedMessage,
+    ) ||
+    /\b(?:image|image url|base64)\b[\s\S]{0,120}\b(?:invalid|malformed)\b/iu.test(normalizedMessage)
+  );
+}

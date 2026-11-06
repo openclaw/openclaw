@@ -1,0 +1,304 @@
+---
+summary: "Agent workspace: location, layout, and backup strategy"
+read_when:
+  - You need to explain the agent workspace or its file layout
+  - You want to back up or migrate an agent workspace
+title: "Agent workspace"
+sidebarTitle: "Agent workspace"
+---
+
+The workspace is the agent's home: the working directory used for file tools
+and workspace context. Keep it private and treat it as memory.
+
+This is separate from `~/.openclaw/`, which stores config, credentials, and sessions.
+
+<Warning>
+The workspace is the **default cwd**, not a hard sandbox. Tools resolve relative paths against the workspace, but absolute paths can still reach elsewhere on the host unless sandboxing is enabled. If you need isolation, use [`agents.defaults.sandbox`](/gateway/sandboxing) (and/or per-agent sandbox config).
+
+When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
+</Warning>
+
+On the host, workspace-contained OpenClaw file tools also allow registered Git
+linked worktrees of the workspace's repository. Each write checks the current
+registration and resolves filesystem aliases; a copied `.git` file alone grants
+no access. Other repositories and Git metadata remain outside this scope.
+Container sandbox mounts keep their own boundaries.
+
+## Default location
+
+- Default: `~/.openclaw/workspace`
+- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw-<profile>/workspace`.
+- `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
+- A non-default `OPENCLAW_STATE_DIR` keeps the default workspace at `<state-dir>/workspace`, including scheduled maintenance and the initial `main` agent entry.
+- A sole configured agent inherits the default workspace unless its entry sets `workspace`.
+- In an explicit multi-agent roster, entries without `workspace` use `<agents.defaults.workspace>/<agentId>` when that root is configured, or `<state-dir>/workspace-<agentId>` otherwise. Naming a shared root does not assign it to an agent.
+
+Override in `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+    },
+  },
+}
+```
+
+Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries. For an unpinned system agent in an explicit roster, `openclaw doctor --fix` copies its files into one workspace and pins it ([Agent roster migration](/gateway/doctor/config-migrations#agent-roster-migration)).
+
+Run workspace selection rejects an explicitly supplied blank or invalid agent ID. Omit the selector to use configured ownership, or supply the intended agent ID.
+
+`openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
+
+Already-provisioned workspaces can continue if packaged templates are unavailable.
+Creating missing files still requires a working template installation.
+
+<Note>
+Sandbox seed copies only accept regular in-workspace files; symlink/hardlink aliases that resolve outside the source workspace are ignored.
+</Note>
+
+If you already manage the workspace files yourself, disable bootstrap file creation:
+
+```json5
+{ agents: { defaults: { skipBootstrap: true } } }
+```
+
+## Sharing generated memory files
+
+For a workspace shared with trusted local users, set
+`agents.defaults.workspaceFileMode` or override it with
+`agents.entries.<agentId>.workspaceFileMode`:
+
+```json5
+{
+  agents: {
+    defaults: { workspaceFileMode: "0660" },
+    entries: { main: { workspace: "/srv/shared/openclaw" } },
+  },
+}
+```
+
+Accepted values are the octal strings `"0600"`, `"0620"`, `"0640"`, and `"0660"`.
+The setting applies only when memory-core creates `DREAMS.md`, `MEMORY.md`, or
+reports under `memory/dreaming/`. Existing files keep their permissions. Daily
+memory files and the session corpus under `memory/.dreams/` keep their private
+creation mode, as do configuration, credentials, logs, and other state.
+
+When configured, the host writing the file applies its own umask. For example,
+`"0660"` with umask `022` creates mode `0640`; a remote workspace uses the remote
+host's umask. When unset, new files retain the exact private mode `0600`.
+
+Provision directory traversal permissions and default ACLs separately. This
+setting does not repair directory access or grant access to a user absent from
+the directory's group or ACL. Generated memory can contain sensitive information;
+share it only with users who should read it.
+
+## Extra workspace folders
+
+Older installs may have created `~/openclaw`. Each agent uses one resolved workspace; keeping extra directories does not merge their persona or memory files into the active workspace.
+
+<Note>
+Keep each agent's workspace path explicit when retaining older directories. Before switching back to an older workspace, stop the Gateway, configure the intended path, run [`openclaw doctor --fix`](/cli/doctor) to migrate retired setup state, and restart. Doctor also discovers legacy setup files in a still-configured `agents.defaults.workspace` root even when no agent currently uses that root directly. Archive unused folders only after verifying which files you want to retain.
+</Note>
+
+## Workspace file map
+
+Use **Settings → Agents → Files** in the Control UI to edit these files. **Preview** shows the current draft; **Edit** returns to the editor so you can continue typing, while **Close** returns to **Preview**.
+
+Standard files OpenClaw expects inside the workspace:
+
+<AccordionGroup>
+  <Accordion title="AGENTS.md - operating instructions">
+    Operating instructions for the agent and how it should use memory. Loaded at the start of every session. Good place for rules, priorities, and "how to behave" details. Template: [AGENTS.md](/reference/templates/AGENTS).
+  </Accordion>
+  <Accordion title="SOUL.md - persona and tone">
+    Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
+  </Accordion>
+  <Accordion title="USER.md - directive-based user model (optional)">
+    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
+  </Accordion>
+  <Accordion title="IDENTITY.md - name, vibe, emoji">
+    The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual. Template: [IDENTITY.md](/reference/templates/IDENTITY).
+  </Accordion>
+  <Accordion title="AGENTS.md Tools section - local tool conventions">
+    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance. Template: [AGENTS.md Tools section](/reference/templates/AGENTS#tools).
+  </Accordion>
+  <Accordion title="BOOT.md - startup checklist">
+    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks/bundled-hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends. Template: [BOOT.md](/reference/templates/BOOT).
+  </Accordion>
+  <Accordion title="BOOTSTRAP.md - first-run ritual">
+    One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete. Template: [BOOTSTRAP.md](/reference/templates/BOOTSTRAP).
+  </Accordion>
+  <Accordion title="memory/YYYY-MM-DD.md - daily memory log">
+    Daily memory log (one file per day). Recommended to read today + yesterday on session start.
+  </Accordion>
+  <Accordion title="MEMORY.md - curated long-term memory (optional)">
+    Curated long-term memory: durable non-profile facts, decisions, and short summaries. Keep detailed logs in `memory/YYYY-MM-DD.md` so memory tools can retrieve them on demand without injecting them into every prompt. Only load `MEMORY.md` in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
+  </Accordion>
+  <Accordion title="skills/ - workspace skills (optional)">
+    Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
+</Note>
+
+The workspace document editor and `agents.files.set` accept up to 2 MiB of UTF-8 text per file. Larger saves are rejected before replacing the existing document. This byte limit is separate from prompt truncation settings and the identity form's avatar support.
+
+## What is NOT in the workspace
+
+These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
+
+- `~/.openclaw/openclaw.json` (config)
+- `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, session rows, transcripts, memory index state, and other per-agent runtime durability)
+- `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
+- `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
+- `~/.openclaw/agents/<agentId>/sessions/` (legacy migration sources and archive/support artifacts)
+- `~/.openclaw/skills/` (managed skills)
+
+If you need to migrate sessions or config, copy them separately and keep them out of version control.
+
+Older OpenClaw releases wrote `openclaw-workspace-state.json` and `.attested`
+workspace sidecars. Current
+runtime uses only the shared SQLite database for that state. If Doctor reports
+one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
+state and deletes a source only after verifying the database rows. Empty reserved
+hashed files under `workspace-attestations/` are discarded because they contain
+no importable state; other unreadable sources stay in place and Doctor names
+their paths.
+
+The pre-July `.openclaw/workspace-state.json` layout is outside the supported
+migration window. Upgrade through `2026.9.7` and run `openclaw doctor --fix` there
+before updating; current Doctor leaves that file untouched. See the
+[retention policy](/gateway/doctor/config-migrations#retention-policy).
+
+## Git backup (recommended, private)
+
+Treat the workspace as private memory. Put it in a **private** git repo so it is backed up and recoverable.
+
+Git is optional. An empty `.git` directory is treated as a non-Git workspace and
+left untouched. Partial Git metadata or a linked worktree whose metadata is missing
+still blocks Git operations with checkout-preservation guidance; repair the original
+repository metadata before retrying.
+
+Commit timing follows your instructions and workspace conventions. A pending
+`BOOTSTRAP.md` does not require committing edits before you review them.
+
+Run these steps on the machine where the Gateway runs (that is where the workspace lives).
+
+<Steps>
+  <Step title="Initialize the repo">
+    If git is installed, brand-new workspaces are initialized automatically. If this workspace is not already a repo, run:
+
+    ```bash
+    cd ~/.openclaw/workspace
+    git init
+    git add AGENTS.md SOUL.md IDENTITY.md USER.md memory/
+    git commit -m "Add agent workspace"
+    ```
+
+  </Step>
+  <Step title="Add a private remote">
+    <Tabs>
+      <Tab title="GitHub web UI">
+        1. Create a new **private** repository on GitHub.
+        2. Do not initialize with a README (avoids merge conflicts).
+        3. Copy the HTTPS remote URL.
+        4. Add the remote and push:
+
+        ```bash
+        git branch -M main
+        git remote add origin <https-url>
+        git push -u origin main
+        ```
+      </Tab>
+      <Tab title="GitHub CLI (gh)">
+        ```bash
+        gh auth login
+        gh repo create openclaw-workspace --private --source . --remote origin --push
+        ```
+      </Tab>
+      <Tab title="GitLab web UI">
+        1. Create a new **private** repository on GitLab.
+        2. Do not initialize with a README (avoids merge conflicts).
+        3. Copy the HTTPS remote URL.
+        4. Add the remote and push:
+
+        ```bash
+        git branch -M main
+        git remote add origin <https-url>
+        git push -u origin main
+        ```
+      </Tab>
+    </Tabs>
+
+  </Step>
+  <Step title="Ongoing updates">
+    ```bash
+    git status
+    git add .
+    git commit -m "Update memory"
+    git push
+    ```
+  </Step>
+</Steps>
+
+## Do not commit secrets
+
+<Warning>
+Even in a private repo, avoid storing secrets in the workspace:
+
+- API keys, OAuth tokens, passwords, or private credentials.
+- Anything under `~/.openclaw/`.
+- Raw dumps of chats or sensitive attachments.
+
+If you must store sensitive references, use placeholders and keep the real secret elsewhere (password manager, environment variables, or `~/.openclaw/`).
+</Warning>
+
+Suggested `.gitignore` starter:
+
+```gitignore
+.DS_Store
+.env
+**/*.key
+**/*.pem
+**/secrets*
+```
+
+## Moving the workspace to a new machine
+
+<Steps>
+  <Step title="Clone the repo">
+    Clone the repo to the desired path (default `~/.openclaw/workspace`).
+  </Step>
+  <Step title="Update config">
+    Set `agents.entries.<agentId>.workspace` to the cloned path in `~/.openclaw/openclaw.json` for the agent that should use it. A sole agent without a per-agent override can use `agents.defaults.workspace` instead; in a multi-agent roster, that setting only changes the base directory for unpinned entries.
+  </Step>
+  <Step title="Verify the workspace">
+    Run `openclaw agents list` and confirm that the intended agent points to the cloned path before starting the Gateway. Moving an existing workspace does not require rerunning onboarding.
+  </Step>
+  <Step title="Copy sessions (optional)">
+    If you need sessions, copy `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    from the old machine separately. Copy `~/.openclaw/agents/<agentId>/sessions/`
+    only when you also need legacy migration inputs or archive/support artifacts.
+  </Step>
+</Steps>
+
+## Advanced notes
+
+- Multi-agent routing can use different workspaces per agent via `agents.entries.*.workspace`. See [Channel routing](/channels/channel-routing) for routing configuration.
+- If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox workspaces under `agents.defaults.sandbox.workspaceRoot`.
+
+## Related
+
+- [Backups](/install/backups) - archives, per-database snapshots, scheduling, and offsite copies of state and workspace
+- [Bootstrapping](/start/bootstrapping) - the first-run ritual that seeds a new workspace and its identity files
+- [Default AGENTS.md](/reference/AGENTS.default) - the default agent instructions and skills roster placed in the workspace
+- [Heartbeat](/gateway/heartbeat) - heartbeat monitors and cron scratch
+- [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
+- [Session](/concepts/session) - session storage paths
+- [Standing orders](/automation/standing-orders) - persistent instructions in workspace files
+- [System prompt](/concepts/system-prompt) - where workspace files are injected into the prompt

@@ -1,0 +1,586 @@
+import { randomUUID } from "node:crypto";
+import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
+import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveLineAccount } from "./accounts.js";
+import { messageAction, normalizeLineMessage } from "./actions.js";
+import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import { normalizeLineMessagingTarget } from "./messaging-target.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
+import { recordLineSentMessages } from "./outbound-message-log.js";
+import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
+import { findLineHttpError, runLinePushWithRetries } from "./send-retry.js";
+import type { LineChannelData, LineOutboundMediaKind, LineSendResult } from "./types.js";
+
+type Message = messagingApi.Message;
+type TextMessage = messagingApi.TextMessage;
+type LocationMessage = messagingApi.LocationMessage;
+type FlexContainer = messagingApi.FlexContainer;
+type TemplateMessage = messagingApi.TemplateMessage;
+type QuickReply = messagingApi.QuickReply;
+type QuickReplyItem = messagingApi.QuickReplyItem;
+type LineLocation = NonNullable<LineChannelData["location"]>;
+
+type LineUserProfile = { displayName: string; pictureUrl?: string };
+const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PROFILE_CACHE_MAX_ENTRIES = 1000;
+const profileCache = createStaleWhileRevalidateCache<LineUserProfile | null>({
+  maxEntries: PROFILE_CACHE_MAX_ENTRIES,
+  ttlMs: PROFILE_CACHE_TTL_MS,
+});
+const groupNameCache = createStaleWhileRevalidateCache<string | undefined>({
+  maxEntries: PROFILE_CACHE_MAX_ENTRIES,
+  ttlMs: PROFILE_CACHE_TTL_MS,
+});
+const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+const LINE_LOCATION_LABEL_LIMIT = 100;
+// This cap bounds receipts and diagnostics: overflow after acceptance becomes no-retry partial
+// delivery, while rejected responses keep their status with prefix-only diagnostics.
+const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
+
+interface LineSendOpts {
+  cfg: OpenClawConfig;
+  channelAccessToken?: string;
+  accountId?: string;
+  mediaUrl?: string;
+  mediaKind?: LineOutboundMediaKind;
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
+  quoteToken?: string;
+  /** Revalidate immediately before every provider attempt, including retries. */
+  authorize?: () => boolean | Promise<boolean>;
+  assertDirectAdapterHandoff?: () => void;
+}
+
+type LineClientOpts = Pick<LineSendOpts, "cfg" | "channelAccessToken" | "accountId">;
+type LinePushOpts = Pick<
+  LineSendOpts,
+  | "cfg"
+  | "channelAccessToken"
+  | "accountId"
+  | "quoteToken"
+  | "authorize"
+  | "assertDirectAdapterHandoff"
+>;
+
+function resolveLineProviderMessageIds(
+  response: messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse,
+  operation: "push" | "reply",
+): { messageId: string; messageIds: string[] } {
+  const sentMessages = Array.isArray(response?.sentMessages) ? response.sentMessages : [];
+  const messageIds = sentMessages.flatMap((entry) => {
+    const id = entry && typeof entry === "object" ? entry.id : undefined;
+    const messageId = typeof id === "string" ? id.trim() : "";
+    return messageId ? [messageId] : [];
+  });
+  const messageId = messageIds[0];
+  if (!messageId || messageIds.length !== sentMessages.length) {
+    // A successful LINE response means delivery was accepted even when its receipt is malformed.
+    throw createChannelPartialDeliveryError(
+      new Error(`LINE ${operation} response did not include a sent message id`),
+      { messageIds, visibleReplySent: true },
+    );
+  }
+  return { messageId, messageIds };
+}
+
+function normalizeTarget(to: string): string {
+  const normalized = normalizeLineMessagingTarget(to);
+  if (!normalized) {
+    throw new Error("Recipient is required for LINE sends");
+  }
+
+  // Real LINE chat ids are a capital C/U/R followed by 32 lowercase hex chars
+  // (33 chars total) and are case-sensitive — push returns HTTP 400 otherwise.
+  // Reject values that match the LINE id shape but lost their leading capital
+  // so the failure is surfaced as a permanent error (recovery moves the entry
+  // to failed/ immediately instead of silently retrying 5 times). Short test
+  // fixtures (e.g. "U123") are left alone. openclaw/openclaw#81628
+  if (normalized.length >= 33 && !/^[CUR]/.test(normalized)) {
+    throw new Error(
+      `Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): ${truncateUtf16Safe(normalized, 4)}…`,
+    );
+  }
+
+  return normalized;
+}
+
+function resolveLineMessagingAccount(opts: LineClientOpts) {
+  const cfg = requireRuntimeConfig(opts.cfg, "LINE send");
+  const account = resolveLineAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
+  return { account, token };
+}
+
+type LineProviderRequest = messagingApi.PushMessageRequest | messagingApi.ReplyMessageRequest;
+type LineProviderResponse = messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse;
+
+async function sendLineProviderMessages(
+  operation: "push" | "reply",
+  token: string,
+  request: LineProviderRequest,
+  retryKey?: string,
+  authorize?: LineSendOpts["authorize"],
+  assertDirectAdapterHandoff?: () => void,
+): Promise<LineProviderResponse> {
+  try {
+    return await postLineProviderMessages(
+      operation,
+      token,
+      request,
+      retryKey,
+      authorize,
+      assertDirectAdapterHandoff,
+    );
+  } catch (error) {
+    // LINE refuses the whole request for a quote token it no longer accepts and
+    // names no field in the answer, so a quoted reply would simply disappear.
+    // A 400 is LINE rejecting that request atomically, so nothing was delivered
+    // and offering the same messages without their quote cannot duplicate it.
+    const unquoted =
+      findLineHttpError(error)?.status === 400
+        ? withoutLineQuoteTokens(request.messages)
+        : undefined;
+    if (!unquoted) {
+      throw error;
+    }
+    return await postLineProviderMessages(
+      operation,
+      token,
+      { ...request, messages: unquoted },
+      retryKey,
+      authorize,
+      assertDirectAdapterHandoff,
+    );
+  }
+}
+
+async function postLineProviderMessages(
+  operation: "push" | "reply",
+  token: string,
+  request: LineProviderRequest,
+  retryKey?: string,
+  authorize?: LineSendOpts["authorize"],
+  assertDirectAdapterHandoff?: () => void,
+): Promise<LineProviderResponse> {
+  const effect = captureEffectAuthority();
+  const requestBody = JSON.stringify(request);
+  if (authorize) {
+    const authorized = authorize();
+    // A synchronous handoff check and the request must share one execution turn.
+    if (!(typeof authorized === "boolean" ? authorized : await authorized)) {
+      throw new Error("LINE send authorization denied");
+    }
+  }
+  const response = await effect.initiate(() => {
+    assertDirectAdapterHandoff?.();
+    return fetchWithRuntimeDispatcherOrMockedGlobal(
+      `https://api.line.me/v2/bot/message/${operation}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
+          ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
+        },
+        body: requestBody,
+      },
+    );
+  });
+
+  // LINE answers a retried key with 409 and the accepted request's sent messages
+  // instead of delivering the batch a second time, so that conflict is the
+  // earlier attempt's success rather than a failure of this one.
+  const acceptedRetryConflict = retryKey !== undefined && response.status === 409;
+
+  if (!response.ok && !acceptedRetryConflict) {
+    const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
+      () => "",
+    );
+    // A proxy or LINE-compatible endpoint can reflect the request's Authorization
+    // token in the error body; mask it before the error reaches logs or diagnostics.
+    const redactedBody = redactToolPayloadText(body);
+    throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      body: redactedBody,
+    });
+  }
+
+  try {
+    return await readProviderJsonResponse<LineProviderResponse>(
+      response,
+      `LINE ${operation} response`,
+      { maxBytes: LINE_PROVIDER_RESPONSE_MAX_BYTES },
+    );
+  } catch (error) {
+    // LINE accepted this exact request before its receipt became unreadable; retrying duplicates it.
+    throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
+  }
+}
+
+export function createLocationMessage(location: LineLocation): LocationMessage | TextMessage {
+  // LINE rejects blank labels atomically. Keep the authored text and coordinates,
+  // bounded by the same label cap, when the location cannot render as a pin.
+  if (!location.title.trim() || !location.address.trim()) {
+    const authored = [location.title, location.address]
+      .map((label) => truncateUtf16Safe(label.trim(), LINE_LOCATION_LABEL_LIMIT))
+      .filter(Boolean);
+    return {
+      type: "text",
+      text: [...authored, `${location.latitude}, ${location.longitude}`].join("\n"),
+    };
+  }
+  return {
+    type: "location",
+    title: truncateUtf16Safe(location.title, LINE_LOCATION_LABEL_LIMIT),
+    address: truncateUtf16Safe(location.address, LINE_LOCATION_LABEL_LIMIT),
+    latitude: location.latitude,
+    longitude: location.longitude,
+  };
+}
+
+function recordLineOutboundActivity(
+  accountId: string,
+  delivery: { messageIds: string[]; receipt?: LineSendResult["receipt"] },
+): void {
+  // Every LINE send funnels through here, so this is where the ids a later quote
+  // can point at become known.
+  recordLineSentMessages(accountId, delivery.messageIds);
+  try {
+    recordChannelActivity({
+      channel: "line",
+      accountId,
+      direction: "outbound",
+    });
+  } catch (error) {
+    // Provider delivery is already final; retain its identity if local bookkeeping fails.
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: delivery.messageIds,
+      ...(delivery.receipt ? { receipt: delivery.receipt } : {}),
+      visibleReplySent: true,
+    });
+  }
+}
+
+function resolveLineReceiptKind(messages: readonly Message[]) {
+  const types = new Set(messages.map((message) => message.type));
+  if (types.has("audio")) {
+    return "voice";
+  }
+  if (types.has("image") || types.has("video")) {
+    return "media";
+  }
+  if (types.has("flex") || types.has("template") || types.has("location")) {
+    return "card";
+  }
+  if (types.has("text")) {
+    return "text";
+  }
+  return "unknown";
+}
+
+async function pushLineMessages(
+  to: string,
+  messages: Message[],
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  if (messages.length === 0) {
+    throw new Error("Message must be non-empty for LINE sends");
+  }
+
+  const { account, token } = resolveLineMessagingAccount(opts);
+  const chatId = normalizeTarget(to);
+  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
+    normalizeLineMessage,
+  );
+  // One retry key per logical push: every attempt reuses it so LINE deduplicates
+  // an attempt that was accepted before its outcome reached us.
+  const retryKey = randomUUID();
+
+  const response = await runLinePushWithRetries(
+    () =>
+      sendLineProviderMessages(
+        "push",
+        token,
+        { to: chatId, messages: normalizedMessages },
+        retryKey,
+        opts.authorize,
+        opts.assertDirectAdapterHandoff,
+      ),
+    "line:push",
+  );
+  const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
+  const result: LineSendResult = {
+    messageId,
+    chatId,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: messageIds.map((providerMessageId) => ({
+        channel: "line",
+        messageId: providerMessageId,
+        chatId,
+        conversationId: chatId,
+        meta: { messageCount: messages.length },
+      })),
+      ...(chatId ? { threadId: chatId } : {}),
+      kind: resolveLineReceiptKind(messages),
+    }),
+  };
+
+  recordLineOutboundActivity(account.accountId, { messageIds, receipt: result.receipt });
+
+  return result;
+}
+
+export async function pushMessageLine(
+  to: string,
+  text: string,
+  opts: LineSendOpts,
+): Promise<LineSendResult> {
+  const chatId = normalizeTarget(to);
+  const messages: Message[] = [];
+
+  const mediaUrl = opts.mediaUrl?.trim();
+  if (mediaUrl) {
+    messages.push(
+      await buildLineMediaMessage(
+        mediaUrl,
+        {
+          mediaKind: opts.mediaKind,
+          previewImageUrl: opts.previewImageUrl,
+          durationMs: opts.durationMs,
+          trackingId: opts.trackingId,
+        },
+        chatId,
+      ),
+    );
+  }
+
+  if (text?.trim()) {
+    messages.push({ type: "text", text: text.trim() });
+  }
+
+  return pushLineMessages(chatId, messages, opts);
+}
+
+export async function replyMessageLine(
+  replyToken: string,
+  messages: Message[],
+  opts: LinePushOpts,
+): Promise<void> {
+  const { account, token } = resolveLineMessagingAccount(opts);
+  const normalizedMessages = applyLineQuoteToken(messages, opts.quoteToken).map(
+    normalizeLineMessage,
+  );
+  const response = await sendLineProviderMessages(
+    "reply",
+    token,
+    { replyToken, messages: normalizedMessages },
+    undefined,
+    opts.authorize,
+    opts.assertDirectAdapterHandoff,
+  );
+  const { messageIds } = resolveLineProviderMessageIds(response, "reply");
+  recordLineOutboundActivity(account.accountId, { messageIds });
+}
+
+export async function pushMessagesLine(
+  to: string,
+  messages: Message[],
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  return pushLineMessages(to, messages, opts);
+}
+
+export function createFlexMessage(
+  altText: string,
+  contents: messagingApi.FlexContainer,
+): messagingApi.FlexMessage {
+  return {
+    type: "flex",
+    altText: truncateUtf16Safe(altText, LINE_FLEX_ALT_TEXT_LIMIT),
+    contents,
+  };
+}
+
+export async function pushLocationMessage(
+  to: string,
+  location: LineLocation,
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  return pushLineMessages(to, [createLocationMessage(location)], opts);
+}
+
+export async function pushFlexMessage(
+  to: string,
+  altText: string,
+  contents: FlexContainer,
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  return pushLineMessages(to, [createFlexMessage(altText, contents)], opts);
+}
+
+export async function pushTemplateMessage(
+  to: string,
+  template: TemplateMessage,
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  return pushLineMessages(to, [template], opts);
+}
+
+export async function pushTextMessageWithQuickReplies(
+  to: string,
+  text: string,
+  quickReplyLabels: string[],
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  return pushLineMessages(
+    to,
+    [{ type: "text", text, quickReply: createQuickReplyItems(quickReplyLabels) }],
+    opts,
+  );
+}
+
+export function createQuickReplyItems(labels: string[]): QuickReply {
+  const items: QuickReplyItem[] = labels
+    .map((label) => label.trim())
+    .filter(Boolean)
+    .slice(0, 13)
+    .map((label) => ({
+      type: "action",
+      action: messageAction(label, label),
+    }));
+  return { items };
+}
+
+export async function showLoadingAnimation(chatId: string, opts: LineClientOpts): Promise<void> {
+  const { token } = resolveLineMessagingAccount(opts);
+  const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+
+  try {
+    await client.showLoadingAnimation({
+      chatId: normalizeTarget(chatId),
+      loadingSeconds: 20,
+    });
+  } catch (err) {
+    logVerbose(`line: loading animation failed (non-fatal): ${String(err)}`);
+  }
+}
+
+export type LineConversationScope = { groupId?: string; roomId?: string };
+
+function lineProfileCacheKey(
+  accountId: string,
+  userId: string,
+  scope: LineConversationScope,
+): string {
+  const conversation = scope.groupId
+    ? ["group", scope.groupId]
+    : scope.roomId
+      ? ["room", scope.roomId]
+      : ["direct"];
+  return JSON.stringify([accountId, "profile", ...conversation, userId]);
+}
+
+// A group or room member who has not added the bot as a friend is invisible to
+// the plain profile endpoint, so the sender's conversation decides which one can
+// answer. Reading the wrong one returns 404 for exactly the people whose names
+// matter most in a group.
+function fetchLineMemberProfile(
+  client: messagingApi.MessagingApiClient,
+  userId: string,
+  scope: LineConversationScope,
+): Promise<{ displayName: string; pictureUrl?: string }> {
+  if (scope.groupId) {
+    return client.getGroupMemberProfile(scope.groupId, userId);
+  }
+  if (scope.roomId) {
+    return client.getRoomMemberProfile(scope.roomId, userId);
+  }
+  return client.getProfile(userId);
+}
+
+export async function getUserProfile(
+  userId: string,
+  opts: LineClientOpts & LineConversationScope,
+): Promise<LineUserProfile | null> {
+  try {
+    // Client construction resolves the canonical account for the cache key and
+    // can throw; an unresolvable name must never cost the inbound turn.
+    const { account, token } = resolveLineMessagingAccount(opts);
+    const cacheKey = lineProfileCacheKey(account.accountId, userId, opts);
+    const load = async () => {
+      try {
+        const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+        const profile = await fetchLineMemberProfile(client, userId, opts);
+        return { displayName: profile.displayName, pictureUrl: profile.pictureUrl };
+      } catch (err) {
+        logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
+        return null;
+      }
+    };
+    return (await profileCache.read(cacheKey, load, { allowStale: false })).value;
+  } catch (err) {
+    logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
+    return null;
+  }
+}
+
+export async function getUserDisplayName(
+  userId: string,
+  opts: LineClientOpts & LineConversationScope,
+): Promise<string> {
+  const profile = await getUserProfile(userId, opts);
+  return profile?.displayName ?? userId;
+}
+
+// LINE never puts the group name in a webhook, and multi-person rooms have no
+// name endpoint at all, so only groups can be named and only by asking.
+export async function getLineGroupName(
+  groupId: string,
+  opts: LineClientOpts,
+): Promise<string | undefined> {
+  try {
+    const { account, token } = resolveLineMessagingAccount(opts);
+    const cacheKey = JSON.stringify([account.accountId, "group", groupId]);
+    return (
+      await groupNameCache.read(
+        cacheKey,
+        async () => {
+          try {
+            const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+            const summary = await client.getGroupSummary(groupId);
+            return summary.groupName.trim() || undefined;
+          } catch (err) {
+            logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+            return undefined;
+          }
+        },
+        { allowStale: false },
+      )
+    ).value;
+  } catch (err) {
+    logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+    return undefined;
+  }
+}

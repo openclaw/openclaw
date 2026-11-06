@@ -1,0 +1,87 @@
+/* @vitest-environment jsdom */
+
+import type { RouteLocation } from "@openclaw/uirouter";
+import { createComponent, createSignal, flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
+import { CustodianRoute } from "./custodian-page.tsx";
+import { page, type CustodianRouteData } from "./route.tsx";
+
+function location(search: string): RouteLocation {
+  return { pathname: "/custodian", search, hash: "" };
+}
+
+function loadRoute(search: string): CustodianRouteData {
+  if (!page.loader) {
+    throw new Error("custodian route has no loader");
+  }
+  return page.loader(
+    {} as ApplicationContext,
+    createRouteLoaderOptions(location(search), search),
+  ) as CustodianRouteData;
+}
+
+function createContext(): ApplicationContext {
+  const harness = createCustodianContext(vi.fn(), []);
+  harness.setGatewaySnapshot({ client: null, phase: "stopped", hello: null });
+  harness.context.agents.state.agentsList = null;
+  return harness.context;
+}
+
+afterEach(() => {
+  document.body.replaceChildren();
+});
+
+describe("custodian route", () => {
+  it("keys and resolves route data from onboarding search", () => {
+    const context = {} as ApplicationContext;
+    expect(page.loaderDeps?.(context, location(""))).toBe("");
+    expect(loadRoute("")).toEqual({ onboarding: false, intent: null });
+    expect(loadRoute("?onboarding=1")).toEqual({ onboarding: true, intent: null });
+    expect(loadRoute("?intent=new-agent")).toEqual({ onboarding: false, intent: "new-agent" });
+  });
+
+  it("renders mode-specific framing", async () => {
+    const provider = createSolidApplicationContextProvider(createContext());
+
+    const [data, setData] = createSignal<CustodianRouteData>();
+    const { container } = mountSolid(
+      () =>
+        createComponent(CustodianRoute, {
+          get data() {
+            return data();
+          },
+        }),
+      { wrapper: provider.wrapper },
+    );
+    flush();
+    expect(container.querySelector("openclaw-custodian-page")).toBeNull();
+
+    setData({ onboarding: false, intent: null });
+    flush();
+    const normalPage = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-custodian-page",
+    );
+    await normalPage?.updateComplete;
+    expect(normalPage?.querySelector(".custodian__header .btn")).toBeNull();
+    expect(normalPage?.querySelector(".custodian__header p")?.textContent?.trim()).toBe(
+      "System setup and care.",
+    );
+
+    setData({ onboarding: true, intent: null });
+    flush();
+    const onboardingPage = container.querySelector<
+      HTMLElement & { updateComplete: Promise<boolean> }
+    >("openclaw-custodian-page");
+    await onboardingPage?.updateComplete;
+    expect(onboardingPage?.querySelector(".custodian__header .btn")).not.toBeNull();
+    // Onboarding renders the minimal header: actions only, no identity block.
+    expect(onboardingPage?.querySelector(".custodian__header--minimal")).not.toBeNull();
+    expect(onboardingPage?.querySelector(".custodian__header p")).toBeNull();
+    expect(onboardingPage?.querySelector(".custodian__identity")).toBeNull();
+  });
+});

@@ -1,0 +1,164 @@
+---
+summary: "Deploy OpenClaw on Render with Infrastructure-as-Code"
+read_when:
+  - Deploying OpenClaw to Render
+  - You want a declarative cloud deploy with Render Blueprints
+title: "Render"
+---
+
+Deploy OpenClaw on [Render](https://render.com) using the repo's `render.yaml` Blueprint. It declares the service, disk, and environment variables in one file.
+
+## Prerequisites
+
+- A [Render account](https://render.com) (free tier available)
+- An API key from your preferred [model provider](/providers)
+
+## Deploy
+
+[Deploy to Render](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
+
+This creates a Render service from `render.yaml`, builds the Docker image, and deploys it. Your service URL follows the pattern `https://<service-name>.onrender.com`.
+
+## The Blueprint
+
+```yaml
+services:
+  - type: web
+    name: openclaw
+    runtime: docker
+    plan: starter
+    dockerCommand: node openclaw.mjs gateway --allow-unconfigured
+    healthCheckPath: /startupz
+    envVars:
+      - key: OPENCLAW_GATEWAY_PORT
+        value: "8080"
+      - key: OPENCLAW_STATE_DIR
+        value: /data/.openclaw
+      - key: OPENCLAW_WORKSPACE_DIR
+        value: /data/workspace
+      - key: OPENCLAW_GATEWAY_TOKEN
+        generateValue: true # auto-generates a secure token
+    disk:
+      name: openclaw-data
+      mountPath: /data
+      sizeGB: 1
+```
+
+| Feature               | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `runtime: docker`     | Builds from the repo's Dockerfile                                |
+| `healthCheckPath`     | Render admits traffic after `/startupz` reports startup complete |
+| `generateValue: true` | Auto-generates a cryptographically secure value                  |
+| `disk`                | Persistent storage that survives redeploys                       |
+
+## Choosing a plan
+
+| Plan      | Spin-down         | Disk          | Best for                      |
+| --------- | ----------------- | ------------- | ----------------------------- |
+| Free      | After 15 min idle | Not available | Testing, demos                |
+| Starter   | Never             | 1GB+          | Personal use, small teams     |
+| Standard+ | Never             | 1GB+          | Production, multiple channels |
+
+The Blueprint defaults to `starter`. To use the free tier, change `plan: free` **and delete the `disk:` block** in your fork's `render.yaml`; Render rejects a Blueprint that attaches a persistent disk to a free instance. Without that disk, OpenClaw state resets on every deploy.
+
+## After deployment
+
+### Access the Control UI
+
+The web dashboard is available at `https://<your-service>.onrender.com/`. Connect using the shared secret: the auto-generated `OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service → Environment**), or your password if you switched to password auth.
+
+### Logs
+
+**Dashboard → your service → Logs** shows build logs (Docker image creation), deploy logs (service startup), and runtime logs (application output).
+
+### Shell access
+
+**Dashboard → your service → Shell** opens a shell session. The persistent disk is mounted at `/data`.
+
+### Environment variables
+
+Edit variables in **Dashboard → your service → Environment**. Changes trigger an automatic redeploy.
+
+### Auto-deploy
+
+Render redeploys automatically when the connected repo's branch gets a new commit. If you deployed straight from `openclaw/openclaw` instead of your own fork, you have no push access to trigger that, so update by running a manual Blueprint sync from the Dashboard, or point the service at your own fork.
+
+## Custom domain
+
+1. **Dashboard → your service → Settings → Custom Domains**
+2. Add your domain
+3. Configure DNS as instructed (CNAME to `*.onrender.com`)
+4. Render provisions a TLS certificate automatically
+
+## Scaling
+
+- **Vertical**: change the plan for more CPU/RAM. Usually sufficient for OpenClaw.
+- **Horizontal**: increase instance count (Standard plan and above). Requires sticky sessions or external state management since OpenClaw keeps runtime state on the local disk.
+
+## Backups and migration
+
+From the Render Dashboard shell, export state, config, auth profiles, and workspace at any time:
+
+```bash
+openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+```
+
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
+
+## Troubleshooting
+
+### Service will not start
+
+Check the deploy logs in the Render Dashboard. Common issues:
+
+- Missing `OPENCLAW_GATEWAY_TOKEN` — verify it is set in **Dashboard → Environment**
+- Port mismatch — set `OPENCLAW_GATEWAY_PORT=8080` so the gateway binds to the port Render expects
+
+### Slow cold starts (free tier)
+
+Free tier services spin down after 15 minutes of inactivity; the first request after spin-down takes a few seconds while the container starts. Upgrade to Starter for always-on.
+
+### Data loss after redeploy
+
+Happens on the free tier (no persistent disk). Upgrade to a paid plan, or regularly export a backup with `openclaw backup create` from the Render shell.
+
+### Health check failures
+
+If builds succeed but deploys fail, the service may be taking too long to start or `/startupz` may not be reachable. Check:
+
+- Build logs for errors
+- Whether the container runs locally with the same image and command Render uses
+
+Reproduce the Render container locally from a checkout of the repository:
+
+```bash
+docker build -t openclaw:local -f Dockerfile .
+docker run --rm -p 8080:8080 \
+  -e OPENCLAW_GATEWAY_PORT=8080 \
+  -e OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)" \
+  openclaw:local node openclaw.mjs gateway --allow-unconfigured
+```
+
+The token is required, not optional: in a container the Gateway selects the
+auto bind mode, and it refuses to bind a non-loopback address without a shared
+secret. `--allow-unconfigured` waives the configuration prerequisite, not that
+guard. Render supplies the value from the blueprint's `generateValue: true`; a
+throwaway one is fine locally.
+
+Leave `OPENCLAW_STATE_DIR` and `OPENCLAW_WORKSPACE_DIR` unset here. Render sets
+them to paths on its mounted disk, but the image prepares only its own
+`node`-owned directories and runs as that user, so pointing them at an unmounted
+`/data` fails when the Gateway creates its lock directory. State lands under the
+image's defaults and is discarded with the container, which is what you want for
+a health-check reproduction.
+
+See [Docker](/install/docker) for the full local container workflow.
+
+## Next steps
+
+- Set up messaging channels: [Channels](/channels)
+- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Keep OpenClaw up to date: [Updating](/install/updating)

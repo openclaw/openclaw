@@ -1,0 +1,241 @@
+import {
+  resolveMemoryIndexIdentityDiagnostic,
+  readMemorySearchManagerStatus,
+  resolveMemoryIndexSearchDiagnostic,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemoryIndexIdentityDiagnostic,
+  type MemoryProviderStatus,
+  type MemorySearchDeadlineControl,
+  type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
+  type MemorySearchResult,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
+import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
+import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
+
+const MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES = 200;
+
+export function buildPausedMemoryIndexUnavailableResult(
+  diagnostic: MemoryIndexIdentityDiagnostic,
+  params: {
+    agentId: string;
+    status: Pick<
+      MemoryProviderStatus,
+      "provider" | "requestedProvider" | "lastSyncError" | "custom"
+    >;
+  },
+) {
+  const { error, warning, action } = resolveMemoryIndexSearchDiagnostic(
+    diagnostic,
+    params.status,
+    params.agentId,
+  );
+  return buildMemorySearchUnavailableResult(error, { warning, action });
+}
+
+type ManagerState = { manager: MemorySearchManager; managerMs?: number };
+
+type MemorySearchToolQuery = {
+  text: string;
+  resultLimit: number;
+  minScore?: number;
+  explicitSources?: MemorySource[];
+  defaultSources?: MemorySource[];
+  indexedSources?: MemorySource[];
+  requestedCorpus?: "memory" | "wiki" | "all" | "sessions";
+  sessionKey?: string;
+  activeProjectKeys?: readonly string[];
+  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+};
+
+type MemorySearchToolVisibility = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sandboxed: boolean;
+};
+
+export async function executeMemorySearchToolQuery(params: {
+  initialManager: ManagerState;
+  query: MemorySearchToolQuery;
+  visibility: MemorySearchToolVisibility;
+  signal: AbortSignal;
+  deadlineControl?: MemorySearchDeadlineControl;
+  onRebuildNotice?: (readWarning: () => string | undefined) => void;
+  onPartialResults?: (
+    result: Awaited<ReturnType<typeof finalizeMemorySearchToolQuery>> | null,
+  ) => void;
+}) {
+  const startedAt = Date.now();
+  const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+  const active = params.initialManager;
+  const { query, signal, visibility } = params;
+  // Product recall may index transcripts without adding them to ordinary model search.
+  // Explicit corpus selection is authorized by the tool owner before this point.
+  const searchSources =
+    query.explicitSources ??
+    (query.requestedCorpus === "sessions"
+      ? query.defaultSources
+      : query.requestedCorpus == null || query.requestedCorpus === "all"
+        ? query.conversationRecall?.corpus === "configured"
+          ? query.indexedSources
+          : query.defaultSources
+        : undefined);
+  const queryContext = {
+    query,
+    visibility,
+    searchSources,
+    startedAt,
+  };
+
+  const searchOnce = async () => {
+    const searchesSessions = searchSources?.includes("sessions") === true;
+    if (params.onRebuildNotice) {
+      params.onRebuildNotice(
+        captureMemoryRebuildNotice(
+          await readMemorySearchManagerStatus(active.manager, { includeCounts: false }),
+        ),
+      );
+    }
+    // Search already bounds available hits; no inventory scan is needed before
+    // reserving room for session visibility filtering or first-search bootstrap.
+    const searchWindow = searchesSessions
+      ? MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES
+      : query.resultLimit;
+    const candidates = await active.manager.search(query.text, {
+      maxResults: searchWindow,
+      minScore: query.minScore,
+      sessionKey: query.sessionKey,
+      activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
+      signal,
+      ...(params.deadlineControl
+        ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: params.deadlineControl }
+        : {}),
+      onDebug: (debug) => runtimeDebug.push(debug),
+      onPartialResults: params.onPartialResults
+        ? (partialCandidates) => {
+            params.onPartialResults?.(null);
+            // Session visibility can change while semantic retrieval waits. A deadline
+            // cannot reuse earlier session authority, so retain only durable memory files.
+            const memoryCandidates = partialCandidates?.filter(
+              (entry) => entry.source === "memory",
+            );
+            if (!memoryCandidates?.length || signal.aborted) {
+              return;
+            }
+            void finalizeMemorySearchToolQuery({
+              active,
+              searched: { candidates: memoryCandidates, searchWindow },
+              ...queryContext,
+              runtimeDebug: [...runtimeDebug],
+              effectiveMode: "keyword-only",
+            }).then(
+              (result) => {
+                if (!signal.aborted) {
+                  params.onPartialResults?.(result.pausedIndexIdentity ? null : result);
+                }
+              },
+              () => {},
+            );
+          }
+        : undefined,
+      ...(searchSources ? { sources: searchSources } : {}),
+    });
+    return {
+      searched: { candidates, searchWindow },
+      status: await readMemorySearchManagerStatus(active.manager, { includeCounts: false }),
+    };
+  };
+
+  const searched = await searchOnce();
+
+  return await finalizeMemorySearchToolQuery({
+    active,
+    ...searched,
+    ...queryContext,
+    runtimeDebug,
+  });
+}
+
+async function finalizeMemorySearchToolQuery(params: {
+  active: ManagerState;
+  status?: MemoryProviderStatus;
+  searched: { candidates: MemorySearchResult[]; searchWindow: number };
+  query: MemorySearchToolQuery;
+  visibility: MemorySearchToolVisibility;
+  searchSources: MemorySource[] | undefined;
+  runtimeDebug: MemorySearchRuntimeDebug[];
+  startedAt: number;
+  effectiveMode?: string;
+}) {
+  const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
+  const status =
+    params.status ??
+    (await readMemorySearchManagerStatus(active.manager, { includeCounts: false }));
+  const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
+  // A pending format upgrade on an otherwise matching corpus degrades to
+  // keyword-only results instead of pausing memory search; every other
+  // mismatch still withholds all candidates. Keyword results still need a
+  // usable FTS index — the manager's fallback requires the same, so without
+  // it there is no retrieval path and the tool must keep the paused
+  // diagnostic instead of reporting a successful empty search.
+  const formatUpgradeKeywordOnly =
+    pausedIndexIdentity?.status === "mismatched" &&
+    pausedIndexIdentity.owner === "openclaw" &&
+    (pausedIndexIdentity.chunkingVersionOnly === true ||
+      pausedIndexIdentity.lexicalCompatible === true) &&
+    Boolean(status.fts?.enabled && status.fts?.available);
+  if (pausedIndexIdentity && !formatUpgradeKeywordOnly) {
+    return {
+      searchStartedAt: startedAt,
+      status,
+      rawResults: [],
+      pausedIndexIdentity,
+      searchMode: undefined,
+      debug: undefined,
+    };
+  }
+
+  let filtered = await filterMemorySearchHitsBySessionVisibility({
+    cfg: visibility.cfg,
+    agentId: visibility.agentId,
+    requesterSessionKey: query.sessionKey,
+    sandboxed: visibility.sandboxed,
+    hits: searched.candidates,
+    conversationRecall: query.conversationRecall,
+  });
+  if (searchSources) {
+    const allowedSources = new Set(searchSources);
+    filtered = filtered.filter((hit) => allowedSources.has(hit.source));
+  }
+  if (query.requestedCorpus === "sessions" || query.requestedCorpus === "memory") {
+    filtered = filtered.filter((hit) => hit.source === query.requestedCorpus);
+  }
+
+  const rawResults = filtered.slice(0, query.resultLimit);
+  const latestDebug = runtimeDebug.at(-1);
+  return {
+    searchStartedAt: startedAt,
+    status,
+    rawResults,
+    pausedIndexIdentity: undefined,
+    searchMode: params.effectiveMode ?? latestDebug?.effectiveMode,
+    debug: {
+      backend: status.backend,
+      configuredMode: latestDebug?.configuredMode,
+      effectiveMode: params.effectiveMode ?? "n/a",
+      fallback: latestDebug?.fallback,
+      managerMs: active.managerMs,
+      searchMs: Math.max(0, Date.now() - startedAt),
+      embeddingBootstrap: runtimeDebug.findLast((entry) => entry.embeddingBootstrap)
+        ?.embeddingBootstrap,
+      hits: rawResults.length,
+      candidateHits: searched.candidates.length,
+      withheldHits: Math.max(0, searched.candidates.length - filtered.length),
+      searchWindow: searched.searchWindow,
+    },
+  };
+}

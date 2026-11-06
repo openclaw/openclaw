@@ -1,0 +1,162 @@
+import { createRequire } from "node:module";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import {
+  ProviderHttpError,
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  mergeScopedSearchConfig,
+  nativeWebSearchCodecs,
+  readWebSearchApiKey,
+  resolveProviderWebSearchPluginConfig,
+  type SearchConfigRecord,
+  withTrustedWebSearchEndpoint,
+} from "openclaw/plugin-sdk/provider-web-search";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  executeParallelSearchRequest,
+  type ParallelSearchResponse,
+} from "./parallel-search-normalize.js";
+
+const PARALLEL_BASE_URL = "https://api.parallel.ai";
+const PARALLEL_SEARCH_PATHNAME = "/v1/search";
+const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Parallel's /v1/search returns a bounded result set, but the body is external
+// (web-search upstream) and untrusted. Cap the successful JSON read so a
+// hostile or malfunctioning endpoint streaming an unbounded body cannot force
+// the runtime to buffer the whole payload before parsing. 16 MiB matches the
+// shared provider JSON cap (readProviderJsonResponse default).
+const PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
+
+const require = createRequire(import.meta.url);
+const PLUGIN_VERSION = readPluginPackageVersion({ require });
+const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
+
+function invalidBaseUrlPayload() {
+  return {
+    error: "invalid_base_url",
+    message: "plugins.entries.parallel.config.webSearch.baseUrl must be a valid http(s) URL.",
+    docs: "https://docs.openclaw.ai/tools/parallel-search",
+  };
+}
+
+export async function executeParallelWebSearchProviderTool(
+  ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const searchConfig = mergeScopedSearchConfig(
+    ctx.searchConfig,
+    "parallel",
+    resolveProviderWebSearchPluginConfig(ctx.config, "parallel"),
+  ) as SearchConfigRecord | undefined;
+  const parallelConfig = asOptionalRecord(searchConfig?.parallel);
+  const apiKey = readWebSearchApiKey(
+    parallelConfig?.apiKey,
+    "plugins.entries.parallel.config.webSearch.apiKey",
+    ["PARALLEL_API_KEY"],
+  );
+  if (!apiKey) {
+    return {
+      error: "missing_parallel_api_key",
+      message:
+        "web_search (parallel) needs a Parallel API key. Set PARALLEL_API_KEY in the Gateway environment, or configure plugins.entries.parallel.config.webSearch.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/parallel-search",
+    };
+  }
+  let endpoint = `${PARALLEL_BASE_URL}${PARALLEL_SEARCH_PATHNAME}`;
+  const configured = normalizeOptionalString(parallelConfig?.baseUrl);
+  if (configured) {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
+      return invalidBaseUrlPayload();
+    }
+    const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      return invalidBaseUrlPayload();
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return invalidBaseUrlPayload();
+    }
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = pathname.endsWith(PARALLEL_SEARCH_PATHNAME)
+      ? pathname
+      : `${pathname}${PARALLEL_SEARCH_PATHNAME}`;
+    parsed.hash = "";
+    endpoint = parsed.toString();
+  }
+
+  return executeParallelSearchRequest({
+    provider: "parallel",
+    endpoint,
+    apiKey,
+    args,
+    searchConfig,
+    search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {
+      const { body } = nativeWebSearchCodecs["parallel.search"].request(
+        endpoint,
+        request.searchQueries,
+        request.count,
+      );
+      if (request.objective) {
+        body.objective = request.objective;
+      }
+      if (request.sessionId) {
+        body.session_id = request.sessionId;
+      }
+      if (request.clientModel) {
+        body.client_model = request.clientModel;
+      }
+
+      return withTrustedWebSearchEndpoint(
+        {
+          url: endpoint,
+          timeoutSeconds,
+          signal,
+          init: {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "User-Agent": USER_AGENT,
+            },
+            body: JSON.stringify(body),
+          },
+        },
+        async (res) => {
+          if (!res.ok) {
+            const detail = await readResponseTextLimited(
+              res,
+              PARALLEL_ERROR_BODY_LIMIT_BYTES,
+            ).catch(() => "");
+            // Provider/proxy error pages can reflect request headers (including the
+            // x-api-key), and the empty-body statusText fallback is server-controlled
+            // too. Redact in two passes before the detail lands in user-facing error
+            // text: the tools-mode pass masks header-shaped reflections while the
+            // header name is intact (a configured pattern like api[_-]?key would
+            // otherwise rewrite the name first and hide the shape from the
+            // structured matcher), then the canonical tool-payload redactor applies
+            // the operator's logging.redactPatterns on top of the built-in defaults.
+            signal?.throwIfAborted();
+            throw new ProviderHttpError(
+              `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
+              { status: res.status },
+            );
+          }
+          return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
+            maxBytes: PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
+          });
+        },
+      );
+    },
+  });
+}

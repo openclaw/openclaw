@@ -1,0 +1,373 @@
+import path from "node:path";
+import { GrammyError } from "grammy";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  MediaFetchError,
+  saveMediaBuffer,
+  saveRemoteMedia,
+} from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { TelegramBotApiFileTooLargeError } from "../bot-handlers.media.js";
+import {
+  resolveTelegramApiBase,
+  shouldRetryTelegramTransportFallback,
+  type TelegramTransport,
+} from "../fetch.js";
+import type { TelegramResolvedMedia } from "../message-cache-persistence.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "../network-errors.js";
+import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
+import { resolveTelegramPrimaryMedia } from "./helpers.js";
+import type { TelegramContext } from "./types.js";
+
+const FILE_TOO_BIG_RE = /file is too big/i;
+const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
+const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
+
+type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
+  message: NonNullable<Parameters<typeof resolveTelegramPrimaryMedia>[0]>;
+};
+
+function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {
+  const hostnames = ["api.telegram.org"];
+  let allowedHostnames: string[] | undefined;
+  if (apiRoot) {
+    try {
+      const customHost = new URL(apiRoot).hostname;
+      if (customHost && !hostnames.includes(customHost)) {
+        hostnames.push(customHost);
+        // A configured custom Bot API host is an explicit operator override and
+        // may legitimately live on a private network (for example, self-hosted
+        // Bot API or an internal reverse proxy). Keep that host reachable while
+        // still enforcing resolved-IP checks for the default public host.
+        allowedHostnames = [customHost];
+      }
+    } catch (err) {
+      logVerbose(`telegram: invalid apiRoot URL "${apiRoot}": ${String(err)}`);
+    }
+  }
+  return {
+    // Restrict media downloads to the configured Telegram API hosts while still
+    // enforcing SSRF checks on the resolved and redirected targets.
+    hostnameAllowlist: hostnames,
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(dangerouslyAllowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    allowRfc2544BenchmarkRange: true,
+  };
+}
+
+function isFileTooBigError(err: unknown): boolean {
+  return FILE_TOO_BIG_RE.test(
+    err instanceof GrammyError ? err.description : formatErrorMessage(err),
+  );
+}
+
+function isRetryableGetFileError(err: unknown): boolean {
+  if (isFileTooBigError(err)) {
+    return false;
+  }
+  if (isRetryableTelegramApiError(err)) {
+    return true;
+  }
+  // Telegram reports pending file availability as a documented getFile 400.
+  return (
+    err instanceof GrammyError &&
+    err.method === "getFile" &&
+    err.error_code === 400 &&
+    /\bfile is temporarily unavailable\b/i.test(err.description)
+  );
+}
+
+function resolveMediaMetadata(msg: TelegramMediaContext["message"]) {
+  return {
+    fileRef:
+      msg.photo?.[msg.photo.length - 1] ??
+      msg.video ??
+      msg.video_note ??
+      msg.animation ??
+      msg.document ??
+      msg.audio ??
+      msg.voice,
+    fileName:
+      msg.animation?.file_name ??
+      msg.document?.file_name ??
+      msg.audio?.file_name ??
+      msg.video?.file_name,
+    mimeType:
+      msg.audio?.mime_type ??
+      msg.voice?.mime_type ??
+      msg.video?.mime_type ??
+      msg.animation?.mime_type ??
+      msg.document?.mime_type,
+  };
+}
+
+async function resolveTelegramFileWithRetry(
+  ctx: Pick<TelegramContext, "getFile">,
+  abortSignal?: AbortSignal,
+): Promise<{ file_path?: string }> {
+  const deadline = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => deadline.abort(new Error("Telegram getFile retry deadline exceeded")),
+    TELEGRAM_GET_FILE_RETRY_DEADLINE_MS,
+  );
+  deadlineTimer.unref?.();
+  const signal = abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal;
+  // grammY ships a compatible AbortSignal runtime with a structurally distinct
+  // declaration, so keep the cast at this dependency boundary.
+  const getFileSignal = signal as Parameters<TelegramContext["getFile"]>[0];
+  try {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await ctx.getFile(getFileSignal);
+      } catch (err) {
+        if (attempt >= TELEGRAM_GET_FILE_RETRY_ATTEMPTS || !isRetryableGetFileError(err)) {
+          throw err;
+        }
+        logVerbose(`telegram: getFile retry ${attempt}/${TELEGRAM_GET_FILE_RETRY_ATTEMPTS}`);
+        try {
+          await sleepWithAbort(readTelegramRetryAfterMs(err) ?? 1000 * 2 ** (attempt - 1), signal);
+        } catch {
+          // Cancellation must not erase the retryable Telegram/network error
+          // that caused this wait; the spool classifier needs its status/cause.
+          throw err;
+        }
+      }
+    }
+  } catch (err) {
+    if (isFileTooBigError(err)) {
+      throw new TelegramBotApiFileTooLargeError(err);
+    }
+    const status = err instanceof GrammyError ? err.error_code : undefined;
+    // Keep getFile failures on the same typed path as download failures so the
+    // handler can warn the user and durably retry transient spooled updates.
+    throw new MediaFetchError(
+      status ? "http_error" : "fetch_failed",
+      `Telegram getFile failed after retries: ${formatErrorMessage(err)}`,
+      {
+        cause: err,
+        status,
+      },
+    );
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+}
+
+const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+const TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+
+function resolveTrustedLocalTelegramRoot(
+  filePath: string,
+  trustedLocalFileRoots?: readonly string[],
+): { rootDir: string; relativePath: string } | null {
+  if (!path.isAbsolute(filePath)) {
+    return null;
+  }
+  for (const rootDir of trustedLocalFileRoots ?? []) {
+    const relativePath = path.relative(rootDir, filePath);
+    if (
+      relativePath === "" ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      continue;
+    }
+    return { rootDir, relativePath };
+  }
+  return null;
+}
+
+// The maintained aiogram/telegram-bot-api image stores --local files here.
+// getFile returns this container path, while OpenClaw reads the host volume mount.
+const TELEGRAM_BOT_API_CONTAINER_DATA_ROOT = "/var/lib/telegram-bot-api";
+
+function normalizeTrustedTelegramRelativeFilePath(filePath: string): string | null {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("\0")) {
+    return null;
+  }
+  const parts = normalized.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    return null;
+  }
+  return normalized;
+}
+
+function resolveTelegramBotApiContainerRelativePaths(filePath: string, token: string): string[] {
+  if (!path.isAbsolute(filePath)) {
+    return [];
+  }
+  const normalized = filePath.replace(/\\/g, "/");
+  const prefix = `${TELEGRAM_BOT_API_CONTAINER_DATA_ROOT}/`;
+  if (!normalized.startsWith(prefix)) {
+    return [];
+  }
+  const relativePath = normalizeTrustedTelegramRelativeFilePath(normalized.slice(prefix.length));
+  if (!relativePath) {
+    return [];
+  }
+  const candidates = [relativePath];
+  // telegram-bot-api owns a per-token directory. On filesystems that reject
+  // colons it replaces ':' with '~'; accept either host-mount layout.
+  for (const tokenDirectory of [token, token.replaceAll(":", "~")]) {
+    const tokenPrefix = `${tokenDirectory}/`;
+    if (tokenDirectory && relativePath.startsWith(tokenPrefix)) {
+      candidates.push(relativePath.slice(tokenPrefix.length));
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+function isTrustedLocalTelegramFileMissing(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "not-found" || error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
+export async function resolveMedia(params: {
+  ctx: TelegramMediaContext;
+  maxBytes: number;
+  token: string;
+  transport?: TelegramTransport;
+  apiRoot?: string;
+  trustedLocalFileRoots?: readonly string[];
+  dangerouslyAllowPrivateNetwork?: boolean;
+  abortSignal?: AbortSignal;
+}): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
+  const { ctx, ...downloadOptions } = params;
+  const msg = ctx.message;
+  const sticker = msg.sticker;
+  if (sticker?.is_animated || sticker?.is_video) {
+    logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
+    return null;
+  }
+  const metadata = sticker
+    ? { fileRef: sticker, fileName: undefined, mimeType: undefined }
+    : resolveMediaMetadata(msg);
+  if (!metadata.fileRef?.file_id) {
+    return null;
+  }
+  const file = await resolveTelegramFileWithRetry(ctx, params.abortSignal);
+  if (!file.file_path) {
+    throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
+  }
+  const filePath = file.file_path;
+  const telegramFileName = metadata.fileName;
+  const mimeType = metadata.mimeType;
+  const saved = await (async (): Promise<Awaited<ReturnType<typeof saveRemoteMedia>>> => {
+    const trustedLocalFile = resolveTrustedLocalTelegramRoot(
+      filePath,
+      downloadOptions.trustedLocalFileRoots,
+    );
+    const containerRelativePaths = trustedLocalFile
+      ? []
+      : resolveTelegramBotApiContainerRelativePaths(filePath, downloadOptions.token);
+    const localFiles = trustedLocalFile
+      ? [trustedLocalFile]
+      : (downloadOptions.trustedLocalFileRoots ?? []).flatMap((rootDir) =>
+          containerRelativePaths.map((relativePath) => ({ rootDir, relativePath })),
+        );
+    for (const { rootDir, relativePath } of localFiles) {
+      let localFile;
+      try {
+        const root = await fsRoot(rootDir);
+        localFile = await root.read(relativePath, { maxBytes: downloadOptions.maxBytes });
+      } catch (err) {
+        if (!trustedLocalFile && isTrustedLocalTelegramFileMissing(err)) {
+          continue;
+        }
+        throw new MediaFetchError(
+          "fetch_failed",
+          `Failed to read ${trustedLocalFile ? `local Telegram Bot API media from ${filePath}` : "mapped local Telegram Bot API media"}: ${formatErrorMessage(err)}`,
+          { cause: err },
+        );
+      }
+      return await saveMediaBuffer(
+        localFile.buffer,
+        mimeType,
+        "inbound",
+        downloadOptions.maxBytes,
+        telegramFileName ?? path.basename(localFile.realPath),
+      );
+    }
+    if (path.isAbsolute(filePath)) {
+      throw new MediaFetchError(
+        "fetch_failed",
+        `Telegram Bot API returned absolute file path ${filePath} outside trustedLocalFileRoots`,
+      );
+    }
+    const transport = downloadOptions.transport;
+    const fetchImpl = transport ? transport.sourceFetch : globalThis.fetch;
+    if (!transport && !fetchImpl) {
+      throw new Error("fetch is not available; set channels.telegram.proxy in config");
+    }
+    const apiBase = resolveTelegramApiBase(downloadOptions.apiRoot);
+    const url = `${apiBase}/file/bot${downloadOptions.token}/${filePath}`;
+    return await saveRemoteMedia({
+      url,
+      fetchImpl,
+      dispatcherAttempts: transport?.dispatcherAttempts,
+      trustExplicitProxyDns:
+        transport?.dispatcherAttempts?.some(
+          (attempt) => attempt.dispatcherPolicy?.mode === "explicit-proxy",
+        ) ?? false,
+      shouldRetryFetchError: shouldRetryTelegramTransportFallback,
+      // The update spool and best-effort album/reply callers own failure handling.
+      // Nested retries would multiply this header deadline before those owners act.
+      ...(downloadOptions.abortSignal
+        ? { requestInit: { signal: downloadOptions.abortSignal } }
+        : {}),
+      filePathHint: filePath,
+      maxBytes: downloadOptions.maxBytes,
+      responseHeaderTimeoutMs: TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS,
+      readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
+      ssrfPolicy: buildTelegramMediaSsrfPolicy(
+        downloadOptions.apiRoot,
+        downloadOptions.dangerouslyAllowPrivateNetwork,
+      ),
+      fallbackContentType: mimeType,
+      originalFilename: telegramFileName,
+    });
+  })();
+  let stickerMetadata: TelegramResolvedMedia["stickerMetadata"];
+  if (sticker) {
+    const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;
+    const fileId = sticker.file_id ?? cached?.fileId;
+    const emoji = sticker.emoji ?? cached?.emoji;
+    const setName = sticker.set_name ?? cached?.setName;
+    if (cached) {
+      if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
+        // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
+        await cacheSticker({ ...cached, fileId, emoji, setName });
+      }
+    }
+    stickerMetadata = {
+      emoji,
+      setName,
+      fileId,
+      fileUniqueId: sticker.file_unique_id,
+      ...(cached ? { cachedDescription: cached.description } : {}),
+    };
+  }
+  const nativeKind = sticker ? "sticker" : (resolveTelegramPrimaryMedia(msg)?.kind ?? "document");
+  return {
+    id: saved.id,
+    path: saved.path,
+    size: saved.size,
+    contentType: saved.contentType,
+    ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
+    kind:
+      nativeKind !== "sticker" && saved.contentType?.startsWith("audio/")
+        ? "audio"
+        : nativeKind === "document" && saved.contentType?.startsWith("image/")
+          ? "image"
+          : nativeKind,
+    fileUniqueId: metadata.fileRef.file_unique_id,
+    savedAt: Date.now(),
+    ...(stickerMetadata ? { stickerMetadata } : {}),
+  };
+}

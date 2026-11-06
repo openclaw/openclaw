@@ -1,0 +1,167 @@
+import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecMode } from "../infra/exec-approvals-core.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { captureExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
+import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  getInstallationTarget,
+  withInstallationTarget,
+} from "../infra/installation-target-context.js";
+import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { resolveAgentConfig } from "./agent-scope.js";
+import { bindAgentToolAvailability } from "./agent-tool-availability.js";
+import { describeExecTool } from "./bash-tools.descriptions.js";
+import { canInterruptExec } from "./bash-tools.exec-target.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import {
+  createExecCompletionSchema,
+  createExecSchema,
+  execSchema as execExecutionSchema,
+} from "./bash-tools.schemas.js";
+import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
+import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import type { AnyAgentTool } from "./tools/common.js";
+
+type BashToolsModule = typeof import("./bash-tools.js");
+type LoadedExecTool = ReturnType<BashToolsModule["createExecTool"]>;
+
+const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
+  () => import("./bash-tools.js"),
+);
+
+type LazyExecToolPresentation = Partial<
+  Pick<AnyAgentTool, "description" | "displaySummary" | "parameters">
+>;
+
+/** Build the exec tool lazily so non-shell agent surfaces avoid loading bash runtime code. */
+export function createLazyExecTool(
+  defaults?: ExecToolDefaults,
+  presentation?: LazyExecToolPresentation,
+): AnyAgentTool {
+  // Native tool callbacks can arrive outside the scope that constructed this lazy tool.
+  const installationTarget = getInstallationTarget();
+  const requestOwners = captureExecRequestOwners({
+    runId: defaults?.runId,
+    sessionId: defaults?.sessionId,
+  });
+  const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  const execSchema = createExecSchema(defaults);
+  const execCompletionSchema = createExecCompletionSchema(defaults);
+  let loadedTool: LoadedExecTool | undefined;
+  let loadingTool: Promise<LoadedExecTool> | undefined;
+  const loadTool = () => {
+    loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
+      loadedTool = withInstallationTarget(installationTarget, () =>
+        createExecTool(
+          withExecRequestOwners({ ...defaults, processToolAvailabilityRef }, requestOwners),
+        ),
+      );
+      return loadedTool;
+    });
+    return loadingTool;
+  };
+
+  return bindAgentToolAvailability(
+    {
+      name: "exec",
+      label: "exec",
+      interruptible: (args) => canInterruptExec(args, defaults),
+      displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
+      getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
+      get description() {
+        return (
+          presentation?.description ??
+          describeExecTool({
+            hasCronTool: defaults?.hasCronTool === true,
+            hasProcessTool: processToolAvailabilityRef.value,
+            autoReview: defaults?.mode === "auto",
+          })
+        );
+      },
+      get parameters() {
+        return (
+          presentation?.parameters ??
+          (processToolAvailabilityRef.value === false ? execCompletionSchema : execSchema)
+        );
+      },
+      prepareBeforeToolCallParams: async (...args) =>
+        (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
+      finalizeBeforeToolCallParams: (params, preparedParams) =>
+        loadedTool?.finalizeBeforeToolCallParams?.(params, preparedParams) ?? params,
+      execute: async (toolCallId, params, signal, onUpdate) =>
+        (await loadTool()).execute(
+          toolCallId,
+          params as Parameters<LoadedExecTool["execute"]>[1],
+          signal,
+          onUpdate,
+        ),
+    } as AnyAgentTool,
+    {
+      prepareBeforeNormalization: true,
+      prepare: (_tool, callableTools) => {
+        processToolAvailabilityRef.value = callableTools.has("process");
+      },
+      executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,
+    },
+  );
+}
+
+/** Resolve global and per-agent exec defaults before runtime-only overrides. */
+/** `tools.byProvider[...].exec.mode` ceilings for one model; global and agent entries both bind. */
+export function resolveModelExecCeilings(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): ExecMode[] {
+  const cfg = params.cfg;
+  const model = { modelProvider: params.modelProvider, modelId: params.modelId };
+  const agentByProvider =
+    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.byProvider : undefined;
+  return [cfg?.tools?.byProvider, agentByProvider].flatMap(
+    (byProvider) => resolveProviderToolPolicy({ ...model, byProvider })?.exec?.mode ?? [],
+  );
+}
+
+export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
+  const cfg = params.cfg;
+  const globalExec = cfg?.tools?.exec;
+  const agentExec =
+    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
+  const layeredPolicy = applyExecPolicyLayer(applyExecPolicyLayer({}, globalExec), agentExec);
+  const configuredPathPrepend = agentExec?.pathPrepend ?? globalExec?.pathPrepend;
+  return {
+    host: agentExec?.host ?? globalExec?.host,
+    mode: layeredPolicy.mode,
+    security: layeredPolicy.security,
+    ask: layeredPolicy.ask,
+    node: agentExec?.node ?? globalExec?.node,
+    // Native harnesses distinguish operator PATH policy from the automatic CLI shim.
+    configuredPathPrepend,
+    pathPrepend: mergeGatewayAgentCliPath(configuredPathPrepend),
+    safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
+    commandHighlighting: resolveExecCommandHighlighting({
+      config: cfg,
+      agentId: params.agentId,
+    }),
+    safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
+    safeBinProfiles: resolveMergedSafeBinProfileFixtures({
+      global: globalExec,
+      local: agentExec,
+    }),
+    reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
+    backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
+    timeoutSec: agentExec?.timeoutSeconds ?? globalExec?.timeoutSeconds,
+    approvalRunningNoticeMs:
+      agentExec?.approvalRunningNoticeMs ?? globalExec?.approvalRunningNoticeMs,
+    cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,
+    notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
+    notifyOnExitEmptySuccess:
+      agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
+    applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
+  };
+}

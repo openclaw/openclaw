@@ -1,0 +1,114 @@
+import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
+
+const OPENAI_REALTIME_API_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_REALTIME_SSRF_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+  hostnameAllowlist: [new URL(OPENAI_REALTIME_API_BASE_URL).hostname],
+} satisfies SsrFPolicy;
+// Secret minting blocks interactive Talk setup; keep this absolute budget aligned
+// with the maintained realtime Talk live smoke.
+const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 30_000;
+
+export function readRealtimeErrorDetail(error: unknown): string {
+  if (typeof error === "string" && error) {
+    return error;
+  }
+  const message = asOptionalRecord(error)?.message;
+  if (typeof message === "string" && message) {
+    return message;
+  }
+  return "Unknown error";
+}
+
+export function resolveOpenAIProviderConfigRecord(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const providers = asOptionalRecord(config.providers);
+  return asOptionalRecord(providers?.openai) ?? asOptionalRecord(config.openai) ?? config;
+}
+
+type OpenAIRealtimeClientSecretRequest = {
+  authToken: string;
+  auditContext: string;
+  session: Record<string, unknown>;
+  authRejectedMessage?: string;
+};
+
+export function resolveOpenAIRealtimeRequestHeaders(
+  { resolveProviderRequestHeaders }: Pick<OpenAIRealtimeHost, "resolveProviderRequestHeaders">,
+  baseUrl: string,
+  defaultHeaders: Record<string, string> = {},
+  transport: "http" | "websocket" = "http",
+): Record<string, string> {
+  return (
+    omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: "openai",
+        baseUrl,
+        capability: "audio",
+        transport,
+        defaultHeaders,
+      }),
+    ) ?? defaultHeaders
+  );
+}
+
+export async function createOpenAIRealtimeClientSecret(
+  params: OpenAIRealtimeClientSecretRequest,
+  runtime: OpenAIRealtimeHost,
+  label = "OpenAI Realtime",
+) {
+  const { createProviderHttpError, readProviderJsonResponse, fetchWithSsrFGuard } = runtime;
+  const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      method: "POST",
+      headers: resolveOpenAIRealtimeRequestHeaders(runtime, url, {
+        Authorization: `Bearer ${params.authToken}`,
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({ session: params.session }),
+    },
+    policy: OPENAI_REALTIME_SSRF_POLICY,
+    timeoutMs: OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS,
+    auditContext: params.auditContext,
+  });
+  let payload: unknown;
+  try {
+    if (!response.ok) {
+      const error = await createProviderHttpError(response, `${label} client secret failed`);
+      // Provider details can echo a masked credential while hiding which
+      // OpenClaw auth source won. Keep the status metadata, but give callers
+      // a bounded remediation for an explicitly configured key.
+      if (response.status === 401 && params.authRejectedMessage) {
+        error.message = params.authRejectedMessage;
+      }
+      throw error;
+    }
+    payload = await readProviderJsonResponse<unknown>(response, "openai.realtime-session");
+  } finally {
+    await release();
+  }
+  const record = asOptionalRecord(payload);
+  const nestedSecret = record?.client_secret;
+  const clientSecret =
+    normalizeOptionalString(record?.value) ??
+    normalizeOptionalString(asOptionalRecord(nestedSecret)?.value);
+  if (!clientSecret) {
+    throw new Error(`${label} client secret response did not include a value`);
+  }
+  const expiresAtMs = resolveExpiresAtMsFromEpochSeconds(record?.expires_at);
+  return {
+    value: clientSecret,
+    ...(expiresAtMs === undefined ? {} : { expiresAt: expiresAtMs }),
+  };
+}

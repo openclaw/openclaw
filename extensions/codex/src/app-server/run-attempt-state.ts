@@ -1,0 +1,130 @@
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
+import { isCodexInferenceTransportFailure } from "./inference-transport.js";
+import { isJsonObject } from "./protocol.js";
+import {
+  assertCodexBindingMayBeReplaced,
+  clearCodexBindingForClient,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
+  type CodexBindingAuthority,
+} from "./session-binding.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client-lifecycle.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+
+/** Called only after a native failure and its output projection have settled. */
+export function retireCodexTransportAfterFailure(
+  {
+    client,
+    thread,
+  }: { client: CodexAppServerClient; thread: CodexAppServerThreadLifecycleBinding },
+  error: unknown,
+): void {
+  if (
+    thread.connectionScope === "supervision" ||
+    thread.ringZeroClientInstanceId !== undefined ||
+    thread.ringZeroConfigFingerprint !== undefined ||
+    !isCodexInferenceTransportFailure(error)
+  ) {
+    return;
+  }
+  // Optional recovery must preserve process-only Incognito history and sibling
+  // ownership, even when no shared-client lease keeps that history alive.
+  if (hasCodexAppServerSiblingThreadWork(client, thread.threadId)) {
+    return;
+  }
+  // Detach future acquisitions without replaying completed tools.
+  const retired = retireSharedCodexAppServerClientIfCurrent(client);
+  if (retired) {
+    embeddedAgentLog.warn("codex inference transport retired after settled failure", {
+      reason: "parent_local_transport_failure",
+      stage: "turn_settled",
+      activeLeases: retired.activeLeases,
+      closed: retired.closed,
+    });
+  }
+}
+
+export function canClearCodexBindingForRecovery(
+  thread: NonNullable<Parameters<typeof assertCodexBindingMayBeReplaced>[0]>,
+  expectedSessionRuntimeOwnership: boolean,
+  operation: string,
+): boolean {
+  if (expectedSessionRuntimeOwnership) {
+    // Optional recovery preserves both native ownership and the completed turn's outcome.
+    embeddedAgentLog.warn(
+      "codex app-server preserved native binding instead of recovery rotation",
+      {
+        threadId: thread.threadId,
+        operation,
+      },
+    );
+    return false;
+  }
+  assertCodexBindingMayBeReplaced(thread, operation);
+  return true;
+}
+
+export async function clearCodexBindingAfterInvalidImagePayload(
+  bindingStore: CodexAppServerBindingStore,
+  identity: CodexAppServerBindingIdentity,
+  fields: { phase: string; threadId: string; clientId?: string; turnId?: string; error?: string },
+  authority: CodexBindingAuthority,
+  expected?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"],
+): Promise<void> {
+  if (expected) {
+    embeddedAgentLog.warn(
+      "codex app-server image payload error detected for native-owned thread; preserving binding",
+      fields,
+    );
+    return;
+  }
+  const cleared = await clearCodexBindingForClient(bindingStore, identity, fields, authority);
+  embeddedAgentLog.warn("codex app-server image payload recovery completed", {
+    ...fields,
+    bindingCleared: cleared,
+  });
+}
+
+export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
+  error: unknown;
+  contextEngineActive: boolean;
+  thread: CodexAppServerThreadLifecycleBinding;
+}): boolean {
+  if (!params.contextEngineActive || params.thread.lifecycle.action !== "resumed") {
+    return false;
+  }
+  return /context (?:window|length)|maximum context|too many tokens/iu.test(
+    formatErrorMessage(params.error),
+  );
+}
+
+export function isCodexActiveCompactTurnError(error: unknown): boolean {
+  if (!(error instanceof CodexAppServerRpcError)) {
+    return false;
+  }
+  const data = isJsonObject(error.data) ? error.data : undefined;
+  const codexErrorInfo = isJsonObject(data?.codexErrorInfo) ? data.codexErrorInfo : undefined;
+  const activeTurn = isJsonObject(codexErrorInfo?.activeTurnNotSteerable)
+    ? codexErrorInfo.activeTurnNotSteerable
+    : undefined;
+  return activeTurn?.turnKind === "compact";
+}
+
+export function prependCurrentInboundContext(
+  prompt: string,
+  context: EmbeddedRunAttemptParams["currentInboundContext"],
+): string {
+  // Inbound context carries quoted replies and room backlog, not the raw
+  // current request; Codex must not resolve explicit mentions from it.
+  const text = context?.text.trim();
+  return text
+    ? [neutralizeCodexExplicitMentionSigils(text), prompt].filter(Boolean).join("\n\n")
+    : prompt;
+}

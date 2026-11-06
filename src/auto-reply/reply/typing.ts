@@ -1,0 +1,190 @@
+import {
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
+
+const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
+const DEFAULT_TYPING_TTL_MS = 2 * 60_000;
+const MAX_TYPING_INTERVAL_MS = Math.floor(MAX_TIMER_TIMEOUT_MS / 2);
+
+export function resolveTypingIntervalMs(seconds: number | undefined): number {
+  if (Number.isFinite(seconds) && (seconds ?? 0) <= 0) {
+    return 0;
+  }
+  const intervalMs =
+    finiteSecondsToTimerSafeMilliseconds(seconds ?? DEFAULT_TYPING_INTERVAL_SECONDS) ??
+    DEFAULT_TYPING_INTERVAL_SECONDS * 1000;
+  return Math.min(intervalMs, MAX_TYPING_INTERVAL_MS);
+}
+
+export type TypingController = {
+  onReplyStart: () => Promise<void>;
+  startTypingLoop: () => Promise<void>;
+  startTypingOnText: (text?: string) => Promise<void>;
+  refreshTypingTtl: () => void;
+  isActive: () => boolean;
+  markRunComplete: () => void;
+  markDispatchIdle: () => void;
+  cleanup: () => void;
+};
+
+/** Creates a typing controller that seals itself after run and dispatch completion. */
+export function createTypingController(params: {
+  onReplyStart?: () => Promise<void> | void;
+  onCleanup?: () => void;
+  typingIntervalSeconds?: number;
+  keepalive?: boolean;
+  log?: (message: string) => void;
+}): TypingController {
+  const { onReplyStart, onCleanup, keepalive = true, log } = params;
+  if (!onReplyStart && !onCleanup) {
+    return {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: () => {},
+    };
+  }
+  let active = false;
+  let runComplete = false;
+  let dispatchIdle = false;
+  // Late streaming callbacks must not restart a completed controller.
+  let sealed = false;
+  let typingTtlTimer: NodeJS.Timeout | undefined;
+  const typingIntervalMs = resolveTypingIntervalMs(params.typingIntervalSeconds);
+  // Leave one full cadence for a keepalive call to settle before safety cleanup.
+  const typingTtlMs = Math.max(DEFAULT_TYPING_TTL_MS, typingIntervalMs * 2);
+
+  const typingTtlLabel =
+    typingTtlMs % 60_000 === 0 ? `${typingTtlMs / 60_000}m` : `${Math.round(typingTtlMs / 1000)}s`;
+
+  const cleanup = () => {
+    if (sealed) {
+      return;
+    }
+    clearTimeout(typingTtlTimer);
+    typingTtlTimer = undefined;
+    typingLoop.stop();
+    // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
+    // This fires only once (sealed prevents re-entry).
+    if (active) {
+      onCleanup?.();
+    }
+    sealed = true;
+  };
+
+  const refreshTypingTtl = () => {
+    if (sealed || typingIntervalMs <= 0) {
+      return;
+    }
+    typingTtlTimer =
+      typingTtlTimer?.refresh() ??
+      setTimeout(() => {
+        if (!typingLoop.isRunning()) {
+          return;
+        }
+        log?.(`typing TTL reached (${typingTtlLabel}); stopping typing indicator`);
+        cleanup();
+      }, typingTtlMs);
+  };
+
+  const isActive = () => active && !sealed;
+
+  const triggerTyping = async () => {
+    if (sealed || runComplete) {
+      return;
+    }
+    try {
+      await onReplyStart?.();
+      refreshTypingTtl();
+    } catch (err) {
+      log?.(`typing start failed: ${String(err)}`);
+    }
+  };
+
+  const scheduleTyping = async () => {
+    void typingLoop.tick();
+    await Promise.resolve();
+  };
+
+  const typingLoop = createTypingKeepaliveLoop({
+    intervalMs: typingIntervalMs,
+    onTick: triggerTyping,
+  });
+
+  const ensureStart = async () => {
+    // Late callbacks after a run completed should never restart typing.
+    if (sealed || runComplete || active) {
+      return;
+    }
+    active = true;
+    await scheduleTyping();
+  };
+
+  const maybeStopOnIdle = () => {
+    // Stop only when the model run is done and the dispatcher queue is empty.
+    if (active && runComplete && dispatchIdle) {
+      cleanup();
+    }
+  };
+
+  const startTypingLoop = async () => {
+    if (sealed || runComplete) {
+      return;
+    }
+    // Always refresh TTL when called, even if loop already running.
+    // This keeps typing alive during long tool executions.
+    refreshTypingTtl();
+    if (!onReplyStart) {
+      return;
+    }
+    if (keepalive && typingLoop.isRunning()) {
+      return;
+    }
+    await ensureStart();
+    // Cleanup or completion can run while the start callback yields. The loop
+    // must not acquire a timer after its owning controller has closed.
+    if (keepalive && !sealed && !runComplete) {
+      typingLoop.start();
+    }
+  };
+
+  const startTypingOnText = async (text?: string) => {
+    if (sealed) {
+      return;
+    }
+    const trimmed = normalizeOptionalString(text);
+    if (!trimmed) {
+      return;
+    }
+    refreshTypingTtl();
+    await startTypingLoop();
+  };
+
+  const markRunComplete = () => {
+    runComplete = true;
+    maybeStopOnIdle();
+  };
+
+  const markDispatchIdle = () => {
+    dispatchIdle = true;
+    maybeStopOnIdle();
+  };
+
+  return {
+    onReplyStart: ensureStart,
+    startTypingLoop,
+    startTypingOnText,
+    refreshTypingTtl,
+    isActive,
+    markRunComplete,
+    markDispatchIdle,
+    cleanup,
+  };
+}

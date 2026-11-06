@@ -1,0 +1,273 @@
+import {
+  tokenizer,
+  type AnyNode,
+  type CallExpression,
+  type Identifier,
+  type MemberExpression,
+  type ObjectExpression,
+} from "acorn";
+import {
+  buildCodeModeScriptParseSource,
+  parseCodeModeScriptSyntax,
+} from "../../../agents/code-mode-script-syntax.js";
+
+type TriggerScriptMigration =
+  | { kind: "current" }
+  | { kind: "unsupported" }
+  | { kind: "supported"; script: string };
+
+type SyntaxVisit = { node: AnyNode; ancestors: AnyNode[] };
+type SourceEdit = { start: number; end: number; replacement: string };
+
+function sourceContainsComment(source: string): boolean {
+  let hasComment = false;
+  const tokens = tokenizer(source, {
+    ecmaVersion: "latest",
+    onComment: () => {
+      hasComment = true;
+    },
+  });
+  while (tokens.getToken().type.label !== "eof") {
+    if (hasComment) {
+      return true;
+    }
+  }
+  return hasComment;
+}
+
+function isSyntaxNode(value: unknown): value is AnyNode {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    typeof value.type === "string" &&
+    "start" in value &&
+    typeof value.start === "number" &&
+    "end" in value &&
+    typeof value.end === "number"
+  );
+}
+
+function collectSyntaxVisits(node: AnyNode, ancestors: AnyNode[] = []): SyntaxVisit[] {
+  const visits: SyntaxVisit[] = [{ node, ancestors }];
+  for (const value of Object.values(node)) {
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (isSyntaxNode(child)) {
+        visits.push(...collectSyntaxVisits(child, [...ancestors, node]));
+      }
+    }
+  }
+  return visits;
+}
+
+function isNoncomputedPropertyName(node: AnyNode, parent: AnyNode | undefined): boolean {
+  return (
+    (parent?.type === "MemberExpression" && parent.property === node && !parent.computed) ||
+    (parent?.type === "Property" && parent.key === node && !parent.computed && !parent.shorthand)
+  );
+}
+
+function isNamedMember(node: AnyNode | undefined, name: string): node is MemberExpression {
+  return (
+    node?.type === "MemberExpression" &&
+    !node.computed &&
+    node.property.type === "Identifier" &&
+    node.property.name === name
+  );
+}
+
+function legacyToolCall(
+  node: AnyNode,
+): { call: CallExpression; tool: Identifier; args: ObjectExpression } | undefined {
+  if (node.type !== "CallExpression") {
+    return undefined;
+  }
+  const callee = node.callee;
+  if (
+    !isNamedMember(callee, "call") ||
+    callee.optional ||
+    callee.object.type !== "Identifier" ||
+    callee.object.name !== "tools" ||
+    node.optional ||
+    node.arguments.length !== 2
+  ) {
+    return undefined;
+  }
+  const [toolName, args] = node.arguments;
+  return toolName?.type === "Literal" &&
+    toolName.value === "exec" &&
+    args?.type === "ObjectExpression" &&
+    args.properties.every(
+      (property) =>
+        property.type === "Property" &&
+        property.kind === "init" &&
+        !property.computed &&
+        !property.method,
+    )
+    ? { call: node, tool: callee.object, args }
+    : undefined;
+}
+
+/** Rewrite only the exact v2026.7.1 Cron trigger idiom; custom legacy code stays untouched. */
+export function migrateLegacyCronTriggerScript(script: string): TriggerScriptMigration {
+  const parsed = parseCodeModeScriptSyntax(script);
+  if (!parsed.ok) {
+    return { kind: "unsupported" };
+  }
+  const wrapper = parsed.program.body[0];
+  if (
+    wrapper?.type !== "ExpressionStatement" ||
+    wrapper.expression.type !== "ArrowFunctionExpression" ||
+    wrapper.expression.body.type !== "BlockStatement"
+  ) {
+    return { kind: "unsupported" };
+  }
+  const body = wrapper.expression.body;
+  const visits = collectSyntaxVisits(body);
+  const accessesLegacyGlobal = visits.some(({ node, ancestors }) => {
+    if (node.type !== "MemberExpression") {
+      return false;
+    }
+    const receiver = node.object;
+    const isGlobalObject = receiver.type === "Identifier" && receiver.name === "globalThis";
+    const isTopLevelThis =
+      receiver.type === "ThisExpression" &&
+      !ancestors.some(
+        (ancestor) =>
+          ancestor.type === "FunctionDeclaration" || ancestor.type === "FunctionExpression",
+      );
+    if (!isGlobalObject && !isTopLevelThis) {
+      return false;
+    }
+    const property = node.property;
+    const name = node.computed
+      ? property.type === "Literal"
+        ? property.value
+        : undefined
+      : property.type === "Identifier"
+        ? property.name
+        : undefined;
+    return name === "tools" || name === "ALL_TOOLS";
+  });
+  if (accessesLegacyGlobal) {
+    return { kind: "unsupported" };
+  }
+  const legacyIdentifiers = visits.filter(({ node, ancestors }) => {
+    if (node.type !== "Identifier") {
+      return false;
+    }
+    return (
+      (node.name === "tools" || node.name === "ALL_TOOLS") &&
+      !isNoncomputedPropertyName(node, ancestors.at(-1))
+    );
+  });
+  if (legacyIdentifiers.length === 0) {
+    return { kind: "current" };
+  }
+
+  const edits: SourceEdit[] = [];
+  const bindings = new Map<string, Identifier>();
+  const recognizedTools = new Set<AnyNode>();
+  const { codeOffset } = buildCodeModeScriptParseSource(script);
+
+  for (const { node, ancestors } of visits) {
+    if (
+      node.type === "FunctionDeclaration" ||
+      node.type === "FunctionExpression" ||
+      node.type === "ArrowFunctionExpression" ||
+      node.type === "WithStatement"
+    ) {
+      return { kind: "unsupported" };
+    }
+    const legacy = legacyToolCall(node);
+    if (!legacy) {
+      continue;
+    }
+    const { call, tool, args } = legacy;
+    const parent = ancestors.at(-1);
+    const awaited = parent?.type === "AwaitExpression";
+    const expression = awaited ? parent : node;
+    const owner = ancestors.at(awaited ? -2 : -1);
+    const statement = ancestors.at(awaited ? -4 : -3);
+    if (owner?.type === "VariableDeclarator") {
+      const declaration = ancestors.at(awaited ? -3 : -2);
+      if (
+        !awaited ||
+        declaration?.type !== "VariableDeclaration" ||
+        declaration.kind !== "const" ||
+        declaration.declarations.length !== 1 ||
+        statement !== body ||
+        owner.id.type !== "Identifier" ||
+        owner.init !== expression ||
+        owner.id.name === "exec" ||
+        bindings.has(owner.id.name)
+      ) {
+        return { kind: "unsupported" };
+      }
+      bindings.set(owner.id.name, owner.id);
+    } else if (owner?.type !== "ExpressionStatement" || ancestors.at(awaited ? -3 : -2) !== body) {
+      return { kind: "unsupported" };
+    }
+    recognizedTools.add(tool);
+    const removedPrefix = script.slice(call.start - codeOffset, args.start - codeOffset);
+    if (sourceContainsComment(removedPrefix)) {
+      return { kind: "unsupported" };
+    }
+    edits.push({
+      start: call.start - codeOffset,
+      end: args.start - codeOffset,
+      replacement: "exec(",
+    });
+  }
+
+  for (const { node, ancestors } of visits) {
+    if (node.type !== "Identifier") {
+      continue;
+    }
+    const parent = ancestors.at(-1);
+    if (isNoncomputedPropertyName(node, parent)) {
+      continue;
+    }
+    if (node.name === "tools" || node.name === "ALL_TOOLS") {
+      if (!recognizedTools.has(node)) {
+        return { kind: "unsupported" };
+      }
+      continue;
+    }
+    if (node.name === "exec") {
+      if (parent?.type !== "CallExpression" || parent.callee !== node) {
+        return { kind: "unsupported" };
+      }
+      continue;
+    }
+    const declaration = bindings.get(node.name);
+    if (!declaration || declaration === node) {
+      continue;
+    }
+    const details = ancestors.at(-2);
+    if (
+      !isNamedMember(parent, "result") ||
+      parent.object !== node ||
+      !isNamedMember(details, "details") ||
+      details.object !== parent
+    ) {
+      return { kind: "unsupported" };
+    }
+    if (sourceContainsComment(script.slice(node.end - codeOffset, details.end - codeOffset))) {
+      return { kind: "unsupported" };
+    }
+    edits.push({ start: node.end - codeOffset, end: details.end - codeOffset, replacement: "" });
+  }
+
+  if (recognizedTools.size !== legacyIdentifiers.length || edits.length === 0) {
+    return { kind: "unsupported" };
+  }
+  let rewritten = script;
+  for (const edit of edits.toSorted((left, right) => right.start - left.start)) {
+    rewritten = `${rewritten.slice(0, edit.start)}${edit.replacement}${rewritten.slice(edit.end)}`;
+  }
+  const result = migrateLegacyCronTriggerScript(rewritten);
+  return result.kind === "current"
+    ? { kind: "supported", script: rewritten }
+    : { kind: "unsupported" };
+}

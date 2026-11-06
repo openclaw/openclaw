@@ -1,0 +1,429 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { inspect } from "node:util";
+import { cancel, type CANCEL_SYMBOL } from "@clack/prompts";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import { printClawBanner } from "../cli/claw-banner.js";
+import { readSourceConfigBestEffort } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
+import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
+import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { displayPath, resolveConfigDir, shortenHomeInString, sleep } from "../utils.js";
+import { VERSION } from "../version.js";
+import { moveToTrash, removeAgentSessions, removeWorkspaceDirs } from "./cleanup-utils.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
+export {
+  resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+} from "../gateway/control-ui-links.js";
+export { detectBrowserOpenSupport } from "../infra/browser-open.js";
+export { detectBinary } from "../infra/detect-binary.js";
+export { randomToken } from "./random-token.js";
+
+export function guardCancel<T>(
+  value: T | typeof CANCEL_SYMBOL,
+  runtime: RuntimeEnv,
+  exitCode = 0,
+): T {
+  if (typeof value === "symbol") {
+    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    runtime.exit(exitCode);
+    throw new Error("unreachable");
+  }
+  return value;
+}
+
+/** Summarizes existing config values before onboarding overwrites or reuses them. */
+export function summarizeExistingConfig(config: OpenClawConfig): string {
+  const rows: string[] = [];
+  const defaults = config.agents?.defaults;
+  if (defaults?.workspace) {
+    rows.push(terminalText`Workspace: ${shortenHomeInString(defaults.workspace)}`);
+  }
+  if (defaults?.model) {
+    const model = resolveAgentModelPrimaryValue(defaults.model);
+    if (model) {
+      rows.push(terminalText`Model: ${shortenHomeInString(model)}`);
+    }
+  }
+  const gatewaySummary = summarizeGatewayConfig(config);
+  if (gatewaySummary) {
+    rows.push(shortenHomeInString(gatewaySummary));
+  }
+  if (config.skills?.install?.nodeManager) {
+    rows.push(
+      terminalText`Node manager: ${shortenHomeInString(config.skills.install.nodeManager)}`,
+    );
+  }
+  return rows.length ? rows.join("\n") : "No key settings detected.";
+}
+
+function summarizeGatewayConfig(config: OpenClawConfig): string | null {
+  const gateway = config.gateway;
+  if (
+    !gateway?.mode &&
+    typeof gateway?.port !== "number" &&
+    !gateway?.bind &&
+    !gateway?.remote?.url
+  ) {
+    return null;
+  }
+  const mode = normalizeOptionalString(gateway.mode);
+  const bind = formatGatewayBind(gateway.bind);
+  const remoteUrl = normalizeOptionalString(gateway.remote?.url);
+  const useRemoteUrl = remoteUrl !== undefined && mode !== "local";
+  const endpoint =
+    useRemoteUrl && remoteUrl
+      ? remoteUrl
+      : typeof gateway.port === "number"
+        ? `:${gateway.port}`
+        : undefined;
+  const words: string[] = [];
+  if (mode) {
+    words.push(mode);
+  }
+  if (bind) {
+    words.push(mode ? `via ${bind}` : bind);
+  }
+  if (mode === "remote" && !remoteUrl) {
+    words.push("(missing remote URL)");
+    return terminalText`Gateway: ${words.join(" ")}`;
+  }
+  if (endpoint) {
+    words.push(`${useRemoteUrl ? "at" : "on"} ${endpoint}`);
+  }
+  return terminalText`Gateway: ${words.length > 0 ? words.join(" ") : "configured"}`;
+}
+
+function formatGatewayBind(value: string | undefined): string | undefined {
+  return value === "lan" ? "LAN" : normalizeOptionalString(value);
+}
+
+/** Normalizes gateway token prompts while rejecting JS stringification sentinels. */
+export function normalizeGatewayTokenInput(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  // Reject the literal string "undefined" — a common bug when JS undefined
+  // gets coerced to a string via template literals or String(undefined).
+  if (isInvalidGatewaySecret(trimmed)) {
+    return "";
+  }
+  return trimmed;
+}
+
+export function validateGatewayPasswordInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return "Required";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Required";
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return 'Cannot be the literal string "undefined" or "null"';
+  }
+  return undefined;
+}
+
+export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
+  await printClawBanner(runtime);
+}
+
+/** Records wizard provenance metadata on config writes. */
+export function applyWizardMetadata(
+  cfg: OpenClawConfig,
+  params: { command: string; mode: OnboardMode },
+): OpenClawConfig {
+  const commit =
+    normalizeOptionalString(process.env.GIT_COMMIT) ?? normalizeOptionalString(process.env.GIT_SHA);
+  return {
+    ...cfg,
+    wizard: {
+      ...cfg.wizard,
+      lastRunAt: new Date().toISOString(),
+      lastRunVersion: VERSION,
+      lastRunCommit: commit,
+      lastRunCommand: params.command,
+      lastRunMode: params.mode,
+    },
+  };
+}
+
+export function formatControlUiSshHint(params: {
+  port: number;
+  basePath?: string;
+  tlsEnabled: boolean;
+}): string {
+  const basePath = normalizeControlUiBasePath(params.basePath);
+  const uiPath = basePath ? `${basePath}/` : "/";
+  const protocol = params.tlsEnabled ? "https" : "http";
+  const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
+  return [
+    "No GUI detected. Open from your computer:",
+    terminalText`ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
+    "Then open:",
+    terminalText`${localUrl}`,
+    "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
+    "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
+    "Docs:",
+    "https://docs.openclaw.ai/gateway/remote",
+    "https://docs.openclaw.ai/web/control-ui",
+  ].join("\n");
+}
+
+/** Ensures workspace bootstrap files and session transcript directories exist. */
+export async function ensureWorkspaceAndSessions(
+  workspaceDir: string,
+  runtime: RuntimeEnv,
+  options: {
+    skipBootstrap?: boolean;
+    skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
+    agentId: string;
+    guard?: WorkspaceStateGuard;
+  },
+): Promise<{ bootstrapPending: boolean }> {
+  const ws = await ensureAgentWorkspace({
+    dir: workspaceDir,
+    ensureBootstrapFiles: !options.skipBootstrap,
+    skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
+    guard: options.guard,
+  });
+  runtime.log(`Workspace OK: ${displayPath(ws.dir)}`);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
+  options.guard?.assertHost?.();
+  await fs.mkdir(sessionsDir, { recursive: true });
+  runtime.log(`Sessions OK: ${displayPath(sessionsDir)}`);
+  return { bootstrapPending: ws.bootstrapPending === true };
+}
+
+async function assertFullResetPreservesOnboardingLock(workspaceDir: string): Promise<void> {
+  const [workspacePath, migrationDir] = await Promise.all([
+    canonicalPathFromExistingAncestor(path.resolve(workspaceDir)),
+    canonicalPathFromExistingAncestor(path.join(resolveStateDir(), "migration")),
+  ]);
+  if (
+    workspacePath === migrationDir ||
+    isPathInside(workspacePath, migrationDir) ||
+    isPathInside(migrationDir, workspacePath)
+  ) {
+    throw new Error(
+      "Full reset workspace overlaps the active onboarding lock directory. " +
+        "Choose a workspace outside the OpenClaw state migration directory or use a narrower reset scope.",
+    );
+  }
+}
+
+/** Deletes onboarding-managed state according to the selected reset scope. */
+export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
+  if (scope === "full") {
+    // Validate before moving config or credentials so an unsafe full reset has
+    // no partial destructive effects and cannot discard its own lock sidecar.
+    await assertFullResetPreservesOnboardingLock(workspaceDir);
+  }
+  const failures: string[] = [];
+  const trashRequiredPath = async (targetPath: string) => {
+    if (!(await moveToTrash(targetPath, runtime))) {
+      failures.push(targetPath);
+    }
+  };
+
+  if (scope !== "config") {
+    await removeAgentSessions(
+      {
+        cfg: await readSourceConfigBestEffort(),
+        configPath: resolveConfigPath(),
+        stateDir: resolveStateDir(),
+      },
+      runtime,
+    );
+  }
+  await trashRequiredPath(resolveConfigPath());
+  if (scope === "config") {
+    throwIfResetFailed(failures);
+    return;
+  }
+  await trashRequiredPath(path.join(resolveConfigDir(), "credentials"));
+  if (scope === "full") {
+    failures.push(
+      ...(await removeWorkspaceDirs([workspaceDir], runtime, {
+        removeStateRows: true,
+        removeWorkspace: (workspace) => moveToTrash(workspace, runtime),
+      })),
+    );
+  }
+  throwIfResetFailed(failures);
+}
+
+function throwIfResetFailed(failures: string[]): void {
+  const uniqueFailures = [...new Set(failures)];
+  if (uniqueFailures.length > 0) {
+    throw new Error(`Reset failed to remove required state:\n${uniqueFailures.join("\n")}`);
+  }
+}
+
+type OnboardingGatewayProbeParams = {
+  url: string;
+  config?: OpenClawConfig;
+  originScopedDeviceAuth?: boolean;
+  configuredRemote?: boolean;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+function runOnboardingGatewayProbe(
+  params: OnboardingGatewayProbeParams,
+  detailLevel: "none" | "config",
+): Promise<GatewayProbeResult> {
+  const url = params.url.trim();
+  const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
+  return probeGateway({
+    url,
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.originScopedDeviceAuth ? { originScopedDeviceAuth: true } : {}),
+    ...(params.configuredRemote ? { configuredRemote: true } : {}),
+    timeoutMs,
+    auth: {
+      token: params.token,
+      password: params.password,
+    },
+    ...(params.tlsFingerprint ? { tlsFingerprint: params.tlsFingerprint } : {}),
+    ...(params.preauthHandshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs }
+      : {}),
+    detailLevel,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+}
+
+/** Runs a single lightweight gateway probe for onboarding readiness checks. */
+export async function probeGatewayReachable(
+  params: OnboardingGatewayProbeParams,
+): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const probe = await runOnboardingGatewayProbe(params, "none");
+    if (!probe.ok) {
+      return { ok: false, detail: probe.error ?? undefined };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, detail: summarizeError(err) };
+  }
+}
+
+export type GatewayConfiguredModelProbeResult =
+  | "configured"
+  | "missing-configured-model"
+  | "reachable-unverified"
+  | "unreachable";
+
+/** Reads only Gateway config and classifies whether its default agent has inference. */
+export async function probeGatewayConfiguredModel(
+  params: OnboardingGatewayProbeParams,
+): Promise<GatewayConfiguredModelProbeResult> {
+  let probe: GatewayProbeResult;
+  try {
+    probe = await runOnboardingGatewayProbe(params, "config");
+  } catch {
+    return "unreachable";
+  }
+  if (!probe.gatewayReached) {
+    return "unreachable";
+  }
+  if (!probe.ok) {
+    return "reachable-unverified";
+  }
+  const snapshot = probe.configSnapshot as {
+    valid?: unknown;
+    runtimeConfig?: unknown;
+    config?: unknown;
+  } | null;
+  const configCandidate =
+    snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+  if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
+    return "reachable-unverified";
+  }
+  try {
+    const config = configCandidate as OpenClawConfig;
+    const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
+    return model ? "configured" : "missing-configured-model";
+  } catch {
+    return "reachable-unverified";
+  }
+}
+
+export async function waitForGatewayReachable(
+  params: Omit<OnboardingGatewayProbeParams, "timeoutMs"> & {
+    /** Total time to wait before giving up. */
+    deadlineMs?: number;
+    /** Per-probe timeout for the hello-only readiness check. */
+    probeTimeoutMs?: number;
+    /** Delay between probes. */
+    pollMs?: number;
+  },
+): Promise<{ ok: boolean; detail?: string }> {
+  const { deadlineMs = 15_000, pollMs = 400, probeTimeoutMs = 1500, ...probeParams } = params;
+  const pollDelayMs = resolveTimerTimeoutMs(pollMs, 400, 0);
+  const startedAt = Date.now();
+  let lastDetail: string | undefined;
+
+  while (Date.now() - startedAt < deadlineMs) {
+    params.signal?.throwIfAborted();
+    const probe = await probeGatewayReachable({
+      ...probeParams,
+      timeoutMs: probeTimeoutMs,
+    });
+    params.signal?.throwIfAborted();
+    if (probe.ok) {
+      return probe;
+    }
+    lastDetail = probe.detail;
+    const remainingMs = deadlineMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollDelayMs, remainingMs), params.signal);
+  }
+
+  return { ok: false, detail: lastDetail };
+}
+
+function summarizeError(err: unknown): string {
+  let raw = "unknown error";
+  if (err instanceof Error) {
+    raw = err.message || raw;
+  } else if (typeof err === "string") {
+    raw = err || raw;
+  } else if (err !== undefined) {
+    raw = inspect(err, { depth: 2 });
+  }
+  const line =
+    raw
+      .split("\n")
+      .map((s) => s.trim())
+      .find(Boolean) ?? raw;
+  return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
+}
+
+/** Default workspace path shown by onboarding prompts. */
+export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

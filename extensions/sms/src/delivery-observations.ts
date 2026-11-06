@@ -1,0 +1,277 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { getSmsRuntime } from "./runtime.js";
+import { resolveTwilioMessageSid } from "./twilio.js";
+import type { ResolvedSmsAccount, SmsSendResult } from "./types.js";
+
+const DELIVERY_NAMESPACE = "twilio-delivery-observations-v1";
+const DELIVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DELIVERY_MAX_MESSAGES = 5_000;
+const DELIVERY_MAX_OBSERVATIONS_PER_MESSAGE = 20;
+
+const DELIVERY_STATUS_RANK: Readonly<Record<string, number>> = {
+  accepted: 10,
+  scheduled: 20,
+  queued: 30,
+  sending: 40,
+  sent: 50,
+};
+
+const TERMINAL_DELIVERY_STATUSES = new Set(["delivered", "undelivered", "failed", "canceled"]);
+const INBOUND_MESSAGE_STATUSES = new Set(["receiving", "received"]);
+
+type SmsDeliveryObservationSource = "api-response" | "callback";
+
+type SmsDeliveryObservation = {
+  source: SmsDeliveryObservationSource;
+  fingerprint: string;
+  status: string;
+  observedAt: number;
+  errorCode?: string;
+  rawDlrDoneDate?: string;
+};
+
+export type SmsDeliveryRecord = {
+  accountId: string;
+  accountSidHash: string;
+  messageSid: string;
+  status: string;
+  firstObservedAt: number;
+  lastObservedAt: number;
+  errorCode?: string;
+  conflict?: boolean;
+  observations: SmsDeliveryObservation[];
+};
+
+export type SmsDeliveryRecorder = ReturnType<typeof createSmsDeliveryRecorder>;
+
+let deliveryStore: PluginStateKeyedStore<SmsDeliveryRecord> | undefined;
+let deliveryStoreRuntime: ReturnType<typeof getSmsRuntime> | undefined;
+
+function firstTrimmed(form: Record<string, string>, key: string): string {
+  return form[key]?.trim() ?? "";
+}
+
+function normalizeDeliveryStatus(rawStatus: string): string {
+  const status = rawStatus.trim().toLowerCase();
+  return INBOUND_MESSAGE_STATUSES.has(status) ? "" : status;
+}
+
+function resolveDeliveryStatus(form: Record<string, string>): string {
+  return normalizeDeliveryStatus(
+    firstTrimmed(form, "MessageStatus") || firstTrimmed(form, "SmsStatus"),
+  );
+}
+
+function fingerprintObservation(params: {
+  source: SmsDeliveryObservationSource;
+  messageSid: string;
+  status: string;
+  errorCode?: string;
+  rawDlrDoneDate?: string;
+}): string {
+  return sha256Hex(
+    JSON.stringify([
+      params.source,
+      params.messageSid,
+      params.status,
+      params.errorCode ?? "",
+      params.rawDlrDoneDate ?? "",
+    ]),
+  );
+}
+
+function openDeliveryStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
+  const runtime = getSmsRuntime();
+  // This is bounded recent operator state, not an audit ledger. At capacity,
+  // preserve callback availability and evict the least recently updated message.
+  if (!deliveryStore || deliveryStoreRuntime !== runtime) {
+    deliveryStoreRuntime = runtime;
+    deliveryStore = runtime.state.openKeyedStore<SmsDeliveryRecord>({
+      namespace: DELIVERY_NAMESPACE,
+      maxEntries: DELIVERY_MAX_MESSAGES,
+      overflowPolicy: "evict-oldest",
+      defaultTtlMs: DELIVERY_RETENTION_MS,
+    });
+  }
+  return deliveryStore;
+}
+
+export function isTwilioDeliveryStatusForm(form: Record<string, string>): boolean {
+  return Boolean(resolveDeliveryStatus(form));
+}
+
+function reduceDeliveryStatus(
+  current: SmsDeliveryRecord | undefined,
+  observation: SmsDeliveryObservation,
+): Pick<SmsDeliveryRecord, "status" | "errorCode" | "conflict"> {
+  if (current?.status === "conflicted") {
+    return {
+      status: current.status,
+      ...(current.errorCode ? { errorCode: current.errorCode } : {}),
+      conflict: true,
+    };
+  }
+  if (current?.status === observation.status) {
+    const errorCode = current.errorCode ?? observation.errorCode;
+    return {
+      status: current.status,
+      ...(errorCode ? { errorCode } : {}),
+      ...(current.conflict ? { conflict: true } : {}),
+    };
+  }
+
+  const currentTerminal = current && TERMINAL_DELIVERY_STATUSES.has(current.status);
+  const nextTerminal = TERMINAL_DELIVERY_STATUSES.has(observation.status);
+  if (currentTerminal && nextTerminal) {
+    const errorCode = observation.errorCode ?? current.errorCode;
+    return {
+      status: "conflicted",
+      ...(errorCode ? { errorCode } : {}),
+      conflict: true,
+    };
+  }
+  const selected =
+    !current ||
+    (!currentTerminal &&
+      (nextTerminal ||
+        (DELIVERY_STATUS_RANK[observation.status] ?? -1) >
+          (DELIVERY_STATUS_RANK[current.status] ?? -1)))
+      ? observation
+      : current;
+  return {
+    status: selected.status,
+    ...(selected.errorCode ? { errorCode: selected.errorCode } : {}),
+    ...(selected === current && current.conflict ? { conflict: true } : {}),
+  };
+}
+
+async function recordSmsDeliveryObservation(params: {
+  account: ResolvedSmsAccount;
+  messageSid: string;
+  observation: SmsDeliveryObservation;
+  store: PluginStateKeyedStore<SmsDeliveryRecord>;
+}) {
+  if (!params.store.observe || !params.store.compareAndApply) {
+    throw new Error("SMS delivery observations require plugin state comparisons.");
+  }
+  const accountId = params.account.accountId;
+  const accountSidHash = sha256Hex(params.account.accountSid);
+  const key = sha256Hex(`${accountId}\n${accountSidHash}\n${params.messageSid}`);
+  let observed = await params.store.observe(key);
+  function mergeSmsDeliveryObservation(): SmsDeliveryRecord | undefined {
+    const messageSid = params.messageSid;
+    const current = observed.value;
+    const observation = params.observation;
+    if (
+      current?.observations.some((existing) => existing.fingerprint === observation.fingerprint)
+    ) {
+      return undefined;
+    }
+    const reduced = reduceDeliveryStatus(current, observation);
+    return {
+      accountId,
+      accountSidHash,
+      messageSid,
+      status: reduced.status,
+      firstObservedAt: current?.firstObservedAt ?? observation.observedAt,
+      lastObservedAt: observation.observedAt,
+      ...(reduced.errorCode ? { errorCode: reduced.errorCode } : {}),
+      ...(reduced.conflict ? { conflict: true } : {}),
+      observations: [...(current?.observations ?? []), observation].slice(
+        -DELIVERY_MAX_OBSERVATIONS_PER_MESSAGE,
+      ),
+    };
+  }
+  while (true) {
+    const next = mergeSmsDeliveryObservation();
+    const result = await params.store.compareAndApply(
+      key,
+      observed.comparison,
+      next
+        ? { operation: "update", action: "set", value: next }
+        : { operation: "update", action: "keep" },
+    );
+    if (result.status === "conflict") {
+      observed = result.current;
+      continue;
+    }
+    const record = next ?? observed.value;
+    if (!record) {
+      throw new Error("SMS delivery observation was not persisted.");
+    }
+    return { duplicate: !next, record };
+  }
+}
+
+export function createSmsDeliveryRecorder() {
+  const store = openDeliveryStore();
+  return {
+    async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
+      const nowMs = Date.now();
+      const messageSid = resolveTwilioMessageSid(form);
+      const status = resolveDeliveryStatus(form);
+      if (!messageSid || !status) {
+        throw new Error("Invalid Twilio delivery status callback.");
+      }
+      const errorCode = firstTrimmed(form, "ErrorCode");
+      const rawDlrDoneDate = firstTrimmed(form, "RawDlrDoneDate");
+      const observation: SmsDeliveryObservation = {
+        source: "callback",
+        fingerprint: fingerprintObservation({
+          source: "callback",
+          messageSid,
+          status,
+          ...(errorCode ? { errorCode } : {}),
+          ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
+        }),
+        status,
+        observedAt: nowMs,
+        ...(errorCode ? { errorCode } : {}),
+        ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
+      };
+      return await recordSmsDeliveryObservation({ account, messageSid, observation, store });
+    },
+  };
+}
+
+export async function recordInitialSmsDeliveryResult(params: {
+  account: ResolvedSmsAccount;
+  result: SmsSendResult;
+}) {
+  const messageSid = params.result.sid.trim();
+  const status = normalizeDeliveryStatus(params.result.status ?? "");
+  if (!messageSid || !status) {
+    return null;
+  }
+  return await recordSmsDeliveryObservation({
+    account: params.account,
+    messageSid,
+    observation: {
+      source: "api-response",
+      fingerprint: fingerprintObservation({
+        source: "api-response",
+        messageSid,
+        status,
+      }),
+      status,
+      observedAt: Date.now(),
+    },
+    store: openDeliveryStore(),
+  });
+}
+
+export async function listRecentSmsDeliveryRecords(
+  account: ResolvedSmsAccount,
+): Promise<SmsDeliveryRecord[]> {
+  const store = openDeliveryStore();
+  const accountSidHash = sha256Hex(account.accountSid);
+  return (await store.entries())
+    .map((entry) => entry.value)
+    .filter(
+      (record) =>
+        record.accountId === account.accountId && record.accountSidHash === accountSidHash,
+    )
+    .toSorted((left, right) => right.lastObservedAt - left.lastObservedAt)
+    .slice(0, 1);
+}

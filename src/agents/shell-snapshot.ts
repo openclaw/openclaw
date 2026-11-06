@@ -1,0 +1,429 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
+import { LruCache } from "../infra/lru-cache.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { killProcessTree } from "../process/kill-tree.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
+import { spawnProcess } from "../process/spawn-utils.js";
+import {
+  captureShellSnapshotEnvironment,
+  SAFE_ENV_NAMES,
+  SECRET_ENV_PATTERN,
+} from "./shell-snapshot-env.js";
+
+const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
+const SNAPSHOT_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+// Bound process-wide cwd/env history while keeping recently used snapshots hot.
+const SNAPSHOT_CACHE_MAX_ENTRIES = 128;
+const CAPTURE_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_CAPTURE__";
+const ENV_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_ENV__";
+const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
+const SNAPSHOT_SHELLS = new Set(["bash", "zsh"]);
+const SNAPSHOT_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
+const CAPTURE_ENV_NAMES = new Set([
+  ...SAFE_ENV_NAMES,
+  "HOME",
+  "OPENCLAW_SHELL",
+  "SHELL",
+  "USERPROFILE",
+  "ZDOTDIR",
+]);
+const SECRET_SHELL_STATE_PATTERNS = [
+  /\b(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|credential)\b\s*[:=]/i,
+  /\b[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API_KEY|ACCESS_KEY|SESSION)[A-Z0-9_]*\s*[:=]/,
+  /\b(GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GEMINI_API_KEY)\b/,
+  /\b(ghp_|github_pat_|sk-[A-Za-z0-9]|xox[baprs]-|ya29\.|AIza[0-9A-Za-z_-]|AKIA[0-9A-Z]{16})/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+] as const;
+
+type ShellSnapshotWrapOptions = {
+  enabled?: boolean;
+  command: string;
+  shell: string;
+  shellArgs: string[];
+  cwd: string;
+  env: Record<string, string | undefined>;
+};
+
+const snapshotCache = new LruCache<{ createdAtMs: number; promise: Promise<string | null> }>(
+  SNAPSHOT_CACHE_MAX_ENTRIES,
+);
+let cleanupPromise: Promise<void> | null = null;
+
+export async function maybeWrapCommandWithShellSnapshot(
+  opts: ShellSnapshotWrapOptions,
+): Promise<string> {
+  if (
+    opts.enabled === false ||
+    process.platform === "win32" ||
+    isExecShellSnapshotDisabled(process.env) ||
+    !isSupportedSnapshotShell(opts.shell, opts.shellArgs)
+  ) {
+    return opts.command;
+  }
+
+  try {
+    const snapshotPath = await getOrCreateShellSnapshot(opts);
+    return snapshotPath
+      ? buildSnapshotWrappedCommand(
+          opts.command,
+          snapshotPath,
+          buildRuntimeEnvRestoreScript(opts.env),
+        )
+      : opts.command;
+  } catch {
+    return opts.command;
+  }
+}
+
+function resolveShellSnapshotDir(env: Record<string, string | undefined> = process.env): string {
+  return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "cache", "shell-snapshots");
+}
+
+function isSupportedSnapshotShell(shell: string, shellArgs: string[]): boolean {
+  return shellArgs.includes("-c") && SNAPSHOT_SHELLS.has(path.basename(shell));
+}
+
+function isExecShellSnapshotDisabled(env: Record<string, string | undefined>): boolean {
+  const value = env[EXEC_SHELL_SNAPSHOT_ENV]?.trim().toLowerCase();
+  return Boolean(value && SNAPSHOT_DISABLE_VALUES.has(value));
+}
+
+async function getOrCreateShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
+  const key = buildSnapshotKey(opts);
+  const cached = snapshotCache.get(key);
+  const now = Date.now();
+  if (cached && now - cached.createdAtMs < SNAPSHOT_REFRESH_MS) {
+    return await cached.promise;
+  }
+  const created = createShellSnapshot(opts, key, Boolean(cached));
+  snapshotCache.set(key, { createdAtMs: now, promise: created });
+  return await created;
+}
+
+function buildSnapshotKey(opts: ShellSnapshotWrapOptions): string {
+  // Snapshot capture executes shell startup files before the approved command.
+  // Use process-owned roots/env only; per-call exec.env is model-controlled.
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: SNAPSHOT_VERSION,
+        shell: opts.shell,
+        shellArgs: opts.shellArgs,
+        cwd: path.resolve(opts.cwd),
+        home: getTrustedShellHome(),
+        stateDir: resolveStateDir(process.env),
+        env: buildSafeEnvSignature(process.env),
+        zdotdir: process.env.ZDOTDIR?.trim() || getTrustedShellHome(),
+      }),
+    )
+    .digest("hex");
+}
+
+function buildSafeEnvSignature(
+  env: Record<string, string | undefined>,
+): Array<[string, string | null]> {
+  return [...SAFE_ENV_NAMES]
+    .toSorted()
+    .map((key): [string, string | null] => [key, env[key] ?? null]);
+}
+
+function getTrustedShellHome(): string {
+  const configuredHome =
+    readNonBlankString(process.env.HOME) ?? readNonBlankString(process.env.USERPROFILE);
+  if (configuredHome) {
+    return configuredHome;
+  }
+  const accountHome = readNonBlankString(os.userInfo().homedir);
+  if (!accountHome) {
+    throw new Error("Unable to resolve the current user's home directory");
+  }
+  return accountHome;
+}
+
+async function createShellSnapshot(
+  opts: ShellSnapshotWrapOptions,
+  key: string,
+  forceRefresh: boolean,
+): Promise<string | null> {
+  const snapshotDir = resolveShellSnapshotDir(process.env);
+  await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
+  cleanupPromise ??= cleanupStaleSnapshots(snapshotDir);
+  void cleanupPromise;
+
+  const snapshotPath = path.join(snapshotDir, `${key}.sh`);
+  // Only validated captures are atomically published at this path.
+  if (!forceRefresh && (await isFreshSnapshot(snapshotPath))) {
+    return snapshotPath;
+  }
+
+  const capture = await captureShellSnapshot(opts);
+  if (!capture) {
+    return null;
+  }
+
+  const tmpPath = path.join(snapshotDir, `${key}.${process.pid}.${Date.now()}.tmp`);
+  await fs.writeFile(tmpPath, capture, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(tmpPath, 0o600);
+  if (!(await validateSnapshot(opts, tmpPath))) {
+    await fs.rm(tmpPath, { force: true });
+    return null;
+  }
+  await fs.rename(tmpPath, snapshotPath);
+  await fs.chmod(snapshotPath, 0o600);
+  return snapshotPath;
+}
+
+async function isFreshSnapshot(snapshotPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(snapshotPath);
+    return Date.now() - stat.mtimeMs < SNAPSHOT_REFRESH_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function validateSnapshot(
+  opts: ShellSnapshotWrapOptions,
+  snapshotPath: string,
+): Promise<boolean> {
+  const exitCode = await runShell({
+    shell: opts.shell,
+    shellArgs: opts.shellArgs,
+    cwd: opts.cwd,
+    env: buildTrustedSnapshotCaptureEnv(opts.env),
+    command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1`,
+    timeoutMs: 2_000,
+  });
+  return exitCode === 0;
+}
+
+async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
+  const shellName = path.basename(opts.shell);
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-shell-snapshot-",
+      dirMode: 0o700,
+      mode: 0o600,
+    },
+    async (workspace) => {
+      const captureOutputPath = await workspace.writeText("snapshot.out", "");
+      const environmentArgv = [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeProcessEntrypointUrl("shellSnapshotEnvironment"),
+          process.execPath,
+        ),
+      ];
+      const captureCommand = [
+        "{",
+        shellName === "zsh"
+          ? `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`
+          : ":",
+        `printf '\\n%s\\n' ${shQuote(CAPTURE_MARKER)}`,
+        shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true",
+        "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
+        `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
+        environmentArgv.map(shQuote).join(" "),
+        `} > ${shQuote(captureOutputPath)}`,
+      ].join("\n");
+
+      const exitCode = await runShell({
+        shell: opts.shell,
+        shellArgs: shellName === "bash" ? ["-i", "-c"] : ["-f", "-i", "-c"],
+        cwd: opts.cwd,
+        env: buildTrustedSnapshotCaptureEnv(opts.env),
+        command: captureCommand,
+        timeoutMs: 5_000,
+      });
+      if (exitCode !== 0) {
+        return null;
+      }
+      const stdout = await fs.readFile(captureOutputPath, "utf8");
+      return buildSnapshotFile(stdout);
+    },
+  );
+}
+
+function buildSnapshotCaptureEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([key]) => CAPTURE_ENV_NAMES.has(key) && !SECRET_ENV_PATTERN.test(key),
+    ),
+  );
+}
+
+function buildTrustedSnapshotCaptureEnv(
+  runtimeEnv: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const env = buildSnapshotCaptureEnv(process.env);
+  env.HOME = getTrustedShellHome();
+  // OPENCLAW_SHELL is injected by the exec runtime, so startup files can keep
+  // their documented exec-specific branches without trusting model input.
+  if (runtimeEnv.OPENCLAW_SHELL === "exec") {
+    env.OPENCLAW_SHELL = "exec";
+  }
+  return env;
+}
+
+function buildSnapshotFile(stdout: string): string | null {
+  const captureIndex = stdout.indexOf(CAPTURE_MARKER);
+  const envIndex = stdout.indexOf(ENV_MARKER);
+  if (captureIndex === -1 || envIndex === -1 || envIndex <= captureIndex) {
+    return null;
+  }
+
+  const shellState = stdout
+    .slice(captureIndex + CAPTURE_MARKER.length, envIndex)
+    .trim()
+    .split(/\r?\n/)
+    .filter((line) => !line.includes(CAPTURE_MARKER) && !line.includes(ENV_MARKER))
+    .join("\n");
+  if (SECRET_SHELL_STATE_PATTERNS.some((pattern) => pattern.test(shellState))) {
+    return null;
+  }
+  const exports = parseSafeEnvExports(stdout.slice(envIndex + ENV_MARKER.length).trim());
+
+  return [
+    "# OpenClaw exec shell snapshot. Generated; do not edit.",
+    'if [ -n "${BASH_VERSION:-}" ]; then shopt -s expand_aliases 2>/dev/null || true; fi',
+    "unalias -a 2>/dev/null || true",
+    shellState,
+    exports,
+    "",
+  ]
+    .filter((part) => part.trim().length > 0)
+    .join("\n");
+}
+
+function parseSafeEnvExports(envJson: string): string {
+  const parsed = safeParseJsonRecord(envJson);
+  if (!parsed) {
+    return "";
+  }
+  return Object.entries(captureShellSnapshotEnvironment(parsed))
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `export ${key}=${shQuote(value)}`)
+    .join("\n");
+}
+
+function buildRuntimeEnvRestoreScript(env: Record<string, string | undefined>): string {
+  return [...SAFE_ENV_NAMES]
+    .toSorted()
+    .filter((key) => env[key] !== process.env[key] && !SECRET_ENV_PATTERN.test(key))
+    .map((key) =>
+      typeof env[key] === "string" ? `export ${key}=${shQuote(env[key])}` : `unset ${key}`,
+    )
+    .join("\n");
+}
+
+function buildSnapshotWrappedCommand(
+  command: string,
+  snapshotPath: string,
+  runtimeEnvRestoreScript: string,
+): string {
+  return [
+    `if [ -r ${shQuote(snapshotPath)} ]; then . ${shQuote(snapshotPath)}; fi`,
+    runtimeEnvRestoreScript,
+    // Alias expansion happens while shells parse a command. Re-parse the user command
+    // after sourcing the snapshot so zsh/bash aliases captured from startup files work.
+    `eval ${shQuote(command)}`,
+  ]
+    .filter((part) => part.trim().length > 0)
+    .join("\n");
+}
+
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+async function runShell(opts: {
+  shell: string;
+  shellArgs: string[];
+  command: string;
+  cwd: string;
+  env: Record<string, string | undefined>;
+  timeoutMs: number;
+}): Promise<number | null> {
+  return await new Promise((resolve) => {
+    const child = withChildProcessOperation("shell.snapshot", () =>
+      spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
+        cwd: opts.cwd,
+        detached: process.platform !== "win32",
+        env: opts.env,
+        stdio: "ignore",
+        windowsHide: true,
+      }),
+    );
+    let settled = false;
+    const finish = (status: number | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (child.pid) {
+        killProcessTree(child.pid, { graceMs: 0, detached: true });
+      } else {
+        // Broker admission can outlive the capture deadline; cancel the pending child too.
+        child.kill("SIGKILL");
+      }
+      resolve(status);
+    };
+    child.once("spawn", () => {
+      if (settled && child.pid) {
+        killProcessTree(child.pid, { graceMs: 0, detached: true });
+      }
+    });
+    const timeout = setTimeout(() => {
+      killProcessTree(child.pid ?? 0, { graceMs: 250, detached: true });
+      finish(null);
+    }, opts.timeoutMs);
+    child.on("error", () => {
+      finish(null);
+    });
+    // Resolve on shell exit rather than pipe close. Startup files can leave
+    // background descendants holding stdout, and capture must stay bounded.
+    child.on("exit", (status) => {
+      setTimeout(() => finish(status), 250);
+    });
+    child.on("close", finish);
+  });
+}
+
+async function cleanupStaleSnapshots(snapshotDir: string): Promise<void> {
+  const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(snapshotDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith(".sh") || entry.endsWith(".tmp"))
+      .map(async (entry) => {
+        const target = path.join(snapshotDir, entry);
+        try {
+          const stat = await fs.stat(target);
+          if (stat.mtimeMs < cutoff) {
+            await fs.rm(target, { force: true });
+          }
+        } catch {
+          // Best-effort cache cleanup.
+        }
+      }),
+  );
+}

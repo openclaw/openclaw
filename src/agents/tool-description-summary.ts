@@ -1,0 +1,122 @@
+/**
+ * Tool description summary helpers.
+ *
+ * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
+function normalizeSummaryWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateSummary(value: string, maxLen = 120, minWordBoundary = 48): string {
+  if (value.length <= maxLen) {
+    return value;
+  }
+  const sliced = truncateUtf16Safe(value, maxLen - 3);
+  const boundary = sliced.lastIndexOf(" ");
+  const trimmed = (boundary >= minWordBoundary ? sliced.slice(0, boundary) : sliced).trimEnd();
+  return `${trimmed}...`;
+}
+
+function isToolDocBlockStart(line: string): boolean {
+  const normalized = line.trim().toUpperCase();
+  if (
+    normalized === "ACTIONS:" ||
+    normalized === "JOB SCHEMA (FOR ADD ACTION):" ||
+    normalized === "JOB SCHEMA:" ||
+    normalized === "SESSION TARGET OPTIONS:" ||
+    normalized === "DEFAULT BEHAVIOR (UNCHANGED FOR BACKWARD COMPATIBILITY):" ||
+    normalized === "SCHEDULE TYPES (SCHEDULE.KIND):" ||
+    normalized === "PAYLOAD TYPES (PAYLOAD.KIND):" ||
+    normalized === "DELIVERY (TOP-LEVEL):" ||
+    normalized === "CRITICAL CONSTRAINTS:" ||
+    normalized === "WAKE MODES (FOR WAKE ACTION):"
+  ) {
+    return true;
+  }
+  return (
+    normalized.endsWith(":") && line.trim() === line.trim().toUpperCase() && normalized.length > 12
+  );
+}
+
+function isExcludedDescriptionLine(line: string): boolean {
+  return (
+    isToolDocBlockStart(line) ||
+    line.startsWith("{") ||
+    line.startsWith("[") ||
+    line.startsWith("- ")
+  );
+}
+
+/** Build a short one-line summary from a tool description. */
+export function summarizeToolDescriptionText(params: {
+  rawDescription?: string | null;
+  displaySummary?: string | null;
+  maxLen?: number;
+}): string {
+  const explicit = normalizeOptionalString(params.displaySummary) ?? "";
+  if (explicit) {
+    return truncateSummary(normalizeSummaryWhitespace(explicit), params.maxLen);
+  }
+
+  const raw = normalizeOptionalString(params.rawDescription) ?? "";
+  if (!raw) {
+    return "Tool";
+  }
+
+  // Prefer paragraph openings before falling back to later lines.
+  for (const paragraph of raw.split(/\n\s*\n/g)) {
+    const first = paragraph.trim().split("\n", 1)[0]?.trim() ?? "";
+    if (!first || isExcludedDescriptionLine(first)) {
+      continue;
+    }
+    return truncateSummary(normalizeSummaryWhitespace(first), params.maxLen);
+  }
+
+  const firstLine = raw.split("\n").find((line) => {
+    const first = line.trim();
+    return first.length > 0 && !isExcludedDescriptionLine(first);
+  });
+  return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
+}
+
+/** Build a longer verbose description while excluding schema/action blocks. */
+export function describeToolForVerbose(params: {
+  rawDescription?: string | null;
+  fallback: string;
+}): string {
+  const raw = normalizeOptionalString(params.rawDescription) ?? "";
+  if (!raw) {
+    return params.fallback;
+  }
+
+  const kept: string[] = [];
+  let keptLength = 0;
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (kept.length > 0 && kept.at(-1) !== "") {
+        kept.push("");
+        // A paragraph gap contributes a separator even before the next line arrives.
+        keptLength += 1;
+      }
+      continue;
+    }
+    if (isExcludedDescriptionLine(trimmed)) {
+      break;
+    }
+    keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);
+    kept.push(trimmed);
+    if (keptLength >= 320) {
+      break;
+    }
+  }
+
+  const normalized = kept.join("\n").trim();
+  if (!normalized) {
+    return params.fallback;
+  }
+  return truncateSummary(normalized, 320, 160);
+}

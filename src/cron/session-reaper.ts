@@ -1,0 +1,327 @@
+/** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
+import path from "node:path";
+import {
+  buildPendingGeneratedMediaSessionKeySet,
+  hasPendingGeneratedMediaTaskForSessionKey,
+} from "../agents/media-generation-activity.js";
+import { assertSubagentReadContext } from "../agents/subagents/registry/subagent-registry-read-cache.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  applySessionEntryLifecycleMutation,
+  type SessionEntryLifecycleRemoval,
+} from "../config/sessions/session-accessor.js";
+import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { CronConfig } from "../config/types.cron.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../sessions/session-row-changes.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { CronAgentAvailability } from "./agent-availability.js";
+import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
+import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import type { Logger } from "./service/state.js";
+
+const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
+
+/** Minimum interval between reaper sweeps (avoid running every timer tick). */
+const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
+
+type ReaperTarget = {
+  agentId: string;
+  retentionMs: number;
+  lastSweepAtMs: number;
+  nextSweepAtMs: number;
+};
+
+const reaper = resolveGlobalSingleton<{
+  targets: Map<string, ReaperTarget>;
+  unsubscribe?: () => void;
+}>(
+  Symbol.for("openclaw.cronSessionReaper"),
+  () => ({ targets: new Map() }),
+  (state) => {
+    state.unsubscribe?.();
+    state.unsubscribe = undefined;
+    state.targets.clear();
+  },
+);
+
+function ensureReaperSubscription(): void {
+  reaper.unsubscribe ??= sessionChanges.subscribeFacts((change) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
+    if (!("all" in change) && !isCronRunSessionKey(change.sessionKey)) {
+      return;
+    }
+    const agentId = "all" in change ? undefined : parseAgentSessionKey(change.sessionKey)?.agentId;
+    // Logical ownership comes from the key even when an agent shares another agent's store.
+    for (const target of reaper.targets.values()) {
+      if (!agentId || target.agentId === normalizeAgentId(agentId)) {
+        target.nextSweepAtMs = 0;
+      }
+    }
+  });
+}
+
+function reaperTargetKey(agentId: string, storePath: string): string {
+  return `${normalizeAgentId(agentId)}\0${path.resolve(storePath)}`;
+}
+
+/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
+function resolveRetentionMs(cronConfig?: CronConfig): number | null {
+  if (cronConfig?.sessionRetention === false) {
+    return null; // pruning disabled
+  }
+  const raw = cronConfig?.sessionRetention;
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const ms = parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      // A zero retention ("0h") is a disable signal, not "prune everything":
+      // cutoff would equal now and the next sweep would delete every cron run
+      // session. Negative durations never get here (the parser rejects them);
+      // the <= 0 check stays defensive.
+      if (ms <= 0) {
+        return null;
+      }
+      return ms;
+    } catch {
+      return DEFAULT_RETENTION_MS;
+    }
+  }
+  return DEFAULT_RETENTION_MS;
+}
+
+type ReaperResult = {
+  swept: boolean;
+  pruned: number;
+};
+
+/** Removes the reusable base session whose owning isolated cron job was deleted. */
+export async function removeCronJobBaseSession(params: {
+  agentId: string;
+  jobId: string;
+  sessionStorePath: string;
+}): Promise<boolean> {
+  const sessionKey = resolveCronAgentSessionKey({
+    agentId: params.agentId,
+    sessionKey: `cron:${params.jobId}`,
+  });
+  const context = captureOpenClawStateWorkerContext();
+  const read = await readSessionEntriesFromStoreInWorker({
+    agentId: params.agentId,
+    storePath: params.sessionStorePath,
+    sessionKeys: [sessionKey],
+    env: context.environment,
+  });
+  assertSubagentReadContext(context);
+  const existing = read.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+  if (!existing) {
+    return false;
+  }
+  const sessionId = existing.sessionId.trim();
+  if (sessionId) {
+    return await deleteCronSessionViaGateway({
+      agentSessionKey: sessionKey,
+      sessionId,
+      lifecycleRevision: existing.lifecycleRevision,
+      sessionUpdatedAt: existing.updatedAt,
+    });
+  }
+  const result = await applySessionEntryLifecycleMutation({
+    agentId: params.agentId,
+    env: context.environment,
+    commitGuard: () => assertSubagentReadContext(context),
+    storePath: params.sessionStorePath,
+    removals: [{ sessionKey, archiveRemovedTranscript: true, expectedEntry: existing }],
+  });
+  return result.removedEntries > 0;
+}
+
+/**
+ * Sweeps completed isolated cron run sessions while preserving base cron sessions.
+ *
+ * Run outside the cron service `locked()` section: cleanup acquires session
+ * lifecycle and writer ownership, so nesting the queues can deadlock timer ticks.
+ */
+export async function sweepCronRunSessions(params: {
+  cronConfig?: CronConfig;
+  agentId: string;
+  /** Resolved session-store target, interpreted by the SQLite accessor. */
+  sessionStorePath: string;
+  isAgentAvailable?: CronAgentAvailability;
+  nowMs?: number;
+  log: Logger;
+}): Promise<ReaperResult> {
+  const retentionMs = resolveRetentionMs(params.cronConfig);
+  if (retentionMs === null) {
+    return { swept: false, pruned: 0 };
+  }
+
+  const now = params.nowMs ?? Date.now();
+  const storePath = params.sessionStorePath;
+  // Shared physical stores still hold agent-scoped rows. The throttle also
+  // suppresses in-flight attempts, so its identity must retain both scopes.
+  const targetKey = reaperTargetKey(params.agentId, storePath);
+  const previous = reaper.targets.get(targetKey);
+
+  // Timer ticks can be frequent; throttle per agent/store target to avoid
+  // repeated session-store I/O.
+  if (
+    previous?.retentionMs === retentionMs &&
+    now >= previous.lastSweepAtMs &&
+    (now - previous.lastSweepAtMs < MIN_SWEEP_INTERVAL_MS || now < previous.nextSweepAtMs)
+  ) {
+    return { swept: false, pruned: 0 };
+  }
+
+  // Throttle attempts, not only successful sweeps. A broken session store must
+  // not turn frequent timer ticks into an unbounded persistence-error loop.
+  ensureReaperSubscription();
+  const target: ReaperTarget = {
+    agentId: normalizeAgentId(params.agentId),
+    retentionMs,
+    lastSweepAtMs: now,
+    nextSweepAtMs: Infinity,
+  };
+  reaper.targets.set(targetKey, target);
+
+  let pruned = 0;
+  let transcriptCleanupError: unknown;
+  try {
+    const context = captureOpenClawStateWorkerContext();
+    const assertCurrent = () => assertSubagentReadContext(context);
+    const deletionStatus = await readAgentDeletionJournalStatusInWorker(params.agentId, {
+      env: context.environment,
+    });
+    if (
+      deletionStatus !== "absent" ||
+      params.isAgentAvailable?.(params.agentId, { deletionBlocked: false }) === false
+    ) {
+      params.log.debug({ agentId: params.agentId }, "cron-reaper: skipped unavailable agent");
+      target.nextSweepAtMs = 0;
+      return { swept: false, pruned: 0 };
+    }
+    const cutoff = now - retentionMs;
+    let pendingMediaSessionKeys: Set<string> | undefined;
+    const removals: SessionEntryLifecycleRemoval[] = [];
+    // Discovery validates the physical store in its reader worker and returns only full
+    // expired candidates. Live continuation/admission checks remain with this owner.
+    const { entries: expiredEntries, nextCronRunUpdatedAt } =
+      await readExpiredCronRunEntriesInWorker({
+        agentId: params.agentId,
+        storePath,
+        env: context.environment,
+        updatedBefore: cutoff,
+      });
+    // A receipt during discovery can only bring the next attempt forward.
+    target.nextSweepAtMs = Math.min(
+      target.nextSweepAtMs,
+      nextCronRunUpdatedAt === null
+        ? Infinity
+        : nextCronRunUpdatedAt === undefined
+          ? 0
+          : nextCronRunUpdatedAt + retentionMs + 1,
+    );
+    const continuationKeys = expiredEntries.flatMap(({ sessionKey, entry }) =>
+      entry.cronRunContinuation ? [sessionKey] : [],
+    );
+    const descendants =
+      continuationKeys.length > 0
+        ? await prepareCronDescendantDeletion(continuationKeys)
+        : undefined;
+    for (const { sessionKey, entry } of expiredEntries) {
+      if (entry.cronRunContinuation) {
+        // Build one unordered snapshot only when an expired continuation needs it.
+        // Fresh rows and stores without continuations never read media operation state.
+        pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
+        if (pendingMediaSessionKeys.has(sessionKey) || descendants?.hasUnsettled(sessionKey)) {
+          continue;
+        }
+      }
+      // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
+      // The shared deletion guard still closes the race between selection and commit.
+      if (
+        entry.sessionId &&
+        isCompetingSessionControllerWorkActive(storePath, [sessionKey, entry.sessionId])
+      ) {
+        continue;
+      }
+      removals.push({
+        sessionKey,
+        expectedEntry: entry,
+        ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
+        expectedUpdatedAt: entry.updatedAt,
+        archiveRemovedTranscript: true,
+      });
+    }
+    if (removals.length > 0) {
+      const result = await applySessionEntryLifecycleMutation({
+        agentId: params.agentId,
+        env: context.environment,
+        storePath,
+        removals,
+        commitGuard: () => {
+          assertCurrent();
+          // Descendants can acquire the continuation while deletion preparation awaits.
+          for (const removal of removals) {
+            if (
+              removal.expectedEntry?.cronRunContinuation &&
+              (descendants?.hasUnsettled(removal.sessionKey) ||
+                hasPendingGeneratedMediaTaskForSessionKey(removal.sessionKey))
+            ) {
+              throw new Error(
+                `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
+              );
+            }
+          }
+        },
+        captureArtifactCleanupError: true,
+      });
+      pruned = result.removedEntries;
+      transcriptCleanupError = result.artifactCleanupError;
+    }
+  } catch (err) {
+    target.nextSweepAtMs = 0;
+    params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
+    return { swept: false, pruned: 0 };
+  }
+
+  if (transcriptCleanupError) {
+    params.log.warn(
+      { err: formatErrorMessage(transcriptCleanupError) },
+      "cron-reaper: transcript cleanup failed",
+    );
+  }
+
+  if (pruned > 0) {
+    params.log.info(
+      { pruned, retentionMs },
+      `cron-reaper: pruned ${pruned} expired cron run session(s)`,
+    );
+  }
+
+  return { swept: true, pruned };
+}
+
+/** Resets per-target reaper throttles between tests. */
+function resetReaperThrottle(): void {
+  reaper.unsubscribe?.();
+  reaper.unsubscribe = undefined;
+  reaper.targets.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronSessionReaperTestApi")] = {
+    resetReaperThrottle,
+  };
+}

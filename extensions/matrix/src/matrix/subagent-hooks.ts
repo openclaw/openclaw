@@ -1,0 +1,117 @@
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  getMatrixThreadBindingManager,
+  listAllBindings,
+  listBindingsForAccount,
+  resolveBindingKey,
+} from "./thread-bindings-shared.js";
+
+export async function handleMatrixSubagentEnded(event: {
+  targetSessionKey: string;
+  targetKind: string;
+  accountId?: string;
+  reason?: string;
+  sendFarewell?: boolean;
+}): Promise<void> {
+  const accountId = normalizeOptionalString(event.accountId) || undefined;
+  // Use the targeted account list when available; fall back to a full scan
+  // so bindings are cleaned up even when accountId is absent.
+  const candidates = accountId ? listBindingsForAccount(accountId) : listAllBindings();
+  const matching = candidates.filter(
+    (entry) => entry.targetSessionKey === event.targetSessionKey && entry.targetKind === "subagent",
+  );
+  const removedBindingKeys = new Set<string>();
+  if (event.sendFarewell) {
+    const bindingService = getSessionBindingService();
+    const reason = normalizeOptionalString(event.reason) || "subagent-ended";
+    for (const binding of matching) {
+      const bindingId = resolveBindingKey(binding);
+      const removed = await bindingService.unbind({
+        bindingId,
+        reason,
+        scope: { channel: "matrix", accountId: binding.accountId },
+      });
+      if (removed.some((entry) => entry.bindingId === bindingId)) {
+        removedBindingKeys.add(bindingId);
+      }
+    }
+  }
+
+  const pendingByAccount = new Map<string, typeof matching>();
+  for (const binding of matching) {
+    if (!removedBindingKeys.has(resolveBindingKey(binding))) {
+      const pending = pendingByAccount.get(binding.accountId) ?? [];
+      pending.push(binding);
+      pendingByAccount.set(binding.accountId, pending);
+    }
+  }
+  for (const [bindingAccountId, pending] of pendingByAccount) {
+    await getMatrixThreadBindingManager(bindingAccountId)?.removeBindingsAsync(pending);
+  }
+}
+
+export function handleMatrixSubagentDeliveryTarget(event: {
+  childSessionKey: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  expectsCompletionMessage: boolean;
+}) {
+  if (!event.expectsCompletionMessage) {
+    return undefined;
+  }
+  const requesterChannel = event.requesterOrigin?.channel?.trim().toLowerCase();
+  if (requesterChannel !== "matrix") {
+    return undefined;
+  }
+
+  const requesterAccountId = normalizeOptionalString(event.requesterOrigin?.accountId);
+  const requesterThreadId =
+    event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
+      ? String(event.requesterOrigin.threadId).trim()
+      : "";
+
+  const candidates = requesterAccountId
+    ? listBindingsForAccount(requesterAccountId)
+    : listAllBindings();
+  const bindings = candidates.filter(
+    (entry) => entry.targetSessionKey === event.childSessionKey && entry.targetKind === "subagent",
+  );
+  if (bindings.length === 0) {
+    return undefined;
+  }
+
+  let binding: (typeof bindings)[number] | undefined;
+  if (requesterThreadId) {
+    binding = bindings.find(
+      (entry) =>
+        entry.conversationId === requesterThreadId &&
+        (!requesterAccountId || entry.accountId === requesterAccountId),
+    );
+  }
+  if (!binding && bindings.length === 1) {
+    binding = bindings[0];
+  }
+  if (!binding) {
+    return undefined;
+  }
+
+  const roomId = binding.parentConversationId ?? binding.conversationId;
+  const threadId =
+    binding.parentConversationId && binding.parentConversationId !== binding.conversationId
+      ? binding.conversationId
+      : undefined;
+
+  return {
+    origin: {
+      channel: "matrix" as const,
+      accountId: binding.accountId,
+      to: `room:${roomId}`,
+      ...(threadId ? { threadId } : {}),
+    },
+  };
+}

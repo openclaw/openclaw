@@ -1,0 +1,312 @@
+// Discord tests cover gateway plugin plugin behavior.
+import { EventEmitter } from "node:events";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
+import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
+import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
+
+const { GatewayIntents, GatewayPlugin } = await vi.hoisted(async () => {
+  const { EventEmitter: TestEmitter } = await import("node:events");
+  const GatewayIntentsLocal = {
+    Guilds: 1 << 0,
+    GuildMessages: 1 << 1,
+    MessageContent: 1 << 2,
+    DirectMessages: 1 << 3,
+    GuildMessageReactions: 1 << 4,
+    DirectMessageReactions: 1 << 5,
+    GuildPresences: 1 << 6,
+    GuildMembers: 1 << 7,
+    GuildVoiceStates: 1 << 8,
+    GuildExpressions: 1 << 9,
+  } as const;
+
+  class GatewayPluginLocal {
+    options: unknown;
+    gatewayInfo: unknown;
+    emitter = new TestEmitter();
+    isConnecting = false;
+    heartbeatInterval?: NodeJS.Timeout;
+    firstHeartbeatTimeout?: NodeJS.Timeout;
+    ws?: unknown;
+
+    constructor(options?: unknown) {
+      this.options = options;
+    }
+
+    async registerClient(_clientForTest: unknown): Promise<void> {}
+
+    connect(_resume = false): void {}
+  }
+
+  return { GatewayIntents: GatewayIntentsLocal, GatewayPlugin: GatewayPluginLocal };
+});
+
+vi.mock("../internal/gateway.js", () => ({
+  DISCORD_GATEWAY_WS_CLIENT_OPTIONS: { maxPayload: 16 * 1024 * 1024 },
+  GatewayIntents,
+  GatewayPlugin,
+}));
+
+const webSocketConstructor = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: webSocketConstructor,
+}));
+
+const captureHost = vi.hoisted(() => ({
+  capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
+  captureWsEventAsync: captureHost.capture,
+  resolveEffectiveDebugProxyUrl: () => undefined,
+  resolveDebugProxySettings: () => ({ enabled: false }),
+}));
+
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    danger: (value: string) => value,
+    warn: (value: string) => value,
+  };
+});
+
+describe("createDiscordGatewayPlugin", () => {
+  let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+  let resolveDiscordGatewayIntents: typeof import("./gateway-plugin.js").resolveDiscordGatewayIntents;
+
+  beforeAll(async () => {
+    ({ createDiscordGatewayPlugin, resolveDiscordGatewayIntents } =
+      await import("./gateway-plugin.js"));
+  });
+
+  beforeEach(() => {
+    captureHost.capture.mockReset().mockResolvedValue(undefined);
+  });
+
+  function createPlugin(
+    socket?: EventEmitter,
+    discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
+    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = createRuntimeSpies(),
+  ) {
+    webSocketConstructor.mockImplementation(function () {
+      return socket;
+    });
+    return createDiscordGatewayPlugin({ discordConfig, runtime });
+  }
+
+  it("omits MessageContent only when explicitly disabled", () => {
+    const defaultIntents = resolveDiscordGatewayIntents();
+    const mentionOnlyIntents = resolveDiscordGatewayIntents({
+      intentsConfig: { messageContent: false },
+    });
+
+    expect(defaultIntents & GatewayIntents.MessageContent).toBe(GatewayIntents.MessageContent);
+    expect(mentionOnlyIntents & GatewayIntents.MessageContent).toBe(0);
+  });
+
+  it("lets intents.voiceStates override voice enablement", () => {
+    const enabled = resolveDiscordGatewayIntents({
+      intentsConfig: { voiceStates: true },
+      voiceEnabled: false,
+    });
+    const disabled = resolveDiscordGatewayIntents({
+      intentsConfig: { voiceStates: false },
+      voiceEnabled: true,
+    });
+
+    expect(enabled & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
+    expect(disabled & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("includes optional configured privileged intents", () => {
+    const intents = resolveDiscordGatewayIntents({
+      intentsConfig: { presence: true, guildMembers: true },
+    });
+
+    expect(intents & GatewayIntents.GuildPresences).toBe(GatewayIntents.GuildPresences);
+    expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
+  });
+
+  it("parses valid Discord gateway metadata", async () => {
+    await expect(
+      fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              url: "wss://gateway.discord.gg",
+              shards: 1,
+              session_start_limit: {
+                total: 1000,
+                remaining: 999,
+                reset_after: 0,
+                max_concurrency: 1,
+              },
+            }),
+          ),
+      }),
+    ).resolves.toEqual({
+      url: "wss://gateway.discord.gg",
+      shards: 1,
+      session_start_limit: {
+        total: 1000,
+        remaining: 999,
+        reset_after: 0,
+        max_concurrency: 1,
+      },
+    });
+  });
+
+  it("rejects malformed Discord gateway metadata", async () => {
+    await expect(
+      fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              url: "wss://gateway.discord.gg",
+              shards: 0,
+              session_start_limit: {
+                total: 1000,
+                remaining: 999,
+                reset_after: 0,
+                max_concurrency: 1,
+              },
+            }),
+          ),
+      }),
+    ).rejects.toThrow(/url|shards/);
+  });
+
+  it("omits voice states when Discord voice is disabled in account config", () => {
+    const plugin = createPlugin(undefined, { voice: { enabled: false } });
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
+  });
+
+  it("keeps voice states for existing Discord voice config blocks", () => {
+    const plugin = createPlugin(undefined, { voice: {} });
+    const options = (plugin as unknown as { options?: { intents?: number } }).options;
+
+    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(
+      GatewayIntents.GuildVoiceStates,
+    );
+  });
+
+  it.each(["present", "rejected"] as const)(
+    "emits transport activity with %s async capture",
+    (capability) => {
+      if (capability === "rejected") {
+        captureHost.capture.mockRejectedValue(new Error("capture write failed"));
+      }
+      const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      const plugin = createPlugin(socket);
+      const activitySpy = vi.fn();
+      (
+        plugin as unknown as {
+          emitter: { on: (event: string, listener: (value: unknown) => void) => void };
+        }
+      ).emitter.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, activitySpy);
+
+      const createdSocket = (
+        plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+      ).createWebSocket("wss://gateway.discord.gg");
+      (plugin as unknown as { ws: unknown }).ws = createdSocket;
+
+      try {
+        createdSocket.emit("message", Buffer.from("{}"));
+
+        expect(activitySpy).toHaveBeenCalledWith({ at: 1_700_000_000_000 });
+        createdSocket.emit("error", new Error("socket failure"));
+        createdSocket.emit("close", 1000, Buffer.alloc(0));
+        expect(captureHost.capture.mock.calls.map(([event]) => event.kind)).toEqual([
+          "ws-open",
+          "ws-frame",
+          "error",
+          "ws-close",
+        ]);
+        expect(captureHost.capture).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "wss://gateway.discord.gg",
+            direction: "inbound",
+            payload: Buffer.from("{}"),
+            meta: { subsystem: "discord-gateway" },
+          }),
+        );
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    },
+  );
+
+  it("ignores messages from stale gateway sockets", () => {
+    const staleSocket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const currentSocket = new EventEmitter();
+    const plugin = createPlugin(staleSocket);
+    const activitySpy = vi.fn();
+    (
+      plugin as unknown as {
+        emitter: { on: (event: string, listener: (value: unknown) => void) => void };
+      }
+    ).emitter.on(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, activitySpy);
+
+    const createdSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => typeof staleSocket }
+    ).createWebSocket("wss://gateway.discord.gg");
+    expect(createdSocket).toBe(staleSocket);
+    (plugin as unknown as { ws: unknown }).ws = currentSocket;
+
+    staleSocket.emit("message", Buffer.from("{}"));
+
+    expect(activitySpy).not.toHaveBeenCalled();
+  });
+
+  it("logs Discord gateway websocket error and abnormal close details", () => {
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const runtime = createRuntimeSpies();
+    const plugin = createPlugin(socket, {}, runtime);
+    const createdSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+    ).createWebSocket("wss://gateway.discord.gg");
+    const receiverLimitError = Object.assign(new Error("Too many buffered parts"), {
+      code: "WS_ERR_TOO_MANY_BUFFERED_PARTS",
+    });
+
+    createdSocket.emit("error", receiverLimitError);
+    createdSocket.emit("close", 1008, Buffer.from("policy violation"));
+
+    const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(logs).toContain("discord: gateway websocket error");
+    expect(logs).toContain("code=WS_ERR_TOO_MANY_BUFFERED_PARTS");
+    expect(logs).toContain("discord: gateway websocket closed");
+    expect(logs).toContain("code=1008");
+    expect(logs).toContain("reason=policy violation");
+    expect(logs).toContain("lastErrorCode=WS_ERR_TOO_MANY_BUFFERED_PARTS");
+    expect(logs).toContain("hint=possible ws receiver buffered-parts limit");
+  });
+
+  it("keeps gateway close reason logs UTF-16 safe", () => {
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const runtime = createRuntimeSpies();
+    const plugin = createPlugin(socket, {}, runtime);
+    const createdSocket = (
+      plugin as unknown as { createWebSocket: (url: string) => typeof socket }
+    ).createWebSocket("wss://gateway.discord.gg");
+
+    createdSocket.emit("close", 1008, Buffer.from(`${"A".repeat(239)}🧪 tail`));
+
+    const log = String(runtime.log.mock.calls.at(-1)?.[0]);
+    expect(log).toContain("discord: gateway websocket closed");
+    expect(log).toContain("code=1008");
+    expect(log).toContain(`reason=${"A".repeat(239)}...`);
+    expect(log).toContain("hint=possible ws receiver buffered-parts limit");
+  });
+});

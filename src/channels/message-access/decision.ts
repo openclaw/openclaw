@@ -1,0 +1,342 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
+import {
+  allowedImplicitMentionKindsFromConfig,
+  resolveInboundMentionDecision,
+} from "../mention-gating.js";
+import { applyIdentifierAuthenticationPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
+import {
+  DEFAULT_IDENTIFIER_AUTHENTICATION,
+  meetsIdentifierAuthentication,
+  minimumIdentifierAuthenticationFrom,
+} from "./identifier-authentication.js";
+import {
+  applyEventAuthModeToSenderGate,
+  senderGateForDirect,
+  senderGateForGroup,
+} from "./sender-gates.js";
+import type {
+  AccessGraphGate,
+  ChannelIngressDecision,
+  ChannelIngressPolicyInput,
+  NormalizedIngressState,
+  RedactedIngressMatch,
+} from "./types.js";
+
+function routeGates(state: NormalizedIngressState): AccessGraphGate[] {
+  // Route gates run first because a matched route can block dispatch before sender,
+  // command, or mention policy needs to evaluate.
+  return state.routeFacts.map((route) => ({
+    id: route.id,
+    phase: "route",
+    kind: route.kind,
+    effect: route.effect,
+    allowed: route.effect !== "block-dispatch",
+    reasonCode: route.effect === "block-dispatch" ? "route_blocked" : "allowed",
+    match: route.match,
+  }));
+}
+
+function routeSenderEmptyGate(state: NormalizedIngressState): AccessGraphGate | null {
+  // deny-when-empty route sender policy means the route matched but has no sender list to
+  // authorize against, so it becomes an explicit route block.
+  const route = state.routeFacts.find(
+    (fact) =>
+      fact.senderPolicy === "deny-when-empty" &&
+      fact.gate === "matched" &&
+      fact.senderAllowlist?.hasConfiguredEntries !== true,
+  );
+  if (!route) {
+    return null;
+  }
+  const reasonCode = "route_sender_empty";
+  return {
+    id: `${route.id}:sender`,
+    phase: "route",
+    kind: "routeSender",
+    effect: "block-dispatch",
+    allowed: false,
+    reasonCode,
+    match: route.match,
+    allowlist: route.senderAllowlist
+      ? redactedAllowlistDiagnostics(route.senderAllowlist, reasonCode)
+      : undefined,
+  };
+}
+
+function commandGate(params: {
+  state: NormalizedIngressState;
+  policy: ChannelIngressPolicyInput;
+}): AccessGraphGate {
+  const command = params.policy.command;
+  if (!command) {
+    return {
+      id: "command",
+      phase: "command",
+      kind: "command",
+      effect: "allow",
+      allowed: true,
+      reasonCode: "command_authorized",
+    };
+  }
+  const useAccessGroups = command.useAccessGroups ?? true;
+  // Command authorization combines owner and group allowlists after authentication policy so
+  // command control cannot be granted by identifiers the current policy rejects.
+  const owner = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandOwner,
+    params.policy,
+  );
+  const group = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandGroup,
+    params.policy,
+  );
+  const authorized = resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups,
+    modeWhenAccessGroupsOff: command.modeWhenAccessGroupsOff,
+    authorizers: [
+      { configured: owner.hasConfiguredEntries, allowed: owner.match.matched },
+      { configured: group.hasConfiguredEntries, allowed: group.match.matched },
+    ],
+  });
+  const shouldBlock = command.allowTextCommands && command.hasControlCommand && !authorized;
+  return {
+    id: "command",
+    phase: "command",
+    kind: "command",
+    effect: shouldBlock ? "block-command" : "allow",
+    allowed: authorized,
+    reasonCode: shouldBlock ? "control_command_unauthorized" : "command_authorized",
+    match: mergeCommandMatch(owner.match, group.match),
+    identifierAuthentication: {
+      evaluated: Boolean(owner.authentication?.evaluated || group.authentication?.evaluated),
+      affectedMatch: Boolean(
+        owner.authentication?.affectedMatch || group.authentication?.affectedMatch,
+      ),
+    },
+    command: {
+      useAccessGroups,
+      allowTextCommands: command.allowTextCommands,
+      modeWhenAccessGroupsOff: command.modeWhenAccessGroupsOff,
+      shouldBlockControlCommand: shouldBlock,
+    },
+  };
+}
+
+function mergeCommandMatch(
+  owner: RedactedIngressMatch,
+  group: RedactedIngressMatch,
+): RedactedIngressMatch {
+  const matchedEntryIds = uniqueStrings([...owner.matchedEntryIds, ...group.matchedEntryIds]);
+  return {
+    matched: owner.matched || group.matched || matchedEntryIds.length > 0,
+    matchedEntryIds,
+  };
+}
+
+function eventGate(params: {
+  state: NormalizedIngressState;
+  policy: ChannelIngressPolicyInput;
+  senderGate: AccessGraphGate;
+  commandGate: AccessGraphGate;
+}): AccessGraphGate {
+  const authMode = params.state.event.authMode;
+  const event = params.state.event;
+  const eventResult = (
+    allowed: boolean,
+    reasonCode: AccessGraphGate["reasonCode"],
+  ): AccessGraphGate => ({
+    id: "event",
+    phase: "event",
+    kind: "event",
+    effect: allowed ? "allow" : "block-dispatch",
+    allowed,
+    reasonCode,
+    event,
+  });
+  if (authMode === "none" || authMode === "route-only") {
+    return eventResult(true, "event_authorized");
+  }
+  if (authMode === "origin-subject") {
+    // Origin-subject mode is used for callbacks tied to a prior message/user identity.
+    if (!params.state.event.hasOriginSubject) {
+      return eventResult(false, "origin_subject_missing");
+    }
+    const matched =
+      params.state.event.originSubjectMatched &&
+      meetsIdentifierAuthentication(
+        params.state.event.originSubjectAuthentication ?? DEFAULT_IDENTIFIER_AUTHENTICATION,
+        minimumIdentifierAuthenticationFrom(params.policy),
+      );
+    return {
+      ...eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched"),
+      identifierAuthentication: {
+        evaluated:
+          params.policy.minIdentifierAuthentication !== undefined ||
+          params.policy.mutableIdentifierMatching !== undefined ||
+          params.state.event.originSubjectAuthentication !== undefined,
+        affectedMatch: params.state.event.originSubjectMatched && !matched,
+      },
+    };
+  }
+  // Command-auth events, such as button or slash command callbacks, inherit the command gate
+  // result instead of re-checking the sender allowlist.
+  const gate = authMode === "command" ? params.commandGate : params.senderGate;
+  return eventResult(gate.allowed, gate.allowed ? "event_authorized" : "event_unauthorized");
+}
+
+function activationGate(params: {
+  state: NormalizedIngressState;
+  policy: ChannelIngressPolicyInput;
+  commandGate: AccessGraphGate;
+}): AccessGraphGate {
+  const activation = params.policy.activation;
+  const mentionFacts = params.state.mentionFacts;
+  const allowedImplicitMentionKinds =
+    activation?.allowedImplicitMentionKinds ??
+    (activation?.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
+      : undefined);
+  const activationResult = (input: {
+    shouldSkip: boolean;
+    effectiveWasMentioned?: boolean;
+    shouldBypassMention?: boolean;
+  }): AccessGraphGate => ({
+    id: "activation",
+    phase: "activation",
+    kind: "mention",
+    effect: input.shouldSkip ? "skip" : "allow",
+    allowed: !input.shouldSkip,
+    reasonCode: input.shouldSkip ? "activation_skipped" : "activation_allowed",
+    activation: {
+      hasMentionFacts: mentionFacts != null,
+      requireMention: activation?.requireMention ?? false,
+      allowTextCommands: activation?.allowTextCommands ?? false,
+      ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
+      ...(activation?.order ? { order: activation.order } : {}),
+      shouldSkip: input.shouldSkip,
+      ...(mentionFacts?.canDetectMention !== undefined
+        ? { canDetectMention: mentionFacts.canDetectMention }
+        : {}),
+      ...(mentionFacts?.wasMentioned !== undefined
+        ? { wasMentioned: mentionFacts.wasMentioned }
+        : {}),
+      ...(mentionFacts?.hasAnyMention !== undefined
+        ? { hasAnyMention: mentionFacts.hasAnyMention }
+        : {}),
+      ...(mentionFacts?.implicitMentionKinds !== undefined
+        ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
+        : {}),
+      ...(input.effectiveWasMentioned !== undefined
+        ? { effectiveWasMentioned: input.effectiveWasMentioned }
+        : {}),
+      ...(input.shouldBypassMention !== undefined
+        ? { shouldBypassMention: input.shouldBypassMention }
+        : {}),
+    },
+  });
+  if (!activation || !mentionFacts) {
+    // Without activation policy or mention facts, sender/event authorization is enough.
+    return activationResult({
+      shouldSkip: false,
+      effectiveWasMentioned:
+        mentionFacts &&
+        (mentionFacts.wasMentioned || Boolean(mentionFacts.implicitMentionKinds?.length)),
+    });
+  }
+  const result = resolveInboundMentionDecision({
+    facts: mentionFacts,
+    policy: {
+      isGroup: params.state.conversationKind !== "direct",
+      requireMention: activation.requireMention,
+      allowedImplicitMentionKinds,
+      allowTextCommands: activation.allowTextCommands,
+      hasControlCommand: params.policy.command?.hasControlCommand ?? false,
+      commandAuthorized: params.commandGate.allowed,
+    },
+  });
+  return activationResult({
+    shouldSkip: result.shouldSkip,
+    effectiveWasMentioned: result.effectiveWasMentioned,
+    shouldBypassMention: result.shouldBypassMention,
+  });
+}
+
+export function decideChannelIngress(
+  state: NormalizedIngressState,
+  policy: ChannelIngressPolicyInput,
+): ChannelIngressDecision {
+  const gates: AccessGraphGate[] = routeGates(state);
+  const decide = (
+    gate: AccessGraphGate,
+    admission: ChannelIngressDecision["admission"],
+    decision: ChannelIngressDecision["decision"],
+  ): ChannelIngressDecision => ({
+    admission,
+    decision,
+    decisiveGateId: gate.id,
+    reasonCode: gate.reasonCode,
+    graph: { gates },
+  });
+  const emptyRouteSenderGate = routeSenderEmptyGate(state);
+  if (emptyRouteSenderGate) {
+    gates.push(emptyRouteSenderGate);
+  }
+  const routeBlock = gates.find((entry) => entry.effect === "block-dispatch");
+  if (routeBlock) {
+    return decide(routeBlock, "drop", "block");
+  }
+
+  // Some channels want mention gating before sender checks so unmentioned room chatter can
+  // short-circuit without exposing sender allowlist diagnostics.
+  const activationBeforeSender =
+    policy.activation?.order === "before-sender" && !policy.activation.allowTextCommands
+      ? activationGate({
+          state,
+          policy,
+          commandGate: commandGate({ state, policy: { ...policy, command: undefined } }),
+        })
+      : null;
+  if (activationBeforeSender) {
+    gates.push(activationBeforeSender);
+    if (activationBeforeSender.effect === "skip") {
+      return decide(activationBeforeSender, "skip", "allow");
+    }
+  }
+
+  const sender =
+    state.conversationKind === "direct"
+      ? senderGateForDirect({ state, policy })
+      : senderGateForGroup({ state, policy });
+  // Event auth mode can relax or tighten how sender gates affect non-message events.
+  const eventModeSender = applyEventAuthModeToSenderGate({ state, senderGate: sender });
+  gates.push(eventModeSender);
+  if (!eventModeSender.allowed) {
+    const admission =
+      eventModeSender.reasonCode === "dm_policy_pairing_required" ? "pairing-required" : "drop";
+    const decision =
+      eventModeSender.reasonCode === "dm_policy_pairing_required" ? "pairing" : "block";
+    return decide(eventModeSender, admission, decision);
+  }
+
+  const command = commandGate({ state, policy });
+  gates.push(command);
+  if (command.effect === "block-command") {
+    return decide(command, "drop", "block");
+  }
+
+  const event = eventGate({ state, policy, senderGate: eventModeSender, commandGate: command });
+  gates.push(event);
+  if (!event.allowed) {
+    return decide(event, "drop", "block");
+  }
+
+  const activation =
+    activationBeforeSender ?? activationGate({ state, policy, commandGate: command });
+  if (!activationBeforeSender) {
+    gates.push(activation);
+  }
+  if (activation.effect === "skip") {
+    return decide(activation, "skip", "allow");
+  }
+  return decide(activation, "dispatch", "allow");
+}

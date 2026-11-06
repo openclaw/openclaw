@@ -1,0 +1,155 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
+import { createSlackReadClient, createSlackTokenCacheKey, createSlackWebClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { readLruMapEntry } from "./monitor/lru-map-cache.js";
+
+export type SlackConversationInfo = {
+  type: "channel" | "group" | "dm" | "unknown";
+  name?: string;
+  user?: string;
+};
+
+const SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES = 1024;
+const SLACK_CONVERSATION_INFO_CACHE = new Map<string, SlackConversationInfo>();
+
+function setCachedSlackConversationInfo(
+  cacheKey: string,
+  conversationInfo: SlackConversationInfo,
+): void {
+  SLACK_CONVERSATION_INFO_CACHE.delete(cacheKey);
+  SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, conversationInfo);
+  pruneMapToMaxSize(SLACK_CONVERSATION_INFO_CACHE, SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES);
+}
+
+function resolveConfiguredSlackConversationInfo(params: {
+  account: ReturnType<typeof resolveSlackAccount>;
+  channelId: string;
+}): SlackConversationInfo {
+  if (/^D/i.test(params.channelId)) {
+    return { type: "dm" };
+  }
+  const channelIdLower = normalizeLowercaseStringOrEmpty(params.channelId);
+  const groupChannels = normalizeStringEntriesLower(params.account.dm?.groupChannels);
+  if (
+    groupChannels.includes(channelIdLower) ||
+    groupChannels.includes(`slack:${channelIdLower}`) ||
+    groupChannels.includes(`channel:${channelIdLower}`) ||
+    groupChannels.includes(`group:${channelIdLower}`) ||
+    groupChannels.includes(`mpim:${channelIdLower}`)
+  ) {
+    return { type: "group" };
+  }
+  const configuredChannel = Object.keys(params.account.channels ?? {}).some((key) => {
+    const normalized = normalizeLowercaseStringOrEmpty(key);
+    return (
+      normalized === channelIdLower ||
+      normalized === `channel:${channelIdLower}` ||
+      normalized.replace(/^#/, "") === channelIdLower
+    );
+  });
+  return { type: configuredChannel ? "channel" : "unknown" };
+}
+
+export async function resolveSlackConversationInfo(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  channelId: string;
+  teamId?: string;
+  operation?: "read" | "write";
+  requireFreshName?: boolean;
+  assertDirectAdapterHandoff?: () => void;
+}): Promise<SlackConversationInfo> {
+  const channelId = params.channelId.trim();
+  if (!channelId) {
+    return { type: "unknown" };
+  }
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
+  const operation = params.operation ?? "read";
+  const token = resolveSlackOperationToken(account, operation);
+  const userToken = normalizeOptionalString(account.userToken);
+  const credentialRole = token ? (token === userToken ? "user" : "bot") : "none";
+  const credentialFingerprint = token ? createSlackTokenCacheKey(token) : "none";
+  const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "no-team-id";
+  const cacheKey = `${account.accountId}:${teamId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
+  if (!params.requireFreshName) {
+    const cached = readLruMapEntry(SLACK_CONVERSATION_INFO_CACHE, cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const isNativeImChannel = /^D/i.test(channelId);
+  const configuredInfo = resolveConfiguredSlackConversationInfo({ account, channelId });
+  if (token) {
+    try {
+      // Read-only classification stays on conversations.info. conversations.open is
+      // write-scoped and must only run when the caller explicitly requests a write.
+      if (isNativeImChannel && operation === "write") {
+        const client = createSlackWebClient(
+          token,
+          { teamId: params.teamId },
+          params.assertDirectAdapterHandoff,
+        );
+        const opened = await client.conversations.open({
+          channel: channelId,
+          prevent_creation: true,
+          return_im: true,
+        });
+        const user = normalizeOptionalString(opened.channel?.user);
+        const result: SlackConversationInfo = user ? { type: "dm", user } : { type: "dm" };
+        if (user) {
+          setCachedSlackConversationInfo(cacheKey, result);
+        }
+        return result;
+      }
+      const client = createSlackReadClient(
+        token,
+        { teamId: params.teamId },
+        undefined,
+        params.assertDirectAdapterHandoff,
+      );
+      const info = await client.conversations.info({ channel: channelId });
+      const channel = info.channel as
+        | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }
+        | undefined;
+      const type = channel?.is_im ? "dm" : channel?.is_mpim ? "group" : "channel";
+      const name = normalizeOptionalString(channel?.name);
+      const user = normalizeOptionalString(channel?.user);
+      const result: SlackConversationInfo = {
+        type,
+        ...(name ? { name } : {}),
+        ...(user ? { user } : {}),
+      };
+      setCachedSlackConversationInfo(cacheKey, {
+        type,
+        ...(user ? { user } : {}),
+      });
+      return result;
+    } catch {
+      // Keep metadata fallback only while the action that requested it remains current.
+      params.assertDirectAdapterHandoff?.();
+      return { type: isNativeImChannel ? "dm" : "unknown" };
+    }
+  }
+
+  if (!isNativeImChannel) {
+    setCachedSlackConversationInfo(cacheKey, configuredInfo);
+  }
+  return configuredInfo;
+}
+
+export async function resolveSlackChannelType(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  channelId: string;
+  teamId?: string;
+}): Promise<"channel" | "group" | "dm" | "unknown"> {
+  return (await resolveSlackConversationInfo(params)).type;
+}

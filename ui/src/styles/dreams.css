@@ -1,0 +1,687 @@
+.dreams-page {
+  width: 100%;
+}
+
+.dreams-page__stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* The sky is a fixed stage, so the sleeper never moves when the bubble comes or
+   goes. Everything hangs off one line: where the sleeper's middle sits. */
+.dreams {
+  --dreams-sleeper-y: 318px;
+  position: relative;
+  flex: none;
+  height: 440px;
+  overflow: hidden;
+  user-select: none;
+  /* The sleeper's glow fades out instead of ending on the stage's edge. */
+  mask-image: linear-gradient(to bottom, black calc(100% - 40px), transparent);
+}
+
+.dreams__lobster {
+  position: absolute;
+  top: calc(var(--dreams-sleeper-y) - 80px);
+  left: calc(50% - 80px);
+  animation: dreams-breathe 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 40px rgba(255, 77, 77, 0.25));
+  transition: filter 0.6s ease;
+}
+
+.dreams__lobster svg {
+  display: block;
+  width: 160px;
+  height: 160px;
+}
+
+/* Stirring: press the sleeper and it half-opens one eye, without quite
+   waking. The peek eye ships hidden inside the sleeping svg. */
+.dreams__lobster .lob-eye-peek {
+  display: none;
+}
+
+.dreams__lobster:active .lob-eye-peek {
+  display: block;
+}
+
+.dreams__lobster:active .lob-eye-closed path:first-of-type {
+  opacity: 0;
+}
+
+.dreams__lobster:active {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dreams__lobster:active .lob-antennae {
+    animation: dreams-stir-antennae 0.9s ease-in-out infinite;
+    transform-origin: 60px 14px;
+  }
+}
+
+@keyframes dreams-stir-antennae {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes dreams-breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.04) translateY(-4px);
+  }
+}
+
+.dreams__z {
+  position: absolute;
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--accent);
+  opacity: 0;
+  animation: dreams-float-z 4s ease-out infinite;
+}
+
+/* Z's originate from the lobster's head and float up-right at an angle.
+   Use nth-of-type because Z's are <span> while stars/moon/glow are <div>. */
+.dreams__z:nth-of-type(1) {
+  font-size: 14px;
+  left: calc(50% + 70px);
+  top: calc(var(--dreams-sleeper-y) - 90px);
+  animation-delay: 0s;
+}
+
+.dreams__z:nth-of-type(2) {
+  font-size: 20px;
+  left: calc(50% + 100px);
+  top: calc(var(--dreams-sleeper-y) - 130px);
+  animation-delay: 1.2s;
+}
+
+.dreams__z:nth-of-type(3) {
+  font-size: 28px;
+  left: calc(50% + 130px);
+  top: calc(var(--dreams-sleeper-y) - 175px);
+  animation-delay: 2.4s;
+}
+
+@keyframes dreams-float-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(-10deg);
+  }
+  15% {
+    opacity: 0.7;
+  }
+  80% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(20px, -40px) rotate(15deg);
+  }
+}
+
+.dreams__star {
+  position: absolute;
+  border-radius: 50%;
+  animation: dreams-twinkle 3s ease-in-out infinite alternate;
+}
+
+@keyframes dreams-twinkle {
+  0% {
+    opacity: 0.15;
+    transform: scale(0.8);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1.2);
+  }
+}
+
+.dreams__bubble {
+  position: absolute;
+  top: calc(var(--dreams-sleeper-y) - 262px);
+  left: max(0px, calc(50% - 200px));
+  max-width: 100%;
+  padding: 16px 20px;
+  /* Opaque underneath, so a star drifting behind it never lands on a word. */
+  background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: var(--radius-xl);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: dreams-bubble-drift 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dreams__bubble-text {
+  font-size: 16px;
+  color: color-mix(in srgb, var(--accent) 50%, var(--text));
+  font-style: italic;
+  min-width: 180px;
+  text-align: center;
+  text-wrap: balance;
+}
+
+/* Motion only: the bubble holds a steady opacity so its text stays readable. */
+@keyframes dreams-bubble-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes dreams-bubble-float {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+.dreams__bubble-dot {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+  animation: dreams-bubble-float 6s ease-in-out infinite;
+}
+
+.dreams__bubble-dot--far {
+  top: calc(var(--dreams-sleeper-y) - 170px);
+  left: calc(50% - 120px);
+  width: 12px;
+  height: 12px;
+  animation-delay: 0.2s;
+}
+
+.dreams__bubble-dot--near {
+  top: calc(var(--dreams-sleeper-y) - 130px);
+  left: calc(50% - 90px);
+  width: 8px;
+  height: 8px;
+  animation-delay: 0.4s;
+}
+
+.dreams__moon {
+  position: absolute;
+  top: 32px;
+  right: 64px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--moon-highlight), var(--moon-base));
+  box-shadow:
+    0 0 40px rgba(251, 191, 36, 0.2),
+    0 0 80px rgba(251, 191, 36, 0.08);
+  opacity: 0.7;
+  animation: dreams-moon-glow 8s ease-in-out infinite alternate;
+}
+
+@keyframes dreams-moon-glow {
+  0% {
+    box-shadow:
+      0 0 40px rgba(251, 191, 36, 0.2),
+      0 0 80px rgba(251, 191, 36, 0.08);
+    opacity: 0.6;
+  }
+  100% {
+    box-shadow:
+      0 0 50px rgba(251, 191, 36, 0.3),
+      0 0 100px rgba(251, 191, 36, 0.12);
+    opacity: 0.8;
+  }
+}
+
+.dreams__glow {
+  position: absolute;
+  top: calc(var(--dreams-sleeper-y) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(255, 77, 77, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  animation: dreams-glow-pulse 4s ease-in-out infinite;
+}
+
+@keyframes dreams-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.dreams--idle .dreams__lobster {
+  filter: drop-shadow(0 0 20px rgba(255, 77, 77, 0.1));
+}
+
+.dreams--idle .dreams__moon {
+  animation: none;
+  opacity: 0.45;
+}
+
+.dreams-controls__status {
+  display: block;
+  min-height: 1.45em;
+}
+
+.dreams-controls__phases {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1) var(--space-3);
+}
+
+.dreams-controls__phase--off {
+  opacity: 0.7;
+}
+
+/* Three short words beside their label read as one line at every width. */
+.dreams-page .dreams-controls__phases-row {
+  flex-wrap: nowrap;
+}
+
+.dreams-page .dreams-controls__phases-row > .settings-row__control {
+  width: auto;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+/* The icon menu sits level with the heading and never grows its header. */
+.dreams-page .settings-section__header:has(.dreams-review__menu) {
+  flex-direction: row;
+  align-items: center;
+}
+
+.dreams-page .settings-section__header:has(.dreams-review__menu) .settings-section__actions {
+  align-self: center;
+  margin-block: -10px;
+}
+
+.dreams__controls-error {
+  padding: 0 16px 12px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+/* One page of the diary: the date is the control that turns it. */
+.dreams-diary__entry {
+  padding: var(--list-row-padding);
+  min-width: 0;
+}
+
+.dreams-diary__pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  min-width: 0;
+}
+
+.dreams-diary__dates {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dreams-diary__steps {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+}
+
+.dreams-diary__steps .btn svg {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+}
+
+.dreams-diary__date {
+  display: block;
+  min-height: 32px;
+  line-height: 32px;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.dreams-diary__prose {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 62ch;
+  min-width: 0;
+  animation: diary-entry-reveal 1.1s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes diary-entry-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(6px);
+  }
+  50% {
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.dreams-diary__para {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  animation: diary-text-stream 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Markdown renders its own paragraph inside each entry paragraph. */
+.dreams-diary__para > p {
+  margin: 0;
+}
+
+@keyframes diary-text-stream {
+  0% {
+    opacity: 0;
+    mask-image: linear-gradient(90deg, black 0%, transparent 0%);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    mask-image: linear-gradient(90deg, black 100%, transparent 100%);
+  }
+}
+
+.dreams-diary__preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  height: min(840px, var(--openclaw-modal-height-limit));
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dreams-diary__preview-header {
+  flex-shrink: 0;
+  padding: 18px 20px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.dreams-diary__preview-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dreams-diary__preview-meta {
+  margin-top: 6px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.dreams-diary__preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
+.dreams-diary__preview-footer {
+  flex-shrink: 0;
+  padding: 14px 20px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.dreams-diary__preview-hint {
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.dreams-diary__preview-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.dreams-diary__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 120px;
+  padding: var(--space-5) var(--space-4);
+  text-align: center;
+}
+
+.dreams-diary__empty-text {
+  font-size: var(--control-ui-text-md);
+  color: var(--text);
+}
+
+.dreams-diary__empty-hint,
+.dreams-diary__preview-meta,
+.dreams-diary__preview-hint,
+.dreams-review__meta {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+}
+
+.dreams-diary__error {
+  padding: var(--space-5) var(--space-4);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--danger);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* Review rows open in place. A press rotates the chevron to show the list hangs
+   from this row; the list itself stays on the group's surface. */
+.dreams-review__row[aria-expanded] .settings-row__chevron svg {
+  transition: transform 140ms ease;
+}
+
+.dreams-review__row[aria-expanded="true"] .settings-row__chevron svg {
+  transform: rotate(90deg);
+}
+
+.dreams-review__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  min-width: 0;
+}
+
+.dreams-review__tools {
+  padding: var(--space-1) 16px var(--space-2);
+}
+
+.dreams-review__entry {
+  padding: var(--space-2) 16px;
+  min-width: 0;
+}
+
+.dreams-review__snippet {
+  margin: 0;
+  font-size: var(--control-ui-text-md);
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.dreams-review__meta {
+  margin: 2px 0 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.dreams-review__meta code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.dreams-review__bounded {
+  padding: 0 16px var(--space-1);
+}
+
+.dreams-review__cluster {
+  min-width: 0;
+}
+
+.dreams-review__cluster + .dreams-review__cluster {
+  margin-top: var(--space-3);
+}
+
+.dreams-review__cluster-heading {
+  margin: 0;
+  padding: var(--space-1) 16px;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dreams-review__cluster > .dreams-review__meta {
+  padding: 0 16px var(--space-1);
+}
+
+.dreams-review__gist {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.dreams-review__wiki-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 16px var(--space-3);
+  min-width: 0;
+}
+
+.dreams-review__wiki-line,
+.dreams-review__wiki-list ul {
+  margin: 0;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.dreams-review__wiki-list ul {
+  padding-inline-start: 1.2em;
+}
+
+.dreams-review__wiki-list strong,
+.dreams-review__wiki-line strong {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.dreams-review__wiki-list > strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (max-width: 640px) {
+  /* A narrow sky stacks moon, bubble and sleeper instead of spreading them. */
+  .dreams {
+    --dreams-sleeper-y: 306px;
+    height: 428px;
+  }
+
+  .dreams__moon {
+    top: 8px;
+    right: 16px;
+    width: 52px;
+    height: 52px;
+  }
+
+  .dreams__bubble {
+    top: calc(var(--dreams-sleeper-y) - 236px);
+    /* Auto margins center the bubble; its float animation owns transform. */
+    left: 0;
+    right: 0;
+    width: fit-content;
+    margin-inline: auto;
+    padding: clamp(14px, 4.2vw, 16px) clamp(16px, 5vw, 20px);
+  }
+
+  .dreams__bubble-text {
+    min-width: 0;
+    font-size: clamp(14px, 4.4vw, 16px);
+  }
+
+  .dreams__bubble-dot--far {
+    top: calc(var(--dreams-sleeper-y) - 128px);
+    left: calc(50% - 72px);
+  }
+
+  .dreams__bubble-dot--near {
+    top: calc(var(--dreams-sleeper-y) - 104px);
+    left: calc(50% - 56px);
+  }
+
+  .dreams__z:nth-of-type(1) {
+    left: calc(50% + 62px);
+  }
+
+  .dreams__z:nth-of-type(2) {
+    left: calc(50% + 84px);
+  }
+
+  .dreams__z:nth-of-type(3) {
+    left: calc(50% + 104px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dreams-diary__prose,
+  .dreams-diary__para {
+    animation: none;
+  }
+
+  .dreams-review__row[aria-expanded] .settings-row__chevron svg {
+    transition: none;
+  }
+}

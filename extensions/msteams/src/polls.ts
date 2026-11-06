@@ -1,0 +1,354 @@
+import crypto from "node:crypto";
+import {
+  parseStrictNonNegativeInteger,
+  parseDateStringTimestampMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getMSTeamsRuntime } from "./runtime.js";
+import {
+  resolveMSTeamsAccountStateNamespace,
+  toPluginJsonValue,
+  withMSTeamsSqliteMutationLock,
+} from "./sqlite-state.js";
+
+type MSTeamsPollVote = {
+  pollId: string;
+  selections: string[];
+};
+
+type StoredMSTeamsPoll = {
+  id: string;
+  question: string;
+  options: string[];
+  maxSelections: number;
+  createdAt: string;
+  updatedAt?: string;
+  conversationId?: string;
+  messageId?: string;
+};
+
+export type MSTeamsPollStore = {
+  createPoll: (poll: StoredMSTeamsPoll) => Promise<void>;
+  getPoll: (pollId: string) => Promise<StoredMSTeamsPoll | null>;
+  recordVote: (params: {
+    pollId: string;
+    voterId: string;
+    selections: string[];
+  }) => Promise<true | null>;
+};
+
+type MSTeamsPollCard = {
+  pollId: string;
+  card: Record<string, unknown>;
+};
+
+type StoredMSTeamsPollVoteBucket = {
+  pollId: string;
+  bucket: string;
+  votes: Record<string, string[]>;
+  updatedAt: string;
+};
+
+const MSTEAMS_POLLS_NAMESPACE = "polls";
+const MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE = "poll-vote-buckets";
+const MSTEAMS_MAX_POLLS = 1000;
+const MSTEAMS_SQLITE_MAX_POLL_ROWS = MSTEAMS_MAX_POLLS + 1000;
+const MSTEAMS_POLL_VOTE_BUCKET_COUNT = 32;
+const MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS = (MSTEAMS_MAX_POLLS + 1) * MSTEAMS_POLL_VOTE_BUCKET_COUNT;
+const MSTEAMS_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function normalizeChoiceValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function extractSelections(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(normalizeChoiceValue).filter((entry): entry is string => Boolean(entry));
+  }
+  const normalized = normalizeChoiceValue(value);
+  if (!normalized) {
+    return [];
+  }
+  if (normalized.includes(",")) {
+    return normalizeStringEntries(normalized.split(","));
+  }
+  return [normalized];
+}
+
+function readNestedValue(value: unknown, keys: Array<string | number>): unknown {
+  let current: unknown = value;
+  for (const key of keys) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[key as keyof typeof current];
+  }
+  return current;
+}
+
+function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
+  return normalizeOptionalString(readNestedValue(value, keys));
+}
+
+export function extractMSTeamsPollVote(
+  activity: { value?: unknown } | undefined,
+): MSTeamsPollVote | null {
+  const value = activity?.value;
+  if (!value || !isRecord(value)) {
+    return null;
+  }
+  const pollId =
+    readNestedString(value, ["openclawPollId"]) ??
+    readNestedString(value, ["pollId"]) ??
+    readNestedString(value, ["openclaw", "pollId"]) ??
+    readNestedString(value, ["openclaw", "poll", "id"]) ??
+    readNestedString(value, ["data", "openclawPollId"]) ??
+    readNestedString(value, ["data", "pollId"]) ??
+    readNestedString(value, ["data", "openclaw", "pollId"]) ??
+    // Action.Execute (Universal Action Model) payload shape: value.action.data
+    readNestedString(value, ["action", "data", "openclawPollId"]) ??
+    readNestedString(value, ["action", "data", "pollId"]);
+  if (!pollId) {
+    return null;
+  }
+
+  const selections =
+    [
+      value.choices,
+      readNestedValue(value, ["data", "choices"]),
+      readNestedValue(value, ["action", "data", "choices"]),
+    ]
+      .map(extractSelections)
+      .find((choices) => choices.length > 0) ?? [];
+
+  if (selections.length === 0) {
+    return null;
+  }
+
+  return {
+    pollId,
+    selections,
+  };
+}
+
+export function buildMSTeamsPollCard(params: {
+  question: string;
+  options: string[];
+  maxSelections?: number;
+}): MSTeamsPollCard {
+  const pollId = crypto.randomUUID();
+  const maxSelections =
+    params.maxSelections !== undefined && params.maxSelections > 1
+      ? Math.floor(params.maxSelections)
+      : 1;
+  const cappedMaxSelections = Math.min(Math.max(1, maxSelections), params.options.length);
+  const choices = params.options.map((option, index) => ({
+    title: option,
+    value: String(index),
+  }));
+  const hint =
+    cappedMaxSelections > 1 ? `Select up to ${cappedMaxSelections} options.` : "Select one option.";
+
+  const card = {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [
+      {
+        type: "TextBlock",
+        text: params.question,
+        wrap: true,
+        weight: "Bolder",
+        size: "Medium",
+      },
+      {
+        type: "Input.ChoiceSet",
+        id: "choices",
+        isMultiSelect: cappedMaxSelections > 1,
+        style: "expanded",
+        choices,
+      },
+      {
+        type: "TextBlock",
+        text: hint,
+        wrap: true,
+        isSubtle: true,
+        spacing: "Small",
+      },
+    ],
+    actions: [
+      {
+        type: "Action.Execute",
+        title: "Vote",
+        verb: "openclaw.poll.vote",
+        data: {
+          openclawPollId: pollId,
+          pollId,
+        },
+      },
+    ],
+  };
+
+  return {
+    pollId,
+    card,
+  };
+}
+
+function isPollExpired(poll: StoredMSTeamsPoll): boolean {
+  const cutoff = Date.now() - MSTEAMS_POLL_TTL_MS;
+  const timestamp = parseDateStringTimestampMs(poll.updatedAt ?? poll.createdAt) ?? 0;
+  return !(timestamp >= cutoff);
+}
+
+function normalizeMSTeamsPollSelections(poll: StoredMSTeamsPoll, selections: string[]) {
+  const maxSelections = Math.max(1, poll.maxSelections);
+  const mapped = selections
+    .map((entry) => parseStrictNonNegativeInteger(entry))
+    .filter((value): value is number => value !== undefined && value < poll.options.length)
+    .map((value) => String(value));
+  // Deduplicate first so repeats do not consume selection slots.
+  return uniqueStrings(mapped).slice(0, maxSelections);
+}
+
+function hashMSTeamsPollVote(pollId: string, voterId: string): string {
+  return crypto.createHash("sha256").update(pollId).update("\0").update(voterId).digest("hex");
+}
+
+function buildMSTeamsPollStateKey(pollId: string): string {
+  return crypto.createHash("sha256").update(pollId).digest("hex");
+}
+
+function selectMSTeamsPollVoteBucket(pollId: string, voterId: string): string {
+  const bucket = Number.parseInt(hashMSTeamsPollVote(pollId, voterId).slice(0, 8), 16);
+  return String(bucket % MSTEAMS_POLL_VOTE_BUCKET_COUNT).padStart(4, "0");
+}
+
+function buildMSTeamsPollVoteBucketKey(pollId: string, bucket: string): string {
+  const pollDigest = buildMSTeamsPollStateKey(pollId);
+  return `${pollDigest}:${bucket}`;
+}
+
+export function createMSTeamsPollStoreState(params?: {
+  accountId?: string | null;
+}): MSTeamsPollStore {
+  const namespace = resolveMSTeamsAccountStateNamespace(MSTEAMS_POLLS_NAMESPACE, params?.accountId);
+  const pollStore = getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPoll>({
+    namespace,
+    maxEntries: MSTEAMS_SQLITE_MAX_POLL_ROWS,
+  });
+  const voteBucketStore = getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPollVoteBucket>({
+    namespace: resolveMSTeamsAccountStateNamespace(
+      MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
+      params?.accountId,
+    ),
+    maxEntries: MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS,
+  });
+
+  const deletePollVotes = async (
+    pollId: string,
+    cachedRows?: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>>,
+  ): Promise<void> => {
+    for (const row of cachedRows?.values() ?? (await voteBucketStore.entries())) {
+      if (row.value.pollId === pollId) {
+        await voteBucketStore.delete(row.key);
+        cachedRows?.delete(row.key);
+      }
+    }
+  };
+
+  const prunePollStoreToLimit = async (): Promise<void> => {
+    let voteRows: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>> | undefined;
+    const deletePrunedPollVotes = async (pollId: string) => {
+      // Poll mutations hold the same lock, and vote buckets have no store TTL.
+      voteRows ??= new Map((await voteBucketStore.entries()).map((row) => [row.key, row]));
+      await deletePollVotes(pollId, voteRows);
+    };
+    const rows = [];
+    for (const row of await pollStore.entries()) {
+      if (isPollExpired(row.value)) {
+        await pollStore.delete(row.key);
+        await deletePrunedPollVotes(row.value.id);
+        continue;
+      }
+      rows.push(row);
+    }
+    if (rows.length <= MSTEAMS_MAX_POLLS) {
+      return;
+    }
+    const sorted = rows.toSorted((a, b) => {
+      const aTs = parseDateStringTimestampMs(a.value.updatedAt ?? a.value.createdAt) ?? 0;
+      const bTs = parseDateStringTimestampMs(b.value.updatedAt ?? b.value.createdAt) ?? 0;
+      return aTs - bTs || a.key.localeCompare(b.key);
+    });
+    for (const row of sorted.slice(0, rows.length - MSTEAMS_MAX_POLLS)) {
+      await pollStore.delete(row.key);
+      await deletePrunedPollVotes(row.value.id);
+    }
+  };
+
+  const createPoll = async (poll: StoredMSTeamsPoll) => {
+    await withMSTeamsSqliteMutationLock(namespace, async () => {
+      await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(poll));
+      await deletePollVotes(poll.id);
+      await prunePollStoreToLimit();
+    });
+  };
+
+  const getPoll = async (pollId: string) => {
+    const poll = await pollStore.lookup(buildMSTeamsPollStateKey(pollId));
+    if (!poll) {
+      return null;
+    }
+    if (isPollExpired(poll)) {
+      return null;
+    }
+    return poll;
+  };
+
+  const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) => {
+    return await withMSTeamsSqliteMutationLock<true | null>(namespace, async () => {
+      const pollKey = buildMSTeamsPollStateKey(vote.pollId);
+      const poll = await pollStore.lookup(pollKey);
+      if (!poll) {
+        return null;
+      }
+      if (isPollExpired(poll)) {
+        await pollStore.delete(pollKey);
+        await deletePollVotes(vote.pollId);
+        return null;
+      }
+      const normalized = normalizeMSTeamsPollSelections(poll, vote.selections);
+      const updatedAt = new Date().toISOString();
+      poll.updatedAt = updatedAt;
+      await pollStore.register(pollKey, poll);
+      const pollId = vote.pollId;
+      const voterId = vote.voterId;
+      const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
+      const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
+      const existing = await voteBucketStore.lookup(key);
+      await voteBucketStore.register(key, {
+        pollId,
+        bucket,
+        votes: { ...existing?.votes, [voterId]: normalized },
+        updatedAt,
+      });
+      await prunePollStoreToLimit();
+      return true;
+    });
+  };
+
+  return { createPoll, getPoll, recordVote };
+}

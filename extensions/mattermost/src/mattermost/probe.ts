@@ -1,0 +1,75 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
+import type { BaseProbeResult } from "./runtime-api.js";
+
+type MattermostProbe = BaseProbeResult & {
+  status?: number | null;
+  elapsedMs?: number | null;
+  bot?: MattermostUser;
+};
+
+export async function probeMattermost(
+  baseUrl: string,
+  botToken: string,
+  timeoutMs = 2500,
+  allowPrivateNetwork = false,
+): Promise<MattermostProbe> {
+  const normalized = normalizeMattermostBaseUrl(baseUrl);
+  if (!normalized) {
+    return { ok: false, error: "baseUrl missing" };
+  }
+  const url = `${normalized}/api/v4/users/me`;
+  const headers = { Authorization: `Bearer ${botToken}` };
+  return await runChannelProbe(
+    undefined,
+    async ({ elapsedMs }) => {
+      // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
+      const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : undefined;
+      const { response: res, release } = await fetchWithSsrFGuard({
+        url,
+        init: {
+          headers,
+        },
+        auditContext: "mattermost-probe",
+        policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
+        ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
+      });
+      const requestElapsedMs = elapsedMs();
+      try {
+        if (!res.ok) {
+          const detail = await readMattermostError(res, headers);
+          return {
+            ok: false,
+            status: res.status,
+            error: detail || res.statusText,
+            elapsedMs: requestElapsedMs,
+          };
+        }
+        const bot = await readProviderJsonResponse<MattermostUser>(
+          res,
+          "Mattermost check /users/me",
+        );
+        return {
+          ok: true,
+          status: res.status,
+          elapsedMs: requestElapsedMs,
+          bot,
+        };
+      } finally {
+        await release();
+      }
+    },
+    (error) => ({
+      ok: false,
+      status: null,
+      error: formatErrorMessage(error),
+    }),
+  );
+}

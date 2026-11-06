@@ -1,0 +1,508 @@
+/**
+ * Per-profile Browser lifecycle actor.
+ *
+ * Starts and destructive transitions share one settled serial tail. Ordinary
+ * Tab/action work stays concurrent; transitions cancel it and wait for settlement.
+ */
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { waitForBrowserStartup } from "../sdk-node-runtime.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+import type { RunningChrome } from "./chrome.js";
+import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
+import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
+import { isLocalManagedProfile, type ResolvedBrowserProfile } from "./config.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
+import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { getLoadedPwAiModule } from "./pw-ai-module.js";
+import type { PlaywrightConnectionRetirement } from "./pw-session.js";
+import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+
+type ProfileLifecycleTerminal = "deleted" | "config-removed";
+
+type ProfileLifecycleActor = {
+  controller: AbortController;
+  /** Settled-only tail: failed starts/transitions never poison later work. */
+  tail: Promise<void>;
+  starts: Map<string, Promise<void>>;
+  leases: Set<Promise<void>>;
+  handles: Set<RunningChrome>;
+  cleanupChromeMcp: string | undefined;
+  cleanupPlaywright: Map<string, PlaywrightConnectionRetirement>;
+  cleanupRelays: Set<ExtensionRelayResource>;
+  terminal: ProfileLifecycleTerminal | null;
+  transitionReason: string | null;
+  blockedReason: string | null;
+};
+
+type ProfileTransitionOptions = {
+  state: BrowserServerState;
+  runtime: ProfileRuntimeState;
+  reason: string;
+  terminal?: ProfileLifecycleTerminal;
+  closeRelay?: boolean;
+  /** Bridge runtimes must not retire process-global adapters shared by another runtime. */
+  closeSharedAdapters?: boolean;
+  managedChrome?: "stop" | "release-profile-data";
+  exposeReason?: boolean;
+  afterCleanup?: () => Promise<void>;
+  rollbackTerminalOnFailure?: boolean;
+};
+
+type ProfileTransitionResult = {
+  stopped: boolean;
+};
+
+type ProfileLeaseContext = {
+  signal: AbortSignal;
+};
+
+// Listeners inherit their creator's leases. Listener paths (the Gateway relay handshake) must
+// enter with `ownership: "lifecycle"`, which ignores inherited leases; caller ownership
+// nests only on the owning operation's await chain.
+const profileLeaseStorage = new AsyncLocalStorage<Map<ProfileRuntimeState, ProfileLeaseContext>>();
+const profileLifecycles = new WeakMap<ProfileRuntimeState, ProfileLifecycleActor>();
+const stoppingBrowserRuntimes = new WeakSet<BrowserServerState>();
+
+function createProfileLifecycleActor(): ProfileLifecycleActor {
+  return {
+    controller: new AbortController(),
+    tail: Promise.resolve(),
+    starts: new Map(),
+    leases: new Set(),
+    handles: new Set(),
+    cleanupChromeMcp: undefined,
+    cleanupPlaywright: new Map(),
+    cleanupRelays: new Set(),
+    terminal: null,
+    transitionReason: null,
+    blockedReason: null,
+  };
+}
+
+/** Internal lifecycle state stays outside the public Browser runtime API shape. */
+export function getProfileLifecycle(runtime: ProfileRuntimeState): ProfileLifecycleActor {
+  let actor = profileLifecycles.get(runtime);
+  if (!actor) {
+    actor = createProfileLifecycleActor();
+    profileLifecycles.set(runtime, actor);
+  }
+  return actor;
+}
+
+export function isBrowserRuntimeRunning(state: BrowserServerState): boolean {
+  return !stoppingBrowserRuntimes.has(state);
+}
+
+export function markBrowserRuntimeStopping(state: BrowserServerState): void {
+  stoppingBrowserRuntimes.add(state);
+}
+
+/** Internal control flow: an owned unhealthy process needs a destructive fence. */
+export class ProfileRestartRequiredError extends Error {
+  constructor() {
+    super("Managed browser restart requires a lifecycle transition.");
+    this.name = "ProfileRestartRequiredError";
+  }
+}
+
+export function isProfileRestartRequiredError(err: unknown): boolean {
+  return err instanceof ProfileRestartRequiredError;
+}
+
+export function isWithinProfileOperationLease(runtime: ProfileRuntimeState): boolean {
+  return profileLeaseStorage.getStore()?.has(runtime) === true;
+}
+
+function lifecycleError(profileName: string, detail: string): BrowserProfileUnavailableError {
+  return new BrowserProfileUnavailableError(
+    `Browser profile "${profileName}" lifecycle changed while work was pending (${detail}).`,
+  );
+}
+
+function toLifecycleError(value: unknown, message: string): Error {
+  return value instanceof Error ? value : new Error(message, { cause: value });
+}
+
+function assertRuntimeAdmission(state: BrowserServerState): void {
+  if (!isBrowserRuntimeRunning(state)) {
+    throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
+  }
+}
+
+function assertProfileCurrent(params: {
+  state: BrowserServerState;
+  runtime: ProfileRuntimeState;
+  allowBlocked?: boolean;
+}): void {
+  assertRuntimeAdmission(params.state);
+  const actor = getProfileLifecycle(params.runtime);
+  if (actor.terminal) {
+    throw lifecycleError(params.runtime.profile.name, actor.terminal);
+  }
+  if (actor.blockedReason && !params.allowBlocked) {
+    throw lifecycleError(params.runtime.profile.name, actor.blockedReason);
+  }
+}
+
+/** Allow explicit lifecycle operations to repair a failed cleanup. */
+export function assertProfileLifecycleContext(params: {
+  state: BrowserServerState;
+  runtime: ProfileRuntimeState;
+}): void {
+  assertProfileCurrent({ ...params, allowBlocked: true });
+}
+
+function combineSignals(lifecycleSignal: AbortSignal, callerSignal?: AbortSignal): AbortSignal {
+  if (!callerSignal || callerSignal === lifecycleSignal) {
+    return lifecycleSignal;
+  }
+  return AbortSignal.any([lifecycleSignal, callerSignal]);
+}
+
+/** Observe shared lifecycle work without transferring cancellation ownership. */
+export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  return racePromiseWithAbortSignal(promise, signal, (aborted) =>
+    toLifecycleError(aborted.reason, "Browser operation aborted."),
+  );
+}
+
+function createLease(actor: ProfileLifecycleActor): () => void {
+  const { promise: settled, resolve: release } = createDeferred<void>();
+  actor.leases.add(settled);
+  return () => {
+    actor.leases.delete(settled);
+    release();
+  };
+}
+
+/** Return the current runtime object; terminal tombstones stay until exact cleanup removes them. */
+export function getOrCreateProfileRuntime(
+  state: BrowserServerState,
+  profile: ResolvedBrowserProfile,
+): ProfileRuntimeState {
+  assertRuntimeAdmission(state);
+  const current = state.profiles.get(profile.name);
+  if (current) {
+    return current;
+  }
+  const created: ProfileRuntimeState = { profile, running: null, lastTargetId: null };
+  state.profiles.set(profile.name, created);
+  return created;
+}
+
+/** Track an exact managed-process handle before it can be adopted or retired. */
+export function registerProfileHandle(
+  runtime: ProfileRuntimeState,
+  running: RunningChrome,
+): boolean {
+  getProfileLifecycle(runtime).handles.add(running);
+  running.proc.on("exit", () => releaseProfileHandle(runtime, running));
+  if (running.proc.exitCode != null || running.proc.signalCode != null) {
+    releaseProfileHandle(runtime, running);
+    return false;
+  }
+  return true;
+}
+
+/** Release only the exact managed-process handle that completed cleanup. */
+export function releaseProfileHandle(runtime: ProfileRuntimeState, running: RunningChrome): void {
+  getProfileLifecycle(runtime).handles.delete(running);
+  if (runtime.running === running) {
+    runtime.running = null;
+  }
+}
+
+/** Check the captured lifecycle signal at resource effect boundaries. */
+export function isProfileOperationCurrent(params: {
+  state: BrowserServerState;
+  runtime: ProfileRuntimeState;
+  signal: AbortSignal;
+}): boolean {
+  const actor = getProfileLifecycle(params.runtime);
+  return (
+    isBrowserRuntimeRunning(params.state) &&
+    !actor.terminal &&
+    !actor.blockedReason &&
+    !params.signal.aborted
+  );
+}
+
+/**
+ * Run ordinary profile work under a concurrent settlement lease.
+ *
+ * Passing the current lifecycle signal denotes nested work already covered by
+ * an outer lease; this avoids self-deadlock while preserving cancellation.
+ */
+export async function withProfileOperationLease<T>(params: {
+  state: BrowserServerState;
+  runtime: ProfileRuntimeState;
+  signal?: AbortSignal;
+  /** Shared producers belong to the lifecycle, never to their first caller. */
+  ownership?: "caller" | "lifecycle";
+  run: (signal: AbortSignal) => Promise<T>;
+  commit?: (result: T) => void | Promise<void>;
+}): Promise<T> {
+  params.signal?.throwIfAborted();
+  const actor = getProfileLifecycle(params.runtime);
+  const inherited = profileLeaseStorage.getStore();
+  const parent = params.ownership === "lifecycle" ? undefined : inherited?.get(params.runtime);
+  if (parent) {
+    const signal = combineSignals(parent.signal, params.signal);
+    signal.throwIfAborted();
+    assertProfileCurrent(params);
+    const result = await params.run(signal);
+    signal.throwIfAborted();
+    assertProfileCurrent(params);
+    await params.commit?.(result);
+    return result;
+  }
+
+  const lifecycleSignal = actor.controller.signal;
+  assertProfileCurrent(params);
+  const waitForTail = () => waitForProfileOperation(actor.tail, params.signal);
+  if (actor.starts.size > 0 && isLocalManagedProfile(params.runtime.profile)) {
+    await waitForBrowserStartup(waitForTail);
+  } else {
+    await waitForTail();
+  }
+  const signal =
+    params.ownership === "lifecycle"
+      ? lifecycleSignal
+      : combineSignals(lifecycleSignal, params.signal);
+  signal.throwIfAborted();
+  const release = createLease(actor);
+  try {
+    const leases = new Map(inherited);
+    leases.set(params.runtime, { signal });
+    const result = await profileLeaseStorage.run(leases, async () => await params.run(signal));
+    signal.throwIfAborted();
+    assertProfileCurrent(params);
+    // This assertion is the operation's linearization point. Once admitted,
+    // an async persistent commit keeps its lease until complete; a later
+    // reset/delete/stop drains behind it instead of partially cancelling it.
+    await params.commit?.(result);
+    return result;
+  } finally {
+    release();
+  }
+}
+
+/** Queue one lifecycle-owned start, coalescing callers with the same start key. */
+export function enqueueProfileStart(params: {
+  state: BrowserServerState;
+  runtime: ProfileRuntimeState;
+  key: string;
+  signal?: AbortSignal;
+  run: (signal: AbortSignal) => Promise<void>;
+}): Promise<void> {
+  assertProfileCurrent(params);
+  params.signal?.throwIfAborted();
+  const actor = getProfileLifecycle(params.runtime);
+  const existing = actor.starts.get(params.key);
+  if (existing) {
+    return waitForProfileOperation(existing, params.signal);
+  }
+
+  const signal = actor.controller.signal;
+  const promise = actor.tail.then(async () => {
+    assertProfileCurrent(params);
+    signal.throwIfAborted();
+    const owned = new Map(profileLeaseStorage.getStore());
+    owned.set(params.runtime, { signal });
+    await profileLeaseStorage.run(owned, async () => await params.run(signal));
+    assertProfileCurrent(params);
+    signal.throwIfAborted();
+  });
+  actor.starts.set(params.key, promise);
+  const settleStart = () => {
+    if (actor.starts.get(params.key) === promise) {
+      actor.starts.delete(params.key);
+    }
+  };
+  actor.tail = promise.then(settleStart, settleStart);
+  return waitForProfileOperation(promise, params.signal);
+}
+
+function capturePlaywrightRetirement(
+  actor: ProfileLifecycleActor,
+  cdpUrl: string,
+): PlaywrightConnectionRetirement | null {
+  const retained = actor.cleanupPlaywright.get(cdpUrl);
+  if (retained) {
+    retained.refresh?.();
+    return retained;
+  }
+  const retirement =
+    getLoadedPwAiModule()?.retirePlaywrightBrowserConnectionExact({ cdpUrl }) ?? null;
+  if (retirement?.retired) {
+    actor.cleanupPlaywright.set(cdpUrl, retirement);
+  }
+  return retirement;
+}
+
+/**
+ * Synchronously cancel current work, eagerly begin owned adapter
+ * teardown, then serialize exact-handle cleanup behind older starts and leases.
+ */
+export function beginProfileTransition(
+  params: ProfileTransitionOptions,
+): Promise<ProfileTransitionResult> {
+  const actor = getProfileLifecycle(params.runtime);
+  const ownerProfile = params.runtime.profile;
+  const managedChrome =
+    params.managedChrome &&
+    ownerProfile.driver === "openclaw" &&
+    ownerProfile.cdpIsLoopback &&
+    !ownerProfile.attachOnly
+      ? { mode: params.managedChrome, profile: ownerProfile, resolved: params.state.resolved }
+      : undefined;
+  const hadPendingWork = actor.starts.size > 0 || actor.leases.size > 0 || actor.handles.size > 0;
+  const reason = lifecycleError(params.runtime.profile.name, params.reason);
+
+  params.runtime.externalBrowserMode = undefined;
+  actor.controller.abort(reason);
+  actor.controller = new AbortController();
+  actor.starts.clear();
+  if (params.terminal) {
+    actor.terminal = params.terminal;
+  }
+  // Every successor owns the visible transition slot, including clearing it.
+  actor.transitionReason = params.exposeReason ? params.reason : null;
+  const closeSharedAdapters = params.closeSharedAdapters !== false;
+  const usesChromeMcp = getBrowserProfileCapabilities(ownerProfile).usesChromeMcp;
+  if (closeSharedAdapters && usesChromeMcp) {
+    actor.cleanupChromeMcp = ownerProfile.name;
+  }
+  const shouldClosePlaywright = closeSharedAdapters && !usesChromeMcp;
+  const eagerPlaywrightRetirement = shouldClosePlaywright
+    ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
+    : null;
+  const captureRelay = () => {
+    const relay =
+      params.closeRelay && params.state.extensionRelays?.get(params.runtime.profile.name);
+    if (relay) {
+      actor.cleanupRelays.add(relay);
+    }
+  };
+  captureRelay();
+
+  // Start closing MCP before waiting for a start, lease, or older transition.
+  const eagerMcpClose =
+    closeSharedAdapters && usesChromeMcp
+      ? (getChromeMcpModule
+          .peek()
+          ?.then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
+          .catch(() => false) ?? null)
+      : null;
+  let cleanupCompleted = false;
+  const transition = actor.tail
+    .then(async () => {
+      await Promise.allSettled(actor.leases);
+      if (shouldClosePlaywright && hadPendingWork) {
+        capturePlaywrightRetirement(actor, ownerProfile.cdpUrl);
+      }
+      captureRelay();
+      const cleanup = async () => {
+        const { state, runtime } = params;
+        let stopped = hadPendingWork || Boolean(eagerPlaywrightRetirement?.retired);
+        if (eagerMcpClose) {
+          stopped = (await eagerMcpClose) || stopped;
+        }
+        let firstError: Error | undefined;
+        const cleanupActor = getProfileLifecycle(runtime);
+        // `running` remains part of the public runtime shape. Include handles
+        // installed by older callers that predate lifecycle registration.
+        const managedHandles = new Set(cleanupActor.handles);
+        if (runtime.running) {
+          managedHandles.add(runtime.running);
+        }
+        for (const running of managedHandles) {
+          try {
+            await stopOpenClawChrome(running);
+            releaseProfileHandle(runtime, running);
+            stopped = true;
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Managed browser cleanup failed.");
+          }
+        }
+
+        if (cleanupActor.cleanupChromeMcp) {
+          try {
+            const chromeMcp = await getChromeMcpModule.peek();
+            stopped =
+              (await chromeMcp?.closeChromeMcpSession(cleanupActor.cleanupChromeMcp)) || stopped;
+            cleanupActor.cleanupChromeMcp = undefined;
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Chrome MCP cleanup failed.");
+          }
+        }
+
+        stopped = cleanupActor.cleanupPlaywright.size > 0 || stopped;
+        for (const [cdpUrl, retirement] of cleanupActor.cleanupPlaywright) {
+          try {
+            await retirement.close();
+            cleanupActor.cleanupPlaywright.delete(cdpUrl);
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Playwright cleanup failed.");
+          }
+        }
+        for (const relay of cleanupActor.cleanupRelays) {
+          try {
+            await relay.close();
+            cleanupActor.cleanupRelays.delete(relay);
+            if (state.extensionRelays?.get(runtime.profile.name) === relay) {
+              state.extensionRelays.delete(runtime.profile.name);
+              const tokens = { ...state.resolved.extensionRelayInternalTokens };
+              delete tokens[runtime.profile.name];
+              state.resolved = { ...state.resolved, extensionRelayInternalTokens: tokens };
+            }
+          } catch (err) {
+            firstError ??= toLifecycleError(err, "Browser relay cleanup failed.");
+          }
+        }
+        if (firstError) {
+          throw firstError;
+        }
+        if (managedChrome) {
+          const { mode, profile, resolved } = managedChrome;
+          const result = await stopOwnedOpenClawChrome(resolved, profile);
+          if (mode === "release-profile-data" && result.status === "unverified") {
+            throw new BrowserProfileUnavailableError(
+              `Cannot release browser profile "${profile.name}" data: ${result.reason}. Close that browser and retry.`,
+            );
+          }
+          stopped = result.status === "stopped" || stopped;
+        }
+        cleanupCompleted = true;
+        await params.afterCleanup?.();
+        actor.blockedReason = null;
+        return { stopped };
+      };
+      // Drain actor starts and leases before taking the cross-runtime lock:
+      // pending work can itself need it. Once cleanup enters, hold the lock
+      // through resource drains and afterCleanup, including nested stopOwned.
+      return managedChrome
+        ? await withChromeProfileLifecycleLock(ownerProfile.name, cleanup)
+        : await cleanup();
+    })
+    .catch((err: unknown) => {
+      if (cleanupCompleted) {
+        if (params.rollbackTerminalOnFailure) {
+          actor.terminal = null;
+        }
+        actor.blockedReason = null;
+      } else {
+        actor.blockedReason = `${params.reason} cleanup failed`;
+      }
+      throw err;
+    });
+  const settleTransition = () => {
+    actor.transitionReason = null;
+  };
+  actor.tail = transition.then(settleTransition, settleTransition);
+  return transition;
+}

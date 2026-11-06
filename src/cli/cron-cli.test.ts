@@ -1,0 +1,883 @@
+import { Command } from "commander";
+import { afterEach, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import type { CronRunLogEntry } from "../cron/run-log-types.js";
+import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
+import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
+import { ExitError } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { registerCronCli } from "./cron-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
+
+const mocks = vi.hoisted(() => {
+  const defaultRuntime = {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn<(value: string) => void>(),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return {
+    defaultRuntime,
+    callGatewayFromCli: vi.fn(),
+  };
+});
+
+const { defaultRuntime, callGatewayFromCli } = mocks;
+
+const defaultGatewayMock = async (method: string, _opts: unknown, params?: unknown) => {
+  if (method === "cron.status") {
+    return { enabled: true };
+  }
+  if (method === "cron.list") {
+    return cronPage([]);
+  }
+  if (method === "system.info") {
+    return { platform: "linux" };
+  }
+  return { ok: true, params };
+};
+callGatewayFromCli.mockImplementation(defaultGatewayMock);
+
+afterEach(vi.useRealTimers);
+
+vi.mock("./gateway-rpc.js", async () => {
+  const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
+  return { ...actual, callGatewayFromCli: mocks.callGatewayFromCli };
+});
+
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: mocks.defaultRuntime,
+}));
+
+function resetGatewayMock() {
+  callGatewayFromCli.mockClear().mockImplementation(defaultGatewayMock);
+  for (const mock of Object.values(defaultRuntime)) {
+    mock.mockClear();
+  }
+}
+
+function stdoutText(): string {
+  return defaultRuntime.writeStdout.mock.calls.map(([value]) => value).join("\n");
+}
+
+function expectRuntimeErrorContaining(text: string): void {
+  expect(defaultRuntime.error.mock.calls.flat().join("\n")).toContain(text);
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets each assertion ascribe expected RPC params.
+function rpcParams<T>(method: string): T {
+  return callGatewayFromCli.mock.calls.find(([name]) => name === method)?.[2] as T;
+}
+
+async function runCronCommand(args: string[]): Promise<void> {
+  resetGatewayMock();
+  await parse(args);
+}
+
+function parse(args: string[]) {
+  const program = new Command().enablePositionalOptions().exitOverride();
+  registerCronCli(program);
+  return program.parseAsync(args, { from: "user" });
+}
+
+const CREATE = ["cron", "add", "--name", "job"];
+const ADD = [...CREATE, "--cron", "* * * * *"];
+const EDIT = ["cron", "edit", "job-1"];
+const RUN_WAIT = ["cron", "run", "job-1", "--wait"];
+const AGENT_ADD = [...ADD, "--message", "hello"];
+const EVENT_ADD = [...ADD, "--system-event", "tick"];
+const telegramOptions = {
+  "--deliver": true,
+  "--channel": "telegram",
+  "--to": "-100123",
+  "--thread-id": "42",
+  "--account": "  coordinator  ",
+} as const;
+const telegramDelivery = {
+  mode: "announce",
+  channel: "telegram",
+  to: "-100123",
+  threadId: 42,
+  accountId: "coordinator",
+} as const;
+
+async function add(...args: string[]): Promise<CronJobCreate> {
+  await runCronCommand(["cron", "add", ...args]);
+  return rpcParams("cron.add");
+}
+
+async function namedAdd(...args: string[]): Promise<CronJobCreate> {
+  return add(...ADD.slice(2), ...args);
+}
+const addOptions = (options: Record<string, string | true>, ...positionals: string[]) =>
+  add(...positionals, ...flags(options));
+const editOptions = (options: Record<string, string | true>) => edit(...flags(options));
+
+async function edit(...args: string[]): Promise<CronJobPatch> {
+  await runCronCommand([...EDIT, ...args]);
+  return rpcParams<{ patch: CronJobPatch }>("cron.update").patch;
+}
+
+async function expectCronCommandExit(args: string[]): Promise<void> {
+  await expect(runCronCommand(args)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+}
+
+const createCronJob = (id: string, name: string) => cronTestJob({ id, name });
+
+function mockExistingJob(job: Partial<CronJob>): void {
+  resetGatewayMock();
+  callGatewayFromCli.mockImplementation(async (method: string, opts: unknown, params?: unknown) =>
+    method === "cron.get"
+      ? { ...createCronJob("job-1", "Existing"), ...job }
+      : await defaultGatewayMock(method, opts, params),
+  );
+}
+
+async function editSchedule(
+  schedule: CronJob["schedule"],
+  ...args: string[]
+): Promise<CronJobPatch> {
+  mockExistingJob({ schedule });
+  await parse([...EDIT, ...args]);
+  return rpcParams<{ patch: CronJobPatch }>("cron.update").patch;
+}
+
+function mockQueuedRun(...history: Array<Partial<CronRunLogEntry> | undefined>) {
+  resetGatewayMock();
+  callGatewayFromCli
+    .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job-1:123:0" })
+    .mockImplementation(async () => ({ entries: history.splice(0, 1).filter(Boolean) }));
+}
+
+async function parseExit(args: string[]): Promise<number | undefined> {
+  try {
+    await parse(args);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof ExitError)) {
+      throw error;
+    }
+    return error.code;
+  }
+}
+
+function flags(options: Record<string, string | true>): string[] {
+  return Object.entries(options).flatMap(([flag, value]) =>
+    value === true ? [flag] : [flag, value],
+  );
+}
+
+function cronPage(
+  jobs: CronJob[],
+  offset = 0,
+  total = jobs.length,
+  deliveryPreviews?: Record<string, CronDeliveryPreview>,
+) {
+  const next = offset + jobs.length;
+  return {
+    jobs,
+    snapshotRevision: "test-stable-cron-inventory",
+    total,
+    offset,
+    limit: 200,
+    hasMore: next < total,
+    nextOffset: next < total ? next : null,
+    deliveryPreviews,
+  };
+}
+
+it("resolves Gateway options with leaf overrides", async () => {
+  await runCronCommand([
+    "automations",
+    ...flags({ "--port": "65267", "--token": "parent-token" }),
+    "create",
+    ...AGENT_ADD.slice(2),
+    ...flags({ "--port": "65268", "--token": "leaf-token" }),
+  ]);
+  expect(callGatewayFromCli).toHaveBeenCalledWith(
+    "cron.add",
+    expect.objectContaining({ port: "65268", token: "leaf-token" }),
+    expect.anything(),
+  );
+});
+
+it.each([{ enqueued: true }, { ran: false }])("returns run exit status for %j", async (result) => {
+  resetGatewayMock();
+  callGatewayFromCli.mockResolvedValueOnce({ ok: true, ...result });
+  expect(await parseExit(["cron", "run", "job-1"])).toBe("enqueued" in result ? 0 : 1);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+});
+
+it("waits for stored failed completion", async () => {
+  mockQueuedRun({ status: "ok", completionStatus: "failed" });
+  expect(await parseExit([...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"])).toBe(1);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(rpcParams("cron.runs")).toEqual({
+    id: "job-1",
+    runId: "manual:job-1:123:0",
+    limit: 1,
+  });
+  expect(JSON.parse(stdoutText())).toMatchObject({
+    completed: true,
+    status: "ok",
+    completionStatus: "failed",
+  });
+  expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.get")).toBe(false);
+});
+
+it("reduces each history RPC timeout after the system clock jumps backward", async () => {
+  vi.useFakeTimers();
+  const monotonicNow = performance.now.bind(performance);
+  let monotonicSample = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => monotonicNow() + ++monotonicSample / 1_000);
+  const startedAt = new Date("2026-07-27T12:00:00.000Z");
+  vi.setSystemTime(startedAt);
+
+  mockQueuedRun(undefined, { status: "ok", deliveryStatus: "not-requested" });
+  const pendingRun = parseExit([...RUN_WAIT, "--wait-timeout", "100ms", "--poll-interval", "25ms"]);
+
+  await vi.advanceTimersByTimeAsync(0);
+  expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
+    1,
+  );
+  vi.setSystemTime(new Date(startedAt.getTime() - 3_600_000));
+  await vi.advanceTimersByTimeAsync(25);
+
+  expect(await pendingRun).toBe(0);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  const pollTimeouts = callGatewayFromCli.mock.calls
+    .filter(([method]) => method === "cron.runs")
+    .map(([, options]) => Number((options as { timeout?: string }).timeout));
+
+  expect(callGatewayFromCli.mock.calls[0]?.[1]).toMatchObject({ timeout: "600000" });
+  expect(pollTimeouts).toHaveLength(2);
+  expect(pollTimeouts.every(Number.isSafeInteger)).toBe(true);
+  expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
+  expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
+  expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);
+});
+
+it("bounds oversized poll intervals by the wait timeout", async () => {
+  vi.useFakeTimers();
+  mockQueuedRun();
+  const run = parseExit([
+    ...RUN_WAIT,
+    "--wait-timeout",
+    "10ms",
+    "--poll-interval",
+    "999999999999999ms",
+  ]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.runs")).toBe(true);
+  await vi.advanceTimersByTimeAsync(10);
+  expect(await run).toBe(1);
+  expectRuntimeErrorContaining("timed out waiting for cron run");
+});
+
+const interruptPhases = ["sleep", "request", "completion", "cron list", "cron show job-1"];
+it.each(interruptPhases)("cancels cron %s", async (phase) => {
+  vi.useFakeTimers();
+  resetGatewayMock();
+  const scope = new AsyncWorkScope();
+  const completed = { entries: [{ status: "ok", completionStatus: "succeeded" }] } as const;
+  const read = createDeferredCore<typeof completed>();
+  const polls = () => callGatewayFromCli.mock.calls.filter(([method]) => method !== "cron.run");
+  callGatewayFromCli.mockImplementation(
+    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
+      if (method === "cron.run") {
+        return { ok: true, enqueued: true, runId: "queued-run" };
+      }
+      if (!["sleep", "completion"].includes(phase) && extra?.signal) {
+        const { signal } = extra;
+        signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
+      }
+      return phase === "sleep" ? { entries: [] } : read.promise;
+    },
+  );
+  const settled = vi.fn();
+  const running = scope.track(() => parse(phase.includes(" ") ? phase.split(" ") : RUN_WAIT));
+  void running.then(() => settled(), settled);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls()).toHaveLength(1);
+    scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+    if (phase === "completion") {
+      read.resolve(completed);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledExactlyOnceWith();
+    for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
+      expect(output).not.toHaveBeenCalled();
+    }
+    expect(polls()).toHaveLength(1);
+  } finally {
+    read.resolve(completed);
+    await vi.advanceTimersByTimeAsync(2000);
+    await scope.drain();
+  }
+});
+
+it.each([
+  ["rm", "cron.remove"],
+  ["scratch", "cron.scratch.get"],
+  ["runs", "cron.runs"],
+])("preserves canonical lookup errors for %s", async (command, method) => {
+  resetGatewayMock();
+  callGatewayFromCli.mockRejectedValueOnce(
+    Object.assign(new Error("gateway cron lookup failed"), {
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing" },
+    }),
+  );
+  await expect(parse(["cron", command, "missing"])).rejects.toMatchObject({
+    name: "ExitError",
+    code: 1,
+  });
+  expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe(method);
+  expectRuntimeErrorContaining(
+    "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+  );
+});
+
+it("composes run-history IDs, Gateway options, filters, and JSON output", async () => {
+  await runCronCommand([
+    "automations",
+    ...flags({ "--port": "65267" }),
+    "runs",
+    "job-1",
+    ...flags({ "--id": "job-1", "--limit": "5", "--run-id": "run-1", "--json": true }),
+  ]);
+  const call = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.runs");
+  expect(call?.[1]).toMatchObject({ port: "65267" });
+  expect(call?.[2]).toEqual({ id: "job-1", runId: "run-1", limit: 5 });
+  expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+});
+
+it("lists jobs with normalized agent filter", async () => {
+  await runCronCommand(["cron", "list", "--agent", " Ops "]);
+  expect(rpcParams("cron.list")).toEqual({
+    includeDisabled: false,
+    agentId: "ops",
+    limit: 200,
+    offset: 0,
+  });
+});
+
+it("paginates cron show lookups", async () => {
+  resetGatewayMock();
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, params?: unknown) => {
+      if (method === "cron.list") {
+        const offset = (params as { offset?: number }).offset ?? 0;
+        if (offset === 0) {
+          return cronPage(
+            Array.from({ length: 200 }, (_, index) =>
+              createCronJob(`first-page-${index}`, `First Page ${index}`),
+            ),
+            0,
+            201,
+          );
+        }
+        const targetJob = createCronJob("target-job", "Target Job");
+        targetJob.state.lastDiagnosticSummary = "exec stderr tail";
+        return cronPage([targetJob], 200, 201, {
+          "target-job": {
+            label: "announce -> telegram:-100",
+            detail: "resolved from last, main session",
+          },
+        });
+      }
+      return { ok: true, params };
+    },
+  );
+
+  await parse(["cron", "show", "Target Job"]);
+
+  const listParams = callGatewayFromCli.mock.calls
+    .filter((call) => call[0] === "cron.list")
+    .map((call) => call[2]);
+  expect(listParams).toEqual([
+    { includeDisabled: true, limit: 200, offset: 0 },
+    { includeDisabled: true, limit: 200, offset: 200 },
+  ]);
+  expect(defaultRuntime.log).toHaveBeenCalledWith("id: target-job");
+  expect(defaultRuntime.log).toHaveBeenCalledWith(
+    "delivery: announce -> telegram:-100 (resolved from last, main session)",
+  );
+  expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
+});
+
+it.each([false, true])(
+  "renders cron show without state (missing payload: %s)",
+  async (missingPayload) => {
+    mockExistingJob({ state: undefined, ...(missingPayload ? { payload: undefined } : {}) });
+    await parse(["cron", "show", "job-1"]);
+    expect(defaultRuntime.log.mock.calls).toEqual(
+      expect.arrayContaining(
+        ["id: job-1", "next: -", "last: -", "status: idle", "last error: -", "diagnostic: -"].map(
+          (line) => [line],
+        ),
+      ),
+    );
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps the ambiguous cron show name error when a matching row has no schedule", async () => {
+  resetGatewayMock();
+  callGatewayFromCli.mockImplementation(async (method: string) =>
+    method === "cron.list"
+      ? {
+          ...cronPage([]),
+          total: 2,
+          jobs: [
+            { id: "broken", name: "Duplicate", enabled: true },
+            createCronJob("second", "Duplicate"),
+          ],
+        }
+      : undefined,
+  );
+
+  await expect(parse(["cron", "show", "Duplicate"])).rejects.toMatchObject({
+    name: "ExitError",
+    code: 1,
+  });
+  expectRuntimeErrorContaining("Multiple automations match this name.");
+});
+
+it("creates a configured agent job from a positional cron schedule and prompt", async () => {
+  const params = await addOptions(
+    {
+      "--name": "job",
+      "--agent": " Ops ",
+      "--session": "SESSION:agent:ops:telegram:group:-100123:topic:42",
+      "--model": "  opus  ",
+      "--thinking": "  low  ",
+      "--light-context": true,
+      "--fallbacks": "openrouter/gpt-4.1-mini openai/gpt-5",
+      "--tools": "read write",
+      "--timeout-seconds": "0",
+      "--stagger": "45s",
+      ...telegramOptions,
+      "--thread-id": " 42 ",
+    },
+    "0 2 * * *",
+    "    code\r\n    line\r\n",
+  );
+  expect(params).toMatchObject({
+    name: "job",
+    agentId: "ops",
+    sessionTarget: "session:agent:ops:telegram:group:-100123:topic:42",
+    schedule: { kind: "cron", expr: "0 2 * * *", staggerMs: 45_000 },
+    payload: {
+      kind: "agentTurn",
+      message: "    code\r\n    line\r\n",
+      model: "opus",
+      thinking: "low",
+      lightContext: true,
+      fallbacks: ["openrouter/gpt-4.1-mini", "openai/gpt-5"],
+      timeoutSeconds: 0,
+      toolsAllow: ["read", "write"],
+    },
+    delivery: telegramDelivery,
+  });
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+});
+
+it("keeps the default-agent warning off JSON stdout and preserves an empty tool grant", async () => {
+  const params = await namedAdd("--message", "    code\r\n    line\r\n", "--tools", "", "--json");
+  expect(params).toMatchObject({
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message: "    code\r\n    line\r\n", toolsAllow: [] },
+  });
+  expect(params.payload).toHaveProperty("timeoutSeconds", undefined);
+  expectRuntimeErrorContaining("No --agent specified");
+  expectRuntimeErrorContaining("configured default agent");
+  expect(stdoutText()).not.toContain("No --agent specified");
+  expect(JSON.parse(stdoutText())).toMatchObject({
+    ok: true,
+    params: { name: "job", payload: { message: "    code\r\n    line\r\n" } },
+  });
+});
+
+it("creates a one-shot webhook system event with an explicit keep policy", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+  const params = await addOptions(
+    {
+      "--at": "+30m",
+      "--system-event": "hi",
+      "--webhook": " https://example.invalid/openclaw ",
+      "--keep-after-run": true,
+    },
+    "Reminder",
+  );
+  expect(params).toMatchObject({
+    name: "Reminder",
+    sessionTarget: "main",
+    deleteAfterRun: false,
+    schedule: { kind: "at", at: "2026-05-25T00:30:00.000Z" },
+    payload: { kind: "systemEvent", text: "hi" },
+  });
+  expect(params.delivery).toEqual({
+    mode: "webhook",
+    to: "https://example.invalid/openclaw",
+    channel: undefined,
+    threadId: undefined,
+    accountId: undefined,
+    bestEffort: undefined,
+  });
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+});
+
+it("creates exact system events with a tool allowlist", async () => {
+  expect(
+    await namedAdd("--system-event", "tick", "--exact", "--tools", "read,write"),
+  ).toMatchObject({
+    sessionTarget: "main",
+    schedule: { kind: "cron", staggerMs: 0 },
+    payload: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "write"] },
+  });
+});
+
+it("keeps invalid add target/payload guidance in JSON mode before RPC", async () => {
+  const argv = process.argv;
+  const args = [
+    ...CREATE,
+    ...flags({
+      "--at": "+3m",
+      "--session": "current",
+      "--system-event": "resume",
+      "--json": true,
+    }),
+  ];
+  process.argv = [...argv.slice(0, 2), ...args];
+  try {
+    const failure = await runCronCommand(args).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ExpectedCliError);
+    expect(formatCliJsonFailure(failure)).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message:
+          'cron sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session; for sessionTarget "current" use payload {kind:"agentTurn",message}',
+      },
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  } finally {
+    process.argv = argv;
+  }
+});
+
+it("accepts a positional every interval without delivery", async () => {
+  expect(await add("every 1h", "summary", "--name", "job", "--no-deliver")).toMatchObject({
+    schedule: { kind: "every", everyMs: 3_600_000 },
+    payload: { kind: "agentTurn", message: "summary" },
+    delivery: { mode: "none" },
+  });
+});
+
+function answerSystemInfo(answer: () => unknown) {
+  callGatewayFromCli.mockImplementation(async (method: string, opts: unknown, params?: unknown) =>
+    method === "system.info" ? answer() : defaultGatewayMock(method, opts, params),
+  );
+}
+
+it.each(["add", "edit"])("%s uses the Gateway shell", async (mode) => {
+  for (const [platform, flag, input, argv] of [
+    ["linux", "--command", "echo ok", ["sh", "-lc", "echo ok"]],
+    ["win32", "--command", "echo ok", ["cmd.exe", "/d", "/s", "/c", "echo ok"]],
+    ["win32", "--command-argv", '["sh","-c","echo ok"]', ["sh", "-c", "echo ok"]],
+  ] as const) {
+    resetGatewayMock();
+    answerSystemInfo(() => ({ platform }));
+    await parse([
+      ...(mode === "add" ? [...CREATE, "--every", "10m"] : EDIT),
+      ...flags({
+        [flag]: input,
+        "--command-cwd": "/srv/app",
+        "--command-env": "FOO=bar",
+        "--timeout-seconds": "0",
+        "--no-output-timeout-seconds": "5",
+        "--output-max-bytes": "4096",
+        "--tools": "read write",
+        "--no-deliver": true,
+      }),
+    ]);
+    const params = rpcParams<{ payload?: unknown; patch?: CronJobPatch }>(
+      `cron.${mode === "add" ? "add" : "update"}`,
+    );
+    expect(params.payload ?? params.patch?.payload).toMatchObject({
+      kind: "command",
+      argv,
+      cwd: "/srv/app",
+      env: { FOO: "bar" },
+      timeoutSeconds: 0,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 4096,
+      toolsAllow: ["read", "write"],
+    });
+    if (flag === "--command-argv") {
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "system.info")).toBe(
+        false,
+      );
+    }
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  }
+});
+
+it.each([undefined, {}])("requires a Gateway platform (%j)", async (info) => {
+  resetGatewayMock();
+  answerSystemInfo(() => {
+    if (info) {
+      return info;
+    }
+    throw new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unknown method: system.info",
+    });
+  });
+  await expect(parse([...CREATE, "--every", "10m", "--command", "echo ok"])).rejects.toMatchObject({
+    name: "ExitError",
+    code: 1,
+  });
+  expectRuntimeErrorContaining("--command-argv");
+  expect(rpcParams("cron.add")).toBeUndefined();
+});
+
+it("creates stream schedules from exact argv flags", async () => {
+  expect(
+    await addOptions({
+      "--name": "events",
+      "--stream-command": '["node","events.mjs"]',
+      "--stream-cwd": "/srv/app",
+      "--stream-mode": "match",
+      "--stream-match": "^ready:",
+      "--stream-batch-ms": "100",
+      "--stream-max-batch-bytes": "2048",
+      "--message": "handle events",
+      "--session": "isolated",
+    }),
+  ).toHaveProperty("schedule", {
+    kind: "stream",
+    command: ["node", "events.mjs"],
+    cwd: "/srv/app",
+    mode: "match",
+    match: "^ready:",
+    batchMs: 100,
+    maxBatchBytes: 2_048,
+  });
+});
+
+it("updates configured agent payload fields", async () => {
+  const patch = await editOptions({
+    "--message": "hello",
+    "--model": "  opus  ",
+    "--thinking": "  high  ",
+    "--fallbacks": "openrouter/gpt-4.1-mini,openai/gpt-5",
+    "--tools": "exec read write",
+    "--light-context": true,
+    "--timeout-seconds": "0",
+  });
+  expect(patch.payload).toEqual({
+    kind: "agentTurn",
+    message: "hello",
+    model: "opus",
+    thinking: "high",
+    fallbacks: ["openrouter/gpt-4.1-mini", "openai/gpt-5"],
+    toolsAllow: ["exec", "read", "write"],
+    lightContext: true,
+    timeoutSeconds: 0,
+  });
+  expect(patch).not.toHaveProperty("delivery");
+});
+
+it.each([
+  [
+    "sets agent routing",
+    ["--agent", " Ops ", "--session", "SESSION:Project-Alpha"],
+    { agentId: "ops", sessionTarget: "session:Project-Alpha" },
+  ],
+  ["clears agent routing", ["--clear-agent"], { agentId: null }],
+  [
+    "retargets Telegram delivery without replacing the payload",
+    flags(telegramOptions),
+    { delivery: telegramDelivery },
+  ],
+  ["disables delivery", ["--no-deliver"], { delivery: { mode: "none" } }],
+  [
+    "sets webhook delivery",
+    ["--webhook", " https://example.invalid/cron ", "--best-effort-deliver"],
+    { delivery: { mode: "webhook", to: "https://example.invalid/cron", bestEffort: true } },
+  ],
+  [
+    "implies announcement when enabling best-effort on a message edit",
+    ["--message", "hello", "--best-effort-deliver"],
+    {
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", bestEffort: true },
+    },
+  ],
+  [
+    "patches failure-alert settings",
+    flags({
+      "--failure-alert-after": "3",
+      "--failure-alert-cooldown": "1h",
+      "--failure-alert-channel": "telegram",
+      "--failure-alert-to": "19098680",
+      "--failure-alert-thread-id": "42",
+      "--failure-alert-mode": "webhook",
+      "--failure-alert-account-id": "bot-a",
+      "--failure-alert-include-skipped": true,
+    }),
+    {
+      failureAlert: {
+        after: 3,
+        cooldownMs: 3_600_000,
+        channel: "telegram",
+        to: "19098680",
+        threadId: "42",
+        mode: "webhook",
+        accountId: "bot-a",
+        includeSkipped: true,
+      },
+    },
+  ],
+  ["disables failure alerts", ["--no-failure-alert"], { failureAlert: false }],
+  [
+    "converts to a zoned one-shot with keep-after-run",
+    ["--at", "+002027-01-15T12:00:00", "--tz", "America/New_York", "--keep-after-run"],
+    { schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" }, deleteAfterRun: false },
+  ],
+] satisfies Array<[string, string[], Record<string, unknown>]>)(
+  "%s",
+  async (_name, args, expected) => {
+    expect(await edit(...args)).toEqual(expected);
+  },
+);
+
+it("normalizes offset one-shot creation independently of timezone", async () => {
+  const params = await addOptions({
+    "--name": "job",
+    "--at": "+002027-01-15T12:00:00+02:00",
+    "--message": "hello",
+    "--tz": "America/New_York",
+  });
+  expect(params.schedule).toEqual({ kind: "at", at: "2027-01-15T10:00:00.000Z" });
+});
+
+it("replaces a cron expression and stagger while retaining its timezone", async () => {
+  expect(
+    await editSchedule(
+      { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      "--cron",
+      "0 * * * *",
+      "--stagger",
+      "30s",
+    ),
+  ).toEqual({ schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 30_000 } });
+});
+
+it.each([
+  { args: ["--stream-match", "^updated:"], match: "^updated:" },
+  { args: ["--stream-mode", "match"], match: "^ready:" },
+])("merges stream replacement metadata $args", async ({ args, match }) => {
+  expect(
+    await editSchedule(
+      { kind: "stream", command: ["node", "events.mjs"], mode: "match", match: "^ready:" },
+      "--stream-command",
+      '["node","replacement.mjs"]',
+      ...args,
+    ),
+  ).toMatchObject({
+    schedule: { kind: "stream", command: ["node", "replacement.mjs"], mode: "match", match },
+  });
+});
+
+it("applies exact mode without replacing the cron expression", async () => {
+  expect(
+    await editSchedule(
+      { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      "--exact",
+    ),
+  ).toEqual({ schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 0 } });
+  expect(rpcParams("cron.get")).toEqual({ id: "job-1" });
+  expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
+});
+
+it("rejects exact mode for stored non-cron schedules", async () => {
+  mockExistingJob({ schedule: { kind: "every", everyMs: 60_000 } });
+  await expect(parse([...EDIT, "--exact"])).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  expectRuntimeErrorContaining("Current job is not a cron schedule");
+});
+
+it.each([
+  [[...AGENT_ADD, "--script", "   "], "--script must not be blank"],
+  [[...AGENT_ADD, "--webhook", "not-a-url"], "--webhook must be a valid http(s) URL"],
+  [
+    ["cron", "create", "0 2 * * *", "    code\n", "--name", "job", "--message", "code"],
+    "Pass the automation message either positionally or with --message",
+  ],
+  [
+    [...ADD, "Positional", "--system-event", "tick"],
+    "Pass the automation name either positionally or with --name",
+  ],
+  [
+    [...AGENT_ADD, "--webhook", "https://example.invalid/cron", "--to", "channel:C123"],
+    "--webhook cannot be combined with chat delivery options",
+  ],
+  [[...AGENT_ADD, "--command", "echo ok"], "Choose exactly one payload"],
+  [
+    [...ADD, "--session", "main", "--system-event", "tick", "--thread-id", "42"],
+    "require an agentTurn job or a non-main command or script job with delivery",
+  ],
+  [[...AGENT_ADD, "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
+  [["cron", "list", "--agent", "   "], "--agent must not be blank"],
+  [["cron", "runs", "--id", "job-1", "--run-id", "   "], "--run-id must not be blank"],
+  [
+    ["cron", "runs", "job-1", "--id", "job-2"],
+    'Conflicting job ids: positional "job-1" and --id "job-2".',
+  ],
+  [["cron", "show", "   "], "Missing job id"],
+  [["cron", "run", "job-1", "--wait", "--poll-interval", "0ms"], "invalid --poll-interval"],
+  [[...EVENT_ADD, "--stagger", "1m", "--exact"], "Choose either --stagger or --exact"],
+  [
+    [...CREATE, "--every", "10m", "--stagger", "30s", "--system-event", "tick"],
+    "--stagger/--exact are only valid for cron schedules",
+  ],
+  [
+    [...CREATE, "--every", "10m", "--tz", "UTC", "--system-event", "tick"],
+    "--tz is only valid with --cron or offset-less --at",
+  ],
+  [
+    [
+      ...CREATE,
+      ...flags({
+        "--at": "2027-09-04T24:00:00",
+        "--tz": "America/Santiago",
+        "--message": "hello",
+      }),
+    ],
+    "Invalid --at",
+  ],
+  [
+    [...EDIT, "--webhook", "https://example.invalid/cron", "--announce"],
+    "Choose at most one of --announce, --no-deliver, or --webhook",
+  ],
+  [[...EDIT, "--failure-alert-after", "3x"], "Invalid --failure-alert-after"],
+  [
+    [...EDIT, "--failure-alert-include-skipped", "--failure-alert-exclude-skipped"],
+    "Use either --failure-alert-include-skipped",
+  ],
+])("rejects %j before Gateway access", async (args, error) => {
+  await expectCronCommandExit(args);
+  expectRuntimeErrorContaining(error);
+  expect(callGatewayFromCli).not.toHaveBeenCalled();
+});

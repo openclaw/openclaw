@@ -1,0 +1,305 @@
+import { createHash } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import type { ResolvedMattermostAccount } from "./accounts.js";
+import { collectMattermostCallbackPaths } from "./callback-host.js";
+import {
+  createWebhookInFlightLimiter,
+  sendHttpRequestRejection,
+  type OpenClawPluginApi,
+} from "./runtime-api.js";
+import {
+  normalizeSlashCommandTrigger,
+  parseSlashCommandPayload,
+  type MattermostRegisteredCommand,
+} from "./slash-commands.js";
+import {
+  clearMattermostSlashCommandValidationCacheForAccount,
+  createSlashCommandHttpHandler,
+  sendSlashCommandResponse,
+  readSlashCommandBody,
+} from "./slash-http.js";
+
+const slashRouteInFlightLimiter = createWebhookInFlightLimiter();
+const SLASH_ROUTE_IN_FLIGHT_KEY = "mattermost:slash";
+const SLASH_AUTHENTICATED_IN_FLIGHT_KEY = `${SLASH_ROUTE_IN_FLIGHT_KEY}:authenticated`;
+type SlashHandler = ReturnType<typeof createSlashCommandHttpHandler>;
+type SlashHandlerMatchSource = "token" | "command";
+type SlashHandlerMatch =
+  | { kind: "none" }
+  | {
+      kind: "single";
+      handler: SlashHandler;
+    }
+  | {
+      kind: "ambiguous";
+      source: SlashHandlerMatchSource;
+      accountIds: string[];
+    };
+
+type SlashCommandAccountState = {
+  /** Tokens from registered/current commands, used for fast-path routing. */
+  commandTokens: Set<string>;
+  /** Registered command IDs for cleanup on shutdown. */
+  registeredCommands: MattermostRegisteredCommand[];
+  handler: SlashHandler | null;
+};
+
+// Route registration and monitor activation can use different module loaders.
+// Share their map; deactivateSlashCommands owns account cleanup.
+const accountStates = resolveGlobalMap<string, SlashCommandAccountState>(
+  Symbol.for("openclaw.mattermost.slash-account-states"),
+);
+
+function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
+  const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
+  if (!token) {
+    return SLASH_ROUTE_IN_FLIGHT_KEY;
+  }
+
+  let matched = false;
+  for (const state of accountStates.values()) {
+    for (const commandToken of state.commandTokens) {
+      matched = safeEqualSecret(token, commandToken) || matched;
+    }
+  }
+
+  // Only known credentials create keys, never arbitrary headers or raw secrets.
+  // Distinct credentials stay isolated even when one startup token is later revoked.
+  return matched
+    ? `${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${createHash("sha256")
+        .update(`${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${token}`)
+        .digest("hex")}`
+    : SLASH_ROUTE_IN_FLIGHT_KEY;
+}
+
+function resolveSlashHandler(
+  source: SlashHandlerMatchSource,
+  matchesState: (state: SlashCommandAccountState) => boolean,
+): SlashHandlerMatch {
+  const matches: Array<{
+    accountId: string;
+    handler: SlashHandler;
+  }> = [];
+
+  for (const [accountId, state] of accountStates) {
+    if (state.handler && matchesState(state)) {
+      matches.push({ accountId, handler: state.handler });
+    }
+  }
+
+  if (matches.length === 0) {
+    return { kind: "none" };
+  }
+  if (matches.length === 1) {
+    const match = matches[0];
+    if (!match) {
+      return { kind: "none" };
+    }
+    return {
+      kind: "single",
+      handler: match.handler,
+    };
+  }
+
+  return {
+    kind: "ambiguous",
+    source,
+    accountIds: matches.map((entry) => entry.accountId),
+  };
+}
+
+function resolveSlashHandlerForCommand(params: {
+  teamId: string;
+  command: string;
+}): SlashHandlerMatch {
+  const trigger = normalizeSlashCommandTrigger(params.command);
+  if (!trigger) {
+    return { kind: "none" };
+  }
+
+  return resolveSlashHandler("command", (state) =>
+    state.registeredCommands.some((cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger),
+  );
+}
+
+export function getSlashCommandState(accountId: string): SlashCommandAccountState | null {
+  return accountStates.get(accountId) ?? null;
+}
+
+/**
+ * Activate slash commands for a specific account.
+ * Called from the monitor after bot connects.
+ */
+export function activateSlashCommands(params: {
+  account: ResolvedMattermostAccount;
+  registeredCommands: MattermostRegisteredCommand[];
+  triggerMap?: Map<string, string>;
+  api: {
+    cfg: import("./runtime-api.js").OpenClawConfig;
+    runtime: import("./runtime-api.js").RuntimeEnv;
+  };
+  log?: (msg: string) => void;
+}) {
+  const { account, registeredCommands, triggerMap, api, log } = params;
+  const accountId = account.accountId;
+
+  const handler = createSlashCommandHttpHandler({
+    account,
+    cfg: api.cfg,
+    runtime: api.runtime,
+    registeredCommands,
+    triggerMap,
+    log,
+  });
+
+  accountStates.set(accountId, {
+    commandTokens: new Set(registeredCommands.map((command) => command.token).filter(Boolean)),
+    registeredCommands,
+    handler,
+  });
+
+  log?.(
+    `mattermost: slash commands activated for account ${accountId} (${registeredCommands.length} commands)`,
+  );
+}
+
+export function deactivateSlashCommands(accountId?: string) {
+  for (const stateAccountId of accountStates.keys()) {
+    if (accountId && stateAccountId !== accountId) {
+      continue;
+    }
+    clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
+    accountStates.delete(stateAccountId);
+  }
+}
+
+/**
+ * Register the HTTP route for slash command callbacks.
+ * Called during plugin registration.
+ *
+ * The single HTTP route dispatches to the correct per-account handler by
+ * matching the inbound token against each account's known tokens, falling back
+ * to registered team/trigger ownership so upstream validation can accept a
+ * rotated Mattermost token.
+ */
+export function registerSlashCommandRoute(api: OpenClawPluginApi) {
+  const dispatchRoute = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    onRequestAuthenticated: () => void,
+  ) => {
+    if (accountStates.size === 0) {
+      sendSlashCommandResponse(
+        res,
+        503,
+        "Slash commands are not yet initialized. Please try again in a moment.",
+      );
+      return;
+    }
+
+    if (accountStates.size === 1) {
+      const state = accountStates.values().next().value;
+      if (!state?.handler) {
+        sendSlashCommandResponse(
+          res,
+          503,
+          "Slash commands are not yet initialized. Please try again in a moment.",
+        );
+        return;
+      }
+      await state.handler(req, res, undefined, onRequestAuthenticated);
+      return;
+    }
+
+    // Multi-account: buffer the body, then find the matching account by token or
+    // registered team/trigger before account-specific validation.
+    // Use the bounded helper so a slow/never-finishing client cannot tie up the
+    // routing handler indefinitely (Slowloris).
+    const bodyStr = await readSlashCommandBody(req, res);
+    if (bodyStr === undefined) {
+      return;
+    }
+
+    // Parse the token for the fast path; if it misses, parse the full slash
+    // payload so rotated tokens can still route by registered team/trigger.
+    let token: string | null = null;
+    const ct = req.headers["content-type"] ?? "";
+    try {
+      if (ct.includes("application/json")) {
+        token = (JSON.parse(bodyStr) as { token?: string }).token ?? null;
+      } else {
+        token = new URLSearchParams(bodyStr).get("token");
+      }
+    } catch {
+      // parse failed — will be caught by handler
+    }
+
+    let match: SlashHandlerMatch = token
+      ? resolveSlashHandler("token", (state) => state.commandTokens.has(token))
+      : { kind: "none" };
+    if (match.kind === "none") {
+      const payload = parseSlashCommandPayload(bodyStr, ct);
+      if (payload) {
+        match = resolveSlashHandlerForCommand({
+          teamId: payload.team_id,
+          command: payload.command,
+        });
+      }
+    }
+
+    if (match.kind === "none") {
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
+      return;
+    }
+
+    if (match.kind === "ambiguous") {
+      api.logger.warn?.(
+        `mattermost: slash callback matched multiple accounts via ${match.source} (${match.accountIds.join(", ")})`,
+      );
+      const conflictText =
+        match.source === "token"
+          ? "Conflict: command token is not unique across accounts."
+          : "Conflict: slash command is not unique across accounts.";
+      sendSlashCommandResponse(res, 409, conflictText);
+      return;
+    }
+
+    // Routing already enforced the body limit. Retain the original transport
+    // and pass those bytes forward instead of replaying a socket-less request.
+    await match.handler(req, res, bodyStr, onRequestAuthenticated);
+  };
+
+  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+    // Header matching only selects a capacity pool. The handler still authenticates
+    // the body token and current command before releasing this admission guard.
+    const inFlightKey = resolveSlashRouteInFlightKey(req.headers.authorization);
+    if (!slashRouteInFlightLimiter.tryAcquire(inFlightKey)) {
+      await sendHttpRequestRejection(req, res, 429, "Too Many Requests");
+      return;
+    }
+
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      slashRouteInFlightLimiter.release(inFlightKey);
+    };
+    try {
+      await dispatchRoute(req, res, release);
+    } finally {
+      release();
+    }
+  };
+
+  for (const callbackPath of collectMattermostCallbackPaths(api.config.channels?.mattermost)) {
+    api.registerHttpRoute({
+      path: callbackPath,
+      auth: "plugin",
+      handler: routeHandler,
+    });
+  }
+}

@@ -1,0 +1,676 @@
+import type { Request, Response } from "express";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
+import {
+  DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  isDangerousNameMatchingEnabled,
+  mergeAllowlist,
+  resolveChannelMediaMaxBytes,
+  summarizeMapping,
+  type MSTeamsConfig,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "../runtime-api.js";
+import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import { formatUnknownError } from "./errors.js";
+import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
+import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { createMSTeamsHandlerConfigReader } from "./monitor-handler/config.js";
+import { createMSTeamsIngress } from "./msteams-ingress.js";
+import { createMSTeamsPollStoreState, extractMSTeamsPollVote } from "./polls.js";
+import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
+import { createMSTeamsReplayContext } from "./replay-context.js";
+import {
+  keepConfiguredMSTeamsAllowlistActive,
+  looksLikeMSTeamsConversationId,
+  projectStableMSTeamsGroupAllowlist,
+  projectStableMSTeamsUserAllowlist,
+  projectStableMSTeamsTeamsConfig,
+  resolveMSTeamsTeamsConfig,
+  resolveMSTeamsUserAllowlist,
+} from "./resolve-allowlist.js";
+import { getMSTeamsRuntime } from "./runtime.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
+import {
+  createMSTeamsExpressAdapter,
+  createMSTeamsTokenProvider,
+  loadMSTeamsSdkWithAuth,
+  type MSTeamsApp,
+  type MSTeamsCardActionResponse,
+} from "./sdk.js";
+import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import { createMSTeamsWebhookHandler } from "./webhook-handler.js";
+import {
+  resolveMSTeamsLegacyMessagesOwner,
+  resolveMSTeamsLegacyWebhook,
+  resolveMSTeamsWebhookPathIssue,
+  resolveMSTeamsWebhookCollisionIssue,
+} from "./webhook-route.js";
+
+type MonitorMSTeamsOpts = {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  msteamsCfg?: MSTeamsConfig;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+};
+
+export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<void> {
+  const core = getMSTeamsRuntime();
+  const log = core.logging.getChildLogger({ name: "msteams" });
+  const account = resolveMSTeamsRuntimeAccount(opts);
+  const { accountId, credentials: creds } = account;
+  const accountPolicyCfg = opts.cfg;
+  let cfg = accountPolicyCfg;
+  let msteamsCfg = account.config;
+  if (opts.cfg.channels?.msteams?.enabled !== true || msteamsCfg.enabled === false) {
+    log.debug?.("msteams provider disabled");
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams provider is disabled", { running: true }),
+    );
+    return;
+  }
+
+  if (!creds) {
+    log.error("msteams credentials not configured");
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams credentials are not configured", { running: true }),
+    );
+    return;
+  }
+  const collisionIssue = resolveMSTeamsWebhookCollisionIssue(accountPolicyCfg);
+  if (collisionIssue) {
+    throw new Error(collisionIssue);
+  }
+  const appId = creds.appId;
+
+  const runtime: RuntimeEnv = opts.runtime ?? {
+    log: console.log,
+    error: console.error,
+    exit: (code: number): never => {
+      throw new Error(`exit ${code}`);
+    },
+  };
+
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
+
+  const configuredAllowFrom = msteamsCfg.allowFrom;
+  const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
+  let allowFrom = projectStableMSTeamsUserAllowlist(configuredAllowFrom);
+  let groupAllowFrom = projectStableMSTeamsGroupAllowlist(
+    configuredGroupAllowFrom ?? configuredAllowFrom,
+  );
+  let teamsConfig = projectStableMSTeamsTeamsConfig(msteamsCfg.teams);
+  const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
+
+  const cleanAllowEntry = (entry: string) =>
+    entry
+      .replace(/^(msteams|teams):/i, "")
+      .replace(/^user:/i, "")
+      .trim();
+  const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
+  const cleanAllowEntries = (entries?: string[]) =>
+    entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
+  const isMutableUserEntry = (entry: string) =>
+    !isStableUserId(entry) &&
+    !/^accessGroup:/i.test(entry) &&
+    !looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(entry));
+
+  const resolveAllowlistUsers = async (label: string, entries: string[]) => {
+    const resolved = await resolveMSTeamsUserAllowlist({ cfg, accountId, entries });
+    const additions: string[] = [];
+    const unresolved: string[] = [];
+    for (const entry of resolved) {
+      if (entry.resolved && entry.id) {
+        additions.push(entry.id);
+      } else {
+        unresolved.push(entry.input);
+      }
+    }
+    const mapping = resolved
+      .filter((entry) => entry.resolved && entry.id)
+      .map((entry) => `${entry.input}→${entry.id}`);
+    summarizeMapping(label, mapping, unresolved, runtime);
+    return { additions, unresolved };
+  };
+
+  try {
+    if (allowNameMatching) {
+      const allowEntries = cleanAllowEntries(configuredAllowFrom).filter(isMutableUserEntry);
+      if (allowEntries.length > 0) {
+        const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+      }
+
+      if (Array.isArray(configuredGroupAllowFrom) && configuredGroupAllowFrom.length > 0) {
+        const groupEntries = cleanAllowEntries(configuredGroupAllowFrom).filter(isMutableUserEntry);
+        if (groupEntries.length > 0) {
+          const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
+          groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+        }
+      }
+    }
+
+    if (msteamsCfg.teams && Object.keys(msteamsCfg.teams).length > 0) {
+      const resolved = await resolveMSTeamsTeamsConfig({
+        cfg,
+        accountId,
+        teamIdMode: "bot-framework",
+        teams: msteamsCfg.teams,
+      });
+      teamsConfig = resolved.teams;
+      summarizeMapping("msteams channels", resolved.mapping, resolved.unresolved, runtime);
+    }
+  } catch (err) {
+    // Graph-resolved aliases are authorization inputs. Keep only the stable
+    // projection when resolution fails so mutable names never become active.
+    runtime.error?.(
+      `msteams resolve failed; mutable allowlist entries are disabled. ${formatUnknownError(err)}`,
+    );
+  }
+
+  if (Array.isArray(configuredGroupAllowFrom)) {
+    // A configured sender list whose entries are all unresolvable names must keep restricting
+    // senders. An empty projection would fall back to the DM allowlist (or its wildcard).
+    groupAllowFrom = keepConfiguredMSTeamsAllowlistActive(configuredGroupAllowFrom, groupAllowFrom);
+  }
+
+  if (configuredGroupAllowFrom == null && groupAllowFrom) {
+    // Group fallback must include users resolved from the DM list without admitting DM chats.
+    groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions: allowFrom ?? [] });
+  }
+
+  msteamsCfg = {
+    ...msteamsCfg,
+    allowFrom,
+    groupAllowFrom,
+    teams: teamsConfig,
+  };
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
+
+  const legacyListener = resolveMSTeamsLegacyWebhook(msteamsCfg);
+  const pathIssue = resolveMSTeamsWebhookPathIssue({
+    cfg: accountPolicyCfg,
+    accountId,
+    accountConfig: msteamsCfg,
+  });
+  if (pathIssue) {
+    if (!legacyListener) {
+      throw new Error(pathIssue);
+    }
+    log.warn?.(pathIssue);
+  }
+  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
+  const mediaMaxBytes =
+    resolveChannelMediaMaxBytes({
+      cfg,
+      resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
+    }) ?? 8 * 1024 * 1024;
+  const conversationStore = createMSTeamsConversationStoreState({ accountId });
+  const pollStore = createMSTeamsPollStoreState({ accountId });
+
+  log.info("starting provider on Gateway HTTP routes");
+
+  const express = await import("express");
+
+  const expressApp = express.default();
+  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
+  const privateQaToken = await privateQaRuntime?.token();
+
+  // Cheap auth-presence gate: reject requests without a Bearer token before
+  // JSON parsing. Bearer-shaped junk still hits the bounded parser below before
+  // the SDK's route-level parser and full JWT validation.
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    const auth = req.headers.authorization;
+    if (
+      !auth ||
+      !auth.startsWith("Bearer ") ||
+      (privateQaToken && !safeEqualSecret(auth.slice(7), privateQaToken))
+    ) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  });
+  expressApp.use(express.json({ limit: DEFAULT_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
+  });
+
+  const configuredPath = (msteamsCfg.webhook?.path || "/api/messages") as `/${string}`;
+  const ssoConnectionName =
+    msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName
+      ? msteamsCfg.sso.connectionName
+      : undefined;
+
+  // The SDK owns request parsing and JWT validation on its messaging route.
+  const { app } = await loadMSTeamsSdkWithAuth(creds, {
+    ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
+    httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
+    messagingEndpoint: configuredPath,
+    ...(ssoConnectionName ? { oauthDefaultConnectionName: ssoConnectionName } : {}),
+  });
+
+  // Existing Azure Bot registrations may retain /api/messages after webhook.path changes.
+  // Forward requests the SDK did not claim until operators update those registrations.
+  if (accountId === DEFAULT_ACCOUNT_ID && configuredPath !== "/api/messages") {
+    let warnedLegacyMessagesRoute = false;
+    expressApp.post(
+      "/api/messages",
+      (req: Request, res: Response, next: (err?: unknown) => void) => {
+        if (!warnedLegacyMessagesRoute) {
+          warnedLegacyMessagesRoute = true;
+          log.warn?.(
+            `received request on /api/messages but webhook.path is ${configuredPath}; ` +
+              "update your Azure Bot endpoint — this fallback will be removed in a future release",
+          );
+        }
+        // Re-enter the middleware chain so the configured SDK route still authenticates it.
+        req.url = configuredPath;
+        expressApp(req, res, next);
+      },
+    );
+  }
+
+  const tokenProvider = createMSTeamsTokenProvider(app);
+
+  const ssoDeps = ssoConnectionName
+    ? {
+        tokenStore: createMSTeamsSsoTokenStoreFs({ accountId }),
+        connectionName: ssoConnectionName,
+      }
+    : undefined;
+  if (ssoDeps) {
+    log.debug?.("msteams sso enabled", {
+      connectionName: ssoDeps.connectionName,
+    });
+  }
+
+  const handlerDeps: MSTeamsMessageHandlerDeps = {
+    cfg,
+    accountPolicyCfg,
+    accountId,
+    runtime,
+    appId,
+    app,
+    tokenProvider,
+    textLimit,
+    mediaMaxBytes,
+    conversationStore,
+    pollStore,
+    log,
+  };
+  handlerDeps.readConfig = createMSTeamsHandlerConfigReader(handlerDeps);
+  const handleActivity = createMSTeamsActivityHandler(handlerDeps);
+
+  // Durable activities belong to the bot identity, not its mutable config label.
+  // Preserve shipped appId queues for every bot, including after account renames.
+  const ingress = createMSTeamsIngress({
+    accountId: appId,
+    runtime,
+    dispatch: async (activity, lifecycle, liveContext) => {
+      // The journaled activity is the dispatch payload; the live context only
+      // supplies the transport surface. A duplicate delivery's context must
+      // not swap in its own (possibly mutated) activity object.
+      if (liveContext) {
+        liveContext.activity = activity;
+      }
+      const context =
+        liveContext ??
+        createMSTeamsReplayContext(
+          activity,
+          app,
+          resolveMSTeamsSdkCloudOptions(msteamsCfg),
+          accountId,
+        );
+      return await handleActivity(context, lifecycle);
+    },
+  });
+
+  // Handle adaptiveCard/action invokes (Action.Execute Universal Action Model).
+  // We must return an InvokeResponse-shaped value so Teams updates the card UI;
+  // returning nothing or letting the catch-all process it makes Teams report
+  // "Unable to reach app".
+  app.on("card.action", async (ctx): Promise<MSTeamsCardActionResponse> => {
+    const adaptedCtx = adaptSdkContext(ctx, app);
+    try {
+      const activity = adaptedCtx.activity;
+      const vote = extractMSTeamsPollVote(activity);
+      if (vote) {
+        const voterId = activity?.from?.aadObjectId ?? activity?.from?.id ?? "unknown";
+        try {
+          if (
+            !(await isMSTeamsInvokeAuthorized({
+              context: adaptedCtx,
+              deps: handlerDeps,
+              invokeKind: "card action",
+            }))
+          ) {
+            return cardActionMessage("Not authorized.");
+          }
+
+          const existingPoll = await pollStore.getPoll(vote.pollId);
+          if (!existingPoll) {
+            log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
+            return cardActionMessage("Poll not found.");
+          }
+          const pollConversationId = existingPoll.conversationId
+            ? normalizeMSTeamsConversationId(existingPoll.conversationId)
+            : undefined;
+          const activityConversationId = normalizeMSTeamsConversationId(
+            activity?.conversation?.id ?? "",
+          );
+          if (pollConversationId && pollConversationId !== activityConversationId) {
+            log.info("poll vote ignored (conversation mismatch)", {
+              pollId: vote.pollId,
+              expectedConversationId: pollConversationId,
+              receivedConversationId: activityConversationId || undefined,
+            });
+            return cardActionMessage("Poll not found.");
+          }
+
+          const poll = await pollStore.recordVote({
+            pollId: vote.pollId,
+            voterId,
+            selections: vote.selections,
+          });
+          if (poll) {
+            log.info("recorded poll vote", { pollId: vote.pollId, voterId });
+            return cardActionMessage("Vote recorded.");
+          }
+          log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
+          return cardActionMessage("Poll not found.");
+        } catch (err) {
+          log.error("failed to record poll vote", {
+            pollId: vote.pollId,
+            error: formatUnknownError(err),
+          });
+          return cardActionError("RECORD_VOTE_FAILED", "Could not record vote.");
+        }
+      }
+      // The SDK has already authenticated this invoke. Acknowledge only after
+      // the raw activity is durable; agent work drains independently.
+      await ingress.accept(activity, adaptedCtx);
+      return cardActionMessage("OK");
+    } catch (err) {
+      log.error("msteams card.action failed", { error: formatUnknownError(err) });
+      return cardActionError("CARD_ACTION_FAILED", "Card action failed.");
+    }
+  });
+
+  // Typed routes let the SDK acknowledge consent before the delayed upload work.
+  app.on("file.consent.accept", (ctx) => {
+    void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
+  });
+  app.on("file.consent.decline", (ctx) => {
+    void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
+  });
+
+  // The SDK transport calls this public operation after validating the request token.
+  // Its system SSO routes precede user middleware, so authorization must run before process.
+  const processActivity = app.process.bind(app);
+  app.process = async (event) => {
+    const activity = event.body;
+    if (
+      activity.type !== "invoke" ||
+      !("name" in activity) ||
+      (activity.name !== "signin/tokenExchange" && activity.name !== "signin/verifyState")
+    ) {
+      return processActivity(event);
+    }
+    const context = { activity: { ...activity, type: activity.type, name: activity.name } };
+    if (!(await isMSTeamsInvokeAuthorized({ context, deps: handlerDeps, invokeKind: "signin" }))) {
+      return { status: 200, body: {} };
+    }
+    if (!ssoDeps) {
+      log.debug?.("signin invoke received but msteams.sso is not configured", {
+        name: activity.name,
+      });
+      return { status: 200, body: {} };
+    }
+
+    return processActivity(event);
+  };
+
+  // The delegated SDK sign-in handlers emit `signin` only after a successful
+  // token exchange/lookup. Persist that token for later OpenClaw use.
+  if (ssoDeps) {
+    app.event("signin", (ctx) => {
+      void (async () => {
+        const adaptedCtx = adaptSdkContext(ctx, app);
+        if (
+          !(await isMSTeamsInvokeAuthorized({
+            context: adaptedCtx,
+            deps: handlerDeps,
+            invokeKind: "signin",
+          }))
+        ) {
+          return;
+        }
+
+        const activity = ctx.activity as {
+          from?: { id?: string; aadObjectId?: string };
+        };
+        const userIds = Array.from(
+          new Set(
+            [activity.from?.id, activity.from?.aadObjectId].filter((id): id is string =>
+              Boolean(id),
+            ),
+          ),
+        );
+        const connectionName = ctx.token.connectionName || ssoDeps.connectionName;
+        if (!connectionName || !ctx.token.token || userIds.length === 0) {
+          log.warn?.("msteams sso signin event missing token metadata", {
+            hasConnectionName: Boolean(connectionName),
+            hasToken: Boolean(ctx.token.token),
+            hasUser: userIds.length > 0,
+          });
+          return;
+        }
+
+        await Promise.all(
+          userIds.map((userId) =>
+            ssoDeps.tokenStore.save({
+              ...(accountId === DEFAULT_ACCOUNT_ID ? {} : { accountId }),
+              connectionName,
+              userId,
+              token: ctx.token.token,
+              expiresAt: ctx.token.expiration,
+              updatedAt: new Date().toISOString(),
+            }),
+          ),
+        );
+        log.info("msteams sso token persisted", {
+          connectionName,
+          userIdCount: userIds.length,
+          hasExpiry: Boolean(ctx.token.expiration),
+        });
+      })().catch((err: unknown) => {
+        log.error("msteams sso token persistence failed", {
+          error: formatUnknownError(err),
+        });
+      });
+    });
+  }
+
+  // Feedback (thumbs up/down) on AI-generated messages. Teams delivers this as
+  // a generic `message/submitAction` invoke, so non-feedback submits must fall
+  // through to the activity catch-all for other submit-action handlers.
+  app.on("message.submit", async (ctx) => {
+    const consumed = await runMSTeamsFeedbackInvokeHandler(adaptSdkContext(ctx, app), handlerDeps);
+    if (!consumed) {
+      const next = (ctx as { next?: () => void | Promise<void> }).next;
+      await next?.call(ctx);
+    }
+  });
+
+  app.on("activity", async (ctx) => {
+    const adaptedCtx = adaptSdkContext(ctx, app);
+    const activity = adaptedCtx.activity;
+    // Skip invokes that have dedicated typed routes above.
+    if (activity?.type === "invoke") {
+      if (activity?.name === "adaptiveCard/action") {
+        return;
+      }
+      if (activity?.name === "fileConsent/invoke") {
+        return;
+      }
+      if (activity?.name === "signin/tokenExchange" || activity?.name === "signin/verifyState") {
+        return;
+      }
+    }
+    if (activity?.type === "message") {
+      // Throwing rejects the SDK route, so a failed SQLite append is never acked.
+      await ingress.accept(activity, adaptedCtx);
+      return;
+    }
+    try {
+      await handleActivity(adaptedCtx);
+    } catch (err) {
+      log.error("msteams non-turn activity failed", { error: formatUnknownError(err) });
+    }
+  });
+
+  await app.initialize();
+  ingress.start();
+
+  const unregisterRoutes: Array<() => void> = [];
+  const webhook = createMSTeamsWebhookHandler(expressApp, (message) => log.warn?.(message));
+  try {
+    unregisterRoutes.push(
+      registerPluginHttpRoute({
+        path: configuredPath,
+        auth: "plugin",
+        pluginId: "msteams",
+        source: "msteams-webhook",
+        accountId,
+        handler: webhook.handler,
+        legacyListener: legacyListener
+          ? {
+              ...legacyListener,
+              timeouts: { headers: 15_000, request: 30_000, socket: 30_000 },
+            }
+          : undefined,
+        throwOnFailure: true,
+        log: (message) => log.warn?.(message),
+      }),
+    );
+    // Only the Gateway alias yields; compatibility listeners retain their forwarder.
+    const legacyMessagesOwner = resolveMSTeamsLegacyMessagesOwner(accountPolicyCfg);
+    if (accountId === DEFAULT_ACCOUNT_ID && !legacyMessagesOwner) {
+      unregisterRoutes.push(
+        registerPluginHttpRoute({
+          path: "/api/messages",
+          auth: "plugin",
+          pluginId: "msteams",
+          // Same owner as primary routes, so reload handoffs pass between alias and primary.
+          source: "msteams-webhook",
+          accountId,
+          handler: webhook.handler,
+          log: (message) => log.warn?.(message),
+        }),
+      );
+    }
+  } catch (error) {
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
+    await ingress.stop();
+    throw error;
+  }
+  log.info(`msteams provider started on Gateway route ${configuredPath}`);
+  opts.statusSink?.(channelReadyPatch());
+
+  try {
+    await waitUntilAbort(opts.abortSignal);
+  } finally {
+    await webhook.close();
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
+    await ingress.stop();
+    opts.statusSink?.(channelStoppedPatch());
+  }
+}
+
+function cardActionMessage(value: string): MSTeamsCardActionResponse {
+  return { statusCode: 200, type: "application/vnd.microsoft.activity.message", value };
+}
+
+function cardActionError(code: string, message: string): MSTeamsCardActionResponse {
+  return {
+    statusCode: 500,
+    type: "application/vnd.microsoft.error",
+    value: {
+      code,
+      message,
+      innerHttpError: { statusCode: 500, body: null },
+    },
+  };
+}
+
+/**
+ * Adapt a new @microsoft/teams.apps SDK context to the MSTeamsTurnContext interface
+ * our handlers expect. The new SDK uses reply()/send() instead of sendActivity().
+ */
+function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
+  const sdkCtx = (ctx ?? {}) as {
+    activity?: { id?: string; conversation?: { id?: string; conversationType?: string } };
+    reply?: (activity: unknown) => Promise<unknown>;
+    send?: (activity: unknown) => Promise<unknown>;
+    api?: MSTeamsApp["api"];
+    stream?: {
+      emit(a: unknown): void;
+      update(t: string): void;
+      close(): unknown;
+      readonly canceled: boolean;
+    };
+  };
+  if (typeof sdkCtx.reply !== "function" && typeof sdkCtx.send !== "function") {
+    // Already adapted or old-style context — pass through.
+    return ctx as MSTeamsTurnContext;
+  }
+  const conversationId = sdkCtx.activity?.conversation?.id ?? "";
+  const inboundApi = sdkCtx.api;
+  const activityApi = inboundApi ?? app.api;
+  const getTeamDetails = inboundApi
+    ? (teamId: string) => inboundApi.teams.getById(teamId)
+    : undefined;
+  const conversationType = (sdkCtx.activity?.conversation?.conversationType ?? "").toLowerCase();
+  const isThreadable = conversationType === "channel" || conversationType === "groupchat";
+  // For Teams channels and group chats, use ctx.reply() so the SDK threads the
+  // outbound activity to the inbound one (via replyToId + the inbound's
+  // serviceUrl/conversation routing). For personal DMs, use ctx.send() instead
+  // because reply() prepends a blockquote of the user's message — fine in
+  // threaded surfaces where the visual nesting indicates context, but ugly in
+  // 1:1 chat. Streaming chunks go through ctx.stream.emit/close separately.
+  const sendActivity = (activity: unknown) =>
+    isThreadable ? sdkCtx.reply!(activity) : sdkCtx.send!(activity);
+  return Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
+    sendActivity,
+    updateActivity: async (activity: { id?: string; [key: string]: unknown }) => {
+      const activityId = activity.id ?? "";
+      return activityApi.conversations.activities(conversationId).update(activityId, activity);
+    },
+    getTeamDetails,
+    stream: sdkCtx.stream,
+  });
+}

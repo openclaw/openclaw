@@ -1,0 +1,468 @@
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  type OutboundDeliveryResult,
+  isOutboundDeliveryError,
+  type OutboundPayloadDeliveryOutcome,
+  type OutboundPayloadDeliverySuppressionReason,
+} from "../../infra/outbound/deliver-types.js";
+import {
+  deliverOutboundPayloadsInternal,
+  deliverStructuredOutboundPayloadsInternal,
+  type DeliverOutboundPayloadsParams,
+  type OutboundDeliveryIntent,
+} from "../../infra/outbound/deliver.js";
+import type { ConversationDeliveryTarget } from "../../infra/outbound/delivery-completion.js";
+import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
+import { createMessageReceiptFromOutboundResults } from "./receipt.js";
+import { createRenderedMessageBatch } from "./rendered-batch.js";
+import type {
+  DurableMessageSendIntent,
+  LiveMessageState,
+  MessageDurabilityPolicy,
+  MessageReceipt,
+  MessageSendContext,
+  RenderedMessageBatch,
+} from "./types.js";
+
+const log = createSubsystemLogger("channels/message/send");
+
+export type DurableMessageBatchSendParams = Omit<
+  DeliverOutboundPayloadsParams,
+  "abortSignal" | "onDeliveryIntent" | "payloads" | "queuePolicy"
+> & {
+  payloads: ReplyPayload[];
+  attempt?: number;
+  signal?: AbortSignal;
+  /** @deprecated Use `signal`. */
+  abortSignal?: AbortSignal;
+  previousReceipt?: MessageReceipt;
+  /** @deprecated Destination history is automatic; removed in the next Plugin SDK major. */
+  mirror?: DeliveryMirror;
+};
+
+type DurableMessageSuppressionReason =
+  | OutboundPayloadDeliverySuppressionReason
+  | "no_visible_result";
+
+type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
+
+type DurableMessagePayloadDeliveryOutcome =
+  | Exclude<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>
+  | (Omit<Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>, "reason"> & {
+      reason: DurableMessageSuppressionReason;
+    });
+
+export type DurableMessageBatchSendResult =
+  | {
+      status: "sent";
+      results: OutboundDeliveryResult[];
+      receipt: MessageReceipt;
+      deliveryIntent?: OutboundDeliveryIntent;
+      payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
+    }
+  | {
+      status: "suppressed";
+      results: [];
+      receipt: MessageReceipt;
+      deliveryIntent?: OutboundDeliveryIntent;
+      reason: DurableMessageSuppressionReason;
+      payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
+    }
+  | {
+      status: "partial_failed";
+      results: OutboundDeliveryResult[];
+      receipt: MessageReceipt;
+      error: unknown;
+      sentBeforeError: true;
+      deliveryIntent?: OutboundDeliveryIntent;
+      payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
+    }
+  | {
+      status: "failed";
+      error: unknown;
+      stage?: DurableMessageFailureStage;
+      payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
+    };
+
+/** Whether platform delivery completed or advanced far enough that retry could duplicate it. */
+export function durableMessageBatchMayHaveReachedRecipient(
+  result: DurableMessageBatchSendResult,
+): boolean {
+  return Boolean(
+    result.status === "sent" ||
+    result.status === "partial_failed" ||
+    (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") ||
+    (result.status === "failed" &&
+      isOutboundDeliveryError(result.error) &&
+      result.error.sentBeforeError) ||
+    result.payloadOutcomes?.some((outcome) =>
+      outcome.status === "failed"
+        ? outcome.sentBeforeError
+        : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
+    ),
+  );
+}
+
+export type SerializedDurableMessagePayloadOutcome =
+  | { index: number; status: "sent"; resultCount: number }
+  | Extract<DurableMessagePayloadDeliveryOutcome, { status: "suppressed" }>
+  | {
+      index: number;
+      status: "failed";
+      error: string;
+      sentBeforeError: boolean;
+      stage: DurableMessageFailureStage;
+    };
+
+export function serializeDurableMessagePayloadOutcomes(
+  outcomes: DurableMessageBatchSendResult["payloadOutcomes"],
+  options?: {
+    /** Internal diagnostics may retain hook metadata; model-facing JSON results must omit it. */
+    includeHookEffect?: boolean;
+  },
+): SerializedDurableMessagePayloadOutcome[] | undefined {
+  if (!outcomes || outcomes.length === 0) {
+    return undefined;
+  }
+  return outcomes.map((outcome): SerializedDurableMessagePayloadOutcome => {
+    if (outcome.status === "sent") {
+      return { index: outcome.index, status: "sent", resultCount: outcome.results.length };
+    }
+    if (outcome.status === "suppressed") {
+      return {
+        index: outcome.index,
+        status: "suppressed",
+        reason: outcome.reason,
+        ...(options?.includeHookEffect === true && outcome.hookEffect
+          ? { hookEffect: outcome.hookEffect }
+          : {}),
+      };
+    }
+    return {
+      index: outcome.index,
+      status: "failed",
+      error: formatErrorMessage(outcome.error),
+      sentBeforeError: outcome.sentBeforeError,
+      stage: outcome.stage,
+    };
+  });
+}
+
+const neverAbortedSignal = new AbortController().signal;
+
+export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
+  durability?: Exclude<MessageDurabilityPolicy, "disabled">;
+  /** Runs after the durable queue intent exists and before platform delivery starts. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  preview?: LiveMessageState<ReplyPayload>;
+  onPreviewUpdate?: (
+    rendered: RenderedMessageBatch<ReplyPayload>,
+    state: LiveMessageState<ReplyPayload>,
+  ) => Promise<LiveMessageState<ReplyPayload>> | LiveMessageState<ReplyPayload>;
+  onEditReceipt?: (
+    receipt: MessageReceipt,
+    rendered: RenderedMessageBatch<ReplyPayload>,
+  ) => Promise<MessageReceipt> | MessageReceipt;
+  onDeleteReceipt?: (receipt: MessageReceipt) => Promise<void> | void;
+  onCommitReceipt?: (receipt: MessageReceipt) => Promise<void> | void;
+  onSendFailure?: (error: unknown) => Promise<void> | void;
+};
+
+export type DurableMessageSendContext = MessageSendContext<
+  ReplyPayload,
+  DurableMessageBatchSendResult
+>;
+
+export async function withDurableMessageSendContextCore<T>(
+  params: DurableMessageSendContextParams,
+  run: (ctx: DurableMessageSendContext) => Promise<T>,
+): Promise<T> {
+  return await withMessageSendContext(params, run, deliverOutboundPayloadsInternal);
+}
+
+async function withMessageSendContext<T>(
+  params: DurableMessageSendContextParams,
+  run: (ctx: DurableMessageSendContext) => Promise<T>,
+  deliver: typeof deliverOutboundPayloadsInternal,
+  conversationDeliveryTarget?: ConversationDeliveryTarget,
+): Promise<T> {
+  let deliveryIntent: OutboundDeliveryIntent | undefined;
+  const {
+    attempt,
+    durability,
+    onDeleteReceipt,
+    onDeliveryIntent,
+    onEditReceipt,
+    onCommitReceipt,
+    onPreviewUpdate,
+    onSendFailure,
+    onPayloadDeliveryOutcome,
+    payloads,
+    preview,
+    previousReceipt,
+    signal,
+    abortSignal,
+    ...deliveryParams
+  } = params;
+  const replyToId = normalizeOutboundReplyFacts(deliveryParams)?.replyToId;
+  const effectiveSignal = signal ?? abortSignal;
+  const queuePolicy = durability === "best_effort" ? "best_effort" : "required";
+  let liveState = preview ?? createLiveMessageState<ReplyPayload>();
+  const receiptFor = (results: OutboundDeliveryResult[]) =>
+    createMessageReceiptFromOutboundResults({
+      results,
+      threadId: params.threadId == null ? undefined : String(params.threadId),
+      replyToId,
+    });
+  const ctx: DurableMessageSendContext = {
+    id: `${params.channel}:${params.to}`,
+    channel: params.channel,
+    to: params.to,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    durability: durability ?? "required",
+    attempt: attempt ?? 1,
+    signal: effectiveSignal ?? neverAbortedSignal,
+    ...(previousReceipt ? { previousReceipt } : {}),
+    preview: liveState,
+    render: async (): Promise<RenderedMessageBatch<ReplyPayload>> =>
+      createRenderedMessageBatch(payloads),
+    previewUpdate: async (rendered): Promise<LiveMessageState<ReplyPayload>> => {
+      liveState = onPreviewUpdate
+        ? await onPreviewUpdate(rendered, liveState)
+        : markLiveMessagePreviewUpdated(liveState, rendered);
+      ctx.preview = liveState;
+      return liveState;
+    },
+    send: async (rendered): Promise<DurableMessageBatchSendResult> => {
+      const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+      const failed = (
+        error: unknown,
+        stage: DurableMessageFailureStage,
+        results: OutboundDeliveryResult[],
+        outcomes: OutboundPayloadDeliveryOutcome[],
+      ): DurableMessageBatchSendResult => {
+        const failure = {
+          error,
+          ...(outcomes.length > 0 ? { payloadOutcomes: [...outcomes] } : {}),
+        };
+        return results.length > 0
+          ? {
+              ...failure,
+              status: "partial_failed",
+              results,
+              receipt: receiptFor(results),
+              sentBeforeError: true,
+              ...(deliveryIntent ? { deliveryIntent } : {}),
+            }
+          : { ...failure, status: "failed", stage };
+      };
+      try {
+        const results = await deliver({
+          ...deliveryParams,
+          // Public SDK callers cannot select a private conversation storage target.
+          conversationDeliveryTarget,
+          sessionGeneration: undefined,
+          payloads: rendered.payloads,
+          renderedBatchPlan: rendered.plan,
+          queuePolicy,
+          ...(effectiveSignal ? { abortSignal: effectiveSignal } : {}),
+          onPayloadDeliveryOutcome: (outcome) => {
+            payloadOutcomes.push(outcome);
+            onPayloadDeliveryOutcome?.(outcome);
+          },
+          onDeliveryIntent: (intent) => {
+            deliveryIntent = intent;
+            const durableIntent: DurableMessageSendIntent<ReplyPayload> = {
+              id: intent.id,
+              channel: intent.channel,
+              to: intent.to,
+              ...(intent.accountId ? { accountId: intent.accountId } : {}),
+              durability: intent.queuePolicy === "required" ? "required" : "best_effort",
+              renderedBatch: rendered,
+            };
+            ctx.intent = durableIntent;
+            onDeliveryIntent?.(durableIntent);
+          },
+        });
+        const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
+        if (failedOutcome) {
+          return failed(failedOutcome.error, failedOutcome.stage, results, payloadOutcomes);
+        }
+        const delivered = {
+          receipt: receiptFor(results),
+          ...(deliveryIntent ? { deliveryIntent } : {}),
+          ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
+        };
+        return results.length === 0
+          ? {
+              ...delivered,
+              status: "suppressed",
+              results: [],
+              reason:
+                payloadOutcomes.find((outcome) => outcome.status === "suppressed")?.reason ??
+                "no_visible_result",
+            }
+          : { ...delivered, status: "sent", results };
+      } catch (error: unknown) {
+        if (isOutboundDeliveryError(error)) {
+          return failed(error, error.stage, error.results, error.payloadOutcomes);
+        }
+        return { status: "failed", error };
+      }
+    },
+    edit: async (receipt, rendered): Promise<MessageReceipt> => {
+      if (!onEditReceipt) {
+        throw new Error("message send context edit is not configured");
+      }
+      const editedReceipt = await onEditReceipt(receipt, rendered);
+      liveState = {
+        ...liveState,
+        receipt: editedReceipt,
+        lastRendered: rendered,
+      };
+      ctx.preview = liveState;
+      return editedReceipt;
+    },
+    delete: async (receipt) => {
+      if (!onDeleteReceipt) {
+        throw new Error("message send context delete is not configured");
+      }
+      await onDeleteReceipt(receipt);
+    },
+    commit: async (receipt) => {
+      await onCommitReceipt?.(receipt);
+    },
+    fail: async (error) => {
+      try {
+        await onSendFailure?.(error);
+      } catch (cleanupError: unknown) {
+        log.warn(
+          `message send failure cleanup failed; preserving original send error: ${formatErrorMessage(cleanupError)}`,
+        );
+      }
+    },
+  };
+
+  try {
+    return await run(ctx);
+  } catch (error: unknown) {
+    await ctx.fail(error);
+    throw error;
+  }
+}
+
+export async function sendDurableMessageBatchCore(
+  params: DurableMessageSendContextParams,
+  conversationDeliveryTarget?: ConversationDeliveryTarget,
+  queueContext?: DeliveryQueueStateContext,
+  sessionGeneration?: SessionDeliveryGeneration,
+  admittedReasoning?: true,
+): Promise<DurableMessageBatchSendResult> {
+  return await sendMessageBatch(
+    params,
+    (delivery) =>
+      deliverOutboundPayloadsInternal(
+        { ...delivery, sessionGeneration },
+        queueContext,
+        admittedReasoning,
+      ),
+    conversationDeliveryTarget,
+  );
+}
+
+export async function sendStructuredDurableMessageBatchCore(
+  input: Omit<DurableMessageSendContextParams, "payloads"> & {
+    plan: readonly OutboundPayloadPlan[];
+  },
+  sessionGeneration?: SessionDeliveryGeneration,
+): Promise<DurableMessageBatchSendResult> {
+  const { plan, ...params } = input;
+  return await sendMessageBatch(
+    { ...params, payloads: plan.map((entry) => entry.payload) },
+    ({ payloads: _payloads, ...delivery }) =>
+      deliverStructuredOutboundPayloadsInternal({ ...delivery, plan, sessionGeneration }),
+  );
+}
+
+async function sendMessageBatch(
+  params: DurableMessageSendContextParams,
+  deliver: typeof deliverOutboundPayloadsInternal,
+  conversationDeliveryTarget?: ConversationDeliveryTarget,
+): Promise<DurableMessageBatchSendResult> {
+  const pendingFinalCompletion = params.deliveryCompletion
+    ? undefined
+    : resolvePendingFinalDeliveryCompletion(params.payloads);
+  const pendingFinalDelivery = pendingFinalCompletion
+    ? {
+        deliveryCompletion: pendingFinalCompletion,
+        deliveryIntentId: pendingFinalCompletion.deliveryId,
+        durability: "required" as const,
+      }
+    : {};
+  const ephemeralWriterAuthorities = pendingFinalCompletion
+    ? []
+    : params.payloads.flatMap((payload) => {
+        const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+        return authority ? [authority] : [];
+      });
+  const prepared: Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>>[] = [];
+  try {
+    for (const authority of new Set(ephemeralWriterAuthorities)) {
+      prepared.push(await prepareSessionWriterDeliveryAuthority(authority));
+    }
+    const onPlatformSendDispatch =
+      ephemeralWriterAuthorities.length > 0
+        ? async () => {
+            for (const { authority } of prepared) {
+              assertSessionWriterDeliveryAuthorized(authority);
+            }
+            await params.onPlatformSendDispatch?.();
+          }
+        : params.onPlatformSendDispatch;
+    const assertDirectAdapterHandoff =
+      ephemeralWriterAuthorities.length > 0
+        ? () => {
+            params.assertDirectAdapterHandoff?.();
+            for (const { authority } of prepared) {
+              assertSessionWriterDeliveryAuthorized(authority);
+            }
+          }
+        : params.assertDirectAdapterHandoff;
+    return await withMessageSendContext(
+      {
+        ...params,
+        ...pendingFinalDelivery,
+        onPlatformSendDispatch,
+        assertDirectAdapterHandoff,
+      },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        const result = await ctx.send(rendered);
+        if (result.status === "sent" || result.status === "suppressed") {
+          await ctx.commit(result.receipt);
+        } else {
+          await ctx.fail(result.error);
+        }
+        return result;
+      },
+      deliver,
+      conversationDeliveryTarget,
+    );
+  } finally {
+    for (const current of prepared) {
+      current.release();
+    }
+  }
+}

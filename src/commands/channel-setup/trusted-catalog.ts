@@ -1,0 +1,223 @@
+// Trusted channel catalog helpers that hide unenabled workspace-shadowed entries.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  getChannelPluginCatalogEntry,
+  listRawChannelPluginCatalogEntries,
+  type ChannelPluginCatalogEntry,
+} from "../../channels/plugins/catalog.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  resolveManifestOwnerBasePolicyBlock,
+} from "../../plugins/manifest-owner-policy.js";
+import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
+import type { ChannelChoice } from "../onboard-types.js";
+
+export function listManifestInstalledChannelIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  index?: InstalledPluginIndex;
+}): Set<ChannelChoice> {
+  const resolvedConfig = applyPluginAutoEnable({
+    config: params.cfg,
+    env: params.env ?? process.env,
+  }).config;
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  return new Set(
+    listPluginContributionIds({
+      contribution: "channels",
+      config: resolvedConfig,
+      workspaceDir,
+      env: params.env ?? process.env,
+      ...(params.index ? { index: params.index } : {}),
+    }),
+  );
+}
+
+type TrustedChannelCatalogOptions = Pick<
+  NonNullable<Parameters<typeof getChannelPluginCatalogEntry>[1]>,
+  "workspaceDir" | "env" | "discovery" | "installRecords"
+> & {
+  cfg: OpenClawConfig;
+};
+
+const LOCAL_CHANNEL_PLUGIN_ORIGINS = ["workspace", "config", "global"] as const;
+
+type LocalChannelPluginOrigin = (typeof LOCAL_CHANNEL_PLUGIN_ORIGINS)[number];
+
+type TrustedCatalogLookupExclusions = Pick<
+  NonNullable<Parameters<typeof getChannelPluginCatalogEntry>[1]>,
+  "excludeOrigins" | "excludePluginRefs"
+>;
+
+const LOCAL_CHANNEL_PLUGIN_ORIGIN_SET = new Set<PluginOrigin>(LOCAL_CHANNEL_PLUGIN_ORIGINS);
+const MAX_TRUSTED_CATALOG_FALLBACKS = 16;
+
+function isLocalChannelPluginOrigin(
+  origin: PluginOrigin | undefined,
+): origin is LocalChannelPluginOrigin {
+  return origin !== undefined && LOCAL_CHANNEL_PLUGIN_ORIGIN_SET.has(origin);
+}
+
+function resolveTrustedCatalogExtraPaths(cfg: OpenClawConfig): string[] | undefined {
+  const extraPaths = normalizePluginsConfig(cfg.plugins).loadPaths;
+  return extraPaths.length > 0 ? extraPaths : undefined;
+}
+
+function isTrustedLocalChannelCatalogEntry(
+  entry: ChannelPluginCatalogEntry | undefined,
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  if (!isLocalChannelPluginOrigin(entry?.origin)) {
+    return true;
+  }
+  if (!entry.pluginId) {
+    return false;
+  }
+  const effectiveConfig = applyPluginAutoEnable({ config: cfg, env: env ?? process.env }).config;
+  const normalizedPlugins = normalizePluginsConfig(effectiveConfig.plugins);
+  if (
+    resolveManifestOwnerBasePolicyBlock({
+      plugin: { id: entry.pluginId },
+      normalizedConfig: normalizedPlugins,
+    }) !== null
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: entry.pluginId,
+    origin: entry.origin,
+    config: normalizedPlugins,
+    rootConfig: effectiveConfig,
+  });
+  return (
+    hasExplicitManifestOwnerTrust({
+      plugin: { id: entry.pluginId },
+      normalizedConfig: normalizedPlugins,
+    }) ||
+    (entry.origin === "workspace" && activationState.source === "auto")
+  );
+}
+
+function resolveRejectedCatalogLookup(
+  rejected: ChannelPluginCatalogEntry[],
+): TrustedCatalogLookupExclusions {
+  const excludePluginRefs: NonNullable<TrustedCatalogLookupExclusions["excludePluginRefs"]> =
+    rejected.flatMap((entry) =>
+      entry.pluginId?.trim()
+        ? [
+            {
+              pluginId: entry.pluginId.trim(),
+              ...(entry.origin ? { origin: entry.origin } : {}),
+            },
+          ]
+        : [],
+    );
+  const excludeOrigins: NonNullable<TrustedCatalogLookupExclusions["excludeOrigins"]> =
+    rejected.flatMap((entry) =>
+      isLocalChannelPluginOrigin(entry.origin) && !entry.pluginId ? [entry.origin] : [],
+    );
+  const lookup: TrustedCatalogLookupExclusions = {};
+  if (excludeOrigins.length > 0) {
+    lookup.excludeOrigins = excludeOrigins;
+  }
+  if (excludePluginRefs.length > 0) {
+    lookup.excludePluginRefs = excludePluginRefs;
+  }
+  return lookup;
+}
+
+/** Resolve a catalog entry, falling back to non-workspace metadata when workspace entry is untrusted. */
+export function getTrustedChannelPluginCatalogEntry(
+  channelId: string,
+  params: TrustedChannelCatalogOptions,
+  rejected: ChannelPluginCatalogEntry[] = [],
+): ChannelPluginCatalogEntry | undefined {
+  const extraPaths = resolveTrustedCatalogExtraPaths(params.cfg);
+  const rejectedEntries = [...rejected];
+
+  for (let attempts = 0; attempts <= MAX_TRUSTED_CATALOG_FALLBACKS; attempts += 1) {
+    const candidate = getChannelPluginCatalogEntry(channelId, {
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      ...(extraPaths ? { extraPaths } : {}),
+      ...(params.discovery ? { discovery: params.discovery } : {}),
+      ...(params.installRecords ? { installRecords: params.installRecords } : {}),
+      ...resolveRejectedCatalogLookup(rejectedEntries),
+    });
+    if (!candidate) {
+      return undefined;
+    }
+    if (isTrustedLocalChannelCatalogEntry(candidate, params.cfg, params.env)) {
+      return candidate;
+    }
+
+    rejectedEntries.push(candidate);
+  }
+  return undefined;
+}
+
+function listChannelPluginCatalogEntriesWithTrustedFallback(
+  params: TrustedChannelCatalogOptions,
+  onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
+): ChannelPluginCatalogEntry[] {
+  const extraPaths = resolveTrustedCatalogExtraPaths(params.cfg);
+  const unfiltered = listRawChannelPluginCatalogEntries({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    ...(extraPaths ? { extraPaths } : {}),
+    ...(params.discovery ? { discovery: params.discovery } : {}),
+    ...(params.installRecords ? { installRecords: params.installRecords } : {}),
+  });
+  return unfiltered.flatMap((entry) => {
+    if (isTrustedLocalChannelCatalogEntry(entry, params.cfg, params.env)) {
+      return [entry];
+    }
+    const fallback = getTrustedChannelPluginCatalogEntry(entry.id, params, [entry]);
+    return fallback ? [fallback] : onMissingFallback(entry);
+  });
+}
+
+/** List trusted catalog entries, dropping untrusted workspace-only shadows. */
+export function listTrustedChannelPluginCatalogEntries(
+  params: TrustedChannelCatalogOptions,
+): ChannelPluginCatalogEntry[] {
+  return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
+}
+
+/** List setup discovery entries, preserving untrusted workspace-only entries for install prompts. */
+export function listSetupDiscoveryChannelPluginCatalogEntries(
+  params: TrustedChannelCatalogOptions,
+): ChannelPluginCatalogEntry[] {
+  return listChannelPluginCatalogEntriesWithTrustedFallback(params, (entry) => [entry]);
+}
+
+/** Resolve a channel id or alias in trusted catalog order. */
+export function resolveTrustedChannelCatalogInput(
+  raw: string,
+  params: TrustedChannelCatalogOptions,
+): ChannelPluginCatalogEntry | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  return listTrustedChannelPluginCatalogEntries(params).find(
+    (entry) =>
+      normalizeOptionalLowercaseString(entry.id) === normalized ||
+      (entry.meta.aliases ?? []).some(
+        (alias) => normalizeOptionalLowercaseString(alias) === normalized,
+      ),
+  );
+}

@@ -1,0 +1,687 @@
+/* @vitest-environment jsdom */
+
+import Panzoom from "@panzoom/panzoom";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import type { ImageLightboxItem, ImageLightboxProps } from "./image-lightbox.types.ts";
+
+vi.mock("@panzoom/panzoom", () => ({
+  default: vi.fn(() => ({
+    destroy: vi.fn(),
+    getScale: vi.fn(() => 1),
+    pan: vi.fn(),
+    reset: vi.fn(),
+    resetStyle: vi.fn(),
+    zoomIn: vi.fn(),
+    zoomOut: vi.fn(),
+    zoomToPoint: vi.fn(),
+    zoomWithWheel: vi.fn(),
+  })),
+}));
+
+import "../lib/toast-host.tsx";
+import "./image-lightbox.tsx";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
+
+type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
+const button = (modal: Lightbox, selector: string) =>
+  modal.querySelector<HTMLButtonElement>(selector)!;
+function pressKey(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, ...init });
+  target.dispatchEvent(event);
+  return event;
+}
+function mockDecoder(decode = async () => {}) {
+  vi.stubGlobal(
+    "Image",
+    class {
+      src = "";
+      decode = decode;
+    },
+  );
+}
+function interceptDownload() {
+  vi.useFakeTimers();
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  onTestFinished(() => click.mockRestore());
+  return click;
+}
+function trackClose(modal: Lightbox) {
+  const close = vi.fn();
+  modal.addEventListener("image-lightbox-close", close);
+  return close;
+}
+function attachLightbox(props: Partial<Lightbox>) {
+  const modal = Object.assign(document.createElement("openclaw-image-lightbox"), props);
+  container.append(modal);
+  return modal;
+}
+
+const animateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+let container: HTMLDivElement;
+let restoreDialogPolyfill: () => void;
+let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => string>>;
+let revokeObjectUrl: ReturnType<typeof vi.fn<(url: string) => void>>;
+let fetchImage: ReturnType<typeof vi.fn>;
+
+async function renderLightbox(props: Partial<ImageLightboxProps> = {}, target = container) {
+  const modal = Object.assign(document.createElement("openclaw-image-lightbox"), {
+    src: "data:image/png;charset=utf-8;base64,cG5n",
+    imageTitle: "Generated lobster",
+    mediaKind: "image",
+    originalSrc: "",
+    ...props,
+  });
+  mountSolid(() => modal, { container: target });
+  await modal.updateComplete;
+  const { modal: dialogAdapter } = await getRenderedModalDialog(modal);
+  return { modal, dialogAdapter };
+}
+
+beforeEach(() => {
+  restoreDialogPolyfill = installDialogPolyfill();
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ finished: Promise.resolve(), cancel: vi.fn() }),
+  });
+  createObjectUrl = vi.fn(() => "blob:lightbox-original");
+  revokeObjectUrl = vi.fn();
+  fetchImage = vi.fn(async () => ({
+    ok: true,
+    blob: async () => new Blob(["png"], { type: "image/png" }),
+  }));
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectUrl;
+      static override revokeObjectURL = revokeObjectUrl;
+    },
+  );
+  vi.stubGlobal("fetch", fetchImage);
+  container = document.createElement("div");
+  document.body.append(container);
+});
+
+afterEach(async () => {
+  container.remove();
+  await Promise.resolve();
+  if (vi.isFakeTimers()) {
+    // Finish delayed download revocation while this test still owns the URL stub.
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
+  restoreDialogPolyfill();
+  restorePropertyDescriptor(Element.prototype, "animate", animateDescriptor);
+  vi.unstubAllGlobals();
+});
+
+it("renders video playback, footer actions and live labels", async () => {
+  const src = "https://example.com/demo.mp4?playback=1";
+  const originalSrc = "https://example.com/demo.mp4";
+  const { modal } = await renderLightbox({
+    mediaKind: "video",
+    src,
+    originalSrc,
+    imageTitle: "Demo clip",
+  });
+  const video = modal.querySelector("video")!;
+  expect(video).toMatchObject({ src, controls: true, autoplay: true });
+  expect(fetchImage).not.toHaveBeenCalled();
+  expect(modal.querySelector("img, .zoom-controls, .header .open-original")).toBeNull();
+  const footer = modal.querySelector("openclaw-modal-actions.lightbox-footer")!;
+  expect(footer?.parentElement?.lastElementChild).toBe(footer);
+  const openOriginal = footer.querySelector<HTMLAnchorElement>(".open-original")!;
+  expect(openOriginal.href).toBe(originalSrc);
+  const close = button(modal, ".close");
+  expect(close.getAttribute("aria-label")).toBe("Close video preview");
+  openOriginal.focus();
+  pressKey(openOriginal, "Tab", { composed: true });
+  expect(document.activeElement).toBe(close);
+  pressKey(close, "Tab", { shiftKey: true, composed: true });
+  expect(document.activeElement).toBe(openOriginal);
+  modal.imageTitle = "Renamed video";
+  await modal.updateComplete;
+  expect(video.getAttribute("aria-label")).toBe("Renamed video");
+  expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe("Video preview: Renamed video");
+});
+
+it.each([false, true])(
+  "keeps video usable while its original link loads (gallery: %s)",
+  async (gallery) => {
+    const original = createDeferred<Blob>();
+    fetchImage.mockResolvedValue({ ok: true, blob: () => original.promise });
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4",
+      originalSrc: "data:image/png;base64,cG5n",
+      gallery: gallery ? { index: 0, items: [async () => null, async () => null] } : undefined,
+    });
+    const video = modal.querySelector("video")!;
+    const pendingLink = modal.querySelector<HTMLAnchorElement>(".open-original");
+    if (gallery) {
+      expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
+      expect(pendingLink?.hasAttribute("href")).toBe(false);
+      expect(pendingLink?.tabIndex).toBe(-1);
+    } else {
+      expect(pendingLink).toBeNull();
+    }
+    modal.imageTitle = "Renamed while loading";
+    await modal.updateComplete;
+    expect(modal.querySelector("video")).toBe(video);
+    expect(video.getAttribute("aria-label")).toBe(
+      gallery ? "Generated lobster" : "Renamed while loading",
+    );
+    expect(button(modal, ".close").isConnected).toBe(true);
+    expect(fetchImage).toHaveBeenCalledOnce();
+
+    original.resolve(new Blob(["png"], { type: "image/png" }));
+    await waitForSolid(() => {
+      const link = modal.querySelector<HTMLAnchorElement>(".open-original");
+      expect(link?.getAttribute("href")).toBe("blob:lightbox-original");
+      expect(link?.getAttribute("aria-disabled")).toBe("false");
+    });
+    modal.remove();
+    await Promise.resolve();
+    expect(revokeObjectUrl).toHaveBeenCalledExactlyOnceWith("blob:lightbox-original");
+  },
+);
+
+it.each(["failed", "replaced", "closed"] as const)(
+  "retires original-link work without hiding video: %s",
+  async (outcome) => {
+    const original = createDeferred<Blob>();
+    fetchImage.mockResolvedValue({ ok: true, blob: () => original.promise });
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4",
+      originalSrc: "data:image/png;base64,cG5n",
+      gallery: { index: 0, items: [async () => null, async () => null] },
+    });
+    expect(modal.querySelector(".open-original")?.getAttribute("aria-disabled")).toBe("true");
+    const replacement = "https://example.com/replacement.mp4";
+    if (outcome === "closed") {
+      modal.remove();
+      await Promise.resolve();
+    } else if (outcome === "replaced") {
+      modal.originalSrc = replacement;
+      await modal.updateComplete;
+    }
+    if (outcome === "failed") {
+      original.reject(new Error("Original unavailable"));
+      await waitForSolid(() => expect(modal.querySelector(".open-original")).toBeNull());
+      expect(modal.querySelector("video")?.isConnected).toBe(true);
+      expect(button(modal, ".close").isConnected).toBe(true);
+      modal.originalSrc = replacement;
+    } else {
+      original.resolve(new Blob(["png"], { type: "image/png" }));
+      await original.promise;
+    }
+    if (outcome !== "closed") {
+      await waitForSolid(() =>
+        expect(modal.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(replacement),
+      );
+    }
+    await modal.updateComplete;
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "preserves preview/zoom during display upgrade (retry: %s)",
+  async (retry) => {
+    const full = createDeferred<ImageLightboxItem | null>();
+    const decoded = createDeferred();
+    const decode = vi.fn(() => (retry ? Promise.resolve() : decoded.promise));
+    mockDecoder(decode);
+    const original = { src: "blob:original", title: "Screenshot", release: vi.fn() };
+    const loadDisplayImage = retry
+      ? vi
+          .fn<() => Promise<ImageLightboxItem | null>>()
+          .mockRejectedValueOnce(new Error("Temporary display failure"))
+          .mockResolvedValueOnce(original)
+      : vi.fn(() => full.promise);
+    const modal = attachLightbox({
+      src: "blob:preview",
+      imageTitle: "Screenshot",
+      loadDisplayImage,
+    });
+    modal.addEventListener("image-lightbox-close", () => container.replaceChildren());
+    await modal.updateComplete;
+    const image = modal.querySelector("img")!;
+    expect(image.src).toBe("blob:preview");
+    expect(modal.querySelector(".open-original")).toBeNull();
+    image.dispatchEvent(new Event("load"));
+    image.dispatchEvent(new CustomEvent("panzoomchange", { detail: { scale: 2 } }));
+    flush();
+    modal.imageTitle = "Renamed screenshot";
+    await modal.updateComplete;
+    expect(image.alt).toBe("Renamed screenshot");
+    expect(modal.hasAttribute("title")).toBe(false);
+    expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Image preview: Renamed screenshot",
+    );
+    expect(loadDisplayImage).toHaveBeenCalledOnce();
+    expect(modal.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
+    if (retry) {
+      await waitForSolid(() =>
+        expect(button(modal, ".image-quality-status button").textContent).toBe("Retry"),
+      );
+      expect(image.src).toBe("blob:preview");
+      expect(modal.querySelector(".image-quality-status")?.textContent).toContain(
+        "Couldn’t load a sharper image. Try again.",
+      );
+      button(modal, ".image-quality-status button").click();
+    } else {
+      full.resolve(original);
+      await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
+      expect(image.src).toBe("blob:preview");
+      decoded.resolve();
+    }
+    await waitForSolid(() => expect(image.src).toBe("blob:original"));
+    image.dispatchEvent(new Event("load"));
+    await modal.updateComplete;
+    expect(modal.querySelector(".zoom-level")?.textContent?.trim()).toBe("200%");
+    expect(modal.querySelector("img")).toBe(image);
+    expect(modal.querySelector(".image-quality-status, .open-original")).toBeNull();
+    expect(fetchImage).not.toHaveBeenCalled();
+    button(modal, ".close").click();
+    await waitForSolid(() => expect(original.release).toHaveBeenCalledOnce());
+    expect(container.querySelector("openclaw-image-lightbox")).toBeNull();
+  },
+);
+
+it("rejects opposing navigation while a move is pending", async () => {
+  mockDecoder();
+  const next = createDeferred<ImageLightboxItem | null>();
+  const previous = vi.fn(async () => ({ src: "blob:previous", title: "Previous" }));
+  const pending = vi.fn(() => next.promise);
+  const { modal } = await renderLightbox({ src: "blob:middle", imageTitle: "Middle" });
+  modal.gallery = { index: 1, items: [previous, async () => null, pending] };
+  await modal.updateComplete;
+  const image = modal.querySelector("img")!;
+  button(modal, ".next").click();
+  button(modal, ".previous").click();
+  await waitForSolid(() => expect(pending).toHaveBeenCalledOnce());
+  expect(previous).not.toHaveBeenCalled();
+  expect(image.src).toBe("blob:middle");
+  next.resolve({ src: "blob:next", title: "Next" });
+  await waitForSolid(() => expect(image.src).toBe("blob:next"));
+  expect(modal.querySelector(".title")?.textContent).toBe("Next");
+});
+
+it("replaces video connections and disconnects before close", async () => {
+  const order: string[] = [];
+  const disconnect = vi.fn();
+  const connectVideo = vi.fn(() => disconnect);
+  const modal = attachLightbox({ mediaKind: "video", connectVideo });
+  await modal.updateComplete;
+  await waitForSolid(() => expect(connectVideo).toHaveBeenCalledOnce());
+  const video = modal.querySelector("video")!;
+  modal.imageTitle = "Renamed video";
+  await modal.updateComplete;
+  expect(connectVideo).toHaveBeenCalledOnce();
+  expect(disconnect).not.toHaveBeenCalled();
+
+  disconnect.mockImplementation(() => order.push("disconnect"));
+  const replacementDisconnect = vi.fn();
+  const replacement = vi.fn(() => {
+    order.push("connect");
+    return replacementDisconnect;
+  });
+  modal.connectVideo = replacement;
+  await waitForSolid(() => expect(replacement).toHaveBeenCalledOnce());
+  expect(order).toEqual(["disconnect", "connect"]);
+  expect(modal.querySelector("video")).toBe(video);
+
+  const closed = vi.fn(() => expect(replacementDisconnect).toHaveBeenCalledOnce());
+  modal.addEventListener("image-lightbox-close", closed);
+  button(modal, ".close").click();
+  expect(closed).toHaveBeenCalledOnce();
+  expect(disconnect).toHaveBeenCalledOnce();
+  expect(replacementDisconnect).toHaveBeenCalledOnce();
+});
+
+it("ignores retired media events when switching kind", async () => {
+  const { modal } = await renderLightbox();
+  const image = modal.querySelector<HTMLImageElement>("img")!;
+  image.dispatchEvent(new Event("load"));
+  const disconnect = vi.fn();
+  const connectVideo = vi.fn(() => disconnect);
+  Object.assign(modal, { mediaKind: "video", connectVideo });
+  await modal.updateComplete;
+  const video = modal.querySelector("video")!;
+  await waitForSolid(() =>
+    expect(connectVideo).toHaveBeenCalledExactlyOnceWith(video, expect.any(Function), false),
+  );
+  expect(image.isConnected).toBe(false);
+
+  vi.mocked(Panzoom).mockClear();
+  image.dispatchEvent(new Event("load"));
+  image.dispatchEvent(new Event("error"));
+  expect(Panzoom).not.toHaveBeenCalled();
+
+  modal.mediaKind = "image";
+  await modal.updateComplete;
+  expect(disconnect).toHaveBeenCalledOnce();
+  expect(video.isConnected).toBe(false);
+  modal.querySelector("img")!.dispatchEvent(new Event("load"));
+  await modal.updateComplete;
+  expect(button(modal, '[aria-label="Zoom in"]').getAttribute("aria-disabled")).toBe("false");
+});
+
+it("retires detached work and reconnects without downloading", async () => {
+  const { modal } = await renderLightbox();
+  const image = modal.querySelector<HTMLImageElement>("img")!;
+  const neighbor = vi.fn(async () => null);
+  modal.gallery = { index: 0, items: [async () => null, neighbor] };
+  modal.remove();
+  await modal.updateComplete;
+  await Promise.resolve();
+  expect(fetchImage).not.toHaveBeenCalled();
+  expect(createObjectUrl).not.toHaveBeenCalled();
+  expect(revokeObjectUrl).not.toHaveBeenCalled();
+  expect(neighbor).not.toHaveBeenCalled();
+  vi.mocked(Panzoom).mockClear();
+  image.dispatchEvent(new Event("load"));
+  expect(Panzoom).not.toHaveBeenCalled();
+  container.append(modal);
+  await modal.updateComplete;
+  expect(modal.querySelector(".download-image")).not.toBeNull();
+  expect(fetchImage).not.toHaveBeenCalled();
+});
+
+it.each(["open", "closed", "reopened"] as const)(
+  "reports failed downloads only in their mounted view: %s",
+  async (state) => {
+    const toast = container.appendChild(document.createElement("openclaw-toast-host"));
+    const original = createDeferred<Blob>();
+    const readOriginalBlob = vi.fn(() => original.promise);
+    const { modal } = await renderLightbox({ readOriginalBlob });
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      toast.remove();
+      vi.useRealTimers();
+    });
+    const download = button(modal, ".download-image");
+    download.click();
+    expect(readOriginalBlob).toHaveBeenCalledOnce();
+    if (state !== "open") {
+      modal.addEventListener("image-lightbox-close", () => modal.remove());
+      button(modal, ".close").click();
+      expect(modal.isConnected).toBe(false);
+      await Promise.resolve();
+      if (state === "reopened") {
+        container.append(modal);
+        await modal.updateComplete;
+        const replacement = button(modal, ".download-image");
+        expect(replacement).not.toBe(download);
+        expect(replacement.disabled).toBe(false);
+      }
+    }
+    original.reject(new Error("Image unavailable"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(toast.toasts.map((entry) => entry.options)).toEqual(
+      state === "open"
+        ? [expect.objectContaining({ message: "Couldn’t download this image. Try again." })]
+        : [],
+    );
+    if (state === "open") {
+      expect(download.disabled).toBe(false);
+      expect(download.hasAttribute("aria-busy")).toBe(false);
+    }
+  },
+);
+
+it.each([
+  ["blob:original-svg", "image/svg+xml", "application/octet-stream"],
+  ["blob:safe-png", "image/png", "image/png"],
+  ["blob:untrusted-html", "text/html", undefined],
+] as const)("downloads only inert bytes on request: %s", async (src, type, downloadType) => {
+  fetchImage.mockResolvedValueOnce({
+    ok: true,
+    blob: async () => new Blob(["image"], { type }),
+  });
+  const { modal } = await renderLightbox({ src, imageTitle: "parcel flow.svg" });
+  expect(fetchImage).not.toHaveBeenCalled();
+  expect(modal.querySelector(".open-original")).toBeNull();
+  const click = interceptDownload();
+  button(modal, ".download-image").click();
+  await waitForSolid(() =>
+    expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
+  );
+  expect(fetchImage).toHaveBeenCalledExactlyOnceWith(src);
+  expect(createObjectUrl).toHaveBeenCalledTimes(downloadType ? 1 : 0);
+  expect(click).toHaveBeenCalledTimes(downloadType ? 1 : 0);
+  if (downloadType) {
+    expect(createObjectUrl.mock.calls[0]?.[0]).toHaveProperty("type", downloadType);
+    expect(click.mock.contexts[0]).toHaveProperty(
+      "download",
+      type === "image/svg+xml" ? "parcel flow.svg" : "parcel flow.png",
+    );
+  }
+});
+
+it.each(["url", "blob", "gallery"] as const)(
+  "downloads the selected original only on request: %s",
+  async (source) => {
+    const original = createDeferred<Blob>();
+    const gallery = source === "gallery";
+    const blob = source === "blob";
+    const readOriginalBlob = vi.fn(() => original.promise);
+    const first = "https://example.com/first.png",
+      next = "https://example.com/next.png";
+    const { modal } = await renderLightbox({
+      src: "blob:preview",
+      originalSrc: blob ? "" : first,
+      readOriginalBlob: source === "url" ? undefined : readOriginalBlob,
+    });
+    expect(readOriginalBlob).not.toHaveBeenCalled();
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(modal.querySelector(".open-original")).toBeNull();
+    if (gallery) {
+      mockDecoder();
+      modal.gallery = {
+        index: 0,
+        items: [async () => null, async () => ({ src: next, title: "Next" })],
+      };
+      await modal.updateComplete;
+      button(modal, ".navigation.next").click();
+      await waitForSolid(() => expect(modal.querySelector("img")?.src).toBe(next));
+      expect(fetchImage).not.toHaveBeenCalled();
+    }
+    const download = button(modal, ".download-image");
+    const click = interceptDownload();
+    download.click();
+    if (blob) {
+      flush();
+      expect(readOriginalBlob).toHaveBeenCalledOnce();
+      expect(download.disabled).toBe(true);
+      expect(download.getAttribute("aria-busy")).toBe("true");
+      download.click();
+      expect(readOriginalBlob).toHaveBeenCalledOnce();
+      original.resolve(new Blob(["original"], { type: "image/png" }));
+    }
+    await waitForSolid(() => expect(click).toHaveBeenCalledOnce());
+    if (blob) {
+      expect(fetchImage).not.toHaveBeenCalled();
+      expect(download.disabled).toBe(false);
+    } else {
+      expect(readOriginalBlob).not.toHaveBeenCalled();
+      expect(fetchImage).toHaveBeenCalledExactlyOnceWith(gallery ? next : first);
+    }
+  },
+);
+
+it("offers browser access for external images", async () => {
+  const { modal } = await renderLightbox({ src: "https://images.example.org/photo.jpg" });
+  const link = modal.querySelector<HTMLAnchorElement>(".external-image");
+  expect(link).toMatchObject({ href: "https://images.example.org/photo.jpg", target: "_blank" });
+  expect(link?.rel).toContain("noreferrer");
+  expect(link?.getAttribute("aria-label")).toBe("Open in new tab");
+  expect(fetchImage).not.toHaveBeenCalled();
+  Object.assign(modal, { src: new URL("/api/chat/media/photo/thumbnail", location.href).href });
+  await modal.updateComplete;
+  expect(modal.querySelector(".external-image")).toBeNull();
+});
+
+it("gates zoom shortcuts", async () => {
+  const { modal, dialogAdapter } = await renderLightbox();
+  const image = modal.querySelector<HTMLImageElement>(".image")!;
+  expect(image).toMatchObject({
+    src: "data:image/png;charset=utf-8;base64,cG5n",
+    alt: "Generated lobster",
+  });
+  expect(button(modal, ".close").hasAttribute("autofocus")).toBe(true);
+  const zoomIn = button(modal, '[aria-label="Zoom in"]');
+  expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
+  const unavailableShortcut = pressKey(dialogAdapter, "+", { cancelable: true });
+  expect(unavailableShortcut.defaultPrevented).toBe(false);
+
+  image.dispatchEvent(new Event("error"));
+  await modal.updateComplete;
+  expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
+
+  image.dispatchEvent(new Event("load"));
+  flush();
+  expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
+  const panzoom = vi.mocked(Panzoom).mock.results.at(-1)!.value;
+  for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+    for (const key of ["=", "+", "-", "0"]) {
+      const shortcut = pressKey(zoomIn, key, {
+        cancelable: true,
+        shiftKey: key === "+",
+        [modifier]: true,
+      });
+      expect(shortcut.defaultPrevented, `${modifier} ${key}`).toBe(false);
+    }
+  }
+  expect(panzoom.zoomIn).not.toHaveBeenCalled();
+  expect(panzoom.zoomOut).not.toHaveBeenCalled();
+  expect(panzoom.reset).not.toHaveBeenCalled();
+
+  for (const [key, command] of [
+    ["=", panzoom.zoomIn],
+    ["+", panzoom.zoomIn],
+    ["-", panzoom.zoomOut],
+    ["0", panzoom.reset],
+  ] as const) {
+    vi.mocked(command).mockClear();
+    const shortcut = pressKey(zoomIn, key, { cancelable: true, shiftKey: key === "+" });
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(command).toHaveBeenCalledOnce();
+  }
+});
+
+it("captures gallery shortcuts and releases them on removal", async () => {
+  mockDecoder();
+  const { modal, dialogAdapter } = await renderLightbox();
+  const initialSource = modal.src;
+  const nextSource = "https://example.com/next.png";
+  modal.gallery = {
+    index: 0,
+    items: [
+      async () => ({ src: initialSource, title: "Generated lobster" }),
+      async () => ({ src: nextSource, title: "Next image" }),
+    ],
+  };
+  await modal.updateComplete;
+  const image = modal.querySelector<HTMLImageElement>(".image")!;
+  image.dispatchEvent(new Event("load"));
+  const panzoom = vi.mocked(Panzoom).mock.results.at(-1)!.value;
+  image.addEventListener("keydown", (event) => event.stopPropagation());
+  const press = (value: string, modifiers: KeyboardEventInit = {}) =>
+    pressKey(image, value, { cancelable: true, ...modifiers });
+
+  expect(press("ArrowRight", { shiftKey: true }).defaultPrevented).toBe(false);
+  expect(panzoom.pan).not.toHaveBeenCalled();
+  await modal.updateComplete;
+  expect(image.src).toBe(initialSource);
+
+  vi.mocked(panzoom.getScale).mockReturnValue(2);
+  for (const [key, x, y] of [
+    ["ArrowLeft", -24, 0],
+    ["ArrowRight", 24, 0],
+    ["ArrowUp", 0, -24],
+    ["ArrowDown", 0, 24],
+  ] as const) {
+    expect(press(key, { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(panzoom.pan).toHaveBeenLastCalledWith(x, y, { relative: true, animate: false });
+  }
+  expect(press("ArrowRight", { shiftKey: true, metaKey: true }).defaultPrevented).toBe(false);
+  expect(panzoom.pan).toHaveBeenCalledTimes(4);
+  expect(image.src).toBe(initialSource);
+
+  for (const [key, source] of [
+    ["ArrowRight", nextSource],
+    ["ArrowLeft", initialSource],
+  ] as const) {
+    expect(press(key).defaultPrevented).toBe(true);
+    await waitForSolid(() => expect(image.src).toBe(source));
+  }
+
+  modal.remove();
+  await Promise.resolve();
+  const retiredShortcut = pressKey(dialogAdapter, "ArrowRight", { cancelable: true });
+  expect(retiredShortcut.defaultPrevented).toBe(false);
+});
+
+it("closes once per button or modal cancellation", async () => {
+  const { modal, dialogAdapter } = await renderLightbox();
+  const close = trackClose(modal);
+  modal.querySelector<HTMLButtonElement>("button")?.click();
+  expect(close).toHaveBeenCalledOnce();
+  dialogAdapter.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true }));
+  expect(close).toHaveBeenCalledTimes(2);
+});
+
+it.each(["document", "shadow"] as const)(
+  "dismisses only backdrop click gestures (%s root)",
+  async (rootKind) => {
+    const mountTarget =
+      rootKind === "shadow"
+        ? container.attachShadow({ mode: "open" }).appendChild(document.createElement("div"))
+        : container;
+    const { modal } = await renderLightbox({}, mountTarget);
+    const hitTestRoot = modal.getRootNode();
+    const stage = modal.querySelector<HTMLElement>(".stage");
+    const slide = modal.querySelector<HTMLElement>(".slide");
+    slide?.addEventListener("pointerdown", (event) => event.stopPropagation());
+    const image = modal.querySelector<HTMLImageElement>(".image");
+    const elementFromPoint = Object.getOwnPropertyDescriptor(hitTestRoot, "elementFromPoint");
+    onTestFinished(() => {
+      restorePropertyDescriptor(hitTestRoot, "elementFromPoint", elementFromPoint);
+    });
+    Object.defineProperty(hitTestRoot, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => stage ?? null),
+    });
+    const close = trackClose(modal);
+
+    const pointer = (target: Element | null | undefined, type: string, pointerId: number, xy = 0) =>
+      target?.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          pointerId,
+          clientX: xy,
+          clientY: xy,
+        }),
+      );
+    pointer(image, "pointerdown", 1);
+    pointer(stage, "pointerup", 1);
+    expect(close).not.toHaveBeenCalled();
+
+    pointer(stage, "pointerdown", 2, 10);
+    pointer(stage, "pointerup", 2, 30);
+    expect(close).not.toHaveBeenCalled();
+
+    pointer(slide, "pointerdown", 3, 10);
+    pointer(stage, "pointerup", 3, 10);
+    expect(close).toHaveBeenCalledOnce();
+  },
+);

@@ -1,0 +1,87 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+
+type AnthropicCacheRetentionFamily =
+  | "anthropic-direct"
+  | "anthropic-bedrock"
+  | "custom-anthropic-api";
+
+/** Matches Application Inference Profile ARNs across all AWS partitions with Bedrock. */
+const BEDROCK_APP_INFERENCE_PROFILE_ARN_RE = /^arn:aws(-cn|-us-gov)?:bedrock:/;
+
+function isAnthropicBedrockModel(modelId: string, allowOpaqueApplicationProfile = false): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+
+  // Direct Anthropic Claude model IDs and regional inference profiles
+  // e.g. "anthropic.claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6", "global.anthropic.claude-opus-4-6-v1"
+  if (normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude")) {
+    return true;
+  }
+
+  // Application Inference Profile ARN — detect Claude via profile ID segment.
+  // e.g. "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile"
+  //
+  // Limitation: This is a name-heuristic only. Application inference profiles have
+  // user-defined names, so a profile named "my-prod-assistant" routing to Claude would
+  // miss cache semantics, while "my-claude-compat-llama" on a non-Claude model would
+  // incorrectly get them. The Bedrock API does not expose the underlying model in the
+  // profile ID itself — resolving this would require a GetInferenceProfile call, which
+  // is too expensive for a per-request check. System-defined profiles (us., eu., global.)
+  // always contain "anthropic.claude" and are matched above.
+  if (
+    BEDROCK_APP_INFERENCE_PROFILE_ARN_RE.test(normalized) &&
+    normalized.includes(":application-inference-profile/")
+  ) {
+    const profileId = normalized.split(":application-inference-profile/")[1] ?? "";
+    // Explicit cache config relies on the extension to resolve opaque profile IDs.
+    return allowOpaqueApplicationProfile || profileId.includes("claude");
+  }
+
+  return false;
+}
+
+export function isAnthropicFamilyCacheTtlEligible(params: {
+  provider: string;
+  modelApi?: string;
+  modelId: string;
+}): boolean {
+  const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
+  if (normalizedProvider === "anthropic" || normalizedProvider === "anthropic-vertex") {
+    return true;
+  }
+  if (normalizedProvider === "amazon-bedrock") {
+    return isAnthropicBedrockModel(params.modelId);
+  }
+  return params.modelApi === "anthropic-messages";
+}
+
+export function resolveAnthropicCacheRetentionFamily(params: {
+  provider: string;
+  modelApi?: string;
+  modelId?: string;
+  hasExplicitCacheConfig: boolean;
+}): AnthropicCacheRetentionFamily | undefined {
+  const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
+  if (normalizedProvider === "anthropic" || normalizedProvider === "anthropic-vertex") {
+    return "anthropic-direct";
+  }
+  if (
+    normalizedProvider === "amazon-bedrock" &&
+    params.hasExplicitCacheConfig &&
+    typeof params.modelId === "string"
+  ) {
+    if (isAnthropicBedrockModel(params.modelId, true)) {
+      return "anthropic-bedrock";
+    }
+  }
+  if (
+    normalizedProvider !== "amazon-bedrock" &&
+    params.hasExplicitCacheConfig &&
+    params.modelApi === "anthropic-messages"
+  ) {
+    return "custom-anthropic-api";
+  }
+  return undefined;
+}

@@ -1,0 +1,115 @@
+import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { Message } from "../internal/discord.js";
+
+type DiscordSnapshotAuthor = {
+  id?: string | null;
+  username?: string | null;
+  discriminator?: string | null;
+  global_name?: string | null;
+  name?: string | null;
+};
+
+export type DiscordSnapshotMessage = {
+  content?: string | null;
+  components?: unknown;
+  embeds?: Array<{ description?: string | null; title?: string | null }> | null;
+  attachments?: APIAttachment[] | null;
+  stickers?: APIStickerItem[] | null;
+  sticker_items?: APIStickerItem[] | null;
+  author?: DiscordSnapshotAuthor | null;
+};
+
+type DiscordMessageSnapshot = {
+  message?: DiscordSnapshotMessage | null;
+};
+
+const FORWARD_MESSAGE_REFERENCE_TYPE = 1;
+
+function normalizeDiscordStickerItems(value: unknown): APIStickerItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (entry): entry is APIStickerItem =>
+      Boolean(entry) &&
+      typeof entry === "object" &&
+      typeof (entry as { id?: unknown }).id === "string" &&
+      typeof (entry as { name?: unknown }).name === "string",
+  );
+}
+
+export function resolveDiscordMessageStickers(message: {
+  stickers?: unknown;
+  sticker_items?: unknown;
+  rawData?: { sticker_items?: unknown; stickers?: unknown };
+}): APIStickerItem[] {
+  const normalized = normalizeDiscordStickerItems(message.stickers);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  const rawData = message.rawData;
+  return normalizeDiscordStickerItems(
+    message.sticker_items ?? rawData?.sticker_items ?? rawData?.stickers,
+  );
+}
+
+export function hasDiscordMessageStickers(message: Message): boolean {
+  return resolveDiscordMessageStickers(message).length > 0;
+}
+
+export function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
+  return normalizeDiscordMessageSnapshots(message.rawData?.message_snapshots);
+}
+
+export function normalizeDiscordMessageSnapshots(snapshots: unknown): DiscordMessageSnapshot[] {
+  if (!Array.isArray(snapshots)) {
+    return [];
+  }
+  return snapshots.filter(
+    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
+  );
+}
+
+export function resolveDiscordReferencedForwardMessage(message: Message): Message | null {
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
+    ? message.referencedMessage
+    : null;
+}
+
+export function resolveDiscordReferencedReplyMessage(message: Message): Message | null {
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
+    ? null
+    : (message.referencedMessage ?? null);
+}
+
+export function resolveDiscordReferencedReplyMessageId(message: Message): string | null {
+  const referenceType = message.messageReference?.type;
+  if (Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE) {
+    return null;
+  }
+  return (
+    normalizeOptionalString(message.messageReference?.message_id) ??
+    normalizeOptionalString(message.referencedMessage?.id) ??
+    null
+  );
+}
+
+export function formatDiscordSnapshotAuthor(
+  author: DiscordSnapshotAuthor | null | undefined,
+): string | undefined {
+  if (!author) {
+    return undefined;
+  }
+  const globalName = normalizeOptionalString(author.global_name);
+  const username = normalizeOptionalString(author.username);
+  const name = normalizeOptionalString(author.name);
+  const discriminator = normalizeOptionalString(author.discriminator);
+  const base = globalName || username || name || author.id;
+  if (username && discriminator && discriminator !== "0") {
+    return `@${username}#${discriminator}`;
+  }
+  return base ? `@${base}` : undefined;
+}

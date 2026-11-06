@@ -1,0 +1,101 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
+import { buildBoardWidgetContentSecurityPolicy } from "../gateway/board-sandbox.js";
+import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import {
+  resolveCanvasDocumentsDir,
+  resolveCanvasHttpPathToLocalPath,
+  type CanvasDocumentManifest,
+} from "./documents.js";
+
+async function readRootFile(root: Awaited<ReturnType<typeof fsRoot>>, relativePath: string) {
+  try {
+    return await root.read(relativePath, { maxBytes: Infinity });
+  } catch (error) {
+    if (error instanceof FsSafeError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function resolveDocumentSandbox(
+  root: Awaited<ReturnType<typeof fsRoot>>,
+  relativePath: string,
+): Promise<"scripts" | undefined> {
+  const documentId = relativePath.split(path.sep)[0];
+  if (!documentId) {
+    return undefined;
+  }
+  const opened = await readRootFile(root, path.join(documentId, "manifest.json"));
+  if (!opened) {
+    return undefined;
+  }
+  try {
+    const manifest = JSON.parse(opened.buffer.toString("utf8")) as CanvasDocumentManifest;
+    return manifest.cspSandbox === "scripts" ? "scripts" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function handleCanvasDocumentHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  const localPath = resolveCanvasHttpPathToLocalPath(req.url ?? "");
+  if (!localPath) {
+    return false;
+  }
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
+  }
+
+  try {
+    const documentsDir = resolveCanvasDocumentsDir();
+    const relativePath = path.relative(documentsDir, localPath);
+    const root = await fsRoot(documentsDir);
+    const opened = await root.read(relativePath, { maxBytes: Infinity });
+
+    const lowerPath = opened.realPath.toLowerCase();
+    const mime =
+      lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+        ? "text/html"
+        : ((await detectMime({ filePath: opened.realPath })) ?? "application/octet-stream");
+    // Measure the decoded representation: UTF-8 replacement characters can
+    // make an HTML response longer than the bytes stored on disk.
+    const body = mime === "text/html" ? opened.buffer.toString("utf8") : opened.buffer;
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
+    if (mime === "text/html") {
+      if ((await resolveDocumentSandbox(root, relativePath)) === "scripts") {
+        // Registered documents allow local renderer scripts in their own CSP;
+        // the response policy must preserve that permission because policies intersect.
+        res.setHeader(
+          "Content-Security-Policy",
+          buildBoardWidgetContentSecurityPolicy({
+            grantState: "none",
+            resourceOrigins: ["'self'"],
+          }),
+        );
+        res.setHeader("Referrer-Policy", "no-referrer");
+      }
+    }
+    if (req.method === "HEAD") {
+      res.end();
+      return true;
+    }
+    res.end(body);
+    return true;
+  } catch (error) {
+    res.statusCode = error instanceof FsSafeError ? 404 : 500;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(error instanceof FsSafeError ? "not found" : "error");
+    return true;
+  }
+}

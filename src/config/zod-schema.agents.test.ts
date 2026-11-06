@@ -1,0 +1,178 @@
+import { describe, expect, it } from "vitest";
+import { AgentsSchema } from "./zod-schema.agents.js";
+import { OpenClawSchema } from "./zod-schema.js";
+
+describe("workspace file modes", () => {
+  it.each(["0600", "0620", "0640", "0660"])("accepts %s at either scope", (mode) => {
+    expect(
+      AgentsSchema.safeParse({
+        defaults: { workspaceFileMode: mode },
+        entries: { main: { workspaceFileMode: mode } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(["600", "0400", "0644", "0700", "1660", "0666", 0o660])(
+    "rejects unsafe or non-octal-string mode %j with a useful error",
+    (mode) => {
+      for (const config of [
+        { defaults: { workspaceFileMode: mode }, entries: { main: {} } },
+        { entries: { main: { workspaceFileMode: mode } } },
+      ]) {
+        const result = AgentsSchema.safeParse(config);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues[0]?.message).toContain("0600, 0620, 0640, or 0660");
+        }
+      }
+    },
+  );
+});
+
+describe("agent roster ownership", () => {
+  it("rejects an empty roster after load-time migration", () => {
+    expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
+  });
+
+  it("rejects a markerless multi-agent roster without explicit ownership", () => {
+    const result = AgentsSchema.safeParse({ entries: { alpha: {}, beta: {} } });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain('agents.ownership="explicit"');
+      expect(result.error.issues[0]?.message).toContain("run openclaw doctor");
+    }
+  });
+
+  it("rejects multiple legacy default markers", () => {
+    expect(
+      AgentsSchema.safeParse({
+        entries: { alpha: { default: true }, beta: { default: true } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects entry keys that resolve to the same agent id", () => {
+    const result = AgentsSchema.safeParse({
+      ownership: "explicit",
+      entries: { Ops: {}, ops: {} },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]).toMatchObject({
+        path: ["entries", "ops"],
+        message:
+          'agents.entries keys "Ops" and "ops" resolve to the same agent id "ops"; rename one key so each agent has a unique id',
+      });
+    }
+  });
+
+  it("rejects a legacy marker with explicit ownership", () => {
+    expect(
+      AgentsSchema.safeParse({
+        ownership: "explicit",
+        entries: { alpha: { default: true }, beta: {} },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("explicit ambient agent targets", () => {
+  it("rejects an unknown explicit target", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: { defaults: { systemAgent: { agentId: "missing" } }, entries: { main: {} } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain("Unknown agent id");
+    }
+  });
+
+  it("accepts configured system-agent, compatibility, and Talk targets", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        agents: {
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            authInheritance: { agentId: "ops" },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: { ops: {} },
+        },
+        talk: { agentId: "ops" },
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("agent GitHub sandbox identity", () => {
+  const profileId = "ghp_0123456789abcdef0123456789abcdef";
+
+  it("accepts an explicit sandbox identity opt-in for one agent", () => {
+    const github = { profileId, allowInSandbox: true };
+    const result = AgentsSchema.safeParse({ entries: { release: { tools: { github } } } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data?.entries?.release?.tools?.github).toEqual(github);
+    }
+  });
+
+  it("rejects a non-boolean sandbox identity opt-in", () => {
+    const result = AgentsSchema.safeParse({
+      entries: { release: { tools: { github: { profileId, allowInSandbox: "true" } } } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          path: ["entries", "release", "tools", "github", "allowInSandbox"],
+        }),
+      ]);
+    }
+  });
+
+  it("rejects a global sandbox identity opt-in", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: { github: { profileId, allowInSandbox: true } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ["tools", "github"], code: "unrecognized_keys" }),
+      ]);
+    }
+  });
+});
+
+describe("agent picker visibility", () => {
+  it("accepts an explicit hidden picker flag", () => {
+    expect(
+      AgentsSchema.safeParse({ entries: { main: { picker: { hidden: true } } } }).success,
+    ).toBe(true);
+  });
+
+  it("defaults to visible when picker is omitted", () => {
+    const parsed = AgentsSchema.safeParse({
+      ownership: "explicit",
+      entries: { main: {}, worker: { picker: { hidden: true } } },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data && parsed.data.entries) {
+      expect(parsed.data.entries.main?.picker).toBeUndefined();
+      expect(parsed.data.entries.worker?.picker?.hidden).toBe(true);
+    }
+  });
+
+  it("rejects unknown picker keys", () => {
+    expect(
+      AgentsSchema.safeParse({ entries: { main: { picker: { visible: false } } } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects non-boolean hidden values", () => {
+    expect(
+      AgentsSchema.safeParse({ entries: { main: { picker: { hidden: "yes" } } } }).success,
+    ).toBe(false);
+  });
+});

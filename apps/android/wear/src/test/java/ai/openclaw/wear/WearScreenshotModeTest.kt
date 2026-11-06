@@ -1,0 +1,53 @@
+package ai.openclaw.wear
+
+import android.content.Intent
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class WearScreenshotModeTest {
+  @Test
+  fun ignoresNormalLaunches() {
+    assertNull(parseWearScreenshotModeIntent(Intent(Intent.ACTION_MAIN)))
+  }
+
+  @Test
+  fun parsesRequestedScene() {
+    val parsed =
+      parseWearScreenshotModeIntent(
+        Intent(Intent.ACTION_MAIN)
+          .putExtra(extraWearScreenshotMode, true)
+          .putExtra(extraWearScreenshotScene, "voice"),
+      )
+
+    assertEquals(WearScreenshotScene.Voice, parsed)
+  }
+
+  @Test
+  fun defaultsUnknownScenesToChat() {
+    val parsed =
+      parseWearScreenshotModeIntent(
+        Intent(Intent.ACTION_MAIN)
+          .putExtra(extraWearScreenshotMode, true)
+          .putExtra(extraWearScreenshotScene, "unknown"),
+      )
+
+    assertEquals(WearScreenshotScene.Chat, parsed)
+  }
+
+  @Test
+  fun mapsScenesToProductionPages() {
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.Chat.initialPage)
+    assertEquals(WearHomePage.Voice, WearScreenshotScene.Voice.initialPage)
+    assertEquals(WearHomePage.Controls, WearScreenshotScene.Controls.initialPage)
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.CheckingPhone.initialPage)
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.PhoneUnavailable.initialPage)
+    assertEquals(WearScreenshotScene.CheckingPhone, WearScreenshotScene.fromRawValue("checking-phone"))
+    assertEquals(WearScreenshotScene.PhoneUnavailable, WearScreenshotScene.fromRawValue("phone-unavailable"))
+  }
+}

@@ -1,0 +1,263 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { findCapabilityProviderById } from "../../packages/media-generation-core/src/capability-model-ref.js";
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  expandShippedCoreToolPolicyNames,
+  readToolAllowlistIntersection,
+} from "./tool-policy.js";
+import {
+  hasSnapshotCapabilityAvailability,
+  hasSnapshotCapabilityProviderAvailability,
+  hasSnapshotProviderEnvAvailability,
+  loadCapabilityMetadataSnapshot,
+} from "./tools/manifest-capability-availability.js";
+
+type OptionalMediaToolFactoryPlan = {
+  imageGenerate: boolean;
+  videoGenerate: boolean;
+  musicGenerate: boolean;
+  pdf: boolean;
+};
+
+function hasExplicitToolModelConfig(model: AgentModelConfig | undefined): boolean {
+  return Boolean(
+    resolveAgentModelPrimaryValue(model)?.trim() ||
+    resolveAgentModelFallbackValues(model).some((entry) => entry.trim().length > 0),
+  );
+}
+
+export function isToolExplicitlyAllowedByFactoryPolicy(params: {
+  toolName: string;
+  allowlist?: string[];
+  denylist?: string[];
+}): boolean {
+  if (!params.allowlist) {
+    return false;
+  }
+  const restrictions = readToolAllowlistIntersection(params.allowlist) ?? [params.allowlist];
+  const deny = expandShippedCoreToolPolicyNames(params.denylist);
+  return restrictions.every(
+    (allow) =>
+      allow.some((entry) => entry.trim().length > 0) &&
+      isToolAllowedByPolicyName(params.toolName, {
+        allow: expandShippedCoreToolPolicyNames(allow),
+        deny,
+      }),
+  );
+}
+
+/** Merges factory policy lists while preserving stable unique entries. */
+export function mergeFactoryPolicyList(
+  ...lists: Array<string[] | undefined>
+): string[] | undefined {
+  const merged = lists.flatMap((list) => list ?? []);
+  return merged.length > 0 ? uniqueStrings(merged) : undefined;
+}
+
+function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
+  const allowlist = mergeFactoryPolicyList(...lists);
+  if (!allowlist?.some((entry) => entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY)) {
+    return allowlist;
+  }
+  const withoutDefaultPluginMarker = allowlist.filter(
+    (entry) => entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  );
+  return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
+}
+
+export function resolveImageToolFactoryAvailable(params: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  modelHasVision?: boolean;
+  authStore?: AuthProfileStore;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+}): boolean {
+  if (!params.agentDir?.trim()) {
+    return false;
+  }
+  if (
+    params.modelHasVision ||
+    hasExplicitToolModelConfig(params.config?.agents?.defaults?.imageModel)
+  ) {
+    return true;
+  }
+  const snapshot =
+    params.preparedModelRuntime?.metadataSnapshot ??
+    loadCapabilityMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  const preparedProviders =
+    params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
+  const hasPreparedImageProvider = preparedProviders?.some(
+    (provider) =>
+      provider.capabilities?.includes("image") &&
+      hasSnapshotCapabilityProviderAvailability({
+        snapshot,
+        authStore: params.authStore,
+        key: "mediaUnderstandingProviders",
+        providerId: provider.id,
+        config: params.config,
+      }),
+  );
+  return (
+    (preparedProviders === undefined
+      ? hasSnapshotCapabilityAvailability({
+          snapshot,
+          authStore: params.authStore,
+          key: "mediaUnderstandingProviders",
+          config: params.config,
+        })
+      : hasPreparedImageProvider === true) ||
+    hasConfiguredVisionModelAuthSignal({
+      config: params.config,
+      snapshot,
+      authStore: params.authStore,
+      preparedProviders,
+    })
+  );
+}
+
+function hasConfiguredVisionModelAuthSignal(params: {
+  config?: OpenClawConfig;
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  authStore?: AuthProfileStore;
+  preparedProviders?: NonNullable<
+    PreparedModelRuntimeSnapshot["mediaCapabilityProviders"]
+  >["mediaUnderstandingProviders"];
+}): boolean {
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return false;
+  }
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!providerConfig?.models?.some((model) => model.input?.includes("image"))) {
+      continue;
+    }
+    const profileIds = params.authStore
+      ? listProfilesForProvider(params.authStore, providerId)
+      : [];
+    const hasDirectProfile = profileIds.some(
+      (profileId) => params.authStore?.profiles[profileId]?.type === "api_key",
+    );
+    const hasEnv = hasSnapshotProviderEnvAvailability({
+      snapshot: params.snapshot,
+      providerId,
+      config: params.config,
+    });
+    const needsPreparedCodex =
+      normalizeMediaProviderId(providerId) === "openai" &&
+      profileIds.length > 0 &&
+      !hasDirectProfile &&
+      !hasEnv;
+    if (
+      needsPreparedCodex &&
+      params.preparedProviders !== undefined &&
+      !findCapabilityProviderById({
+        providers: params.preparedProviders,
+        providerId: "codex",
+        normalizeProviderId: normalizeMediaProviderId,
+      })?.capabilities?.includes("image")
+    ) {
+      continue;
+    }
+    if (
+      profileIds.length > 0 ||
+      hasEnv ||
+      resolveUsableCustomProviderApiKey({
+        cfg: params.config,
+        provider: providerId,
+        authStore: params.authStore,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveOptionalMediaToolFactoryPlan(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
+  toolAllowlist?: string[];
+  toolDenylist?: string[];
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+}): OptionalMediaToolFactoryPlan {
+  const defaults = params.config?.agents?.defaults;
+  const toolAllowlist = mergeBuiltInFactoryAllowlist(
+    params.config?.tools?.allow,
+    params.toolAllowlist,
+  );
+  const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
+  const matches = createToolPolicyMatcher({ allow: toolAllowlist, deny: toolDenylist });
+  const allowPdf = matches("pdf");
+  const explicitPdf =
+    hasExplicitToolModelConfig(defaults?.pdfModel) ||
+    hasExplicitToolModelConfig(defaults?.imageModel);
+  if (params.config?.plugins?.enabled === false) {
+    // Optional media tools are plugin/capability backed. Disabling plugins shuts them off even when
+    // stale defaults or env availability would otherwise appear to make a tool available.
+    return {
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    };
+  }
+  const snapshot =
+    params.preparedModelRuntime?.metadataSnapshot ??
+    loadCapabilityMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  const preparedProviders = params.preparedModelRuntime?.mediaCapabilityProviders;
+  const generationAvailable = (kind: "image" | "video" | "music") => {
+    const key = `${kind}GenerationProviders` as const;
+    const providers = preparedProviders?.[key];
+    return (
+      matches(`${kind}_generate`) &&
+      (providers === undefined || providers.length > 0) &&
+      (hasExplicitToolModelConfig(defaults?.mediaModels?.[kind]) ||
+        hasSnapshotCapabilityAvailability({
+          snapshot,
+          authStore: params.authStore,
+          key,
+          config: params.config,
+        }))
+    );
+  };
+  return {
+    imageGenerate: generationAvailable("image"),
+    videoGenerate: generationAvailable("video"),
+    musicGenerate: generationAvailable("music"),
+    pdf:
+      allowPdf &&
+      (explicitPdf ||
+        hasSnapshotCapabilityAvailability({
+          snapshot,
+          authStore: params.authStore,
+          key: "mediaUnderstandingProviders",
+          config: params.config,
+        }) ||
+        hasConfiguredVisionModelAuthSignal({
+          config: params.config,
+          snapshot,
+          authStore: params.authStore,
+        })),
+  };
+}

@@ -1,0 +1,81 @@
+import { describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+import { createPluginToolsMcpServer } from "./plugin-tools-serve.js";
+import { createMcpConnection } from "./tools-mcp.test-support.js";
+
+describe("plugin tools MCP client bridge", () => {
+  it("lists and calls a plugin tool through a real MCP client", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "MCP fact: the codename is ORBIT-9." }],
+    });
+    const tool = {
+      name: "memory_search",
+      description: "Search memory",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          maxResults: { type: "number" },
+        },
+        required: ["query"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const server = createPluginToolsMcpServer({
+      tools: [tool],
+    });
+    const { client, connect } = createMcpConnection(server, "plugin-tools-test-client");
+    await connect();
+
+    try {
+      const listed = await client.listTools();
+      expect(listed.tools.map((listedTool) => listedTool.name)).toContain("memory_search");
+
+      const result = await client.callTool({
+        name: "memory_search",
+        arguments: { query: "ORBIT-9 codename", maxResults: 3 },
+      });
+
+      expect(execute).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^mcp-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+        ),
+        { query: "ORBIT-9 codename", maxResults: 3 },
+        expect.any(AbortSignal),
+        undefined,
+      );
+      expect(JSON.stringify(result.content)).toContain("ORBIT-9");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("delivers resolved tool failures as MCP errors", async () => {
+    const content = [{ type: "text", text: "backend unavailable" }];
+    const tool = {
+      name: "memory_search",
+      description: "Search memory",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn().mockResolvedValue({
+        content,
+        details: { status: "failed", error: "backend unavailable" },
+      }),
+    } as unknown as AnyAgentTool;
+    const server = createPluginToolsMcpServer({
+      tools: [tool],
+    });
+    const { client, connect } = createMcpConnection(server, "plugin-tools-error-test-client");
+    await connect();
+    try {
+      const result = await client.callTool({ name: "memory_search", arguments: {} });
+
+      expect(result.content).toEqual(content);
+      expect(result.isError).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});

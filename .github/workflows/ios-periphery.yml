@@ -1,0 +1,14 @@
+name: iOS Periphery Dead Code
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  scan:
+    uses: ./.github/workflows/macos-periphery.yml
+    with:
+      ios_only: true

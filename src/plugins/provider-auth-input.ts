@@ -1,0 +1,192 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+
+export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
+
+/** Keeps secret resolution out of synchronous provider setup metadata imports. */
+export const promptSecretRefForSetup: typeof import("./provider-auth-ref.js").promptSecretRefForSetup =
+  async (...args) => (await import("./provider-auth-ref.js")).promptSecretRefForSetup(...args);
+
+const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
+
+/** Normalizes pasted API-key input, including shell assignment forms. */
+export function normalizeApiKeyInput(raw: string): string {
+  const trimmed = normalizeStringifiedOptionalString(raw) ?? "";
+  if (!trimmed) {
+    return "";
+  }
+
+  const normalizedPaste = normalizeSecretInput(trimmed);
+  const assignmentMatch = normalizedPaste.match(
+    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
+  );
+  const valuePart = assignmentMatch
+    ? expectDefined(assignmentMatch[1], "assignment match capture group 1").trim()
+    : normalizedPaste;
+  const withoutSemicolon = valuePart.endsWith(";") ? valuePart.slice(0, -1).trim() : valuePart;
+
+  const unquoted =
+    withoutSemicolon.length >= 2 &&
+    ((withoutSemicolon.startsWith('"') && withoutSemicolon.endsWith('"')) ||
+      (withoutSemicolon.startsWith("'") && withoutSemicolon.endsWith("'")) ||
+      (withoutSemicolon.startsWith("`") && withoutSemicolon.endsWith("`")))
+      ? withoutSemicolon.slice(1, -1)
+      : withoutSemicolon;
+
+  return normalizeSecretInput(unquoted);
+}
+
+/** Validates required API-key input for setup prompts. */
+export const validateApiKeyInput = (value: string) => {
+  const normalized = normalizeApiKeyInput(value);
+  if (!normalized) {
+    return "Required";
+  }
+  if (isMalformedApiKeyInput(normalized)) {
+    return "Paste the API key value, not an OpenClaw onboarding command.";
+  }
+  return undefined;
+};
+
+/** Formats a redacted API-key preview for setup confirmation prompts. */
+export function formatApiKeyPreview(
+  raw: string,
+  opts: { head?: number; tail?: number } = {},
+): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "…";
+  }
+  const head = opts.head ?? DEFAULT_KEY_PREVIEW.head;
+  const tail = opts.tail ?? DEFAULT_KEY_PREVIEW.tail;
+  if (trimmed.length <= head + tail) {
+    const shortHead = Math.min(2, trimmed.length);
+    const shortTail = Math.min(2, trimmed.length - shortHead);
+    if (shortTail <= 0) {
+      return `${sliceUtf16Safe(trimmed, 0, shortHead)}…`;
+    }
+    return `${sliceUtf16Safe(trimmed, 0, shortHead)}…${sliceUtf16Safe(trimmed, -shortTail)}`;
+  }
+  return `${sliceUtf16Safe(trimmed, 0, head)}…${sliceUtf16Safe(trimmed, -tail)}`;
+}
+
+/** Resolves an API key from CLI options first, then environment or prompt fallback. */
+export async function ensureApiKeyFromOptionEnvOrPrompt(
+  params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
+    token: string | undefined;
+    tokenProvider: string | undefined;
+    expectedProviders: string[];
+    noteMessage?: string;
+    noteTitle?: string;
+  },
+): Promise<string> {
+  const tokenProvider = normalizeOptionalLowercaseString(params.tokenProvider);
+  if (
+    params.token &&
+    tokenProvider &&
+    params.expectedProviders.some(
+      (provider) => normalizeOptionalLowercaseString(provider) === tokenProvider,
+    )
+  ) {
+    const apiKey = params.normalize(params.token);
+    const validationError = params.validate(apiKey);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    await params.setCredential(apiKey, params.secretInputMode);
+    if (apiKey) {
+      return apiKey;
+    }
+  }
+
+  if (params.noteMessage) {
+    await params.prompter.note(params.noteMessage, params.noteTitle);
+  }
+
+  return await ensureApiKeyFromEnvOrPrompt(params);
+}
+
+/** Resolves an API key from environment or interactive prompt and records the chosen secret mode. */
+export async function ensureApiKeyFromEnvOrPrompt(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  provider: string;
+  envLabel: string;
+  promptMessage: string;
+  normalize: (value: string) => string;
+  validate: (value: string) => string | undefined;
+  prompter: WizardPrompter;
+  secretInputMode?: SecretInputMode;
+  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
+}): Promise<string> {
+  const selectedMode = await resolveSecretInputModeForEnvSelection({
+    prompter: params.prompter,
+    explicitMode: params.secretInputMode,
+  });
+  const [
+    { resolveEnvApiKey },
+    {
+      extractEnvVarFromSourceLabel,
+      promptSecretRefForSetup: promptSecretRef,
+      resolveRefFallbackInput,
+    },
+  ] = await Promise.all([import("../agents/model-auth-env.js"), import("./provider-auth-ref.js")]);
+  const env = params.env ?? process.env;
+  // Setup must resolve the same trusted workspace/provider descriptors as
+  // runtime; dropping the staged config silently changes credential ownership.
+  const envKey = resolveEnvApiKey(params.provider, env, {
+    config: params.config,
+    workspaceDir:
+      params.workspaceDir ??
+      resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), env),
+  });
+
+  if (selectedMode === "ref") {
+    const refParams = {
+      provider: params.provider,
+      config: params.config,
+      preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+      env,
+    };
+    const resolved =
+      typeof params.prompter.select !== "function"
+        ? resolveRefFallbackInput(refParams)
+        : await promptSecretRef({ ...refParams, prompter: params.prompter });
+    await params.setCredential(resolved.ref, selectedMode);
+    return resolved.resolvedValue;
+  }
+
+  if (envKey && selectedMode === "plaintext") {
+    const useExisting = await params.prompter.confirm({
+      message: `Use existing ${params.envLabel} (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+      initialValue: true,
+    });
+    if (useExisting) {
+      await params.setCredential(envKey.apiKey, selectedMode);
+      return envKey.apiKey;
+    }
+  }
+
+  const key = await params.prompter.text({
+    message: params.promptMessage,
+    placeholder: "API key",
+    validate: params.validate,
+    sensitive: true,
+  });
+  const apiKey = params.normalize(key ?? "");
+  await params.setCredential(apiKey, selectedMode);
+  return apiKey;
+}

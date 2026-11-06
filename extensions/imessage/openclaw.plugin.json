@@ -1,0 +1,20 @@
+{
+  "id": "imessage",
+  "categories": ["channels"],
+  "name": "iMessage",
+  "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac.",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [{ "id": "imessage-retired-state" }]
+  },
+  "activation": {
+    "onStartup": false
+  },
+  "skills": ["./skills"],
+  "channels": ["imessage"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

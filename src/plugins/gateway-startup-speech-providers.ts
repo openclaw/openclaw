@@ -1,0 +1,168 @@
+// Collects startup speech provider metadata from plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { resolveConfiguredTalkSpeechProviderId } from "../config/talk.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTtsConfigReservedKey, resolveEffectiveTtsConfig } from "../tts/tts-config.js";
+import { isConfigActivationValueEnabled } from "./gateway-startup-plugin-contracts.js";
+
+/** Normalizes configured TTS provider ids for startup plugin selection. */
+function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized === "edge" ? "microsoft" : normalized;
+}
+
+/** Resolves provider activation from both canonical providers maps and legacy root keys. */
+function resolveProviderConfigActivation(
+  ttsConfig: Record<string, unknown>,
+  providerId: string,
+): boolean | undefined {
+  let fromProviders: boolean | undefined;
+  if (isRecord(ttsConfig.providers)) {
+    for (const [key, providerConfig] of Object.entries(ttsConfig.providers)) {
+      if (normalizeConfiguredSpeechProviderIdForStartup(key) === providerId) {
+        fromProviders = isConfigActivationValueEnabled(providerConfig);
+      }
+    }
+  }
+  if (fromProviders !== undefined) {
+    return fromProviders;
+  }
+
+  for (const [key, providerConfig] of Object.entries(ttsConfig)) {
+    if (isTtsConfigReservedKey(key) || !isRecord(providerConfig)) {
+      continue;
+    }
+    if (normalizeConfiguredSpeechProviderIdForStartup(key) === providerId) {
+      return isConfigActivationValueEnabled(providerConfig);
+    }
+  }
+  return undefined;
+}
+
+function addProviderIfEnabled(
+  target: Set<string>,
+  ttsConfig: Record<string, unknown>,
+  providerId: unknown,
+): void {
+  const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
+  if (!normalized) {
+    return;
+  }
+  if (resolveProviderConfigActivation(ttsConfig, normalized) !== false) {
+    target.add(normalized);
+  }
+}
+
+function findActivePersona(
+  ttsConfig: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const personaId = normalizeOptionalLowercaseString(ttsConfig.persona);
+  if (!personaId || !isRecord(ttsConfig.personas)) {
+    return undefined;
+  }
+  for (const [id, persona] of Object.entries(ttsConfig.personas)) {
+    if (normalizeOptionalLowercaseString(id) === personaId && isRecord(persona)) {
+      return persona;
+    }
+  }
+  return undefined;
+}
+
+function addActivePersonaProvider(target: Set<string>, ttsConfig: Record<string, unknown>): void {
+  const persona = findActivePersona(ttsConfig);
+  if (!persona) {
+    return;
+  }
+  const provider = normalizeConfiguredSpeechProviderIdForStartup(persona.provider);
+  if (!provider) {
+    return;
+  }
+  const rootActivation = resolveProviderConfigActivation(ttsConfig, provider);
+  const personaActivation = resolveProviderConfigActivation(persona, provider);
+  if ((personaActivation ?? rootActivation) !== false) {
+    target.add(provider);
+  }
+}
+
+function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  addProviderIfEnabled(target, value, value.provider);
+  addActivePersonaProvider(target, value);
+
+  if (isRecord(value.providers)) {
+    for (const [providerId, providerConfig] of Object.entries(value.providers)) {
+      if (isConfigActivationValueEnabled(providerConfig)) {
+        addProviderIfEnabled(target, value, providerId);
+      }
+    }
+  }
+  for (const [key, providerConfig] of Object.entries(value)) {
+    if (isTtsConfigReservedKey(key) || !isRecord(providerConfig)) {
+      continue;
+    }
+    if (isConfigActivationValueEnabled(providerConfig)) {
+      addProviderIfEnabled(target, value, key);
+    }
+  }
+}
+
+/** Collects active Talk and TTS provider ids across root, agent, channel, and plugin config. */
+export function collectConfiguredSpeechProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const configured = new Set<string>();
+  addConfiguredTtsProviderIds(configured, resolveEffectiveTtsConfig(config));
+  const talkProviderId = resolveConfiguredTalkSpeechProviderId(config);
+  if (talkProviderId) {
+    configured.add(talkProviderId.toLowerCase());
+  }
+
+  withAgentRosterFactsBatch(config, () => {
+    for (const agent of listAgentEntries(config)) {
+      addConfiguredTtsProviderIds(
+        configured,
+        resolveEffectiveTtsConfig(config, { agentId: agent.id }),
+      );
+    }
+  });
+
+  const channels = config.channels;
+  if (isRecord(channels)) {
+    for (const [channelId, channelConfig] of Object.entries(channels)) {
+      if (!isRecord(channelConfig)) {
+        continue;
+      }
+      addConfiguredTtsProviderIds(configured, resolveEffectiveTtsConfig(config, { channelId }));
+      if (isRecord(channelConfig.voice)) {
+        addConfiguredTtsProviderIds(configured, channelConfig.voice.tts);
+      }
+      if (isRecord(channelConfig.accounts)) {
+        for (const [accountId, accountConfig] of Object.entries(channelConfig.accounts)) {
+          if (!isRecord(accountConfig)) {
+            continue;
+          }
+          addConfiguredTtsProviderIds(
+            configured,
+            resolveEffectiveTtsConfig(config, { channelId, accountId }),
+          );
+          if (isRecord(accountConfig.voice)) {
+            addConfiguredTtsProviderIds(configured, accountConfig.voice.tts);
+          }
+        }
+      }
+    }
+  }
+
+  const pluginEntries = config.plugins?.entries;
+  if (isRecord(pluginEntries)) {
+    for (const entry of Object.values(pluginEntries)) {
+      if (isRecord(entry) && isRecord(entry.config)) {
+        addConfiguredTtsProviderIds(configured, entry.config.tts);
+      }
+    }
+  }
+
+  return configured;
+}

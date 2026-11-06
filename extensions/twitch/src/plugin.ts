@@ -1,0 +1,396 @@
+import { StaticAuthProvider } from "@twurple/auth";
+import { ChatClient } from "@twurple/chat";
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+  type PluginRuntime,
+} from "openclaw/plugin-sdk/channel-core";
+import {
+  createAccountStatusSink,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createLoggedPairingApprovalNotifier,
+  createPairingPrefixStripper,
+} from "openclaw/plugin-sdk/channel-pairing";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { removeClientManager } from "./client-manager-registry.js";
+import { TwitchConfigSchema } from "./config-schema.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  resolveDefaultTwitchAccountId,
+  resolveTwitchAccountContext,
+  twitchConfigAdapter,
+  type ResolvedTwitchAccount,
+} from "./config.js";
+import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
+import { resolveTwitchTargets } from "./resolver.js";
+import { twitchSetupPlugin } from "./setup-surface.js";
+import { normalizeTwitchMessagingTarget } from "./target.js";
+import type { ChannelLogSink, ChannelPlugin, TwitchAccountConfig } from "./types.js";
+import { isAccountConfigured, normalizeToken } from "./utils/twitch.js";
+
+function readSendValue(value: unknown): string | undefined {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    ? String(value).trim()
+    : undefined;
+}
+
+export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
+  createChatChannelPlugin<ResolvedTwitchAccount>({
+    pairing: {
+      idLabel: "twitchUserId",
+      normalizeAllowEntry: createPairingPrefixStripper(/^(twitch:)?user:?/i),
+      notifyApproval: createLoggedPairingApprovalNotifier(
+        ({ id }) => `Pairing approved for user ${id} (notification sent via chat if possible)`,
+        console.warn,
+      ),
+    },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const channel = normalizeTwitchMessagingTarget(target);
+        return (
+          Boolean(channel) &&
+          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+            (current) => current != null && normalizeTwitchMessagingTarget(current) === channel,
+          )
+        );
+      },
+    },
+    outbound: twitchOutbound,
+    base: {
+      id: "twitch",
+      meta: {
+        id: "twitch",
+        label: "Twitch",
+        selectionLabel: "Twitch (Chat)",
+        docsPath: "/channels/twitch",
+        blurb: "Twitch chat integration",
+        aliases: ["twitch-chat"],
+      },
+      setupContract: twitchSetupPlugin.setupContract,
+      setupWizard: twitchSetupPlugin.setupWizard,
+      reload: twitchSetupPlugin.reload,
+      capabilities: {
+        chatTypes: ["group"],
+      },
+      messaging: {
+        normalizeTarget: normalizeTwitchMessagingTarget,
+        targetResolver: {
+          looksLikeId: (input) => Boolean(normalizeTwitchMessagingTarget(input)),
+          hint: "<channel-name>",
+        },
+        inferTargetChatType: ({ to }) => (normalizeTwitchMessagingTarget(to) ? "group" : undefined),
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const channel = normalizeTwitchMessagingTarget(target);
+          if (!channel) {
+            return null;
+          }
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "twitch",
+            accountId,
+            recipientSessionExact: true,
+            peer: { kind: "group", id: channel },
+            chatType: "group",
+            from: `twitch:channel:${channel}`,
+            to: channel,
+          });
+        },
+      },
+      message: twitchMessageAdapter,
+      configSchema: buildChannelConfigSchema(TwitchConfigSchema),
+      config: {
+        ...twitchConfigAdapter,
+        describeAccount: (account: TwitchAccountConfig | undefined) =>
+          account
+            ? describeAccountSnapshot({
+                account,
+                configured: isAccountConfigured(account, account.accessToken),
+              })
+            : {
+                accountId: DEFAULT_ACCOUNT_ID,
+                enabled: false,
+                configured: false,
+              },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        extractToolSend: ({ args }) => {
+          const to = readSendValue(args.to);
+          const message = readSendValue(args.message);
+          return to && message ? { to, message } : null;
+        },
+        // Core owns send execution so receipts, queue settlement, and mirrors agree.
+      },
+      resolver: {
+        resolveTargets: async ({ cfg, accountId, inputs, kind, runtime }) => {
+          const account = getAccountConfig(cfg, accountId ?? resolveDefaultTwitchAccountId(cfg));
+          if (!account) {
+            return inputs.map((input) => ({
+              input,
+              resolved: false,
+              note: "account not configured",
+            }));
+          }
+
+          const log: ChannelLogSink = {
+            info: (msg) => runtime.log(msg),
+            warn: (msg) => runtime.log(msg),
+            error: (msg) => runtime.error(msg),
+            debug: (msg) => runtime.log(msg),
+          };
+          return await resolveTwitchTargets(inputs, account, kind, log);
+        },
+      },
+      status: createComputedAccountStatusAdapter<ResolvedTwitchAccount>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
+        probeAccount: async ({ account, timeoutMs }) => {
+          let client: ChatClient | undefined;
+          try {
+            return await runChannelProbe(
+              undefined,
+              async () => {
+                if (!account.accessToken || !account.username) {
+                  return {
+                    ok: false,
+                    error: "missing credentials (accessToken, username)",
+                    username: account.username,
+                  };
+                }
+
+                const rawToken = normalizeToken(account.accessToken.trim());
+                const authProvider = new StaticAuthProvider(account.clientId ?? "", rawToken);
+
+                const probeClient = new ChatClient({ authProvider });
+                client = probeClient;
+
+                const connectionPromise = new Promise<void>((resolve, reject) => {
+                  let settled = false;
+
+                  const cleanup = () => {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
+                    authSuccessListener.unbind();
+                    disconnectListener.unbind();
+                    authFailListener.unbind();
+                  };
+
+                  const authSuccessListener = probeClient.onAuthenticationSuccess(() => {
+                    cleanup();
+                    resolve();
+                  });
+
+                  const disconnectListener = probeClient.onDisconnect((_manually, reason) => {
+                    cleanup();
+                    reject(reason || new Error("Disconnected"));
+                  });
+
+                  const authFailListener = probeClient.onAuthenticationFailure(() => {
+                    cleanup();
+                    reject(new Error("Authentication failed"));
+                  });
+                });
+
+                await raceWithTimeout(
+                  () => {
+                    probeClient.connect();
+                    return connectionPromise;
+                  },
+                  timeoutMs,
+                  () => {
+                    throw new Error(`timeout after ${timeoutMs}ms`);
+                  },
+                );
+
+                client.quit();
+                client = undefined;
+
+                return {
+                  ok: true,
+                  connected: true,
+                  username: account.username,
+                  channel: account.channel,
+                };
+              },
+              (error) => ({
+                ok: false,
+                error: formatErrorMessage(error),
+                username: account.username,
+                channel: account.channel,
+              }),
+            );
+          } finally {
+            if (client) {
+              try {
+                client.quit();
+              } catch {
+                // Ignore cleanup errors
+              }
+            }
+          }
+        },
+        collectStatusIssues: (accounts) => {
+          const issues: ChannelStatusIssue[] = [];
+
+          for (const entry of accounts) {
+            const accountId = entry.accountId;
+
+            if (!accountId) {
+              continue;
+            }
+
+            const addIssue = (kind: ChannelStatusIssue["kind"], message: string, fix: string) =>
+              issues.push({ channel: "twitch", accountId, kind, message, fix });
+
+            if (!entry.configured) {
+              addIssue(
+                "config",
+                "Twitch account is not properly configured",
+                "Add required fields: username, accessToken, and clientId to your account configuration",
+              );
+              continue;
+            }
+
+            if (entry.enabled === false) {
+              addIssue(
+                "config",
+                "Twitch account is disabled",
+                "Set enabled: true in your account configuration to enable this account",
+              );
+              continue;
+            }
+
+            if (entry.lastError) {
+              addIssue(
+                "runtime",
+                `Last error: ${entry.lastError}`,
+                "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
+              );
+            }
+
+            if (
+              !entry.running &&
+              !entry.lastStartAt &&
+              !entry.lastInboundAt &&
+              !entry.lastOutboundAt
+            ) {
+              addIssue(
+                "runtime",
+                "Account has never connected successfully",
+                "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
+              );
+            }
+
+            if (entry.running && entry.lastStartAt) {
+              const uptime = Date.now() - entry.lastStartAt;
+              const daysSinceStart = uptime / (1000 * 60 * 60 * 24);
+              if (daysSinceStart > 7) {
+                addIssue(
+                  "runtime",
+                  `Connection has been running for ${Math.floor(daysSinceStart)} days`,
+                  "Consider restarting the connection periodically to refresh the connection. Twitch tokens may expire after long periods.",
+                );
+              }
+            }
+          }
+
+          return issues;
+        },
+        resolveAccountSnapshot: ({ account, cfg }) => {
+          const { configured } = resolveTwitchAccountContext(cfg, account.accountId);
+          return {
+            accountId: account.accountId,
+            enabled: account.enabled !== false,
+            configured,
+          };
+        },
+      }),
+      gateway: {
+        startAccount: async (ctx): Promise<void> => {
+          const account = ctx.account;
+          const accountId = ctx.accountId;
+          // SAFETY: Gateway startup supplies the full registered runtime behind its context-only public type.
+          const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+          if (!channelRuntime?.inbound?.buildContext) {
+            throw new Error("Twitch requires its registered channel runtime context builder");
+          }
+          const statusSink = createAccountStatusSink({
+            accountId,
+            setStatus: ctx.setStatus,
+          });
+
+          statusSink({
+            running: true,
+            lastStartAt: Date.now(),
+            lastError: null,
+            lifecycle: "starting",
+          });
+
+          ctx.log?.info(`Starting Twitch connection for ${account.username}`);
+
+          // Keep startAccount pending until abort fires; otherwise the channel
+          // supervisor reads the settled task as `channel exited without an
+          // error` and triggers a restart loop. See #60071.
+          try {
+            await runPassiveAccountLifecycle({
+              abortSignal: ctx.abortSignal,
+              start: async () => {
+                // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+                const { monitorTwitchProvider } = await import("./monitor.js");
+                return monitorTwitchProvider({
+                  account,
+                  accountId,
+                  channelRuntime,
+                  config: ctx.cfg,
+                  runtime: ctx.runtime,
+                  abortSignal: ctx.abortSignal,
+                  statusSink,
+                });
+              },
+              stop: async (monitor) => {
+                await monitor.stop();
+              },
+            });
+          } catch (error) {
+            ctx.setStatus?.({
+              accountId,
+              running: false,
+              lastStopAt: Date.now(),
+            });
+            throw error;
+          }
+        },
+        stopAccount: async (ctx): Promise<void> => {
+          const account = ctx.account;
+          const accountId = ctx.accountId;
+
+          await removeClientManager(accountId);
+
+          ctx.setStatus?.({
+            accountId,
+            running: false,
+            lastStopAt: Date.now(),
+          });
+
+          ctx.log?.info(`Stopped Twitch connection for ${account.username}`);
+        },
+      },
+    },
+  });

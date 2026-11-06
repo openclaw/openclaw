@@ -1,0 +1,356 @@
+import path from "node:path";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { expressionBuilder } from "kysely";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { resolveStateDir } from "../config/state-dir.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
+import { hasTemplateDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
+import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
+import {
+  getAgentDeletionJournalStatus,
+  loadAgentDeletionJournalStatus,
+  seedAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
+import type {
+  AgentDatabaseDeletionSnapshot,
+  AgentDatabaseDeletionWorkerSnapshot,
+  AgentDeletionJournalDisposition,
+  AgentDeletionJournalPurpose,
+  AgentDeletionJournalStatus,
+  RetainedAgentDeletion,
+} from "./agent-deletion-journal.types.js";
+import {
+  isAgentDatabaseRegistryChangedError,
+  isOpenClawAgentDatabaseRegistryChange,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+} from "./openclaw-agent-db-registry-listing.js";
+import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import type { DB } from "./openclaw-state-db.generated.js";
+import { resolveDatabasePath, resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+
+class AgentDatabaseDeletionSnapshotChangedError extends Error {
+  constructor() {
+    super("Agent database deletion snapshot changed during consumption.");
+    this.name = "AgentDatabaseDeletionSnapshotChangedError";
+  }
+}
+
+/** These owners require a fresh read, never replay of an already-entered consumer. */
+export function isAgentDatabaseDeletionSnapshotChangedError(error: unknown): boolean {
+  return (
+    error instanceof AgentDatabaseDeletionSnapshotChangedError ||
+    isAgentDatabaseRegistryChangedError(error)
+  );
+}
+
+export async function readAgentDeletionRecoveryHoldsInWorker(
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const statePath = resolveDatabasePath(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { ...options, path: statePath },
+    { type: "agentRecovery.holds", input: { statePath } },
+    { current: true },
+  );
+  return reply?.held ?? [];
+}
+
+export async function readAgentDeletionJournalForCreation(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "agentRecovery.creationJournal", input: { agentId: normalizeAgentId(agentId) } },
+    { current: true },
+  );
+  return reply?.journal;
+}
+
+/** Completed cleanup still retains a deletion tombstone. */
+export function readAgentDeletionJournalStatusInDatabase(
+  database: EngineConnection,
+  agentId: string,
+): AgentDeletionJournalStatus {
+  const cached = getAgentDeletionJournalStatus(database, agentId);
+  if (cached) {
+    return cached;
+  }
+  if (!tableExists(database, "agent_deletion_journal")) {
+    return "absent";
+  }
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
+      .selectFrom("agent_deletion_journal")
+      .select("cleanup_completed")
+      .where("agent_id", "=", normalizeAgentId(agentId)),
+  );
+  return row ? (row.cleanup_completed === 1 ? "complete" : "pending") : "absent";
+}
+
+export async function readAgentDeletionJournalStatusInWorker(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  signal?: AbortSignal,
+): Promise<AgentDeletionJournalStatus> {
+  signal?.throwIfAborted();
+  return loadAgentDeletionJournalStatus(resolveDatabasePath(options), agentId, async () => {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
+      { current: true, signal },
+    );
+    return reply?.status ?? "absent";
+  });
+}
+
+export function parseAgentDeletionDatabasePaths(value: string): string[] {
+  const parsed: unknown = JSON.parse(value);
+  if (isStringArray(parsed)) {
+    return parsed;
+  }
+  throw new Error("Invalid agent deletion database path journal.");
+}
+
+/** Read existing deletion history without initializing or repairing the journal. */
+export function readRetainedAgentDeletionsFromDatabase(
+  database: EngineConnection,
+  statePath: string,
+  purpose: AgentDeletionJournalPurpose = "maintenance",
+  deletedAgents?: AgentDatabaseDeletionWorkerSnapshot["deletedAgents"],
+): AgentDeletionJournalDisposition {
+  let entries: RetainedAgentDeletion[] = [];
+  let missing = false;
+  let unreadableReason: string | undefined;
+  try {
+    missing = !tableExists(database, "agent_deletion_journal");
+    if (!missing) {
+      const eb = expressionBuilder<Pick<DB, "agent_deletion_journal">, "agent_deletion_journal">();
+      const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
+      // Pending stores leave runtime discovery as soon as deletion commits.
+      const included =
+        purpose !== "runtime" ? eb.or([retained, eb("cleanup_completed", "=", 0)]) : retained;
+      entries = executeSqliteQuerySync(
+        database,
+        getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
+          .selectFrom("agent_deletion_journal")
+          .select(["agent_id", "cleanup_completed"])
+          // Read-only upgrade inspection can precede the additive phase migration.
+          .select(
+            tableHasColumn(database, "agent_deletion_journal", "phase")
+              ? "phase"
+              : eb.lit(null).as("phase"),
+          )
+          // Status-only tombstones must not transfer their retained path payloads.
+          .select([
+            eb.case().when(included).then(eb.ref("agent_dir")).else(null).end().as("agent_dir"),
+            eb
+              .case()
+              .when(included)
+              .then(eb.ref("database_paths_json"))
+              .else("[]")
+              .end()
+              .as("database_paths_json"),
+          ])
+          .$if(!deletedAgents, (query) => query.where(included))
+          .orderBy("agent_id", "asc"),
+      ).rows.flatMap((row) => {
+        deletedAgents?.push({
+          agentId: row.agent_id,
+          status: row.cleanup_completed === 1 ? "complete" : "pending",
+        });
+        if (row.agent_dir === null) {
+          return [];
+        }
+        let databasePaths: string[] = [];
+        try {
+          databasePaths = parseAgentDeletionDatabasePaths(row.database_paths_json);
+        } catch (error) {
+          if (purpose === "maintenance") {
+            unreadableReason ??= formatErrorMessage(error);
+          }
+          // Unreadable path details cannot erase this row's known deleted identity.
+        }
+        const entry: RetainedAgentDeletion = {
+          agentId: row.agent_id,
+          agentDir: row.agent_dir,
+          databasePaths: [path.join(row.agent_dir, "openclaw-agent.sqlite"), ...databasePaths],
+          cleanupCompleted: row.cleanup_completed === 1,
+        };
+        if (
+          row.cleanup_completed === 0 &&
+          row.phase == null &&
+          hasTemplateDeletionOwnership({ db: database }, row.agent_id)
+        ) {
+          entry.manualTemplateRemoval = true;
+        }
+        return entry;
+      });
+    }
+  } catch (error) {
+    if (isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    unreadableReason = formatErrorMessage(error);
+  }
+  const held =
+    purpose === "maintenance" && tableExists(database, "migration_sources")
+      ? readAgentDeletionRecoveryHolds({ db: database, path: statePath })
+      : [];
+  if (missing && held.length === 0 && hasPreJournalStateSchema(database)) {
+    return { status: "empty" };
+  }
+  if (missing || unreadableReason !== undefined) {
+    return {
+      status: "unavailable",
+      cause: missing ? "missing" : "unreadable",
+      reason: missing
+        ? "deletion journal missing"
+        : `deletion journal unreadable: ${unreadableReason}`,
+      ...(entries.length || held.length ? { known: { entries, held } } : {}),
+    };
+  }
+  return entries.length || held.length ? { status: "present", entries, held } : { status: "empty" };
+}
+
+/** Read journal and registered-owner facts from one shared-state generation. */
+export function readAgentDatabaseDeletionSnapshot(
+  env: NodeJS.ProcessEnv,
+  purpose: AgentDeletionJournalPurpose = "maintenance",
+): AgentDatabaseDeletionSnapshot | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db, path: statePath }) =>
+      runSqliteReadSnapshotSync(
+        db,
+        () => ({
+          retainedDeletions: readRetainedAgentDeletionsFromDatabase(db, statePath, purpose),
+          registeredAgentDatabases: readRegisteredAgentDatabaseRows(db, statePath, false),
+        }),
+        { operationLabel: "agentDeletionJournal.snapshot" },
+      ),
+    { env },
+  );
+}
+
+type PreparedAgentDatabaseDeletionSnapshot = {
+  snapshot: AgentDatabaseDeletionWorkerSnapshot | undefined;
+  assertCurrent: () => void;
+};
+
+/** Repeated discovery reads keep their original source custody and observe current committed facts. */
+export function prepareAgentDatabaseDeletionSnapshotRead(
+  inputOptions: OpenClawStateDatabaseOptions = {},
+  purpose: AgentDeletionJournalPurpose = "maintenance",
+  signal?: AbortSignal,
+): {
+  read(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
+  readWithCurrentAdmission(): Promise<PreparedAgentDatabaseDeletionSnapshot>;
+  withCurrentSnapshot<T>(
+    consume: (
+      snapshot: AgentDatabaseDeletionWorkerSnapshot | undefined,
+      assertCurrent: () => void,
+    ) => T | Promise<T>,
+  ): Promise<T>;
+} {
+  const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const options = {
+    env,
+    path: path.resolve(inputOptions.path ?? resolveOpenClawStateSqlitePath(env)),
+  };
+  const source = prepareOpenClawStateReadSource(options);
+  const context = source.workerContext();
+  const readSnapshot = async (readContext: typeof context) => {
+    const assertReadCurrent = () => {
+      signal?.throwIfAborted();
+      readContext.maintenanceScope?.assertAdmission();
+      readContext.admission.assertCurrent();
+    };
+    assertReadCurrent();
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      { type: "agentDatabaseDeletion.snapshot", purpose },
+      { context: readContext, current: true, signal },
+    );
+    assertReadCurrent();
+    if (purpose === "runtime-discovery" && reply) {
+      seedAgentDeletionDiscovery(options.path, reply.snapshot.retainedDeletions);
+    }
+    return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
+  };
+  const read = () => readSnapshot(context);
+  return {
+    read,
+    async readWithCurrentAdmission() {
+      return source.withCurrent(readSnapshot);
+    },
+    async withCurrentSnapshot(consume) {
+      let changed: boolean;
+      let assertRegistryCurrent: (() => void) | undefined;
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if (
+          isSessionStoreTopologyChange(change) &&
+          (!assertRegistryCurrent || !isOpenClawAgentDatabaseRegistryChange(change))
+        ) {
+          changed = true;
+        }
+      });
+      try {
+        for (;;) {
+          changed = false;
+          const { snapshot, assertCurrent } = await read();
+          assertCurrent();
+          if (changed) {
+            continue;
+          }
+          // Writer promotion can renew an existing registration without changing discovery facts.
+          const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+            options,
+            (mutation) =>
+              mutation.kind === "upsert" &&
+              mutation.sources.every((registration) =>
+                snapshot?.registeredAgentDatabases.some(
+                  (entry) =>
+                    entry.agentId === registration.agentId &&
+                    entry.path === registration.path &&
+                    entry.schemaVersion === registration.schemaVersion,
+                ),
+              ),
+          );
+          assertRegistryCurrent = registry.assertCurrent;
+          // Host commits publish before worker replies; consume before yielding again.
+          // Once invoked, the operation is never replayed, including its later failures.
+          return await consume(snapshot, () => {
+            assertCurrent();
+            if (changed) {
+              throw new AgentDatabaseDeletionSnapshotChangedError();
+            }
+            assertRegistryCurrent?.();
+          });
+        }
+      } finally {
+        changed = true;
+        stop();
+      }
+    },
+  };
+}

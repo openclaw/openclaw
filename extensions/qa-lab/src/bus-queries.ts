@@ -1,0 +1,156 @@
+import type {
+  QaBusEvent,
+  QaBusMessage,
+  QaBusPollInput,
+  QaBusPollResult,
+  QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
+  QaBusStateSnapshot,
+  QaBusThread,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const DEFAULT_ACCOUNT_ID = "default";
+
+export function normalizeAccountId(raw?: string): string {
+  const trimmed = raw?.trim();
+  return trimmed || DEFAULT_ACCOUNT_ID;
+}
+
+export function cloneMessage(message: QaBusMessage): QaBusMessage {
+  return structuredClone({
+    ...message,
+    attachments: message.attachments ?? [],
+    toolCalls: message.toolCalls,
+  });
+}
+
+function cloneEvent(event: QaBusEvent): QaBusEvent {
+  return event.kind === "thread-created"
+    ? { ...event, thread: { ...event.thread } }
+    : { ...event, message: cloneMessage(event.message) };
+}
+
+export function buildQaBusSnapshot(params: {
+  cursor: number;
+  conversations: Map<string, QaBusSnapshotConversation>;
+  threads: Map<string, QaBusThread>;
+  messages: Map<string, QaBusMessage>;
+  events: QaBusEvent[];
+}): QaBusStateSnapshot {
+  return {
+    cursor: params.cursor,
+    conversations: Array.from(params.conversations.values()).map((conversation) =>
+      Object.assign({}, conversation),
+    ),
+    threads: Array.from(params.threads.values()).map((thread) => Object.assign({}, thread)),
+    messages: Array.from(params.messages.values()).map(cloneMessage),
+    events: params.events.map(cloneEvent),
+  };
+}
+
+export function requireQaBusMessageForAccount(params: {
+  messages: Map<string, QaBusMessage>;
+  input: Pick<QaBusReadMessageInput, "accountId" | "messageId">;
+}): QaBusMessage {
+  const accountId = normalizeAccountId(params.input.accountId);
+  let match: QaBusMessage | undefined;
+  for (const message of params.messages.values()) {
+    if (message.id !== params.input.messageId || message.accountId !== accountId) {
+      continue;
+    }
+    // Reads have no conversation selector, so never guess which chat to mutate.
+    if (match) {
+      throw new Error(
+        `qa-bus message id is ambiguous for selected account: ${params.input.messageId}`,
+      );
+    }
+    match = message;
+  }
+  if (!match) {
+    throw new Error(`qa-bus message not found: ${params.input.messageId}`);
+  }
+  return match;
+}
+
+export function searchQaBusMessages(params: {
+  messages: Map<string, QaBusMessage>;
+  input: QaBusSearchMessagesInput;
+}) {
+  const accountId = normalizeAccountId(params.input.accountId);
+  const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
+  const query = normalizeOptionalLowercaseString(params.input.query);
+  return Array.from(params.messages.values())
+    .filter(
+      (message) =>
+        message.accountId === accountId &&
+        !message.deleted &&
+        (params.input.conversationId === undefined ||
+          message.conversation.id === params.input.conversationId) &&
+        (!params.input.conversationKind ||
+          message.conversation.kind === params.input.conversationKind) &&
+        (params.input.threadId === undefined ||
+          (message.threadId ?? null) === params.input.threadId),
+    )
+    .filter((message) => {
+      if (!query) {
+        return true;
+      }
+      const attachmentHaystack = message.attachments ?? [];
+      const searchableAttachmentText = attachmentHaystack
+        .flatMap((attachment) => [
+          attachment.fileName,
+          attachment.altText,
+          attachment.transcript,
+          attachment.mimeType,
+        ])
+        .filter((value): value is string => Boolean(value))
+        .join(" ")
+        .toLowerCase();
+      const messageText = normalizeOptionalLowercaseString(message.text) ?? "";
+      const searchableToolText = (message.toolCalls ?? [])
+        .map((toolCall) => toolCall.name)
+        .join(" ")
+        .toLowerCase();
+      return `${messageText} ${searchableAttachmentText} ${searchableToolText}`.includes(query);
+    })
+    .slice(-limit)
+    .map(cloneMessage);
+}
+
+function resolveQaBusPollStartCursor(params: {
+  currentCursor: number;
+  requestedCursor?: number;
+}): number {
+  const requestedCursor = params.requestedCursor ?? 0;
+  return params.currentCursor < requestedCursor ? 0 : requestedCursor;
+}
+
+export function pollQaBusEvents(params: {
+  events: QaBusEvent[];
+  cursor: number;
+  input?: QaBusPollInput;
+  isAdoptedInbound: (eventCursor: number) => boolean;
+}): QaBusPollResult {
+  const accountId = normalizeAccountId(params.input?.accountId);
+  const effectiveStartCursor = resolveQaBusPollStartCursor({
+    currentCursor: params.cursor,
+    requestedCursor: params.input?.cursor,
+  });
+  const limit = Math.max(1, Math.min(params.input?.limit ?? 100, 500));
+  const matchingEvents = params.events.filter(
+    (event) =>
+      event.accountId === accountId &&
+      event.cursor > effectiveStartCursor &&
+      (event.kind !== "inbound-message" || !params.isAdoptedInbound(event.cursor)),
+  );
+  const page = matchingEvents.slice(0, limit);
+  // A limited page may advance only through events it returns. Jumping to the
+  // bus-wide cursor would make every remaining account event unreachable.
+  const nextCursor = matchingEvents.length > page.length ? page.at(-1)?.cursor : params.cursor;
+  return {
+    cursor: nextCursor ?? params.cursor,
+    events: page.map(cloneEvent),
+  };
+}

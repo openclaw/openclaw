@@ -1,0 +1,81 @@
+/**
+ * Shared TypeBox schema helpers for agent tools.
+ *
+ * Tool definitions use these helpers for channel targets and common optional
+ * numeric fields so provider-facing schemas stay consistent.
+ */
+import { Type, type TOptional, type TString } from "typebox";
+import {
+  CHANNEL_TARGET_DESCRIPTION,
+  CHANNEL_TARGETS_DESCRIPTION,
+} from "../../infra/outbound/channel-target.js";
+export { optionalStringEnum, stringEnum } from "./string-enum.js";
+
+export function requesterProfileSchema(options: { defaultToTurnOwner?: boolean } = {}) {
+  return Type.Optional(
+    Type.String({
+      description: options.defaultToTurnOwner
+        ? "An admitted participant's requester_profile.id. Omit to use the turn's original requester; selection does not establish human intent or approval."
+        : "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  );
+}
+
+/** Describe the intended work; completion is reported by the tool result. */
+export function executionTitleSchema(options: { required: true }): TString;
+export function executionTitleSchema(options?: { required?: false }): TOptional<TString>;
+export function executionTitleSchema(options: { required?: boolean } = {}) {
+  const schema = Type.String({
+    maxLength: 120,
+    description: "Every call: short purpose; never claim success. No secrets.",
+    ...(options.required ? { minLength: 1, pattern: "\\S" } : {}),
+  });
+  return options.required ? schema : Type.Optional(schema);
+}
+
+/** Builds a schema for one outbound channel target. */
+export function channelTargetSchema(options?: { description?: string }) {
+  return Type.String({
+    description: options?.description ?? CHANNEL_TARGET_DESCRIPTION,
+  });
+}
+
+/** Builds a schema for multiple outbound channel targets. */
+export function channelTargetsSchema(options?: { description?: string }) {
+  return Type.Array(
+    channelTargetSchema({ description: options?.description ?? CHANNEL_TARGETS_DESCRIPTION }),
+  );
+}
+
+type IntegerSchemaOptions = {
+  description?: string;
+  maximum?: number;
+};
+
+type NumberSchemaOptions = {
+  description?: string;
+  deprecated?: boolean;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+};
+
+/** Builds an optional finite number schema with caller-provided metadata. */
+export function optionalFiniteNumberSchema(options: NumberSchemaOptions = {}) {
+  return Type.Optional(Type.Number(options));
+}
+
+function optionalIntegerSchema(minimum: number, options: IntegerSchemaOptions) {
+  return Type.Optional(Type.Integer({ minimum, ...options }));
+}
+
+/** Builds an optional positive integer schema. */
+export function optionalPositiveIntegerSchema(options: IntegerSchemaOptions = {}) {
+  return optionalIntegerSchema(1, options);
+}
+
+/** Builds an optional non-negative integer schema. */
+export function optionalNonNegativeIntegerSchema(options: IntegerSchemaOptions = {}) {
+  return optionalIntegerSchema(0, options);
+}

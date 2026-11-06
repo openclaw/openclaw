@@ -1,0 +1,88 @@
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "openclaw/plugin-sdk/routing";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  resolveBrowserConfig,
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserTabCleanupConfig,
+} from "./config.js";
+import { sweepTrackedBrowserTabs } from "./session-tab-registry.js";
+
+const MIN_SWEEP_INTERVAL_MS = 60_000;
+
+function minutesToMs(minutes: number): number {
+  return Math.max(0, Math.floor(minutes * 60_000));
+}
+
+/** Returns true for user-facing sessions whose tabs should be tracked for cleanup. */
+function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
+  return (
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey)
+  );
+}
+
+function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfig {
+  const cfg = getRuntimeConfig();
+  return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
+}
+
+export function startTrackedBrowserTabCleanupTimer(params: {
+  getResolvedBrowserConfig?: () =>
+    | ResolvedBrowserConfig
+    | null
+    | Promise<ResolvedBrowserConfig | null>;
+  isCurrent?: () => boolean;
+  onWarn: (message: string) => void;
+}): () => Promise<void> {
+  let stopped = false;
+  let timer: NodeJS.Timeout | undefined;
+  let running: Promise<unknown> | null = null;
+
+  const schedule = () => {
+    if (stopped || params.isCurrent?.() === false) {
+      return;
+    }
+    let sweepMinutes = 5;
+    try {
+      sweepMinutes = resolveBrowserTabCleanupRuntimeConfig().sweepMinutes;
+    } catch (err) {
+      params.onWarn(`failed to resolve browser tab cleanup config: ${String(err)}`);
+    }
+    timer = setTimeout(run, Math.max(MIN_SWEEP_INTERVAL_MS, minutesToMs(sweepMinutes))).unref();
+  };
+
+  const run = () => {
+    if (stopped || params.isCurrent?.() === false) {
+      return;
+    }
+    running = (async () => {
+      const cleanup = resolveBrowserTabCleanupRuntimeConfig();
+      await sweepTrackedBrowserTabs({
+        idleMs: cleanup.enabled ? minutesToMs(cleanup.idleMinutes) : undefined,
+        maxTabsPerSession: cleanup.enabled ? cleanup.maxTabsPerSession : undefined,
+        ordinaryCleanup: cleanup.enabled,
+        sessionFilter: isPrimaryTrackedBrowserSessionKey,
+        ...params,
+      });
+    })()
+      .catch((error: unknown) => {
+        params.onWarn(`failed to sweep tracked browser tabs: ${String(error)}`);
+      })
+      .finally(() => {
+        running = null;
+        schedule();
+      });
+  };
+
+  schedule();
+  return async () => {
+    stopped = true;
+    clearTimeout(timer);
+    await running?.catch(() => {});
+  };
+}

@@ -1,0 +1,67 @@
+# `@openclaw/ai`
+
+Reusable model API contracts, provider adapters, and streaming primitives from
+OpenClaw. The package supports isolated runtime instances; importing it does not
+register providers globally.
+
+```ts
+import { createLlmRuntime } from "@openclaw/ai";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+
+const runtime = createLlmRuntime();
+registerBuiltInApiProviders(runtime.registry);
+```
+
+Provider-neutral contracts, validation, diagnostics, and event streams are
+available from the package root and focused subpaths such as
+`@openclaw/ai/event-stream`, `@openclaw/ai/transports`, and
+`@openclaw/ai/validation`. No second OpenClaw runtime package is required.
+
+Provider ids, credentials, model catalogs, retries, and failover remain
+application concerns. OpenClaw supplies those policies around this package.
+Host policy (request fetch guarding, secret redaction, strict-tool defaults,
+provider plugin hooks, and diagnostics logging) can be injected with
+`configureAiTransportHost`; the defaults are inert. Node callers that need
+runtime-local policy can use `createNodeLlmRuntime`; it preserves that host across
+provider work without replacing the process default. `createLlmRuntime` continues
+to use the process-default host.
+
+Embedding hosts can implement optional `isLogEnabled(subsystem, level)` to skip
+diagnostic preparation for disabled sinks. Hosts without it retain emission-time
+filtering.
+
+OpenAI HTTP adapters report rejected response status and headers through
+`onResponse` before consuming the error body. Successful streaming responses
+invoke the callback before the first event. Retry and failover policy remains
+with the application.
+
+Anthropic Messages, OpenAI-compatible Chat Completions, Google, Mistral, and
+OpenAI Responses calls stop waiting for payload and response hooks when the
+request signal aborts. A hook can continue running after cancellation; embedding
+hosts can retain that work through `observePendingProviderWork` until it
+settles. Native provider transports get the same payload-hook behavior from
+`applyProviderPayloadHook`.
+
+Hosts that attach request state to async contexts should supply
+`runInDetachedAsyncContext` from a context-free root initialized before requests
+start. Retained HTTP continuation timers use it at creation so completed caller
+state can be collected while the response remains reusable for 90 minutes.
+The default host runs the callback directly, including in browsers.
+
+Tool-call stream producers expose cumulative argument text as `partialJson` on
+the active content block while emitting `toolcall_delta`. This transient buffer
+supports input progress; completed tool calls retain only parsed `arguments`.
+It is the live block, not a per-event snapshot: a consumer that lags behind the
+producer reads the latest value, or none once the call has finished.
+
+The Anthropic and Mistral adapters report unreadable tool descriptors as
+a stream error before sending a model request rather than silently omitting them.
+The pinned Mistral SDK chat client is bundled into the adapter; consumers do not
+need the SDK's full package tree. The SDK's Apache-2.0 license ships as
+`dist/mistral.LICENSE`.
+
+The explicit `@openclaw/ai/internal/anthropic`, `google`, `google-model-family`, `openai`,
+`openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
+`tool-schema` subpaths exist for the OpenClaw application itself.
+They carry no semver guarantee and can change or disappear in any release; do
+not depend on them outside OpenClaw.

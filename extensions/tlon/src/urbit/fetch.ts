@@ -1,0 +1,44 @@
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { validateUrbitBaseUrl } from "./base-url.js";
+import { UrbitUrlError } from "./errors.js";
+
+export async function urbitFetch(params: {
+  baseUrl: string;
+  path: string;
+  init?: RequestInit;
+  ssrfPolicy?: SsrFPolicy;
+  beforeRequest?: () => void;
+  timeoutMs?: number;
+  maxRedirects?: number;
+  signal?: AbortSignal;
+  auditContext?: string;
+}) {
+  const validated = validateUrbitBaseUrl(params.baseUrl);
+  if (!validated.ok) {
+    throw new UrbitUrlError(validated.error);
+  }
+
+  const url = new URL(params.path, validated.baseUrl).toString();
+  const guarded = await fetchWithSsrFGuard({
+    url,
+    beforeRequest: params.beforeRequest,
+    init: params.init,
+    timeoutMs: params.timeoutMs,
+    maxRedirects: params.maxRedirects,
+    signal: params.signal,
+    policy: params.ssrfPolicy,
+    auditContext: params.auditContext,
+  });
+
+  return {
+    ...guarded,
+    release: async () => {
+      // Guard cleanup only closes the dispatcher; captured response clones can
+      // keep cancellation pending, so start it without delaying the release.
+      if (!guarded.response.bodyUsed) {
+        void guarded.response.body?.cancel().catch(() => undefined);
+      }
+      await guarded.release();
+    },
+  };
+}

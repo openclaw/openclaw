@@ -1,0 +1,96 @@
+// The singleton resolves the current request registry or process root on every dispatch,
+// so registry replacement and hooks added after initialization take effect immediately.
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-gateway.types.js";
+import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
+import {
+  createLiveHookRegistryFacade,
+  hookRunnerGlobalState as state,
+} from "./hook-runner-global-state.js";
+import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
+import { createHookRunner, type HookRunner } from "./hooks.js";
+
+/**
+ * Initialize the global hook runner with a plugin registry.
+ * Called on every plugin registry activation and by SDK consumers. The runner
+ * instance stays stable so references captured mid-run keep seeing current hooks.
+ */
+export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
+  state.registry = registry;
+  ensureGlobalHookRunner();
+}
+
+/**
+ * Create the global hook runner without claiming a registry. Its live facade reads
+ * the scoped registry of the current run, so a host that never activated a process
+ * root (a headless `agent exec` run) still dispatches that run's hooks.
+ */
+export function ensureGlobalHookRunner(): HookRunner {
+  if (!state.hookRunner) {
+    state.hookRunner = createHookRunner(createLiveHookRegistryFacade(), {
+      logger: createSubsystemLogger("plugins"),
+      catchErrors: true,
+      failurePolicyByHook: {
+        before_agent_run: "fail-closed",
+        before_install: "fail-closed",
+        before_tool_call: "fail-closed",
+      },
+    });
+  }
+  return state.hookRunner;
+}
+
+/**
+ * Get the global hook runner.
+ * Returns null if plugins haven't been loaded yet.
+ */
+export function getGlobalHookRunner(): HookRunner | null {
+  return state.hookRunner;
+}
+
+/**
+ * Get the registry from the most recent activation or explicit initialization.
+ * Returns null if plugins haven't been loaded yet.
+ */
+export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
+  return state.registry;
+}
+
+export function hasGlobalHooks<K extends PluginHookName>(
+  hookName: K,
+  ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
+): boolean {
+  return state.hookRunner?.hasHooks(hookName, ctx) ?? false;
+}
+
+export async function runGlobalGatewayStopSafely(params: {
+  registry?: GlobalHookRunnerRegistry;
+  event: PluginHookGatewayStopEvent;
+  ctx: PluginHookGatewayContext;
+  onError?: (err: unknown) => void;
+}): Promise<void> {
+  const log = createSubsystemLogger("plugins");
+  const hookRunner = params.registry
+    ? createHookRunner(params.registry, { logger: log })
+    : getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("gateway_stop")) {
+    return;
+  }
+  try {
+    await hookRunner.runGatewayStop(params.event, params.ctx);
+  } catch (err) {
+    if (params.onError) {
+      params.onError(err);
+      return;
+    }
+    log.warn(`gateway_stop hook failed: ${String(err)}`);
+  }
+}
+
+/**
+ * Reset the global hook runner (for testing).
+ */
+export function resetGlobalHookRunner(): void {
+  state.hookRunner = null;
+  state.registry = null;
+}

@@ -1,0 +1,193 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseSecretRef } from "../config/types.secrets.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
+import { isBuiltInDefaultSecretProviderRef } from "../secrets/ref-contract.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import type {
+  PluginManifestCapabilityProviderAuthSignal,
+  PluginManifestCapabilityProviderConfigSignal,
+} from "./manifest.js";
+
+function readPath(root: unknown, path: string | undefined): unknown {
+  if (!path?.trim()) {
+    return root;
+  }
+  let current = root;
+  for (const segment of path.split(".")) {
+    const key = segment.trim();
+    if (!key) {
+      return undefined;
+    }
+    if (!isRecord(current) || !(key in current)) {
+      return undefined;
+    }
+    current = current[key];
+  }
+  return current;
+}
+
+export function manifestConfigSignalPasses(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  signal: PluginManifestCapabilityProviderConfigSignal;
+}): boolean {
+  const root = readPath(params.config, params.signal.rootPath);
+  if (!isRecord(root)) {
+    return false;
+  }
+  const overlay = readPath(root, params.signal.overlayPath);
+  const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
+  const passes = (effectiveConfig: Record<string, unknown>): boolean => {
+    const modeSignal = params.signal.mode;
+    if (modeSignal) {
+      const modePath = modeSignal.path?.trim() || "mode";
+      const mode =
+        normalizeOptionalString(readPath(effectiveConfig, modePath)) ?? modeSignal.default;
+      if (!mode) {
+        return false;
+      }
+      if (modeSignal.allowed?.length && !modeSignal.allowed.includes(mode)) {
+        return false;
+      }
+      if (modeSignal.disallowed?.includes(mode)) {
+        return false;
+      }
+    }
+    const hasValue = (path: string) => {
+      const value = readPath(effectiveConfig, path);
+      const secretRef = parseSecretRef(value, params.config?.secrets?.defaults);
+      if (secretRef?.source === "env") {
+        return (
+          canResolveEnvSecretRefInReadOnlyPath({
+            cfg: params.config,
+            provider: secretRef.provider,
+            id: secretRef.id,
+          }) && Boolean(params.env[secretRef.id]?.trim())
+        );
+      }
+      if (secretRef) {
+        const providerConfig = params.config?.secrets?.providers?.[secretRef.provider];
+        return (
+          providerConfig?.source === secretRef.source ||
+          isBuiltInDefaultSecretProviderRef(params.config ?? {}, secretRef)
+        );
+      }
+      if (typeof value === "string") {
+        return value.trim().length > 0;
+      }
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      if (isRecord(value)) {
+        return Object.keys(value).length > 0;
+      }
+      return value !== undefined && value !== null;
+    };
+    const requiredAny = params.signal.requiredAny ?? [];
+    return (
+      (params.signal.required ?? []).every(hasValue) &&
+      (requiredAny.length === 0 || requiredAny.some(hasValue))
+    );
+  };
+  if (!params.signal.overlayMapPath?.trim()) {
+    return passes(baseConfig);
+  }
+  const overlayMap = readPath(baseConfig, params.signal.overlayMapPath);
+  return (
+    isRecord(overlayMap) &&
+    Object.entries(overlayMap)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .some(([, mapOverlay]) => isRecord(mapOverlay) && passes({ ...baseConfig, ...mapOverlay }))
+  );
+}
+
+function normalizeBaseUrlForManifestGuard(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+export function manifestProviderBaseUrlGuardPasses(params: {
+  config?: OpenClawConfig;
+  guard: PluginManifestCapabilityProviderAuthSignal["providerBaseUrl"];
+}): boolean {
+  const guard = params.guard;
+  if (!guard) {
+    return true;
+  }
+  const providerConfig = params.config?.models?.providers?.[guard.provider];
+  const rawBaseUrl =
+    typeof providerConfig?.baseUrl === "string" && providerConfig.baseUrl.trim()
+      ? providerConfig.baseUrl
+      : guard.defaultBaseUrl;
+  if (!rawBaseUrl) {
+    return false;
+  }
+  const normalizedBaseUrl = normalizeBaseUrlForManifestGuard(rawBaseUrl);
+  return guard.allowedBaseUrls.some(
+    (allowedBaseUrl) => normalizeBaseUrlForManifestGuard(allowedBaseUrl) === normalizedBaseUrl,
+  );
+}
+
+export function manifestPluginSetupProviderEnvVars(
+  plugin: PluginManifestRecord,
+  providerId: string,
+): readonly string[] {
+  return plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars ?? [];
+}
+
+export function hasNonEmptyManifestEnvCandidate(
+  env: NodeJS.ProcessEnv,
+  envVars: readonly string[],
+): boolean {
+  return envVars.some((envVar) => {
+    const key = envVar.trim();
+    return key.length > 0 && Boolean(env[key]?.trim());
+  });
+}
+
+export function hasManifestToolAvailability(params: {
+  plugin: PluginManifestRecord;
+  toolNames: readonly string[];
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  hasAuthForProvider?: (providerId: string) => boolean;
+}): boolean {
+  return params.toolNames.some((toolName) => {
+    const metadata = params.plugin.toolMetadata?.[toolName];
+    if (!metadata) {
+      return true;
+    }
+    const authSignals: PluginManifestCapabilityProviderAuthSignal[] = metadata.authSignals?.length
+      ? metadata.authSignals
+      : [...(metadata.authProviders ?? []), ...(metadata.aliases ?? [])].map((provider) => ({
+          provider,
+        }));
+    if (!metadata.configSignals?.length && authSignals.length === 0) {
+      return true;
+    }
+    if (
+      metadata.configSignals?.some((signal) =>
+        manifestConfigSignalPasses({
+          config: params.config,
+          env: params.env,
+          signal,
+        }),
+      )
+    ) {
+      return true;
+    }
+    return authSignals.some(
+      (signal) =>
+        manifestProviderBaseUrlGuardPasses({
+          config: params.config,
+          guard: signal.providerBaseUrl,
+        }) &&
+        (params.hasAuthForProvider?.(signal.provider) ||
+          hasNonEmptyManifestEnvCandidate(
+            params.env,
+            manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
+          )),
+    );
+  });
+}

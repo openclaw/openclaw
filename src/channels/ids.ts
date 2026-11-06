@@ -1,0 +1,67 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
+import { GENERATED_BUNDLED_CHANNEL_IDS } from "./bundled-channel-ids.generated.js";
+
+export type ChatChannelId = string;
+
+const BUNDLED_CHAT_CHANNEL_ENTRIES = GENERATED_BUNDLED_CHANNEL_IDS.filter(
+  (entry) => entry.configurable !== false,
+)
+  .map((entry) => ({
+    id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
+    aliases: entry.aliases ?? [],
+    label: entry.label?.trim() || undefined,
+    order: entry.order ?? Number.MAX_SAFE_INTEGER,
+  }))
+  .toSorted(
+    (left, right) =>
+      left.order - right.order || left.id.localeCompare(right.id, "en", { sensitivity: "base" }),
+  );
+const CHAT_CHANNEL_ID_SET = new Set(BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id));
+
+/**
+ * Stable built-in channel order derived from generated bundled channel metadata.
+ */
+export const CHAT_CHANNEL_ORDER = Object.freeze(
+  BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id),
+);
+
+/**
+ * Alias retained for callers that still refer to chat channel ordering as channel ids.
+ */
+export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
+
+const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.fromEntries(
+  BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
+    entry.aliases.map((alias) => [alias, entry.id] as const),
+  ),
+);
+
+/** Finds the generated operator-facing label for a built-in channel id or alias. */
+export function findChatChannelLabel(raw?: string | null): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
+  return BUNDLED_CHAT_CHANNEL_ENTRIES.find((entry) => entry.id === resolved)?.label;
+}
+
+function normalizeRuntimeBundledChatChannelId(normalized: string): ChatChannelId | null {
+  return (
+    listBundledChannelCatalogEntries().find(
+      (entry) => entry.id === normalized || entry.aliases.includes(normalized),
+    )?.id ?? null
+  );
+}
+
+export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return null;
+  }
+  const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
+  return CHAT_CHANNEL_ID_SET.has(resolved)
+    ? resolved
+    : normalizeRuntimeBundledChatChannelId(normalized);
+}

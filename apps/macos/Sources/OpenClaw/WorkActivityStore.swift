@@ -1,0 +1,209 @@
+import Foundation
+import Observation
+import OpenClawKit
+import OpenClawProtocol
+import SwiftUI
+
+@MainActor
+@Observable
+final class WorkActivityStore {
+    static let shared = WorkActivityStore()
+
+    struct Activity: Equatable {
+        let sessionKey: String
+        let role: SessionRole
+        let kind: ActivityKind
+        let label: String
+        let startedAt: Date
+        var lastUpdate: Date
+    }
+
+    private(set) var current: Activity?
+    private(set) var iconState: IconState = .idle
+    private(set) var lastToolUpdatedAt: Date?
+
+    private var jobs: [String: Activity] = [:]
+    private var tools: [String: Activity] = [:]
+    private var currentSessionKey: String?
+    private var toolCleanupOwners: [String: UUID] = [:]
+
+    private(set) var mainSessionKey = "main"
+    private let toolResultGrace: TimeInterval = 2.0
+
+    func reset() {
+        self.jobs.removeAll()
+        self.tools.removeAll()
+        self.toolCleanupOwners.removeAll()
+        self.currentSessionKey = nil
+        self.lastToolUpdatedAt = nil
+        self.refreshDerivedState()
+    }
+
+    func handleJob(sessionKey: String, state: String) {
+        let isStart = state.lowercased() == "started" || state.lowercased() == "streaming"
+        if isStart {
+            let activity = Activity(
+                sessionKey: sessionKey,
+                role: self.role(for: sessionKey),
+                kind: .job,
+                label: "job",
+                startedAt: Date(),
+                lastUpdate: Date())
+            self.jobs[sessionKey] = activity
+            self.updateCurrentSession(with: activity)
+        } else {
+            // Job ended (done/error/aborted/etc). Clear everything for this session.
+            self.clearTool(sessionKey: sessionKey)
+            if self.jobs.removeValue(forKey: sessionKey) != nil {
+                self.didClearActivity(sessionKey: sessionKey)
+            }
+        }
+    }
+
+    func handleTool(
+        sessionKey: String,
+        phase: String,
+        name: String?,
+        meta: String?,
+        args: [String: OpenClawProtocol.AnyCodable]?)
+    {
+        let displayCall = ToolDisplayRegistry.displayCall(name: name, args: args.map { AnyCodable($0) })
+        let toolKind = Self.mapToolKind(displayCall.name)
+        let label = Self.buildLabel(name: name, meta: meta, args: args)
+        if phase.lowercased() == "start" {
+            self.lastToolUpdatedAt = Date()
+            // Session keys can recur after reset; old grace tasks must never regain ownership.
+            self.toolCleanupOwners[sessionKey] = UUID()
+            let activity = Activity(
+                sessionKey: sessionKey,
+                role: self.role(for: sessionKey),
+                kind: .tool(toolKind),
+                label: label,
+                startedAt: Date(),
+                lastUpdate: Date())
+            self.tools[sessionKey] = activity
+            self.updateCurrentSession(with: activity)
+        } else {
+            // Delay removal slightly to avoid flicker on rapid result/start bursts.
+            let key = sessionKey
+            guard let owner = self.toolCleanupOwners[key] else { return }
+            Task { [weak self] in
+                let nsDelay = UInt64((self?.toolResultGrace ?? 0) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: nsDelay)
+                guard let self, self.toolCleanupOwners[key] == owner else { return }
+                self.lastToolUpdatedAt = Date()
+                self.clearTool(sessionKey: key)
+            }
+        }
+    }
+
+    func resolveIconState(override selection: IconOverrideSelection) {
+        self.iconState = selection.fixedIconState() ?? self.deriveIconState()
+    }
+
+    private func updateCurrentSession(with activity: Activity) {
+        // Main session preempts immediately.
+        if activity.role == .main || self.currentSessionKey.map(self.isActive(sessionKey:)) != true {
+            self.currentSessionKey = activity.sessionKey
+        }
+        self.refreshDerivedState()
+    }
+
+    func setMainSessionKey(_ sessionKey: String) {
+        let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard trimmed != self.mainSessionKey else { return }
+        self.mainSessionKey = trimmed
+        if let current = self.currentSessionKey, !self.isActive(sessionKey: current) {
+            self.pickNextSession()
+        }
+        self.refreshDerivedState()
+    }
+
+    private func clearTool(sessionKey: String) {
+        guard self.tools.removeValue(forKey: sessionKey) != nil else { return }
+        self.toolCleanupOwners.removeValue(forKey: sessionKey)
+        self.didClearActivity(sessionKey: sessionKey)
+    }
+
+    private func didClearActivity(sessionKey: String) {
+        if self.currentSessionKey == sessionKey, !self.isActive(sessionKey: sessionKey) {
+            self.pickNextSession()
+        }
+        self.refreshDerivedState()
+    }
+
+    private func pickNextSession() {
+        // Prefer main if present.
+        if self.isActive(sessionKey: self.mainSessionKey) {
+            self.currentSessionKey = self.mainSessionKey
+            return
+        }
+
+        // Otherwise, pick most recent by lastUpdate across job/tool.
+        let keys = Set(self.jobs.keys).union(self.tools.keys)
+        let next = keys.max(by: { self.lastUpdate(for: $0) < self.lastUpdate(for: $1) })
+        self.currentSessionKey = next
+    }
+
+    private func role(for sessionKey: String) -> SessionRole {
+        sessionKey == self.mainSessionKey ? .main : .other
+    }
+
+    private func isActive(sessionKey: String) -> Bool {
+        self.jobs[sessionKey] != nil || self.tools[sessionKey] != nil
+    }
+
+    private func lastUpdate(for sessionKey: String) -> Date {
+        max(self.jobs[sessionKey]?.lastUpdate ?? .distantPast, self.tools[sessionKey]?.lastUpdate ?? .distantPast)
+    }
+
+    private func currentActivity(for sessionKey: String) -> Activity? {
+        // Prefer tool overlay if present, otherwise job.
+        self.tools[sessionKey] ?? self.jobs[sessionKey]
+    }
+
+    private func refreshDerivedState() {
+        if let key = self.currentSessionKey, !self.isActive(sessionKey: key) {
+            self.currentSessionKey = nil
+        }
+        self.current = self.currentSessionKey.flatMap { self.currentActivity(for: $0) }
+        self.iconState = self.deriveIconState()
+    }
+
+    private func deriveIconState() -> IconState {
+        guard let sessionKey = self.currentSessionKey,
+              let activity = self.currentActivity(for: sessionKey)
+        else { return .idle }
+
+        switch activity.role {
+        case .main: return .workingMain(activity.kind)
+        case .other: return .workingOther(activity.kind)
+        }
+    }
+
+    private static func mapToolKind(_ name: String?) -> ToolKind {
+        switch name?.lowercased() {
+        case "bash", "shell": .bash
+        case "read": .read
+        case "write": .write
+        case "edit": .edit
+        case "attach": .attach
+        default: .other
+        }
+    }
+
+    private static func buildLabel(
+        name: String?,
+        meta: String?,
+        args: [String: OpenClawProtocol.AnyCodable]?) -> String
+    {
+        let wrappedArgs = args.map { OpenClawKit.AnyCodable($0.mapValues(\.foundationValue)) }
+        let display = ToolDisplayRegistry.resolve(name: name ?? "tool", args: wrappedArgs, meta: meta)
+        if let detail = display.detailLine, !detail.isEmpty {
+            return "\(display.label): \(detail)"
+        }
+
+        return display.label
+    }
+}

@@ -1,0 +1,112 @@
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+} from "openclaw/plugin-sdk/media-understanding";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { setDeepgramQueryParam } from "./audio-query.js";
+
+export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
+export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
+
+function readDeepgramTranscript(payload: Record<string, unknown>): string | undefined {
+  const results = asOptionalRecord(payload.results);
+  if (!results) {
+    return undefined;
+  }
+  if (!Array.isArray(results.channels)) {
+    throw new Error("Audio transcription failed: malformed JSON response");
+  }
+  const transcripts: string[] = [];
+  for (const rawChannel of results.channels) {
+    const channel = asOptionalRecord(rawChannel);
+    if (!channel) {
+      return undefined;
+    }
+    if (!Array.isArray(channel.alternatives)) {
+      throw new Error("Audio transcription failed: malformed JSON response");
+    }
+    const alternative = asOptionalRecord(channel.alternatives[0]);
+    if (!alternative || alternative.transcript === undefined) {
+      return undefined;
+    }
+    if (typeof alternative.transcript !== "string") {
+      throw new Error("Audio transcription failed: malformed JSON response");
+    }
+    transcripts.push(alternative.transcript.trim());
+  }
+  // Multichannel results contain independent tracks, not alternative hypotheses.
+  // Retain the best transcript per track in provider order, including repeats.
+  return transcripts.length ? transcripts.filter(Boolean).join("\n\n") : undefined;
+}
+
+export async function transcribeDeepgramAudio(
+  params: AudioTranscriptionRequest,
+): Promise<AudioTranscriptionResult> {
+  const {
+    assertOkOrThrowHttpError,
+    postTranscriptionRequest,
+    readProviderJsonObjectResponse,
+    resolveProviderHttpRequestConfigWithOriginTrust,
+    requireTranscriptionText,
+  } = await import("openclaw/plugin-sdk/provider-http");
+  const { isDeepgramFluxModel, transcribeDeepgramFluxAudio } = await import("./audio-flux.js");
+  const model = params.model?.trim() || DEFAULT_DEEPGRAM_AUDIO_MODEL;
+  const flux = isDeepgramFluxModel(model);
+  const requestConfig = resolveProviderHttpRequestConfigWithOriginTrust({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      authorization: `Token ${params.apiKey}`,
+      ...(flux ? {} : { "content-type": params.mime ?? "application/octet-stream" }),
+    },
+    provider: "deepgram",
+    capability: "audio",
+    transport: "media-understanding",
+  });
+  if (flux) {
+    return await transcribeDeepgramFluxAudio({ request: params, requestConfig, model });
+  }
+  const fetchFn = params.fetchFn ?? fetch;
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } = requestConfig;
+
+  const url = new URL(`${baseUrl}/listen`);
+  url.searchParams.set("model", model);
+  if (params.language?.trim()) {
+    url.searchParams.set("language", params.language.trim());
+  }
+  if (params.query) {
+    for (const [key, value] of Object.entries(params.query)) {
+      if (value === undefined) {
+        continue;
+      }
+      setDeepgramQueryParam(url.searchParams, key, value);
+    }
+  }
+
+  const body = new Uint8Array(params.buffer);
+  const { response: res, release } = await postTranscriptionRequest({
+    url: url.toString(),
+    headers,
+    body,
+    timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
+    fetchFn,
+    allowPrivateNetwork,
+    dispatcherPolicy,
+  });
+
+  try {
+    await assertOkOrThrowHttpError(res, "Audio transcription failed");
+
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
+    const transcript = requireTranscriptionText(
+      readDeepgramTranscript(payload),
+      "Audio transcription response missing transcript",
+    );
+    return { text: transcript, model };
+  } finally {
+    await release();
+  }
+}

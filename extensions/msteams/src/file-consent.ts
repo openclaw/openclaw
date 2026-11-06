@@ -1,0 +1,166 @@
+import { lookup } from "node:dns/promises";
+import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { GRAPH_HOSTS, SHAREPOINT_HOSTS } from "./microsoft-hosts.js";
+import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
+import { buildUserAgent } from "./user-agent.js";
+
+/**
+ * Allowlist of domains that are valid targets for file consent uploads.
+ * These are the Microsoft/SharePoint domains that Teams legitimately provides
+ * as upload destinations in the FileConsentCard flow.
+ */
+const CONSENT_UPLOAD_HOST_ALLOWLIST = [
+  ...SHAREPOINT_HOSTS,
+  "storage.live.com",
+  "onedrive.com",
+  "1drv.ms",
+  ...GRAPH_HOSTS,
+] as const;
+
+async function validateConsentUploadUrl(url: string): Promise<void> {
+  const parsed = URL.parse(url);
+  if (!parsed) {
+    throw new Error("Consent upload URL is not a valid URL");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Consent upload URL must use HTTPS, got ${parsed.protocol}`);
+  }
+
+  const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
+  const hostAllowed = CONSENT_UPLOAD_HOST_ALLOWLIST.some(
+    (entry) => hostname === entry || hostname.endsWith(`.${entry}`),
+  );
+  if (!hostAllowed) {
+    throw new Error(`Consent upload URL hostname "${hostname}" is not in the allowed domains`);
+  }
+
+  // Check all resolved addresses to avoid SSRF bypass via mixed public/private answers.
+  let resolved: { address: string }[];
+  try {
+    resolved = await lookup(hostname, { all: true });
+  } catch {
+    throw new Error(`Failed to resolve consent upload URL hostname "${hostname}"`);
+  }
+
+  for (const entry of resolved) {
+    if (isPrivateIpAddress(entry.address)) {
+      throw new Error(`Consent upload URL resolves to a private/reserved IP (${entry.address})`);
+    }
+  }
+}
+
+/**
+ * Build a FileConsentCard attachment for requesting upload permission.
+ * Use this for files >= 4MB in personal (1:1) chats.
+ */
+export function buildFileConsentCard(params: {
+  filename: string;
+  description?: string;
+  sizeInBytes: number;
+  /** Custom context data to include in the card (passed back in the invoke) */
+  context?: Record<string, unknown>;
+}) {
+  return {
+    contentType: "application/vnd.microsoft.teams.card.file.consent",
+    name: params.filename,
+    content: {
+      description: params.description ?? `File: ${params.filename}`,
+      sizeInBytes: params.sizeInBytes,
+      acceptContext: { filename: params.filename, ...params.context },
+      declineContext: { filename: params.filename, ...params.context },
+    },
+  };
+}
+
+/**
+ * Build a FileInfoCard attachment for confirming upload completion.
+ * Send this after successfully uploading the file to the consent URL.
+ */
+export function buildFileInfoCard(params: {
+  filename: string;
+  contentUrl: string;
+  uniqueId: string;
+  fileType: string;
+}) {
+  return {
+    contentType: "application/vnd.microsoft.teams.card.file.info",
+    contentUrl: params.contentUrl,
+    name: params.filename,
+    content: {
+      uniqueId: params.uniqueId,
+      fileType: params.fileType,
+    },
+  };
+}
+
+interface FileConsentUploadInfo {
+  name: string;
+  uploadUrl: string;
+  contentUrl: string;
+  uniqueId: string;
+  fileType: string;
+}
+
+export function parseFileConsentInvoke(activity: { name?: string; value?: unknown }): {
+  action: "accept" | "decline";
+  uploadInfo?: FileConsentUploadInfo;
+  context?: Record<string, unknown>;
+} | null {
+  if (activity.name !== "fileConsent/invoke") {
+    return null;
+  }
+
+  const value = activity.value as {
+    type?: string;
+    action?: string;
+    uploadInfo?: FileConsentUploadInfo;
+    context?: Record<string, unknown>;
+  };
+
+  if (value?.type !== "fileUpload") {
+    return null;
+  }
+
+  return {
+    action: value.action === "accept" ? "accept" : "decline",
+    uploadInfo: value.uploadInfo,
+    context: value.context,
+  };
+}
+
+/**
+ * Upload a file to the consent URL provided by Teams.
+ * The URL is provided in the fileConsent/invoke response after user accepts.
+ */
+export async function uploadToConsentUrl(params: {
+  url: string;
+  buffer: Buffer;
+  contentType?: string;
+}): Promise<void> {
+  await validateConsentUploadUrl(params.url);
+
+  const res = await fetchWithTimeout(
+    params.url,
+    {
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
+        "Content-Type": params.contentType ?? "application/octet-stream",
+        "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
+      },
+      // Snapshot the slice without a Blob stream, which retains async context on Node 24.16–24.19.
+      body: Uint8Array.from(params.buffer),
+    },
+    resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
+  );
+
+  // Consent uploads never consume the response payload. Cancel it on every
+  // status so the fetch implementation can release the underlying connection.
+  await res.body?.cancel().catch(() => undefined);
+  if (!res.ok) {
+    throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
+  }
+}

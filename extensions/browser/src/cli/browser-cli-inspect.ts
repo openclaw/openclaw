@@ -1,0 +1,265 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { Command } from "commander";
+import { inheritOptionFromParent } from "openclaw/plugin-sdk/cli-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { SnapshotResult } from "../browser/client.js";
+import { writeExternalFileWithinOutputRoot } from "../browser/output-files.js";
+import {
+  BROWSER_TAB_REFERENCE_HELP,
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  runBrowserCliCommand,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
+
+function parseOptionalIntegerOption(
+  value: string | undefined,
+  label: string,
+  opts: { min: number },
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed =
+    opts.min === 0 ? parseStrictNonNegativeInteger(value) : parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed < opts.min) {
+    throw new Error(`Invalid ${label}: must be an integer >= ${opts.min}`);
+  }
+  return parsed;
+}
+
+function parseBrowserChoiceOption<const T extends string>(
+  value: string,
+  label: string,
+  choices: readonly T[],
+): T {
+  const choice = choices.find((candidate) => candidate === value);
+  if (choice !== undefined) {
+    return choice;
+  }
+  throw new Error(`Invalid ${label}: expected ${choices.join(" or ")}`);
+}
+
+type PendingDialogSummary = { id: string; type?: string; message?: string };
+
+function readPendingDialogs(browserState: unknown): PendingDialogSummary[] {
+  const dialogs = isRecord(browserState) ? browserState.dialogs : undefined;
+  const pending = isRecord(dialogs) ? dialogs.pending : undefined;
+  if (!Array.isArray(pending)) {
+    return [];
+  }
+  return pending.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.id !== "string") {
+      return [];
+    }
+    return [
+      {
+        id: entry.id,
+        type: typeof entry.type === "string" ? entry.type : undefined,
+        message: typeof entry.message === "string" ? entry.message : undefined,
+      },
+    ];
+  });
+}
+
+function describeDialogBlockedSnapshot(result: SnapshotResult, profile?: string): string {
+  // Keep the selected profile in the suggested command: without it the dialog hook goes to
+  // the default profile, where this target may not exist, and the dialog stays pending.
+  const profileFlag = profile ? ` --browser-profile=${profile}` : "";
+  const lines = [`Snapshot not captured: a pending dialog blocks tab ${result.targetId}.`];
+  for (const dialog of readPendingDialogs(result.browserState)) {
+    const kind = dialog.type ? ` (${dialog.type})` : "";
+    const message = dialog.message ? `: ${JSON.stringify(dialog.message)}` : "";
+    lines.push(`Dialog ${dialog.id}${kind}${message}`);
+    lines.push(
+      `Dismiss it with: openclaw browser dialog${profileFlag} --dismiss --dialog-id ${dialog.id} --target-id ${result.targetId}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function resolveBrowserInspectTimeout(
+  command: Command,
+  parent: BrowserParentOpts,
+  value: string | undefined,
+): { parent: BrowserParentOpts; timeoutMs?: number } {
+  const timeout =
+    command.getOptionValueSource("timeout") === "cli"
+      ? value
+      : inheritOptionFromParent<string>(command, "timeout", "cli");
+  if (timeout === undefined) {
+    return { parent };
+  }
+  const timeoutMs = parseBrowserPositiveIntegerOption(timeout, "--timeout");
+  return { parent: { ...parent, timeout: String(timeoutMs) }, timeoutMs };
+}
+
+export function registerBrowserInspectCommands(
+  browser: Command,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
+) {
+  browser
+    .command("screenshot")
+    .description("Capture a screenshot (prints the saved path)")
+    .argument("[targetId]", BROWSER_TAB_REFERENCE_HELP)
+    .option("--full-page", "Capture full scrollable page", false)
+    .option("--ref <ref>", "ARIA ref from ai snapshot")
+    .option("--element <selector>", "CSS selector for element screenshot")
+    .option(
+      "--labels",
+      "Overlay role refs on the screenshot (works with --full-page, --ref, and --element)",
+      false,
+    )
+    .option("--type <png|jpeg>", "Output type (default: png)", "png")
+    .option("--timeout <ms>", "Timeout in ms")
+    .action(async (targetId: string | undefined, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      const type = parseBrowserChoiceOption(opts.type, "--type", ["png", "jpeg"]);
+      await runBrowserCliCommand(async () => {
+        const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
+        const result = await callBrowserRequest<{ path: string }>(request.parent, {
+          method: "POST",
+          path: "/screenshot",
+          query: profile ? { profile } : undefined,
+          body: {
+            targetId: normalizeOptionalString(targetId),
+            fullPage: Boolean(opts.fullPage),
+            ref: normalizeOptionalString(opts.ref),
+            element: normalizeOptionalString(opts.element),
+            labels: Boolean(opts.labels),
+            type,
+            ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+          },
+        });
+        if (parent?.json) {
+          defaultRuntime.writeJson(result);
+          return;
+        }
+        defaultRuntime.log(shortenHomePath(result.path));
+      }, "inline");
+    });
+
+  browser
+    .command("snapshot")
+    .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
+    .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .option("--limit <n>", "Max nodes (default: 500/800)")
+    .option("--mode <efficient>", "Snapshot preset (efficient)")
+    .option("--efficient", "Use the efficient snapshot preset", false)
+    .option("--interactive", "Role snapshot: interactive elements only", false)
+    .option("--compact", "Role snapshot: compact output", false)
+    .option("--depth <n>", "Role snapshot: max depth")
+    .option("--selector <sel>", "Role snapshot: scope to CSS selector")
+    .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
+    .option("--labels", "Include label overlay screenshot with annotations", false)
+    .option("--urls", "Append discovered link URLs to AI snapshots", false)
+    .option("--out <path>", "Write snapshot to a file")
+    .option("--timeout <ms>", "Timeout in ms")
+    .action(async (opts, cmd: Command) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      const format = parseBrowserChoiceOption(opts.format, "--format", ["aria", "ai"]);
+      const explicitMode =
+        opts.mode === undefined
+          ? undefined
+          : parseBrowserChoiceOption(opts.mode, "--mode", ["efficient"]);
+      const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
+      const configMode =
+        !formatWasExplicit &&
+        format === "ai" &&
+        (await captureRuntimeConfigAsyncReader()()).browser?.snapshotDefaults?.mode === "efficient"
+          ? "efficient"
+          : undefined;
+      const mode =
+        opts.efficient === true || explicitMode === "efficient" ? "efficient" : configMode;
+      const limit = parseOptionalIntegerOption(opts.limit, "--limit", { min: 1 });
+      const depth = parseOptionalIntegerOption(opts.depth, "--depth", { min: 0 });
+      await runBrowserCliCommand(async () => {
+        const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
+        const query: Record<string, string | number | boolean | undefined> = {
+          format,
+          targetId: normalizeOptionalString(opts.targetId),
+          limit,
+          interactive: opts.interactive ? true : undefined,
+          compact: opts.compact ? true : undefined,
+          depth,
+          selector: normalizeOptionalString(opts.selector),
+          frame: normalizeOptionalString(opts.frame),
+          labels: opts.labels ? true : undefined,
+          urls: opts.urls ? true : undefined,
+          mode,
+          profile,
+          ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+        };
+        const result = await callBrowserRequest<SnapshotResult>(request.parent, {
+          method: "GET",
+          path: "/snapshot",
+          query,
+        });
+        const imagePath = result.format === "ai" ? result.imagePath : undefined;
+
+        // A pending dialog answers with an empty payload and blockedByDialog, so the caller
+        // can dismiss the dialog and retry. Outside --json that flag is the only thing that
+        // separates "no capture happened" from a genuinely blank page, so do not print the
+        // empty payload as a result or write it over an existing --out file. --json without
+        // --out keeps returning the full response, dialog details included.
+        if (result.blockedByDialog && (opts.out || !parent?.json)) {
+          throw new Error(describeDialogBlockedSnapshot(result, normalizeOptionalString(profile)));
+        }
+
+        if (opts.out) {
+          const payload =
+            result.format === "ai" ? result.snapshot : JSON.stringify(result, null, 2);
+          await writeExternalFileWithinOutputRoot({
+            path: path.resolve(opts.out),
+            write: async (tempPath) => {
+              await fs.writeFile(tempPath, payload, "utf8");
+            },
+          });
+        }
+
+        if (parent?.json) {
+          defaultRuntime.writeJson(
+            opts.out
+              ? {
+                  ok: true,
+                  out: opts.out,
+                  ...(imagePath ? { imagePath } : {}),
+                }
+              : result,
+          );
+          return;
+        }
+
+        if (opts.out) {
+          defaultRuntime.log(shortenHomePath(opts.out));
+        } else if (result.format === "ai") {
+          defaultRuntime.log(result.snapshot);
+        } else {
+          defaultRuntime.log(
+            result.nodes
+              .map((n) => {
+                const indent = "  ".repeat(Math.min(20, n.depth));
+                const name = n.name ? ` "${n.name}"` : "";
+                const value = n.value ? ` = "${n.value}"` : "";
+                return `${indent}- ${n.role}${name}${value} [ref=${n.ref}]`;
+              })
+              .join("\n"),
+          );
+        }
+        if (imagePath) {
+          defaultRuntime.log(shortenHomePath(imagePath));
+        }
+      }, "inline");
+    });
+}

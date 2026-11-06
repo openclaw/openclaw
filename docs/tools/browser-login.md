@@ -1,0 +1,117 @@
+---
+summary: "Manual logins for browser automation + X/Twitter posting"
+read_when:
+  - You need to log into sites for browser automation
+  - You want to post updates to X/Twitter
+title: "Browser login"
+---
+
+## Manual login (recommended)
+
+When a site requires login, sign in manually in the host browser's `openclaw`
+profile. Automated logins often trigger anti-bot defenses and can lock the account.
+
+For an owner-authorized task, the agent may use owner-supplied credentials through
+browser form fills. Keep credentials out of chat and replies.
+
+Use the host browser (manual login) for both reading (search/threads) and
+posting on X/Twitter and other bot-sensitive sites. Sandboxed browser sessions
+are more likely to trigger bot detection.
+
+Back to the main browser docs: [Browser](/tools/browser).
+
+## Passkeys in headless browsers
+
+Chrome's invisible passkey dialog can block clicks and key presses in headless
+mode. OpenClaw dismisses modal passkey requests in headless Chromium so the site
+can offer another sign-in method, such as a password or one-time code. Passkey
+autofill requests and headed browsers keep Chrome's normal behavior.
+
+Use a headed profile to sign in with a passkey or security key. If a page already
+requested a passkey before OpenClaw connected, navigate to the same URL to reload
+it. Attached and remote browsers must report their headless launch flags; a
+failed detection is logged. `existing-session` profiles are unchanged.
+
+## Which Chrome profile is used?
+
+OpenClaw controls a dedicated Chrome profile named `openclaw` (orange-tinted
+UI), separate from your daily browser profile.
+
+For agent browser tool calls:
+
+- Default choice: the agent uses its isolated `openclaw` browser.
+- Use `profile="user"` only when existing logged-in sessions matter and you
+  are at the computer to click/approve any attach prompt.
+- If you have multiple user-browser profiles, specify the profile explicitly
+  instead of guessing.
+
+Local managed browsers are headless by default. For manual login, use a browser
+host with a desktop session and full Chrome/Chromium; headless shell cannot show
+a login window. If your profile uses headless shell, create a separate profile
+with `executablePath` set to a full browser before signing in. Do not reuse its
+data directory across shell/full distributions. See
+[Browser configuration](/tools/browser/configuration).
+
+On the browser host, set `browser.headless` to `false`. If the selected profile
+has its own `headless` value, set that to `false` too. Remove a
+`OPENCLAW_BROWSER_HEADLESS=1` override from the Gateway process environment, or
+set it to `0`; it takes precedence over config. Do not pass `start --headless`.
+
+Stop an already-running browser before starting it in headed mode. For the
+default `openclaw` profile without a per-profile override:
+
+```bash
+openclaw browser stop
+openclaw config set browser.headless false
+openclaw browser start
+openclaw browser open https://x.com
+```
+
+Sign in through the visible window. You can also ask the agent to open the page
+after the headed configuration is in effect. Keep the same profile when switching
+between headed and headless modes of the same full browser. Do not use
+`reset-profile`, which removes its saved browser data.
+
+For a non-default profile, put `--browser-profile <name>` before the
+subcommand (default is `openclaw`):
+
+```bash
+openclaw browser --browser-profile <name> open https://x.com
+```
+
+## Sandboxing: allow host browser access
+
+If the agent is sandboxed, its `browser` tool calls default to the sandbox
+browser, not the host. To let the agent target the host browser instead:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "non-main",
+        browser: {
+          allowHostControl: true,
+        },
+      },
+    },
+  },
+}
+```
+
+CLI invocations always target the host browser, never the sandbox, so you can
+open the host browser yourself regardless of this setting:
+
+```bash
+openclaw browser --browser-profile openclaw open https://x.com
+```
+
+Once `sandbox.browser.allowHostControl: true` is set, the agent's `browser`
+tool calls can target the host too. Alternatively, disable sandboxing for the
+agent that posts updates.
+
+## Related
+
+- [Browser](/tools/browser)
+- [Browser Linux troubleshooting](/tools/browser-linux-troubleshooting)
+- [Browser WSL2 troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)

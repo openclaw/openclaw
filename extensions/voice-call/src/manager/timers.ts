@@ -1,0 +1,157 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { TerminalStates, type CallId, type CallRecord } from "../types.js";
+import type { CallEndResult, CallManagerContext } from "./context.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
+
+type TimerContext = Pick<
+  CallManagerContext,
+  | "activeCalls"
+  | "maxDurationTimers"
+  | "config"
+  | "transcriptWaiters"
+  | "trackCallWork"
+  | "isStopping"
+>;
+type MaxDurationTimerContext = Pick<
+  TimerContext,
+  "activeCalls" | "maxDurationTimers" | "config" | "trackCallWork" | "isStopping"
+>;
+type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
+
+/** Per-call limits can shorten a call, but never extend the configured cap. */
+export function resolveCallMaxDurationSeconds(
+  call: Pick<CallRecord, "metadata"> | undefined,
+  configuredCap: number,
+): number {
+  const requested = call?.metadata?.maxDurationSeconds;
+  return typeof requested === "number" && Number.isFinite(requested) && requested > 0
+    ? Math.min(requested, configuredCap)
+    : configuredCap;
+}
+
+/** Clear and forget the max-duration timer for a call. */
+export function clearMaxDurationTimer(
+  ctx: Pick<MaxDurationTimerContext, "maxDurationTimers">,
+  callId: CallId,
+): void {
+  const timer = ctx.maxDurationTimers.get(callId);
+  if (timer) {
+    clearTimeout(timer);
+    ctx.maxDurationTimers.delete(callId);
+  }
+}
+
+/** Start or replace the max-duration timer for a call. */
+export function startMaxDurationTimer(params: {
+  ctx: MaxDurationTimerContext;
+  callId: CallId;
+  onTimeout: (callId: CallId) => Promise<CallEndResult>;
+  timeoutMs?: number;
+}): void {
+  clearMaxDurationTimer(params.ctx, params.callId);
+
+  const maxDurationMs =
+    params.timeoutMs === undefined
+      ? resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(
+            params.ctx.activeCalls.get(params.callId),
+            params.ctx.config.maxDurationSeconds,
+          ),
+        )
+      : resolveTimerTimeoutMs(params.timeoutMs, 1);
+  console.log(
+    `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,
+  );
+
+  const timer = setTimeout(() => {
+    const work = (async () => {
+      params.ctx.maxDurationTimers.delete(params.callId);
+      const call = params.ctx.activeCalls.get(params.callId);
+      if (!params.ctx.isStopping() && call && !TerminalStates.has(call.state)) {
+        console.log(
+          `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
+        );
+        try {
+          const result = await params.onTimeout(params.callId);
+          if (!result.success) {
+            console.warn(
+              `[voice-call] Failed to end max-duration call ${params.callId}: ${result.error ?? "unknown error"}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[voice-call] Failed to end max-duration call ${params.callId}: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+    })();
+    params.ctx.trackCallWork(work);
+  }, maxDurationMs);
+
+  params.ctx.maxDurationTimers.set(params.callId, timer);
+}
+
+/** Clear and forget a pending final-transcript waiter. */
+export function clearTranscriptWaiter(ctx: TranscriptWaiterContext, callId: CallId): void {
+  const waiter = ctx.transcriptWaiters.get(callId);
+  if (!waiter) {
+    return;
+  }
+  clearTimeout(waiter.timeout);
+  ctx.transcriptWaiters.delete(callId);
+}
+
+/** Reject a pending transcript waiter during call finalization or error paths. */
+export function rejectTranscriptWaiter(
+  ctx: TranscriptWaiterContext,
+  callId: CallId,
+  reason: string,
+): void {
+  const waiter = ctx.transcriptWaiters.get(callId);
+  if (!waiter) {
+    return;
+  }
+  clearTranscriptWaiter(ctx, callId);
+  waiter.reject(new Error(reason));
+}
+
+/** Resolve a transcript waiter when the matching turn's final transcript arrives. */
+export function resolveTranscriptWaiter(
+  ctx: TranscriptWaiterContext,
+  callId: CallId,
+  transcript: string,
+  turnToken?: string,
+): boolean {
+  const waiter = ctx.transcriptWaiters.get(callId);
+  if (!waiter) {
+    return false;
+  }
+  if (waiter.turnToken && waiter.turnToken !== turnToken) {
+    return false;
+  }
+  clearTranscriptWaiter(ctx, callId);
+  waiter.resolve(transcript);
+  return true;
+}
+
+/** Wait for the next final transcript for a call, optionally scoped to a turn token. */
+export function waitForFinalTranscript(
+  ctx: TimerContext,
+  callId: CallId,
+  turnToken?: string,
+): Promise<string> {
+  if (ctx.transcriptWaiters.has(callId)) {
+    return Promise.reject(new Error("Already waiting for transcript"));
+  }
+
+  const timeoutMs = resolveTimerTimeoutMs(ctx.config.transcriptTimeoutMs, 1);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      ctx.transcriptWaiters.delete(callId);
+      reject(new Error(`Timed out waiting for transcript after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    ctx.transcriptWaiters.set(callId, { resolve, reject, timeout, turnToken });
+  });
+}

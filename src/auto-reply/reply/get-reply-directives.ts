@@ -1,0 +1,735 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../agents/agent-scope.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { listModelAliasCandidates } from "../../agents/model-selection-shared.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  expandExplicitSkillReferences,
+  hasSkillReferenceCandidate,
+} from "../../skills/discovery/chat-command-invocation.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { isExplicitCommandTurn } from "../command-turn-context.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
+import { shouldHandleTextCommands } from "../commands-text-routing.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
+import type {
+  FinalizedRuntimeMsgContext,
+  FinalizedTemplateContext as TemplateContext,
+} from "../templating.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
+import { resolveBlockStreamingChunking } from "./block-streaming.js";
+import { buildCommandContext } from "./commands-context.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
+import {
+  parseInlineSessionDirectives,
+  resolveReplyDirectiveCommand,
+} from "./directive-handling.parse.js";
+import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
+import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
+import { stripMentions } from "./mentions.js";
+import { prepareInlineModelDirectiveMatcher } from "./model-selection-directive.js";
+import { createModelSelectionState } from "./model-selection.js";
+import type { PreparedReplyConversation } from "./prompt-session-context.js";
+import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
+import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
+import { createReplyModelLevelResolver } from "./reply-model-levels.js";
+import {
+  recordReplyPreRunRejection,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import type { TypingController } from "./typing.js";
+
+type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+
+const commandsRegistryLoader = createLazyImportLoader(
+  () => import("../commands-registry.runtime.js"),
+);
+const skillCommandsLoader = createLazyImportLoader(
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
+);
+
+export async function resolveReplyDirectives(params: {
+  ctx: FinalizedRuntimeMsgContext;
+  cfg: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  agentCfg: AgentDefaults;
+  sessionCtx: TemplateContext;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  sessionKey: string;
+  storePath?: string;
+  sessionScope: Parameters<typeof applyInlineDirectiveOverrides>[0]["sessionScope"];
+  conversation: PreparedReplyConversation;
+  isGroup: boolean;
+  triggerBodyNormalized: string;
+  resetTriggered: boolean;
+  commandAuthorized: boolean;
+  defaultProvider: string;
+  defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
+  aliasIndex: ModelAliasIndex;
+  provider: string;
+  model: string;
+  hasResolvedTurnModelOverride?: boolean;
+  typing: TypingController;
+  opts?: InternalGetReplyOptions;
+  skillFilter?: string[];
+  preparedModelCatalog?: ModelCatalogSnapshot;
+}) {
+  const {
+    ctx,
+    cfg,
+    agentId,
+    agentCfg,
+    workspaceDir,
+    sessionCtx,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    conversation,
+    isGroup,
+    triggerBodyNormalized,
+    resetTriggered,
+    commandAuthorized,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+    hasResolvedTurnModelOverride,
+    typing,
+    opts,
+    skillFilter,
+  } = params;
+  let { provider, model } = params;
+  const agentEntry = listAgentEntries(cfg).find(
+    (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+  );
+  const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+
+  const commandText = sessionCtx.commandText;
+  const commandContext = {
+    ctx,
+    cfg,
+    agentId,
+    sessionKey,
+    isGroup,
+    triggerBodyNormalized,
+    commandAuthorized,
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg,
+    surface: command.surface,
+    commandSource: ctx.CommandSource,
+  });
+  const canInterpretTextDirectives =
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    ctx.CommandInterpretationSuppressed !== true &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") === null;
+  const commandTextHasSlash = commandText.includes("/");
+  const configuredModelAliases = commandTextHasSlash
+    ? listModelAliasCandidates(cfg, agentId)
+        .map((candidate) => candidate.alias)
+        .filter(Boolean)
+    : [];
+  const hasConfiguredModelAliases = configuredModelAliases.length > 0;
+  const hasSkillReferences =
+    canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
+  const reservedCommands = new Set<string>();
+  if (hasConfiguredModelAliases) {
+    const { listChatCommands } = await commandsRegistryLoader.load();
+    for (const chatCommand of listChatCommands()) {
+      for (const alias of chatCommand.textAliases) {
+        reservedCommands.add(normalizeLowercaseStringOrEmpty(alias.replace(/^\//, "")));
+      }
+    }
+  }
+
+  const rawAliases = configuredModelAliases.filter(
+    (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
+  );
+  const skillCommandContext = {
+    workspaceDir,
+    cfg,
+    agentId,
+    sessionEntry: targetSessionEntry,
+    sessionKey,
+  };
+
+  // Every directive parser requires a whitespace/start slash, including directives
+  // whose removal exposes a model alias. URLs alone do not need skill-name reservation.
+  const skillCommands =
+    canInterpretTextDirectives &&
+    ((rawAliases.length > 0 && /(?:^|\s)\//u.test(commandText)) || hasSkillReferences)
+      ? await (
+          await skillCommandsLoader.load()
+        ).prepareSkillCommandsForWorkspace({
+          ...skillCommandContext,
+          skillFilter,
+        })
+      : [];
+  for (const skill of skillCommands) {
+    reservedCommands.add(normalizeLowercaseStringOrEmpty(skill.name));
+  }
+
+  const allSkillCommands =
+    hasSkillReferences && skillFilter !== undefined
+      ? await (
+          await skillCommandsLoader.load()
+        ).prepareSkillCommandsForWorkspace({
+          ...skillCommandContext,
+          includeAllowlistHidden: true,
+        })
+      : skillCommands;
+  const explicitSkillReferences = hasSkillReferences
+    ? expandExplicitSkillReferences({
+        text: command.commandBodyNormalized,
+        skillCommands,
+        allSkillCommands,
+      })
+    : undefined;
+  if (explicitSkillReferences?.error) {
+    typing.cleanup();
+    return {
+      kind: "reply" as const,
+      reply: markCommandReplyForDelivery({ text: explicitSkillReferences.error }),
+    };
+  }
+  const hasExplicitSkillInvocation = Boolean(explicitSkillReferences?.skills.length);
+  const canInterpretMessageDirectives = canInterpretTextDirectives && !hasExplicitSkillInvocation;
+
+  const configuredAliases = rawAliases.filter(
+    (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
+  );
+  const commandTurn = ctx.CommandTurn;
+  const commandRegistry =
+    command.isAuthorizedSender &&
+    isExplicitCommandTurn(commandTurn) &&
+    (commandTurn.kind === "native" ? Boolean(commandTurn.commandName) : canInterpretTextDirectives)
+      ? await commandsRegistryLoader.load()
+      : undefined;
+  const explicitDirectiveCommand = resolveReplyDirectiveCommand(
+    commandRegistry
+      ? commandTurn.kind === "native"
+        ? commandRegistry.findCommandByNativeName(commandTurn.commandName ?? "", command.channel, {
+            includeBundledChannelFallback: false,
+          })?.key
+        : commandRegistry.resolveTextCommand(command.commandBodyNormalized, cfg)?.command.key
+      : undefined,
+  );
+  const directiveCommandText =
+    explicitDirectiveCommand && commandTurn.kind === "text-slash"
+      ? normalizeCommandBody(commandText, { botUsername: ctx.BotUsername, preserveArguments: true })
+      : commandText;
+  const agentText =
+    sessionCtx.agentText === commandText ? directiveCommandText : sessionCtx.agentText;
+  const routingCommand: NonNullable<Parameters<typeof parseInlineSessionDirectives>[1]>["command"] =
+    explicitDirectiveCommand
+      ? { kind: commandTurn.kind === "native" ? "native" : "text", name: explicitDirectiveCommand }
+      : undefined;
+  let preparedModelCatalog = params.preparedModelCatalog;
+  let isKnownInlineModel: ((raw: string) => boolean) | undefined;
+  const parseDirectives = (text: string) =>
+    parseInlineSessionDirectives(text, {
+      modelAliases: configuredAliases,
+      isKnownInlineModel,
+      allowStatusDirective: canInterpretMessageDirectives,
+      command: routingCommand,
+    });
+  const cleanStatus = (text: string) =>
+    canInterpretMessageDirectives ? stripInlineStatus(text).cleaned : text;
+  let directives = parseDirectives(directiveCommandText);
+  const rawModel = directives.rawModelDirective?.trim();
+  if (
+    canInterpretMessageDirectives &&
+    !isDirectiveOnly({ directives, cleanedBody: directives.cleaned, ctx, cfg, agentId, isGroup }) &&
+    directives.hasModelDirective &&
+    directives.modelDirectiveSource === "model" &&
+    rawModel &&
+    !rawModel.includes("/") &&
+    !["default", "list", "status"].includes(rawModel.toLowerCase())
+  ) {
+    ({ preparedModelCatalog, isKnownInlineModel } = await prepareInlineModelDirectiveMatcher({
+      cfg,
+      agentId,
+      defaultProvider,
+      defaultModel,
+      aliasIndex: params.aliasIndex,
+      preparedModelCatalog,
+    }));
+    // Qualify before sender projection and reuse the decision when stripping that span.
+    directives = parseDirectives(directiveCommandText);
+  }
+  const hasInlineStatus = directives.hasStatusDirective && directives.cleaned.trim().length > 0;
+  if (hasInlineStatus) {
+    directives = { ...directives, hasStatusDirective: false };
+  }
+  if (
+    isGroup &&
+    ctx.WasMentioned !== true &&
+    directives.hasElevatedDirective &&
+    directives.elevatedLevel !== "off"
+  ) {
+    directives = {
+      ...directives,
+      hasElevatedDirective: false,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+    };
+  }
+  if (
+    isGroup &&
+    ctx.WasMentioned !== true &&
+    directives.hasExecDirective &&
+    directives.execSecurity !== "deny"
+  ) {
+    directives = clearExecInlineDirectives(directives);
+  }
+
+  if (
+    canInterpretMessageDirectives &&
+    !isDirectiveOnly({
+      directives,
+      cleanedBody: directives.cleaned,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+    })
+  ) {
+    // Model browsing and exec placement remain command-only; runtime hints stay on the turn.
+    const modelInfo =
+      directives.modelDirectiveSource !== "alias" &&
+      ["", "list", "status"].includes(directives.rawModelDirective?.trim().toLowerCase() ?? "");
+    const hasExecPolicy =
+      directives.rawExecSecurity !== undefined || directives.rawExecAsk !== undefined;
+    directives = {
+      ...directives,
+      ...(modelInfo
+        ? {
+            hasModelDirective: false,
+            rawModelDirective: undefined,
+            rawModelProfile: undefined,
+            rawModelRuntime: undefined,
+            modelDirectiveSource: undefined,
+            modelScope: undefined,
+            modelScopeConflict: false,
+          }
+        : {}),
+      hasExecDirective: hasExecPolicy,
+      hasExecOptions: hasExecPolicy,
+      execHost: undefined,
+      execNode: undefined,
+      rawExecHost: undefined,
+      rawExecNode: undefined,
+      invalidExecHost: false,
+      invalidExecNode: false,
+    };
+  }
+
+  const unauthorizedReasoningDirectiveAttempt =
+    !command.isAuthorizedSender && directives.hasReasoningDirective;
+  const canInterpretDirectives = canInterpretMessageDirectives || directives.command !== undefined;
+  let cleanedBody = agentText;
+  let inlineCommand: string | undefined;
+  if (!canInterpretDirectives) {
+    directives = clearInlineDirectives(directiveCommandText);
+  } else {
+    const cleanedCommand = cleanStatus(directives.cleaned);
+    const requestedInlineCommand =
+      canInterpretMessageDirectives &&
+      command.isAuthorizedSender &&
+      !routingCommand &&
+      ctx.CommandSource !== "native"
+        ? extractInlineSimpleCommand(cleanedCommand)
+        : null;
+    if (
+      directiveCommandText !== "" &&
+      (cleanedCommand !== directiveCommandText || requestedInlineCommand)
+    ) {
+      const preparedCommandSource = ctx.ChannelContext?.chat?.commandSourceText;
+      const preparedSource =
+        typeof preparedCommandSource === "string" ? preparedCommandSource : undefined;
+      // Reset already projected its payload from rawText; otherwise retain the channel's raw source.
+      const fallbackRawText =
+        resetTriggered || agentText === directiveCommandText ? agentText : ctx.rawText;
+      const normalizeSource = (text: string, stripProviderMentions = isGroup) =>
+        normalizeCommandBody(
+          stripProviderMentions ? stripMentions(text, ctx, cfg, agentId) : text,
+          { botUsername: ctx.BotUsername },
+        );
+      const preparedSourceMatches =
+        preparedSource !== undefined &&
+        normalizeSource(preparedSource, true) === directiveCommandText.trim();
+      // A channel may identify its exact sender span after provider rendering. Accept it only when
+      // provider-owned mention stripping reconstructs the same command body; supplemental context
+      // and arbitrary channel metadata must never become a command source.
+      const rawText = preparedSourceMatches ? preparedSource : fallbackRawText;
+      const contentStart = rawText.length - rawText.trimStart().length;
+      const lineEnd = rawText.indexOf("\n", contentStart);
+      const firstLine = lineEnd < 0 ? rawText : rawText.slice(0, lineEnd);
+      // Normalized commands may omit multiline tails. Those bytes remain prompt content.
+      const commandSource =
+        preparedSourceMatches || resetTriggered || rawText.trim() === directiveCommandText.trim()
+          ? rawText
+          : normalizeSource(firstLine) === directiveCommandText.trim()
+            ? firstLine
+            : normalizeSource(rawText) === directiveCommandText.trim()
+              ? rawText
+              : undefined;
+      if (commandSource !== undefined) {
+        const leadingSender =
+          rawText !== "" && (agentText === rawText || agentText.startsWith(`${rawText}\n`));
+        // A directive-only final line owns its newline, never the following content.
+        const source =
+          commandSource +
+          (rawText[commandSource.length] === "\n" ||
+          (leadingSender && agentText[commandSource.length] === "\n")
+            ? "\n"
+            : "");
+        let cleanedSender = cleanStatus(parseDirectives(source).cleaned);
+        const shortcut = requestedInlineCommand ? extractInlineSimpleCommand(cleanedSender) : null;
+        // Normalized aliases may select a command; cleanup still needs the corresponding raw token.
+        if (shortcut && shortcut.command === requestedInlineCommand?.command) {
+          inlineCommand = shortcut.command;
+          cleanedSender = shortcut.cleaned;
+        }
+        // Only the whole body or demonstrated leading sender block can be projected.
+        // Non-leading, encoded, and flat-history bodies stay opaque; never search quoted context.
+        if (
+          leadingSender &&
+          !agentText.trimStart().startsWith(HISTORY_CONTEXT_MARKER) &&
+          !agentText.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+        ) {
+          cleanedBody = cleanedSender + agentText.slice(source.length);
+        }
+      }
+      if (!agentText && !resetTriggered) {
+        cleanedBody =
+          inlineCommand && requestedInlineCommand ? requestedInlineCommand.cleaned : cleanedCommand;
+      }
+    }
+  }
+
+  sessionCtx.agentText = cleanedBody;
+  sessionCtx.BodyForAgent = cleanedBody;
+  sessionCtx.Body = cleanedBody;
+  sessionCtx.BodyStripped = cleanedBody;
+
+  const messageProviderKey =
+    normalizeOptionalLowercaseString(sessionCtx.Provider) ??
+    normalizeLowercaseStringOrEmpty(ctx.Provider);
+  const elevated = resolveElevatedPermissions({
+    cfg,
+    agentId,
+    ctx,
+    provider: messageProviderKey,
+  });
+  const elevatedEnabled = elevated.enabled;
+  const elevatedAllowed = elevated.allowed;
+  const elevatedFailures = elevated.failures;
+  if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
+    typing.cleanup();
+    recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "session-directive-rejected");
+    const policySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
+    const runtimeSandboxed = (
+      await resolveSandboxRuntimeStatusAsync({
+        cfg,
+        agentId,
+        sessionKey,
+        classificationSessionKey: policySessionKey,
+        ...(policySessionKey === sessionKey ? { preparedSessionEntry: targetSessionEntry } : {}),
+      })
+    ).sandboxed;
+    return {
+      kind: "reply" as const,
+      reply: {
+        text: formatElevatedUnavailableMessage({
+          runtimeSandboxed,
+          failures: elevatedFailures,
+          sessionKey: ctx.SessionKey,
+        }),
+      },
+    };
+  }
+
+  const requireMention = await resolveGroupRequireMention({
+    cfg,
+    group: conversation.group,
+  });
+  const defaultActivation = defaultGroupActivation(requireMention);
+  const sessionThinkLevel = directives.clearThinkLevel
+    ? undefined
+    : (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
+  const thinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
+  const configuredThinkingDefault =
+    normalizeThinkLevel(agentEntry?.thinkingDefault) ??
+    normalizeThinkLevel(agentCfg?.thinkingDefault);
+  const resolvedThinkLevel = thinkingLevelOverride ?? directives.thinkLevel ?? sessionThinkLevel;
+
+  const resolvedVerboseLevel =
+    directives.verboseLevel ??
+    (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    agentEntry?.verboseDefault ??
+    agentCfg?.verboseDefault;
+  const configuredReasoningDefault = agentEntry?.reasoningDefault ?? agentCfg?.reasoningDefault;
+  const canUseReasoningState =
+    command.isAuthorizedSender ||
+    command.senderIsOwner ||
+    (Array.isArray(ctx.GatewayClientScopes) && ctx.GatewayClientScopes.includes("operator.admin"));
+  const rawSessionReasoningLevel = targetSessionEntry?.reasoningLevel as
+    | ReasoningLevel
+    | null
+    | undefined;
+  const sessionReasoningLevel = canUseReasoningState ? rawSessionReasoningLevel : undefined;
+  const blockedSessionReasoningLevel = rawSessionReasoningLevel != null && !canUseReasoningState;
+  const resolvedReasoningLevel: ReasoningLevel =
+    !canUseReasoningState && directives.reasoningLevel === undefined
+      ? "off"
+      : (directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off");
+  const resolvedElevatedLevel = elevatedAllowed
+    ? (directives.elevatedLevel ??
+      (targetSessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      agentCfg?.elevatedDefault ??
+      "on")
+    : "off";
+  const blockStreamingEnabled =
+    opts?.disableBlockStreaming === false ||
+    (opts?.disableBlockStreaming !== true && agentCfg?.blockStreamingDefault === "on");
+  // Off-mode text blocks are suppressed by delivery; keep captions until media is parsed.
+  const resolvedBlockStreamingBreak: "text_end" | "message_end" =
+    !blockStreamingEnabled || agentCfg?.blockStreamingBreak === "message_end"
+      ? "message_end"
+      : "text_end";
+  const blockReplyChunking = blockStreamingEnabled
+    ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
+    : undefined;
+  const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
+    cfg,
+    isFastTestEnv: isFastTestRuntimeEnv(),
+  });
+
+  let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
+  try {
+    modelState = await createModelSelectionState({
+      cfg,
+      agentId,
+      agentCfg,
+      sessionEntry: targetSessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey:
+        targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+      provider,
+      model,
+      hasModelDirective: directives.hasModelDirective,
+      hasResolvedTurnModelOverride,
+      preparedModelCatalog,
+      operatorAuthority: opts?.operatorAuthority,
+    });
+  } catch (error) {
+    if (
+      !(error instanceof ModelSelectionLockedError) &&
+      !isSessionWorkStartInvalidatedError(error)
+    ) {
+      throw error;
+    }
+    typing.cleanup();
+    if (error instanceof ModelSelectionLockedError) {
+      recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
+    }
+    return { kind: "reply" as const, reply: { text: error.message, isError: true } };
+  }
+  ({ provider, model } = modelState);
+
+  const contextTokenProjection = useFastReplyRuntime
+    ? undefined
+    : resolveModelContextTokenProjection({
+        cfg,
+        allowAsyncLoad: false,
+        provider,
+        model,
+        modelContextWindow: modelState.modelContextWindow,
+        modelContextTokens: modelState.modelContextTokens,
+      });
+  let contextTokens = contextTokenProjection?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+
+  const initialModelLabel = `${provider}/${model}`;
+  const formatModelSwitchEvent = (label: string, alias?: string) =>
+    alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
+  const isModelInfoDirective =
+    directives.hasModelDirective &&
+    directives.modelDirectiveSource !== "alias" &&
+    ["status", "list"].includes(normalizeLowercaseStringOrEmpty(directives.rawModelDirective));
+  const effectiveModelDirective = isModelInfoDirective ? undefined : directives.rawModelDirective;
+
+  const inlineStatusRequested = hasInlineStatus && canInterpretMessageDirectives;
+
+  const applyResult = await applyInlineDirectiveOverrides({
+    ...params,
+    abortSignal: opts?.abortSignal,
+    agentEntry,
+    sessionEntry: targetSessionEntry,
+    allowTextCommands,
+    command,
+    directives,
+    elevatedEnabled,
+    elevatedAllowed,
+    elevatedFailures,
+    provider,
+    model,
+    modelState,
+    initialModelLabel,
+    formatModelSwitchEvent,
+    resolvedElevatedLevel,
+    defaultActivation: () => defaultActivation,
+    contextTokens,
+    contextTokenProjection,
+    effectiveModelDirective,
+  });
+  if (applyResult.kind === "reply") {
+    recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
+    return { kind: "reply" as const, reply: markCommandReplyForDelivery(applyResult.reply) };
+  }
+  ({ directives, provider, model, contextTokens } = applyResult);
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg,
+    provider,
+    modelId: model,
+    agentId,
+    sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
+    sessionEntry: targetSessionEntry,
+  });
+  const thinkingExplicitlySet =
+    thinkingLevelOverride !== undefined ||
+    directives.thinkLevel !== undefined ||
+    sessionThinkLevel !== undefined ||
+    configuredThinkingDefault !== undefined ||
+    modelState.hasConfiguredThinkingDefault === true;
+
+  // When neither directive nor session nor agent set reasoning, default to model capability
+  // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
+  // or when thinking was explicitly disabled.
+  const hasAgentReasoningDefault =
+    agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null;
+  const reasoningExplicitlySet =
+    directives.reasoningLevel !== undefined ||
+    unauthorizedReasoningDirectiveAttempt ||
+    blockedSessionReasoningLevel ||
+    sessionReasoningLevel != null ||
+    hasAgentReasoningDefault;
+  const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
+  const resolvedFastModeState = resolveFastModeState({
+    cfg,
+    provider,
+    model,
+    agentId,
+    sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
+  });
+  const resolvedFastMode =
+    opts?.fastModeOverride ?? directives.fastMode ?? resolvedFastModeState.mode;
+  const resolvedFastModeAutoOnSeconds =
+    opts?.fastModeAutoOnSecondsOverride ?? resolvedFastModeState.fastAutoOnSeconds;
+  const resolvedFastModeOverride =
+    opts?.fastModeOverride !== undefined || directives.fastMode !== undefined;
+  const resolvedFastModeAutoOnSecondsOverride = opts?.fastModeAutoOnSecondsOverride !== undefined;
+  const execOverrides = resolveReplyExecOverrides({
+    directives,
+    sessionEntry: targetSessionEntry,
+    agentExecDefaults: agentEntry?.tools?.exec,
+  });
+
+  return {
+    kind: "continue" as const,
+    result: {
+      commandSource: commandText,
+      command,
+      allowTextCommands,
+      skillCommands,
+      directives,
+      cleanedBody,
+      inlineCommand,
+      messageProviderKey,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      defaultActivation,
+      resolveModelLevels: createReplyModelLevelResolver({
+        modelState,
+        abortSignal: opts?.abortSignal,
+        selection: {
+          provider,
+          model,
+          agentRuntime: thinkingRuntime,
+          thinkLevel: resolvedThinkLevel,
+          thinkingExplicit: thinkingExplicitlySet,
+          reasoningLevel: resolvedReasoningLevel,
+          reasoningExplicit: reasoningExplicitlySet,
+        },
+      }),
+      resolvedFastMode,
+      resolvedFastModeAutoOnSeconds,
+      resolvedFastModeOverride,
+      resolvedFastModeAutoOnSecondsOverride,
+      resolvedVerboseLevel,
+      resolvedElevatedLevel,
+      execOverrides,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      provider,
+      model,
+      requestedRouteResolution: effectiveModelDirective
+        ? ("resolved" as const)
+        : modelState.requestedRouteResolution,
+      modelState,
+      contextTokens,
+      contextTokenProjection: applyResult.contextTokenProjection,
+      inlineStatusRequested,
+      directiveAck,
+      perMessageQueueMode,
+      perMessageQueueOptions,
+    },
+  };
+}

@@ -1,0 +1,64 @@
+// Browser tests cover control service.plugin disabled plugin behavior.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  createBrowserRuntimeState: vi.fn(async () => ({ ok: true })),
+  loadConfig: vi.fn(() => ({
+    browser: {
+      enabled: true,
+    },
+    plugins: {
+      entries: {
+        browser: {
+          enabled: false,
+        },
+      },
+    },
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
+  return {
+    ...actual,
+    readRuntimeConfig: mocks.loadConfig,
+    captureRuntimeConfigAsyncReader: () => async () => mocks.loadConfig(),
+    loadConfig: mocks.loadConfig,
+  };
+});
+
+vi.mock("./config.js", () => ({
+  resolveBrowserConfig: vi.fn(() => ({
+    enabled: true,
+    controlPort: 18791,
+    profiles: { openclaw: { cdpPort: 18800 } },
+  })),
+}));
+
+vi.mock("./runtime-lifecycle.js", () => ({
+  createBrowserRuntimeState: mocks.createBrowserRuntimeState,
+  stopBrowserRuntime: vi.fn(async () => {}),
+}));
+
+vi.mock("./server-context.js", () => ({
+  createBrowserRouteContext: vi.fn(),
+}));
+
+const { startBrowserControlServiceFromConfig } = await import("../control-service.js");
+vi.doUnmock("./server-context.js");
+
+describe("startBrowserControlServiceFromConfig", () => {
+  beforeEach(() => {
+    mocks.createBrowserRuntimeState.mockClear();
+    mocks.loadConfig.mockClear();
+  });
+
+  it("does not start the default service when the browser plugin is disabled", async () => {
+    const started = await startBrowserControlServiceFromConfig();
+
+    expect(started).toBeNull();
+    expect(mocks.createBrowserRuntimeState).not.toHaveBeenCalled();
+  });
+});

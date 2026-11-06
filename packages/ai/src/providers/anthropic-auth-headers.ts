@@ -1,0 +1,44 @@
+import { getAiTransportHost } from "../host.js";
+import type { ModelRequestHeaders } from "../types.js";
+
+/** Inspect resolved credential shape for auth routing without exposing its value. */
+export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
+  return (
+    typeof apiKey === "string" &&
+    getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat")
+  );
+}
+
+export function usesFoundryBearerAuth(model: {
+  provider?: string;
+  authHeader?: boolean;
+  headers?: ModelRequestHeaders;
+}): boolean {
+  return (
+    model.provider === "microsoft-foundry" &&
+    (model.authHeader === true ||
+      Object.entries(model.headers ?? {}).some(
+        ([key, value]) =>
+          key.toLowerCase() === "authorization" &&
+          value !== null &&
+          /^bearer\s+\S+/i.test(value.trim()),
+      ))
+  );
+}
+
+export function omitFoundryBearerCredentialHeaders(
+  headers?: ModelRequestHeaders,
+): ModelRequestHeaders | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const next: ModelRequestHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
+      continue;
+    }
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}

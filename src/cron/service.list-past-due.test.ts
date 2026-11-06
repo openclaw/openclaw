@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createStartedCronServiceWithFinishedBarrier,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
+import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
+
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+  prefix: "openclaw-cron-16156-",
+  fakeTimers: false,
+});
+
+describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
+  it("does not skip a cron job when list() is called while the job is past-due", async () => {
+    const store = await makeStorePath();
+    const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
+    const { cron, state, runSessionEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      storePath: store.storePath,
+      logger: noopLogger,
+    });
+
+    try {
+      const { wake } = await captureCronSchedulerWakeForTest(() => cron.start());
+
+      const job = await cron.add({
+        name: "every-minute",
+        enabled: true,
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "cron-tick" },
+      });
+
+      const firstDueAt = job.state.nextRunAtMs!;
+      expect(firstDueAt).toBe(Date.parse("2025-12-13T00:01:00.000Z"));
+
+      clock.setTime(firstDueAt + 5);
+
+      const listedBefore = await cron.list({ includeDisabled: true });
+      const jobBeforeTimer = listedBefore.find((j) => j.id === job.id);
+
+      expect(jobBeforeTimer?.state.nextRunAtMs).toBe(firstDueAt);
+
+      const finishedRun = finished.waitForOk(job.id);
+      await wake(state);
+      await finishedRun;
+
+      const jobs = await cron.list({ includeDisabled: true });
+      const updated = jobs.find((j) => j.id === job.id);
+
+      expect(runSessionEvent).toHaveBeenCalledOnce();
+      const execution = runSessionEvent.mock.calls[0]?.[0];
+      expect(execution?.text).toBe("cron-tick");
+      expect(execution?.job).toMatchObject({ id: job.id, sessionTarget: "main" });
+      expect(updated?.state.lastStatus).toBe("ok");
+      expect(updated?.state.nextRunAtMs).toBeGreaterThan(firstDueAt);
+    } finally {
+      cron.stop();
+    }
+  });
+});

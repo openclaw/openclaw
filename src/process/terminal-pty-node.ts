@@ -1,0 +1,284 @@
+import { constants } from "node:os";
+import { toErrorObject } from "../infra/errors.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
+import { BrokerChild } from "./spawn-broker/child.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
+import { spawnProcess } from "./spawn-utils.js";
+import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
+import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
+
+const STARTUP_TIMEOUT_MS = 10_000;
+const CLEANUP_TIMEOUT_MS = 2_000;
+
+/** Owns native PTY I/O and inherited exec resource policy outside the Gateway. */
+export async function spawnNodeTerminalPty(
+  params: TerminalPtySpawnParams,
+  beforeSpawn?: () => void,
+  initiateSpawn?: SpawnInitiation,
+): Promise<TerminalPtyHandle> {
+  const node = resolveNodeRuntimeExecutable();
+  if (!node) {
+    throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
+  }
+  const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
+  const broker = getSpawnBroker();
+  const child = runWithMainThreadTask(
+    "process:spawn",
+    () =>
+      spawnProcess(node, resolveRuntimeWorkerArgv(worker, node), {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        serialization: "json",
+        env: process.env,
+      }),
+    "pty-helper",
+  );
+  const brokerChild = child instanceof BrokerChild ? child : undefined;
+  if (brokerChild) {
+    try {
+      await brokerChild.ready();
+    } catch (error) {
+      await brokerChild.waitForClose();
+      throw error;
+    }
+  }
+  const stdout = child.stdout;
+  const stderrPipe = child.stderr;
+  if (!stdout || !stderrPipe) {
+    child.once("error", () => undefined);
+    child.kill("SIGKILL");
+    throw new Error("Terminal Node worker did not provide its required output pipes");
+  }
+  const ready = createDeferredCore<number>();
+  const listeners = new Set<(event: { exitCode: number; signal?: number }) => void>();
+  let exited: { exitCode: number; signal?: number } | undefined;
+  let reportedExit: typeof exited;
+  let startupError: Error | undefined;
+  let stderr = "";
+  let paused = false;
+  let ptyPid: number | undefined;
+  let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  let helperExit: typeof exited;
+  let outputEnded = false;
+  let ipcClosed = false;
+
+  const fail = (error: Error) => {
+    if (exited) {
+      return;
+    }
+    startupError ??= error;
+    if (child.connected) {
+      child.disconnect();
+    }
+    stdout.resume();
+    if (!helperExit) {
+      cleanupTimer ??= setTimeout(() => {
+        if (ptyPid !== undefined) {
+          signalPtySessionTree(ptyPid, "SIGKILL");
+        }
+        if (child.pid !== undefined) {
+          killProcessTree(child.pid, { force: true, detached: false });
+        }
+      }, CLEANUP_TIMEOUT_MS);
+    }
+  };
+  const send = (message: TerminalPtyControl, initiate?: SpawnInitiation) => {
+    if (!child.connected) {
+      return;
+    }
+    const done = (error: Error | null) => {
+      if (error) {
+        fail(error);
+      }
+    };
+    if (brokerChild) {
+      brokerChild.send(message, undefined, undefined, done, initiate);
+    } else {
+      const launch = () => child.send(message, done);
+      if (initiate) {
+        initiate(launch);
+      } else {
+        launch();
+      }
+    }
+  };
+  // The broker queues IPC. Check authority when the final launch frame is written.
+  const authorizeLaunch: SpawnInitiation = (launch) => {
+    beforeSpawn?.();
+    return initiateSpawn
+      ? initiateSpawn(
+          launch,
+          ready.promise.then(
+            () => {},
+            () => broker?.waitForCleanup(),
+          ),
+        )
+      : launch();
+  };
+  const timeout = setTimeout(
+    () => fail(new Error("Terminal Node worker startup timed out")),
+    STARTUP_TIMEOUT_MS,
+  );
+  const finish = () => {
+    if (exited || !helperExit || !outputEnded || !ipcClosed) {
+      return;
+    }
+    ready.reject(
+      startupError ?? new Error(stderr.trim() || "Terminal Node worker exited before startup"),
+    );
+    exited = startupError ? { exitCode: 1 } : (reportedExit ?? helperExit);
+    for (const listener of listeners) {
+      listener(exited);
+    }
+  };
+  stdout.pause();
+  stdout.setEncoding("utf8");
+  stderrPipe.setEncoding("utf8");
+  stderrPipe.on("data", (data: string) => {
+    stderr = (stderr + data).slice(-8_192);
+  });
+  child.on("error", (error) => {
+    if (child.pid === undefined) {
+      helperExit = { exitCode: 1 };
+      ipcClosed = true;
+    }
+    fail(error);
+    finish();
+  });
+  stdout.on("error", fail);
+  const finishOutput = () => {
+    outputEnded = true;
+    finish();
+  };
+  stdout.once("close", finishOutput);
+  stdout.once("end", finishOutput);
+  child.once("disconnect", () => {
+    ipcClosed = true;
+    finish();
+  });
+  if (brokerChild && broker) {
+    brokerChild.once("close", () => {
+      if (helperExit) {
+        return;
+      }
+      // Broker loss closes the transport without an exit receipt; its owner retains the tree cleanup.
+      void broker
+        .waitForCleanup()
+        .catch((error: unknown) => {
+          startupError = toErrorObject(error, "Terminal Node worker cleanup failed");
+        })
+        .then(() => {
+          clearTimeout(timeout);
+          clearTimeout(cleanupTimer);
+          helperExit = { exitCode: 1 };
+          finish();
+        });
+    });
+  }
+  // The version-matched PTY helper is the sole writer on this private IPC channel.
+  child.on("message", (message: TerminalPtyEvent) => {
+    if (message.type === "boot" || message.type === "prepared") {
+      try {
+        if (message.type === "boot") {
+          if (initiateSpawn) {
+            beforeSpawn?.();
+            send({ type: "prepare", params });
+          } else {
+            send({ type: "start", params }, authorizeLaunch);
+          }
+        } else {
+          if (!initiateSpawn) {
+            throw new Error("Terminal launch authority is unavailable");
+          }
+          // Rejection already joins helper exit, IPC close, and output EOF in finish().
+          send({ type: "launch" }, authorizeLaunch);
+        }
+      } catch (error) {
+        fail(toErrorObject(error, "PTY launch denied"));
+      }
+    } else if (message.type === "ready") {
+      ptyPid = message.pid;
+      if (!startupError) {
+        ready.resolve(message.pid);
+      }
+    } else if (message.type === "error") {
+      fail(new Error(message.message));
+    } else {
+      reportedExit = { exitCode: message.exitCode, signal: message.signal };
+    }
+  });
+  child.once("exit", (code, signal) => {
+    clearTimeout(timeout);
+    clearTimeout(cleanupTimer);
+    if (!reportedExit && ptyPid !== undefined) {
+      signalPtySessionTree(ptyPid, "SIGKILL");
+    }
+    helperExit = {
+      exitCode: code ?? 1,
+      ...(signal ? { signal: constants.signals[signal] } : {}),
+    };
+    if (ptyPid === undefined) {
+      stdout.resume();
+    }
+    // Node can omit ChildProcess.close after a host-side IPC disconnect. Join
+    // process exit, final IPC delivery, and output EOF without dropping tail bytes.
+    finish();
+  });
+  let pid: number;
+  try {
+    pid = await ready.promise;
+  } finally {
+    clearTimeout(timeout);
+  }
+  return {
+    pid,
+    write: (data) =>
+      send(
+        typeof data === "string"
+          ? { type: "input", data }
+          : { type: "input", dataBase64: data.toString("base64") },
+      ),
+    resize: (cols, rows) => send({ type: "resize", cols, rows }),
+    pause: () => {
+      paused = true;
+      stdout.pause();
+    },
+    resume: () => {
+      paused = false;
+      if (stdout.listenerCount("data") > 0) {
+        stdout.resume();
+      }
+    },
+    onData: (listener) => {
+      stdout.on("data", listener);
+      if (!paused) {
+        stdout.resume();
+      }
+      return {
+        dispose() {
+          stdout.off("data", listener);
+          if (stdout.listenerCount("data") === 0) {
+            stdout.pause();
+          }
+        },
+      };
+    },
+    onExit: (listener) => {
+      listeners.add(listener);
+      if (exited) {
+        listener(exited);
+      }
+      return { dispose: () => listeners.delete(listener) };
+    },
+    kill: (signal) => {
+      send({ type: "kill", signal });
+      // A paused pipe must drain so process cleanup can reach the close event.
+      stdout.resume();
+    },
+  };
+}

@@ -1,0 +1,581 @@
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandOptions } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
+import {
+  listMissingRequiredPlatformPackages,
+  readManagedNpmRootInstalledDependency,
+  readOpenClawManagedNpmRootOverrides,
+  syncManagedNpmRootPeerDependencies,
+  upsertManagedNpmRootDependency,
+} from "./npm-managed-root.js";
+import {
+  readManifest,
+  successfulSpawn,
+  useManagedNpmRootFixture,
+  writeFixtureJson,
+} from "./npm-managed-root.test-support.js";
+import * as openclawRoot from "./openclaw-root.js";
+
+const makeTempRoot = useManagedNpmRootFixture();
+afterEach(() => vi.restoreAllMocks());
+
+function requireCommandOptions(
+  options: number | CommandOptions | undefined,
+  label: string,
+): CommandOptions {
+  if (!options || typeof options === "number") {
+    throw new Error(`expected ${label} command options`);
+  }
+  return options;
+}
+
+type PlanManifest = { dependencies?: Record<string, string>; overrides?: Record<string, unknown> };
+function peerPlan(packages: Record<string, unknown>, inspect?: (manifest: PlanManifest) => void) {
+  return vi.fn(async (_args: string[], rawOptions: number | CommandOptions) => {
+    const { cwd } = requireCommandOptions(rawOptions, "npm peer plan");
+    if (!cwd) {
+      throw new Error("expected npm peer plan cwd");
+    }
+    const manifest = (await readManifest(cwd)) as PlanManifest;
+    inspect?.(manifest);
+    await writeLock(cwd, { "": { dependencies: manifest.dependencies }, ...packages });
+    return successfulSpawn;
+  });
+}
+
+function writeLock(root: string, packages: Record<string, unknown>) {
+  return writeFixtureJson(path.join(root, "package-lock.json"), { lockfileVersion: 3, packages });
+}
+
+const platformFacts = { optional: true, os: [process.platform], cpu: [process.arch] };
+
+describe("managed npm root", () => {
+  it("finds explicitly required optional packages for the current platform", async () => {
+    const npmRoot = await makeTempRoot();
+    const matchingPackage = "@vendor/tool-platform";
+    const otherMatchingPackage = "@vendor/tool-other";
+    const foreignPackage = "@vendor/tool-foreign";
+    const unconstrainedPackage = "@vendor/tool-optional";
+    const unlistedPackage = "@vendor/tool-unlisted";
+    await writeLock(npmRoot, {
+      "": {},
+      [`node_modules/${matchingPackage}`]: platformFacts,
+      [`node_modules/${otherMatchingPackage}`]: platformFacts,
+      [`node_modules/${foreignPackage}`]: {
+        ...platformFacts,
+        os: [`not-${process.platform}`],
+      },
+      [`node_modules/${unconstrainedPackage}`]: { optional: true },
+      [`node_modules/${unlistedPackage}`]: platformFacts,
+    });
+
+    await expect(
+      listMissingRequiredPlatformPackages({
+        npmRoot,
+        requiredPackageNames: [
+          matchingPackage,
+          otherMatchingPackage,
+          foreignPackage,
+          unconstrainedPackage,
+        ],
+      }),
+    ).resolves.toEqual(
+      [otherMatchingPackage, matchingPackage].map((name) => ({
+        name,
+        packagePath: path.join(npmRoot, "node_modules", ...name.split("/")),
+      })),
+    );
+  });
+
+  it.each([
+    { installedState: "invalid package manifest", expectedMissing: true },
+    { installedState: "absent native executable (ENOENT)", expectedMissing: true },
+    { installedState: "directory in place of native executable", expectedMissing: true },
+    {
+      installedState: "non-executable native executable",
+      expectedMissing: process.platform !== "win32",
+    },
+    { installedState: "installed native executable", expectedMissing: false },
+    { installedState: "X_OK denied with EPERM", expectedMissing: false },
+    { installedState: "Windows exe without Unix executable bits", expectedMissing: false },
+    { installedState: "incomplete target before complete target", expectedMissing: false },
+    { installedState: "stat EACCES", expectedMissing: false },
+    { installedState: "stat EPERM", expectedMissing: false },
+    { installedState: "non-native package", expectedMissing: false },
+    { installedState: "vendor package without native bin declaration", expectedMissing: false },
+  ])(
+    "validates current-platform package contents: $installedState",
+    async ({ installedState, expectedMissing }) => {
+      if (installedState === "Windows exe without Unix executable bits") {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
+      const npmRoot = await makeTempRoot();
+      const platformPackage = "@vendor/tool-platform";
+      const canonicalPackage = "@vendor/tool";
+      const packagePath = path.join(npmRoot, "node_modules", ...platformPackage.split("/"));
+      await fs.mkdir(packagePath, { recursive: true });
+      await writeLock(npmRoot, {
+        "": {},
+        [`node_modules/${canonicalPackage}`]: {
+          bin:
+            installedState === "vendor package without native bin declaration"
+              ? {}
+              : { tool: "bin/tool.js" },
+        },
+        [`node_modules/${platformPackage}`]: {
+          name: canonicalPackage,
+          optional: true,
+          os: [process.platform],
+          cpu: [process.arch],
+        },
+      });
+
+      let executablePath = "";
+      if (installedState === "invalid package manifest") {
+        await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
+      } else {
+        await writeFixtureJson(path.join(packagePath, "package.json"), {
+          name: canonicalPackage,
+          version: "1.0.0-platform",
+          files: installedState === "non-native package" ? [] : ["vendor"],
+        });
+        const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
+        await fs.mkdir(nativeBinDir, { recursive: true });
+        await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
+        const executableName = process.platform === "win32" ? "tool.exe" : "tool";
+        executablePath = path.join(nativeBinDir, executableName);
+        if (installedState === "directory in place of native executable") {
+          await fs.mkdir(executablePath);
+        } else if (
+          installedState !== "absent native executable (ENOENT)" &&
+          installedState !== "non-native package" &&
+          installedState !== "vendor package without native bin declaration"
+        ) {
+          await fs.writeFile(executablePath, "native executable", {
+            encoding: "utf8",
+            mode:
+              installedState === "non-executable native executable" ||
+              installedState === "Windows exe without Unix executable bits"
+                ? 0o644
+                : 0o755,
+          });
+        }
+        if (installedState === "incomplete target before complete target") {
+          await fs.mkdir(path.join(packagePath, "vendor", "a-incomplete", "bin", executableName), {
+            recursive: true,
+          });
+        }
+      }
+      const access = fs.access;
+      const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (mode === syncFs.constants.X_OK) {
+          throw Object.assign(new Error("mocked stage execution denial"), { code: "EPERM" });
+        }
+        return access(file, mode);
+      });
+      const statErrorCode = installedState.startsWith("stat ")
+        ? installedState.slice(5)
+        : undefined;
+      if (statErrorCode) {
+        const error = Object.assign(new Error("native metadata unavailable"), {
+          code: statErrorCode,
+        });
+        const statSpy = vi.spyOn(fs, "stat").mockRejectedValue(error);
+        await expect(
+          listMissingRequiredPlatformPackages({ npmRoot, requiredPackageNames: [platformPackage] }),
+        ).rejects.toBe(error);
+        expect(statSpy).toHaveBeenCalledWith(executablePath);
+        return;
+      }
+
+      await expect(
+        listMissingRequiredPlatformPackages({ npmRoot, requiredPackageNames: [platformPackage] }),
+      ).resolves.toEqual(expectedMissing ? [{ name: platformPackage, packagePath }] : []);
+      expect(accessSpy.mock.calls.filter(([, mode]) => mode === syncFs.constants.X_OK)).toEqual([]);
+    },
+  );
+
+  it("can omit npm alias overrides for npm versions that reject them", async () => {
+    const npmRoot = await makeTempRoot();
+
+    await upsertManagedNpmRootDependency({
+      npmRoot,
+      packageName: "@openclaw/feishu",
+      dependencySpec: "2026.5.4",
+      omitNpmAliasOverrides: true,
+      managedOverrides: {
+        axios: "1.18.0",
+        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+        nested: { alias: "npm:@scope/alias@1.0.0", semver: "1.2.3" },
+      },
+    });
+
+    await expect(readManifest(npmRoot)).resolves.toMatchObject({
+      overrides: {
+        axios: "1.18.0",
+        nested: { semver: "1.2.3" },
+      },
+      openclaw: { managedOverrides: ["axios", "nested"] },
+    });
+  });
+
+  it.each([
+    { override: "1.0.0", retained: {} },
+    {
+      override: { ".": "1.0.0", "vuln-child": "3.0.0" },
+      retained: { "pinned-package": { "vuln-child": "3.0.0" } },
+    },
+  ])(
+    "removes only the conflicting root override from $override",
+    async ({ override, retained }) => {
+      const npmRoot = await makeTempRoot();
+
+      await upsertManagedNpmRootDependency({
+        npmRoot,
+        packageName: "pinned-package",
+        dependencySpec: "2.0.0",
+        managedOverrides: { "pinned-package": override, axios: "1.18.0" },
+      });
+
+      await expect(readManifest(npmRoot)).resolves.toEqual({
+        private: true,
+        dependencies: { "pinned-package": "2.0.0" },
+        overrides: { axios: "1.18.0", ...retained },
+        openclaw: { managedOverrides: ["axios", ...Object.keys(retained)] },
+      });
+    },
+  );
+
+  it("transfers ownership of a managed peer pin when it is explicitly installed", async () => {
+    const npmRoot = await makeTempRoot({
+      private: true,
+      dependencies: { plugin: "1.0.0", "runtime-peer": "4.12.23" },
+      openclaw: { managedPeerDependencies: ["runtime-peer"] },
+    });
+
+    await upsertManagedNpmRootDependency({
+      npmRoot,
+      packageName: "runtime-peer",
+      dependencySpec: "5.0.0",
+    });
+
+    // The installed package leaves managedPeerDependencies so the next peer sync
+    // cannot re-pin or delete the explicitly requested version.
+    await expect(readManifest(npmRoot)).resolves.toEqual({
+      private: true,
+      dependencies: { plugin: "1.0.0", "runtime-peer": "5.0.0" },
+    });
+  });
+
+  it("normalizes workspace overrides before managed npm use", async () => {
+    const packageRoot = await makeTempRoot();
+    await writeFixtureJson(path.join(packageRoot, "package.json"), {
+      name: "openclaw",
+      dependencies: {
+        "managed-runtime": "3.1024.0",
+        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+      },
+      optionalDependencies: { "optional-runtime": "2.0.0" },
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      [
+        "overrides:",
+        '  "parent@1>child": 2.0.0',
+        '  "parent>@scope/child": 2.0.0',
+        '  "@scope/parent@1>@scope/child": 2.0.0',
+        '  "range-target@>1": 2.0.0',
+        '  managed-runtime: "$managed-runtime"',
+        "  nested:",
+        '    "parent>child": 2.0.0',
+        '    "range-target@>=1": 2.0.0',
+        '    ".": 1.0.0',
+        '    optional-runtime: "$optional-runtime"',
+        '    alias: "$node-domexception"',
+        "  axios: 1.18.0",
+        '  node-domexception: "$node-domexception"',
+        "",
+      ].join("\n"),
+    );
+
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockReturnValue(packageRoot);
+    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({
+      "range-target@>1": "2.0.0",
+      "managed-runtime": "3.1024.0",
+      nested: {
+        "range-target@>=1": "2.0.0",
+        ".": "1.0.0",
+        "optional-runtime": "2.0.0",
+        alias: "npm:@nolyfill/domexception@1.0.28",
+      },
+      axios: "1.18.0",
+      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+    });
+  });
+
+  it("reads installed dependency metadata from package-lock", async () => {
+    const npmRoot = await makeTempRoot();
+    await writeLock(npmRoot, {
+      "node_modules/@openclaw/discord": {
+        version: "2026.5.2",
+        resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
+        integrity: "sha512-discord",
+      },
+    });
+
+    await expect(
+      readManagedNpmRootInstalledDependency({ npmRoot, packageName: "@openclaw/discord" }),
+    ).resolves.toEqual({
+      version: "2026.5.2",
+      resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
+      integrity: "sha512-discord",
+    });
+  });
+
+  it("syncs managed peer pins without blocking filesystem writes and an unbounded update budget", async () => {
+    const npmRoot = await makeTempRoot({
+      private: true,
+      dependencies: { "existing-root": "1.0.0", "old-peer": "1.0.0", plugin: "1.0.0" },
+      devDependencies: { "dev-plugin": "1.0.0" },
+      openclaw: { managedPeerDependencies: ["old-peer"] },
+    });
+
+    const runCommand = peerPlan(
+      {
+        "node_modules/existing-root": { version: "1.0.0" },
+        "node_modules/dev-peer": { dev: true, version: "3.0.0" },
+        "node_modules/dev-plugin": {
+          dev: true,
+          peerDependencies: { "dev-peer": "^3.0.0" },
+          version: "1.0.0",
+        },
+        "node_modules/new-peer": { peer: true, version: "2.1.0" },
+        "node_modules/openclaw": { peer: true, version: "2026.5.12" },
+        "node_modules/plugin": {
+          peerDependencies: {
+            "existing-root": "^1.0.0",
+            "new-peer": "^2.0.0",
+            openclaw: ">=2026.5.0",
+          },
+          version: "1.0.0",
+        },
+        "node_modules/unsupported-optional": {
+          optional: true,
+          os: [process.platform === "win32" ? "darwin" : "win32"],
+          peerDependencies: { "unsupported-peer": "^9.0.0" },
+          version: "1.0.0",
+        },
+      },
+      (manifest) => {
+        expect(manifest.dependencies).toEqual({ "existing-root": "1.0.0", plugin: "1.0.0" });
+      },
+    );
+
+    const synchronousWrites = ["writeFileSync", "writeSync", "fsyncSync", "renameSync"] as const;
+    const writeSpies = synchronousWrites.map((method) => vi.spyOn(syncFs, method));
+    await expect(
+      syncManagedNpmRootPeerDependencies({
+        npmRoot,
+        runCommand,
+        timeoutMs: 120_000,
+        workTimeoutMs: null,
+      }),
+    ).resolves.toBe(true);
+    for (const spy of writeSpies) {
+      expect(spy).not.toHaveBeenCalled();
+    }
+
+    const [args, rawOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "npm peer plan command call",
+    );
+    const options = requireCommandOptions(rawOptions, "npm peer plan");
+    expect(npmCommandArgs(args)).toEqual([
+      "install",
+      "--package-lock-only",
+      "--force",
+      "--omit=dev",
+      "--omit=peer",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--workspaces=false",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    expect(options?.cwd).not.toBe(npmRoot);
+    expect(options.timeoutMs).toBe(undefined);
+    expect(options?.env?.npm_config_legacy_peer_deps).toBe("false");
+
+    await expect(readManifest(npmRoot)).resolves.toEqual({
+      private: true,
+      dependencies: { "existing-root": "1.0.0", "new-peer": "2.1.0", plugin: "1.0.0" },
+      devDependencies: { "dev-plugin": "1.0.0" },
+      openclaw: { managedPeerDependencies: ["new-peer"] },
+    });
+  });
+
+  it("advances stale managed peer pins to the override-aware npm plan", async () => {
+    const npmRoot = await makeTempRoot({
+      private: true,
+      dependencies: { plugin: "1.0.0", "runtime-peer": "4.12.23" },
+      overrides: { "runtime-peer": "4.12.18" },
+      openclaw: { managedOverrides: ["runtime-peer"], managedPeerDependencies: ["runtime-peer"] },
+    });
+
+    const runCommand = peerPlan(
+      {
+        "node_modules/plugin": {
+          peerDependencies: { "runtime-peer": "^4.0.0" },
+          version: "1.0.0",
+        },
+        "node_modules/runtime-peer": { peer: true, version: "4.12.18" },
+      },
+      (manifest) => {
+        expect(manifest.dependencies).toEqual({ plugin: "1.0.0" });
+        expect(manifest.overrides).toEqual({ "runtime-peer": "4.12.18" });
+      },
+    );
+
+    await expect(
+      syncManagedNpmRootPeerDependencies({
+        npmRoot,
+        managedOverrides: { "runtime-peer": "4.12.18" },
+        runCommand,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(readManifest(npmRoot)).resolves.toEqual({
+      private: true,
+      dependencies: { plugin: "1.0.0", "runtime-peer": "4.12.18" },
+      overrides: { "runtime-peer": "4.12.18" },
+      openclaw: { managedOverrides: ["runtime-peer"], managedPeerDependencies: ["runtime-peer"] },
+    });
+  });
+
+  it("retains the manifest when authority expires during temporary publication", async () => {
+    const original = { private: true, dependencies: { plugin: "1.0.0" } };
+    const npmRoot = await makeTempRoot(original);
+    const open = fs.open.bind(fs);
+    let current = true;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (path.dirname(String(args[0])) === npmRoot && args[1] === "wx") {
+        current = false;
+      }
+      return handle;
+    });
+    await expect(
+      syncManagedNpmRootPeerDependencies({
+        npmRoot,
+        managedOverrides: { axios: "1.18.0" },
+        runCommand: peerPlan({}),
+        beforePersistentApply: () => {
+          if (!current) {
+            throw new Error("publication authority expired");
+          }
+        },
+      }),
+    ).rejects.toThrow("publication authority expired");
+    await expect(readManifest(npmRoot)).resolves.toEqual(original);
+  });
+
+  it("reconciles preserved stale pins with managed overrides when peer planning fails", async () => {
+    const npmRoot = await makeTempRoot({
+      private: true,
+      dependencies: { "aliased-peer": "3.0.10", plugin: "1.0.0", "runtime-peer": "4.12.23" },
+      openclaw: { managedPeerDependencies: ["aliased-peer", "runtime-peer"] },
+    });
+
+    const runCommand = vi.fn(async () => ({
+      ...successfulSpawn,
+      code: 1,
+      stderr: "npm ERR! network request failed",
+    }));
+
+    await expect(
+      syncManagedNpmRootPeerDependencies({
+        npmRoot,
+        managedOverrides: { "aliased-peer": "npm:@scope/real@3.0.10", "runtime-peer": "4.12.18" },
+        runCommand,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(readManifest(npmRoot)).resolves.toEqual({
+      private: true,
+      dependencies: {
+        "aliased-peer": "npm:@scope/real@3.0.10",
+        plugin: "1.0.0",
+        "runtime-peer": "4.12.18",
+      },
+      overrides: { "aliased-peer": "npm:@scope/real@3.0.10", "runtime-peer": "4.12.18" },
+      openclaw: {
+        managedOverrides: ["aliased-peer", "runtime-peer"],
+        managedPeerDependencies: ["aliased-peer", "runtime-peer"],
+      },
+    });
+  });
+
+  it("uses lockfile metadata to preserve non-host peers when host peer planning fails", async () => {
+    const npmRoot = await makeTempRoot({
+      private: true,
+      dependencies: { plugin: "1.0.0" },
+    });
+
+    const runCommand = peerPlan({
+      "node_modules/plugin": {
+        peerDependencies: { openclaw: "2026.5.99-beta.1", "runtime-peer": "^2.0.0" },
+        version: "1.0.0",
+      },
+    }).mockResolvedValueOnce({
+      ...successfulSpawn,
+      code: 1,
+      stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
+    });
+
+    await expect(
+      syncManagedNpmRootPeerDependencies({ npmRoot, runCommand, timeoutMs: 45_000 }),
+    ).resolves.toBe(true);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    const [strictArgs, rawStrictOptions] = runCommand.mock.calls[0] ?? [];
+    const [fallbackArgs, rawFallbackOptions] = runCommand.mock.calls[1] ?? [];
+    const strictOptions = requireCommandOptions(rawStrictOptions, "strict npm peer plan");
+    const fallbackOptions = requireCommandOptions(rawFallbackOptions, "fallback npm peer plan");
+    expect(strictArgs).not.toContain("--legacy-peer-deps");
+    expect(strictOptions.env?.npm_config_legacy_peer_deps).toBe("false");
+    expect(fallbackArgs).toContain("--legacy-peer-deps");
+    expect(fallbackOptions.env?.npm_config_legacy_peer_deps).toBe("true");
+    expect([strictOptions.timeoutMs, fallbackOptions.timeoutMs]).toEqual([45_000, 45_000]);
+    await expect(readManifest(npmRoot)).resolves.toEqual({
+      private: true,
+      dependencies: { plugin: "1.0.0", "runtime-peer": "^2.0.0" },
+      openclaw: { managedPeerDependencies: ["runtime-peer"] },
+    });
+  });
+
+  it("does not promote nested bundled peer ranges without a root peer package", async () => {
+    const npmRoot = await makeTempRoot({
+      private: true,
+      dependencies: { plugin: "file:./plugin.tgz" },
+    });
+
+    const runCommand = peerPlan({
+      "node_modules/plugin": { version: "1.0.0" },
+      "node_modules/plugin/node_modules/runtime-lib": {
+        peerDependencies: { zod: "^4.0.0" },
+        version: "1.0.0",
+      },
+      "node_modules/plugin/node_modules/zod": { version: "4.4.3" },
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
+
+    await expect(readManifest(npmRoot)).resolves.toEqual({
+      private: true,
+      dependencies: { plugin: "file:./plugin.tgz" },
+    });
+  });
+});

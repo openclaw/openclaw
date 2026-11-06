@@ -1,0 +1,133 @@
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
+import type {
+  ChannelGroupPolicy,
+  OpenClawConfig,
+  TelegramAccountConfig,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { NormalizedAllowFrom } from "./bot-access.js";
+
+type TelegramGroupBaseBlockReason =
+  | "group-disabled"
+  | "topic-disabled"
+  | "group-override-unauthorized";
+
+type TelegramGroupBaseAccessResult =
+  | { allowed: true }
+  | { allowed: false; reason: TelegramGroupBaseBlockReason };
+
+export const evaluateTelegramGroupBaseAccess = (params: {
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+  hasGroupAllowOverride: boolean;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  senderId?: string;
+  enforceAllowOverride: boolean;
+  requireSenderForAllowOverride: boolean;
+}): TelegramGroupBaseAccessResult => {
+  // Check enabled flags for both groups and DMs
+  if (params.groupConfig?.enabled === false) {
+    return { allowed: false, reason: "group-disabled" };
+  }
+  if (params.topicConfig?.enabled === false) {
+    return { allowed: false, reason: "topic-disabled" };
+  }
+  if (
+    params.enforceAllowOverride &&
+    params.hasGroupAllowOverride &&
+    (!params.effectiveGroupAllow.hasEntries ||
+      (params.requireSenderForAllowOverride && !params.senderId) ||
+      !isSenderIdAllowed(params.effectiveGroupAllow, params.senderId ?? "", true))
+  ) {
+    return { allowed: false, reason: "group-override-unauthorized" };
+  }
+  return { allowed: true };
+};
+
+type TelegramGroupPolicyBlockReason =
+  | "group-policy-disabled"
+  | "group-policy-allowlist-no-sender"
+  | "group-policy-allowlist-empty"
+  | "group-policy-allowlist-unauthorized"
+  | "group-chat-not-allowed";
+
+type TelegramGroupPolicyAccessResult =
+  | { allowed: true }
+  | { allowed: false; reason: TelegramGroupPolicyBlockReason };
+
+export const resolveTelegramRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
+
+export const resolveTelegramEffectiveGroupPolicy = (params: {
+  cfg: OpenClawConfig;
+  telegramCfg: TelegramAccountConfig;
+  groupConfig?: TelegramGroupConfig;
+  topicConfig?: TelegramTopicConfig;
+}) => {
+  const { groupPolicy: runtimeFallbackPolicy } = resolveTelegramRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.telegram !== undefined,
+    groupPolicy: params.telegramCfg.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
+  return (
+    firstDefined(
+      params.topicConfig?.groupPolicy,
+      params.groupConfig?.groupPolicy,
+      params.telegramCfg.groupPolicy,
+      params.cfg.channels?.defaults?.groupPolicy,
+    ) ?? runtimeFallbackPolicy
+  );
+};
+
+export const evaluateTelegramGroupPolicyAccess = (params: {
+  isGroup: boolean;
+  chatId: string | number;
+  cfg: OpenClawConfig;
+  telegramCfg: TelegramAccountConfig;
+  topicConfig?: TelegramTopicConfig;
+  groupConfig?: TelegramGroupConfig;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  senderId?: string;
+  resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
+  enforceAllowlistAuthorization: boolean;
+  allowEmptyAllowlistEntries: boolean;
+}): TelegramGroupPolicyAccessResult => {
+  if (!params.isGroup) {
+    return { allowed: true };
+  }
+  const groupPolicy = resolveTelegramEffectiveGroupPolicy(params);
+  if (groupPolicy === "disabled") {
+    return { allowed: false, reason: "group-policy-disabled" };
+  }
+  // Check chat-level allowlist first so that groups explicitly listed in the
+  // `groups` config are not blocked by the sender-level "empty allowlist" guard.
+  const groupAllowlist = params.resolveGroupPolicy(params.chatId, params.cfg);
+  if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
+    return { allowed: false, reason: "group-chat-not-allowed" };
+  }
+  // A wildcard enables the group but does not bypass sender-level filtering.
+  const chatExplicitlyAllowed =
+    groupAllowlist.allowlistEnabled && Boolean(groupAllowlist.groupConfig);
+  if (groupPolicy === "allowlist" && params.enforceAllowlistAuthorization) {
+    const senderId = params.senderId ?? "";
+    const allowlistConfigured =
+      chatExplicitlyAllowed ||
+      params.allowEmptyAllowlistEntries ||
+      params.effectiveGroupAllow.hasEntries;
+    const allowlistMatched =
+      (chatExplicitlyAllowed && !params.effectiveGroupAllow.hasEntries) ||
+      isSenderIdAllowed(params.effectiveGroupAllow, senderId, true);
+    if (!senderId) {
+      return { allowed: false, reason: "group-policy-allowlist-no-sender" };
+    }
+    if (!allowlistConfigured) {
+      return { allowed: false, reason: "group-policy-allowlist-empty" };
+    }
+    if (!allowlistMatched) {
+      return { allowed: false, reason: "group-policy-allowlist-unauthorized" };
+    }
+  }
+  return { allowed: true };
+};

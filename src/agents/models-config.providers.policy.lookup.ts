@@ -1,0 +1,39 @@
+/**
+ * Resolves provider plugin lookup keys from provider config aliases.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { MODEL_APIS } from "../config/types.models.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+const GENERIC_PROVIDER_APIS = new Set<string>([
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+  "google-interactions",
+]);
+
+export function resolveProviderPluginLookupKey(
+  providerKey: string,
+  provider?: ProviderConfig,
+): string {
+  const api = normalizeOptionalString(provider?.api) ?? "";
+  if (
+    providerKey === "google-antigravity" ||
+    providerKey === "google-vertex" ||
+    api === "google-generative-ai"
+  ) {
+    return "google";
+  }
+  if (provider?.models?.some((model) => model.api === "google-generative-ai")) {
+    return "google";
+  }
+  if (
+    api &&
+    MODEL_APIS.includes(api as (typeof MODEL_APIS)[number]) &&
+    !GENERIC_PROVIDER_APIS.has(api)
+  ) {
+    return api;
+  }
+  return providerKey;
+}

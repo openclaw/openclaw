@@ -1,0 +1,261 @@
+import type {
+  SystemAgentChatHistoryResult,
+  SystemAgentChatResult,
+} from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WizardStep } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status-state.ts";
+import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
+import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
+
+const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
+
+export type CustodianMessage = {
+  id: number;
+  role: "assistant" | "user";
+  text: string;
+  at: number;
+  question: CustodianStructuredQuestion | null;
+  step: WizardStep | null;
+  /** Gateway-recorded optional welcome; notices and required input remain visible. */
+  optionalWelcome?: boolean;
+};
+
+export function createCustodianMessage(
+  id: number,
+  role: CustodianMessage["role"],
+  text: string,
+  question: CustodianStructuredQuestion | null = null,
+  step: WizardStep | null = null,
+): CustodianMessage {
+  return { id, role, text, at: Date.now(), question, step };
+}
+
+export function createCustodianReplyMessage(
+  id: number,
+  result: SystemAgentChatResult,
+): CustodianMessage {
+  const step = result.step ?? null;
+  const question = step ? null : parseCustodianQuestion(result.question);
+  return {
+    ...createCustodianMessage(id, "assistant", result.reply, question, step),
+    optionalWelcome: result.optionalWelcome === true,
+  };
+}
+
+export function hasUnresolvedCustodianQuestion(
+  messages: readonly CustodianMessage[],
+  dismissedQuestions: ReadonlySet<string>,
+  answeredQuestions: ReadonlySet<string>,
+  wizardInputPending: boolean,
+  replyUncertain: boolean,
+): boolean {
+  return (
+    wizardInputPending ||
+    replyUncertain ||
+    // buildSystemAgentGreetingQuestion emits suggestions, not pending input.
+    // Like free text, diagnostics and nudges may replace those quick actions.
+    messages.some(
+      (message) =>
+        message.question !== null &&
+        message.question.id !== "system-agent-quick-actions" &&
+        !dismissedQuestions.has(`${message.id}:${message.question.id}`) &&
+        !answeredQuestions.has(`${message.id}:${message.question.id}`),
+    )
+  );
+}
+
+export function retireCustodianQuestions(
+  messages: readonly CustodianMessage[],
+  answeredQuestions: ReadonlySet<string>,
+): Set<string> {
+  const answered = new Set(answeredQuestions);
+  for (const message of messages) {
+    if (message.question) {
+      answered.add(`${message.id}:${message.question.id}`);
+    }
+  }
+  return answered;
+}
+
+export function custodianErrorMessage(error: unknown): string {
+  return formatUiError(error, t("custodian.requestFailed"));
+}
+
+type CustodianTranscriptResult =
+  | { ok: true; turns: SystemAgentChatHistoryResult["turns"] }
+  | { ok: false; error: unknown };
+
+async function readCustodianTranscript(
+  client: GatewayBrowserClient,
+): Promise<CustodianTranscriptResult> {
+  try {
+    const result = await client.request<SystemAgentChatHistoryResult>(
+      "openclaw.chat.history",
+      {},
+      { timeoutMs: CUSTODIAN_TRANSCRIPT_TIMEOUT_MS },
+    );
+    return { ok: true, turns: result.turns };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+export class CustodianTranscriptLoader {
+  status: PanelRefreshStatus = createPanelRefreshStatus();
+  private generation = 0;
+  private recoveryPending = false;
+  private inFlight: {
+    client: GatewayBrowserClient;
+    epoch: number;
+    promise: Promise<CustodianTranscriptResult>;
+    completion: Promise<PanelRefreshStatus>;
+    settle: () => void;
+  } | null = null;
+
+  constructor(
+    private readonly onStatusChange: () => void,
+    private readonly getGatewaySnapshot: () => ApplicationGatewaySnapshot | undefined,
+  ) {}
+
+  get refreshing(): boolean {
+    return this.inFlight !== null;
+  }
+
+  get completion(): Promise<PanelRefreshStatus> | null {
+    return this.inFlight?.completion ?? null;
+  }
+
+  deferRecovery(): void {
+    this.recoveryPending = true;
+  }
+
+  clearRecovery(): void {
+    this.recoveryPending = false;
+  }
+
+  settleRecovery(blocked: boolean, refresh: () => void): void {
+    if (this.recoveryPending && !blocked) {
+      this.clearRecovery();
+      refresh();
+    }
+  }
+
+  watchAvailability(refresh: () => void): () => void {
+    let previous = this.getGatewaySnapshot();
+    return () => {
+      const next = this.getGatewaySnapshot();
+      const becameAvailable =
+        next && isGatewayAvailable(next) && (!previous || !isGatewayAvailable(previous));
+      previous = next;
+      if (becameAvailable) {
+        void this.recover(refresh);
+      }
+    };
+  }
+
+  private async recover(refresh: () => void): Promise<void> {
+    const generation = this.generation;
+    await this.inFlight?.promise;
+    const snapshot = this.getGatewaySnapshot();
+    if (
+      generation === this.generation &&
+      snapshot &&
+      isGatewayAvailable(snapshot) &&
+      (this.status.awaitingGateway || this.status.error !== null)
+    ) {
+      refresh();
+    }
+  }
+
+  invalidate(): void {
+    // Normal turns invalidate reads, but keep the intent to recover once idle.
+    this.generation += 1;
+    this.inFlight?.settle();
+    this.inFlight = null;
+  }
+
+  reset(): void {
+    this.clearRecovery();
+    this.invalidate();
+    this.status = createPanelRefreshStatus();
+  }
+
+  async read(
+    client: GatewayBrowserClient,
+    epoch: number,
+    isCurrent: () => boolean,
+  ): Promise<CustodianTranscriptResult | null> {
+    const current = this.inFlight;
+    if (current && current.client === client && current.epoch === epoch) {
+      await current.promise;
+      return null;
+    }
+    const generation = ++this.generation;
+    this.status = beginPanelRefresh(this.status, { clearError: false });
+    const promise = readCustodianTranscript(client);
+    const { promise: completion, resolve } = Promise.withResolvers<PanelRefreshStatus>();
+    const receipt = { client, epoch, promise, completion, settle: () => resolve(this.status) };
+    this.inFlight = receipt;
+    this.onStatusChange();
+    try {
+      const result = await promise;
+      if (!isCurrent() || generation !== this.generation) {
+        return null;
+      }
+      this.status = result.ok
+        ? completePanelRefresh()
+        : failPanelRefresh(this.status, result.error, this.getGatewaySnapshot());
+      return result;
+    } finally {
+      receipt.settle();
+      if (this.inFlight?.promise === promise) {
+        this.inFlight = null;
+        this.onStatusChange();
+      }
+    }
+  }
+
+  async loadMessages(
+    client: GatewayBrowserClient,
+    epoch: number,
+    firstMessageId: number,
+    isCurrent: () => boolean,
+  ): Promise<{ messages: CustodianMessage[]; nextMessageId: number } | null> {
+    this.clearRecovery();
+    const result = await this.read(client, epoch, isCurrent);
+    if (!result?.ok || !isCurrent()) {
+      return null;
+    }
+    let nextMessageId = firstMessageId;
+    const messages = result.turns.map((turn) => ({
+      id: nextMessageId++,
+      role: turn.role,
+      text:
+        turn.role === "user" && turn.text === SERVER_SENSITIVE_MASK
+          ? t("custodian.sensitiveReply")
+          : turn.text,
+      at: turn.at,
+      question: null,
+      step: null,
+    }));
+    return { messages, nextMessageId };
+  }
+}
+
+/**
+ * Sensitive turns are masked server-side before persistence: the engine pushes
+ * only "<redacted secret>" into history (never raw input), so durable turns
+ * cannot carry credentials. This mapping only localizes that marker to the
+ * same display text live sensitive replies use.
+ */
+const SERVER_SENSITIVE_MASK = "<redacted secret>";

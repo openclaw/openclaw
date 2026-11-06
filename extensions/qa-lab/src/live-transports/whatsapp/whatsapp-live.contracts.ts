@@ -1,0 +1,169 @@
+import type {
+  WhatsAppQaDriverObservedMessage,
+  WhatsAppQaDriverSession,
+} from "@openclaw/whatsapp/api.js";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { QaGatewayChild } from "../../gateway-child.js";
+
+export type WhatsAppQaRuntimeEnv = {
+  driverAuthArchiveBase64: string;
+  driverPhoneE164: string;
+  sutAuthArchiveBase64: string;
+  sutPhoneE164: string;
+  groupJid?: string;
+};
+
+type WhatsAppQaApprovalDecision = "allow-once" | "deny";
+type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
+
+type WhatsAppQaMessageSendMode =
+  | {
+      kind?: "text";
+    }
+  | {
+      fileName?: string;
+      kind: "media";
+      mediaBuffer: Buffer;
+      mediaType: string;
+    };
+
+export type WhatsAppQaGatewayRuntime = Pick<QaGatewayChild, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<QaGatewayChild, "logs" | "token" | "wsUrl">>;
+export type WhatsAppQaGatewayCallContext = {
+  gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
+  gatewayTarget: string;
+  scenarioId: string;
+  sutAccountId: string;
+};
+export type WhatsAppQaDriverQuotedMessageKey = NonNullable<
+  NonNullable<Parameters<WhatsAppQaDriverSession["sendText"]>[2]>["quotedMessageKey"]
+>;
+
+export type WhatsAppQaMessageScenarioContext = {
+  driver: WhatsAppQaDriverSession;
+  driverPhoneE164: string;
+  gateway: WhatsAppQaGatewayRuntime;
+  gatewayTarget: string;
+  gatewayWorkspaceDir: string;
+  requestStartedAt: Date;
+  scenarioId: string;
+  sent: { messageId?: string };
+  sutAccountId: string;
+  sutPhoneE164: string;
+  target: string;
+  targetKind: "dm" | "group";
+};
+
+export type WhatsAppQaResolvedScenarioTarget =
+  | {
+      target: "dm";
+    }
+  | {
+      groupJid: string;
+      target: "group";
+    };
+
+export function resolveWhatsAppQaScenarioTarget(params: {
+  groupJid?: string;
+  scenarioId: string;
+  target: "dm" | "group";
+}): WhatsAppQaResolvedScenarioTarget {
+  if (params.target === "dm") {
+    return { target: "dm" };
+  }
+  if (!params.groupJid) {
+    throw new Error(`WhatsApp scenario ${params.scenarioId} requires groupJid.`);
+  }
+  return {
+    groupJid: params.groupJid,
+    target: "group",
+  };
+}
+
+export function resolveWhatsAppQaMessageTargets(params: {
+  driverPhoneE164: string;
+  groupJid?: string;
+  scenarioTarget: "dm" | "group";
+  sutPhoneE164: string;
+}) {
+  if (params.scenarioTarget === "group") {
+    if (!params.groupJid) {
+      throw new Error("WhatsApp group scenario requires groupJid.");
+    }
+    return {
+      driverTarget: params.groupJid,
+      gatewayTarget: params.groupJid,
+    };
+  }
+  return {
+    driverTarget: params.sutPhoneE164,
+    gatewayTarget: params.driverPhoneE164,
+  };
+}
+
+export type WhatsAppQaMessageScenarioRun = {
+  afterReply?: (
+    reply: WhatsAppQaDriverObservedMessage,
+    context: WhatsAppQaMessageScenarioContext,
+  ) => Promise<string | undefined> | string | undefined;
+  afterSend?: (context: WhatsAppQaMessageScenarioContext) => Promise<string | undefined>;
+  allowQuietWindowMessage?: (
+    message: WhatsAppQaDriverObservedMessage,
+    context: WhatsAppQaMessageScenarioContext,
+  ) => boolean;
+  configMode: "allowlist" | "disabled" | "open" | "pairing";
+  expectReply: boolean;
+  expectedJoinedSutTextIncludes?: string[];
+  expectedSutMessageCount?: number;
+  input: string;
+  kind?: "message";
+  matchText: string | RegExp;
+  quietInput?: string;
+  quietMatchText?: string | RegExp;
+  quietSendMode?: WhatsAppQaMessageSendMode;
+  quietWindowMs?: number;
+  sendMode?: WhatsAppQaMessageSendMode;
+  settleMs?: number;
+  target: "dm" | "group";
+  verify?: (
+    reply: WhatsAppQaDriverObservedMessage,
+    context: WhatsAppQaMessageScenarioContext,
+  ) => void;
+};
+
+export type WhatsAppQaApprovalScenarioRun = {
+  approvalKind: ChannelApprovalKind;
+  decision: WhatsAppQaApprovalDecision;
+  decisionMode?: WhatsAppQaApprovalDecisionMode;
+  kind: "approval";
+  target?: "dm" | "group";
+  token: string;
+};
+
+export type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
+
+export type WhatsAppQaConfigOverrides = {
+  actions?: boolean;
+  audioPreflight?: boolean;
+  approvals?: {
+    exec?: boolean;
+    plugin?: boolean;
+  };
+  blockGroupSender?: boolean;
+  broadcast?: {
+    agents: string[];
+    strategy?: "parallel" | "sequential";
+  };
+  groupHistoryLimit?: number;
+  groupPolicy?: "allowlist" | "disabled" | "open";
+  inboundDebounceMs?: number;
+  replyToMode?: ReplyToMode;
+  statusReactions?: boolean;
+};
+
+export type WhatsAppQaScenarioImplementation = {
+  buildRun: () => WhatsAppQaScenarioRun;
+  configOverrides?: WhatsAppQaConfigOverrides;
+  requiresGroupJid?: boolean;
+};

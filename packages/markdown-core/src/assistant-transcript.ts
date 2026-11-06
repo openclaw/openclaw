@@ -1,0 +1,326 @@
+// Assistant transcript annotations are produced after Markdown inline parsing and text joining.
+import type { MarkdownIt, StateCore, Token } from "markdown-it";
+import {
+  findAssistantTranscriptRoleHeaderSpans,
+  type AssistantTranscriptRoleHeaderSpan,
+} from "./assistant-transcript-headers.js";
+import { tokenizeHtmlTags } from "./html-tags.js";
+import { appendHtmlTags, copyHtmlTags, RAW_HTML_TOKEN_TYPE } from "./ir-metadata.js";
+
+export const ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE = "assistant_transcript_role_text";
+
+export type AssistantTranscriptRoleTokenMeta = {
+  assistantTranscriptRoleHeader: Omit<AssistantTranscriptRoleHeaderSpan, "start" | "end">;
+};
+
+export type AssistantTranscriptRoleImageMeta = {
+  assistantTranscriptRoleImage: {
+    /** Parsed visible label; annotation offsets are relative to this text. */
+    text: string;
+    spans: AssistantTranscriptRoleHeaderSpan[];
+  };
+};
+
+type VisibleTokenProjection = {
+  text: string;
+  excludedRanges: Array<{ start: number; end: number }>;
+};
+
+type AssistantTranscriptRoleMarkdownOptions = {
+  /** Trusted renderer tokens that contribute structure but no visible text. */
+  isStructuralHtmlInline?: (token: Token) => boolean;
+};
+
+const RAW_CODE_CONTAINER_TAGS = new Set(["code", "pre", "script", "style", "textarea"]);
+
+function findRawCodeContainerRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const openTags: string[] = [];
+  let rangeStart = -1;
+
+  for (const tag of tokenizeHtmlTags(text)) {
+    if (!RAW_CODE_CONTAINER_TAGS.has(tag.name)) {
+      continue;
+    }
+    if (tag.closing) {
+      const openIndex = openTags.lastIndexOf(tag.name);
+      if (openIndex !== -1) {
+        openTags.splice(openIndex);
+        if (openTags.length === 0 && rangeStart !== -1) {
+          ranges.push({ start: rangeStart, end: tag.end });
+          rangeStart = -1;
+        }
+      }
+    } else if (!tag.selfClosing) {
+      if (openTags.length === 0) {
+        rangeStart = tag.start;
+      }
+      openTags.push(tag.name);
+    }
+  }
+
+  if (openTags.length > 0 && rangeStart !== -1) {
+    ranges.push({ start: rangeStart, end: text.length });
+  }
+  return ranges;
+}
+
+function visibleTokenProjection(
+  token: Token,
+  options: AssistantTranscriptRoleMarkdownOptions,
+): VisibleTokenProjection | null {
+  if (token.type === "softbreak" || token.type === "hardbreak") {
+    return { text: "\n", excludedRanges: [] };
+  }
+  if (token.type === "html_inline" && options.isStructuralHtmlInline?.(token) === true) {
+    return null;
+  }
+  if (token.type === "text" || token.type === "html_inline") {
+    return { text: token.content, excludedRanges: [] };
+  }
+  // Raw lexemes own their contents but still contribute length to later text offsets.
+  if (token.type === "code_inline" || token.type === RAW_HTML_TOKEN_TYPE) {
+    return { text: token.content, excludedRanges: [{ start: 0, end: token.content.length }] };
+  }
+  if (token.type === "image") {
+    return token.children && token.children.length > 0
+      ? combineVisibleTokenProjections(
+          token.children.map((child) => visibleTokenProjection(child, options)),
+        )
+      : { text: token.content, excludedRanges: [] };
+  }
+  return null;
+}
+
+function combineVisibleTokenProjections(
+  projections: readonly (VisibleTokenProjection | null)[],
+): VisibleTokenProjection {
+  let text = "";
+  const excludedRanges: VisibleTokenProjection["excludedRanges"] = [];
+  for (const projection of projections) {
+    if (!projection) {
+      continue;
+    }
+    const offset = text.length;
+    text += projection.text;
+    for (const range of projection.excludedRanges) {
+      excludedRanges.push({ start: offset + range.start, end: offset + range.end });
+    }
+  }
+  excludedRanges.push(...findRawCodeContainerRanges(text));
+  return { text, excludedRanges };
+}
+
+function cloneToken(
+  TokenType: StateCore["Token"],
+  source: Token,
+  start: number,
+  end: number,
+  type: string = source.type,
+): Token {
+  const token = new TokenType(
+    type,
+    type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE ? "" : source.tag,
+    0,
+  );
+  Object.assign(token, source);
+  token.type = type;
+  token.content = source.content.slice(start, end);
+  token.children = null;
+  return copyHtmlTags(source, token, start, end);
+}
+
+function sliceRoleHeaderSpans(
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+  spanStartIndex: number,
+  start: number,
+  end: number,
+): AssistantTranscriptRoleHeaderSpan[] {
+  const sliced: AssistantTranscriptRoleHeaderSpan[] = [];
+  for (let index = spanStartIndex; index < spans.length; index += 1) {
+    const span = spans[index];
+    if (!span || span.start >= end) {
+      break;
+    }
+    if (span.end > start) {
+      sliced.push({
+        ...span,
+        start: Math.max(span.start, start) - start,
+        end: Math.min(span.end, end) - start,
+      });
+    }
+  }
+  return sliced;
+}
+
+function splitVisibleToken(
+  TokenType: StateCore["Token"],
+  token: Token,
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+): Token[] {
+  if (spans.length === 0) {
+    return [token];
+  }
+  const result: Token[] = [];
+  let localCursor = 0;
+  for (const span of spans) {
+    if (span.start > localCursor) {
+      result.push(cloneToken(TokenType, token, localCursor, span.start));
+    }
+    if (span.end > span.start) {
+      const roleToken = cloneToken(
+        TokenType,
+        token,
+        span.start,
+        span.end,
+        ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
+      );
+      roleToken.meta = {
+        ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
+        assistantTranscriptRoleHeader: {
+          kind: span.kind,
+          role: span.role,
+        },
+      } satisfies AssistantTranscriptRoleTokenMeta;
+      result.push(roleToken);
+    }
+    localCursor = span.end;
+  }
+  if (localCursor < token.content.length) {
+    result.push(cloneToken(TokenType, token, localCursor, token.content.length));
+  }
+  return result;
+}
+
+function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[] {
+  const openLinks: Array<{ token: Token; containsRole: boolean }> = [];
+  const suppressedLinks = new Set<Token>();
+  for (const token of tokens) {
+    if (token.type === "link_open") {
+      openLinks.push({ token, containsRole: false });
+      continue;
+    }
+    const imageMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
+      ?.assistantTranscriptRoleImage;
+    if (token.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE || imageMeta?.spans.length) {
+      for (const link of openLinks) {
+        link.containsRole = true;
+      }
+      continue;
+    }
+    if (token.type !== "link_close") {
+      continue;
+    }
+    const openLink = openLinks.pop();
+    if (!openLink?.containsRole) {
+      continue;
+    }
+    suppressedLinks.add(openLink.token);
+    suppressedLinks.add(token);
+  }
+
+  const result: Token[] = [];
+  for (const token of tokens) {
+    if (suppressedLinks.has(token)) {
+      continue;
+    }
+    const previous = result.at(-1);
+    if (
+      previous?.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE &&
+      token.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE
+    ) {
+      appendHtmlTags(previous, token, previous.content.length);
+      previous.content += token.content;
+      continue;
+    }
+    result.push(token);
+  }
+  return result;
+}
+
+/** Adds semantic transcript-role tokens to assistant-authored Markdown only. */
+export function markdownItAssistantTranscriptRoles(
+  md: MarkdownIt,
+  options: AssistantTranscriptRoleMarkdownOptions = {},
+): void {
+  md.core.ruler.after("text_join", "assistant_transcript_roles", (state) => {
+    if (state.env?.assistantTranscriptRoleHeaders !== true) {
+      return;
+    }
+    const tokens: Token[] = [];
+    const preserveLinks = state.env?.assistantTranscriptRolePreserveLinks === true;
+    for (const token of state.tokens) {
+      if (token.type === "inline" && token.children) {
+        const TokenType = state.Token;
+        const children = token.children;
+        const tokenProjections = children.map((child) => visibleTokenProjection(child, options));
+        const projection = combineVisibleTokenProjections(tokenProjections);
+        const spans = findAssistantTranscriptRoleHeaderSpans(
+          projection.text,
+          projection.excludedRanges,
+        );
+        if (spans.length === 0) {
+          token.children = children;
+          tokens.push(token);
+          continue;
+        }
+
+        const result: Token[] = [];
+        let visibleCursor = 0;
+        let spanCursor = 0;
+        for (const [index, child] of children.entries()) {
+          const tokenProjection = tokenProjections[index];
+          if (!tokenProjection) {
+            result.push(child);
+            continue;
+          }
+          const content = tokenProjection.text;
+          for (;;) {
+            const span = spans[spanCursor];
+            if (!span || span.end > visibleCursor) {
+              break;
+            }
+            spanCursor += 1;
+          }
+          const tokenEnd = visibleCursor + content.length;
+          if (child.type === "text" || child.type === "html_inline") {
+            result.push(
+              ...splitVisibleToken(
+                TokenType,
+                child,
+                sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, tokenEnd),
+              ),
+            );
+          } else if (child.type === "image") {
+            const imageSpans = sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, tokenEnd);
+            if (imageSpans.length > 0) {
+              child.meta = {
+                ...(child.meta && typeof child.meta === "object" ? child.meta : {}),
+                assistantTranscriptRoleImage: { text: content, spans: imageSpans },
+              } satisfies AssistantTranscriptRoleImageMeta;
+            }
+            result.push(child);
+          } else {
+            result.push(child);
+          }
+          visibleCursor += content.length;
+        }
+        token.children = preserveLinks
+          ? result
+          : removeLinksContainingAssistantTranscriptRoles(result);
+        tokens.push(token);
+        continue;
+      }
+      if (token.type === "html_block") {
+        const spans = findAssistantTranscriptRoleHeaderSpans(
+          token.content,
+          findRawCodeContainerRanges(token.content),
+        );
+        tokens.push(...splitVisibleToken(state.Token, token, spans));
+        continue;
+      }
+      tokens.push(token);
+    }
+    state.tokens = tokens;
+  });
+}

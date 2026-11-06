@@ -1,0 +1,20 @@
+export { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
+export {
+  extractEnvAssignmentKeysFromDispatchWrappers,
+  unwrapDispatchWrappersForResolution,
+  unwrapKnownDispatchWrapperInvocation,
+} from "./dispatch-wrapper-resolution.js";
+export {
+  extractBindableShellWrapperInlineCommand,
+  extractShellWrapperCommand,
+  hasEnvManipulationBeforeShellWrapper,
+  hasPosixShellStartupBeforeInlineCommand,
+  isBlockedShellWrapperCommand,
+  isShellWrapperExecutable,
+  isShellWrapperInvocation,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
+  POSIX_SHELL_WRAPPERS,
+  POWERSHELL_WRAPPERS,
+  resolveShellWrapperTransportArgv,
+  unwrapKnownShellMultiplexerInvocation,
+} from "./shell-wrapper-resolution.js";

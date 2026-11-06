@@ -1,0 +1,394 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import pLimit, { type LimitFunction } from "p-limit";
+import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mts";
+import {
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  parsePackageDistContentInventory,
+  comparePackageDistContentInventory,
+  createPackageDistContentInventoryEntry,
+  type PackageDistContentInventoryEntry,
+} from "../../scripts/lib/package-dist-inventory-contract.mts";
+import { escapeRegExp } from "../shared/regexp.js";
+import { sha256File } from "./directory-durability.js";
+import { isMissingPathError } from "./errno.js";
+import { root as openFsRoot } from "./fs-safe.js";
+import { readJsonIfExists } from "./json-files.js";
+export {
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  type PackageDistContentInventoryEntry,
+} from "../../scripts/lib/package-dist-inventory-contract.mts";
+
+const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
+const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
+const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
+// The build keeps source-shaped SDK declarations for local boundary projects,
+// but the npm package ships flat declarations and must not inventory the old tree.
+const OMITTED_DIST_PREFIXES = [
+  "dist/plugin-sdk/src/",
+  "dist/qa-runtime-",
+  ...[LEGACY_QA_CHANNEL_DIR, LEGACY_QA_LAB_DIR].flatMap((name) => [
+    `dist/plugin-sdk/extensions/${name}/`,
+    `dist/extensions/${name}/`,
+  ]),
+];
+const OMITTED_PLUGIN_SDK_TEST_NAMES = [
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-test-helpers",
+  "compiled-subprocess-testing",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+];
+const sdkFiles = (names: string[]) =>
+  names.flatMap((name) => [`dist/plugin-sdk/${name}.d.ts`, `dist/plugin-sdk/${name}.js`]);
+const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(sdkFiles(OMITTED_PLUGIN_SDK_TEST_NAMES));
+const OMITTED_PLUGIN_SDK_FILES = new Set(
+  sdkFiles([
+    ...OMITTED_PLUGIN_SDK_TEST_NAMES,
+    LEGACY_QA_CHANNEL_DIR,
+    `${LEGACY_QA_CHANNEL_DIR}-protocol`,
+    LEGACY_QA_LAB_DIR,
+    "qa-runtime",
+  ]),
+);
+const OMITTED_DIST_SUBTREE_PATTERNS = [
+  /^dist\/extensions\/node_modules(?:\/|$)/u,
+  /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
+  /^dist\/plugin-sdk\/src(?:\/|$)/u,
+  new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
+  new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
+] as const;
+type PackageDistExclusionRules = {
+  includePackageExcludedFiles?: boolean;
+  files: ReadonlySet<string>;
+  prefixes: readonly string[];
+  patterns: readonly RegExp[];
+};
+
+function normalizeRelativePath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
+  const parts = relativePath.split("/");
+  if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
+    return false;
+  }
+
+  return parts[2]?.toLowerCase() === "node_modules" || parts[3]?.toLowerCase() === "node_modules";
+}
+
+function compilePackageFilesExclusionPattern(pattern: string): RegExp {
+  let source = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "*") {
+      if (pattern[index + 1] === "*") {
+        if (pattern[index + 2] === "/") {
+          source += "(?:[^/]+/)*";
+          index += 2;
+        } else {
+          source += ".*";
+          index += 1;
+        }
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+    source += escapeRegExp(char ?? "");
+  }
+  source += "$";
+  return new RegExp(source, "u");
+}
+
+function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDistExclusionRules {
+  if (!rootPackageJson || typeof rootPackageJson !== "object") {
+    return { files: new Set(), prefixes: [], patterns: [] };
+  }
+  const files = (rootPackageJson as { files?: unknown }).files;
+  if (!Array.isArray(files)) {
+    return { files: new Set(), prefixes: [], patterns: [] };
+  }
+  const excludedFiles = new Set<string>();
+  const excludedPrefixes = new Set<string>();
+  const excludedPatterns: RegExp[] = [];
+  for (const entry of files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const normalized = normalizeRelativePath(entry);
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(normalized);
+    if (match?.[1]) {
+      // Preserve literal root and descendant exclusion alongside package-file glob rules.
+      excludedFiles.add(`dist/extensions/${match[1]}`);
+      excludedPrefixes.add(`dist/extensions/${match[1]}/`);
+    }
+    if (!normalized.startsWith("!dist/")) {
+      continue;
+    }
+    const excludedPath = normalized.slice(1);
+    if (excludedPath.endsWith("/**") && !excludedPath.slice(0, -3).includes("*")) {
+      excludedPrefixes.add(excludedPath.slice(0, -2));
+    } else if (excludedPath.includes("*")) {
+      excludedPatterns.push(compilePackageFilesExclusionPattern(excludedPath));
+    } else {
+      excludedFiles.add(excludedPath);
+    }
+  }
+  return {
+    files: excludedFiles,
+    prefixes: [...excludedPrefixes].toSorted((left, right) => left.localeCompare(right)),
+    patterns: excludedPatterns,
+  };
+}
+
+function isPackageFilesExcludedDistPath(
+  relativePath: string,
+  exclusions: PackageDistExclusionRules,
+): boolean {
+  return (
+    exclusions.files.has(relativePath) ||
+    exclusions.prefixes.some((prefix) => relativePath.startsWith(prefix)) ||
+    exclusions.patterns.some((pattern) => pattern.test(relativePath))
+  );
+}
+
+function isPackagedDistPath(relativePath: string, rules: PackageDistExclusionRules): boolean {
+  if (!relativePath.startsWith("dist/")) {
+    return false;
+  }
+  if (rules.includePackageExcludedFiles) {
+    return (
+      relativePath !== PACKAGE_DIST_INVENTORY_RELATIVE_PATH &&
+      !isLegacyPluginDependencyDirPath(relativePath)
+    );
+  }
+  return !(
+    isPackageFilesExcludedDistPath(relativePath, rules) ||
+    isLegacyPluginDependencyDirPath(relativePath) ||
+    relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH ||
+    isLocalBuildMetadataDistPath(relativePath) ||
+    relativePath.endsWith(".map") ||
+    relativePath === "dist/plugin-sdk/.tsbuildinfo" ||
+    OMITTED_PLUGIN_SDK_FILES.has(relativePath) ||
+    OMITTED_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  );
+}
+
+function isOmittedDistSubtree(relativePath: string, rules: PackageDistExclusionRules): boolean {
+  if (rules.includePackageExcludedFiles) {
+    return isLegacyPluginDependencyDirPath(relativePath);
+  }
+  return (
+    // npm directory exclusions can select the root itself or its trailing-slash subtree.
+    isPackageFilesExcludedDistPath(relativePath, rules) ||
+    isPackageFilesExcludedDistPath(`${relativePath}/`, rules) ||
+    isLegacyPluginDependencyDirPath(relativePath) ||
+    OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath) ||
+    OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
+  );
+}
+
+async function collectRelativeFiles(
+  rootDir: string,
+  baseDir: string,
+  rules: PackageDistExclusionRules,
+  fsLimit: LimitFunction,
+): Promise<string[]> {
+  const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
+  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, rules)) {
+    return [];
+  }
+  try {
+    const rootStats = await fsLimit(() => fs.lstat(rootDir));
+    if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+      throw new Error(`Unsafe package dist path: ${rootRelativePath}`);
+    }
+    const entries = await fsLimit(() => fs.readdir(rootDir, { withFileTypes: true }));
+    const files = await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = path.join(rootDir, entry.name);
+        const relativePath = normalizeRelativePath(path.relative(baseDir, entryPath));
+        if (entry.isSymbolicLink()) {
+          throw new Error(`Unsafe package dist path: ${relativePath}`);
+        }
+        if (entry.isDirectory()) {
+          return await collectRelativeFiles(entryPath, baseDir, rules, fsLimit);
+        }
+        if (entry.isFile()) {
+          return isPackagedDistPath(relativePath, rules) ? [relativePath] : [];
+        }
+        if (rules.includePackageExcludedFiles) {
+          throw new Error(`Unsupported local package entry: ${relativePath}`);
+        }
+        return [];
+      }),
+    );
+    return files.flat().toSorted((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function collectPackageDistInventory(
+  packageRoot: string,
+  options: {
+    packageManifest?: unknown;
+    includePackageExcludedFiles?: boolean;
+  } = {},
+): Promise<string[]> {
+  const rules = options.includePackageExcludedFiles
+    ? { ...collectPackageDistExclusionRules({}), includePackageExcludedFiles: true }
+    : options.packageManifest === undefined
+      ? collectPackageDistExclusionRules(
+          await readJsonIfExists<unknown>(path.join(packageRoot, "package.json")),
+        )
+      : collectPackageDistExclusionRules(options.packageManifest);
+  const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
+  return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot, rules, fsLimit);
+}
+
+export async function readPackageDistInventoryIfPresent(
+  packageRoot: string,
+): Promise<string[] | null> {
+  const parsed = await readPackageDistJsonIfExists<unknown>(
+    packageRoot,
+    PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  );
+  if (parsed === undefined) {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new Error(`Invalid package dist inventory at ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
+  }
+  return sortUniqueStrings(parsed.map(normalizeRelativePath));
+}
+
+async function openPackageDistFsRootIfPresent(
+  packageRoot: string,
+): Promise<Awaited<ReturnType<typeof openFsRoot>> | null> {
+  const packageFs = await openFsRoot(packageRoot, {
+    hardlinks: "allow",
+    symlinks: "reject",
+  });
+  let distStats;
+  try {
+    distStats = await fs.lstat(path.join(packageFs.rootReal, "dist"));
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  if (!distStats.isDirectory() || distStats.isSymbolicLink()) {
+    throw new Error("Unsafe package dist path: dist");
+  }
+  return packageFs;
+}
+
+async function readPackageDistJsonIfExists<T>(
+  packageRoot: string,
+  relativePath: string,
+): Promise<T | undefined> {
+  const packageFs = await openPackageDistFsRootIfPresent(packageRoot);
+  if (!packageFs) {
+    return undefined;
+  }
+  try {
+    return await packageFs.readJson<T>(relativePath, {
+      hardlinks: "allow",
+      maxBytes: 16 * 1024 * 1024,
+      symlinks: "reject",
+    });
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+export async function collectPackageDistContentInventory(
+  packageRoot: string,
+  inventory?: string[],
+): Promise<PackageDistContentInventoryEntry[]> {
+  const files = (inventory ?? (await collectPackageDistInventory(packageRoot))).filter(
+    (file) => file !== PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  );
+  const packageFs = await openPackageDistFsRootIfPresent(packageRoot);
+  if (!packageFs) {
+    if (files.length === 0) {
+      return [];
+    }
+    throw new Error("Unsafe package dist path: dist");
+  }
+  const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
+  const entries = await Promise.all(
+    files.map((relativePath) =>
+      fsLimit(async () => {
+        await using opened = await packageFs.open(relativePath, {
+          hardlinks: "allow",
+          symlinks: "reject",
+        });
+        return createPackageDistContentInventoryEntry(
+          relativePath,
+          await sha256File(opened.handle),
+          opened.stat.mode,
+        );
+      }),
+    ),
+  );
+  return entries.toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
+export async function readPackageDistContentInventoryIfPresent(
+  packageRoot: string,
+): Promise<PackageDistContentInventoryEntry[] | null> {
+  const parsed = await readPackageDistJsonIfExists<unknown>(
+    packageRoot,
+    PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  );
+  if (parsed !== undefined) {
+    return parsePackageDistContentInventory(parsed);
+  }
+  // The filename inventory advertises the capability. No release-version guesses.
+  const files = await readPackageDistInventoryIfPresent(packageRoot);
+  if (files?.includes(PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH)) {
+    throw new Error(
+      `missing package dist content inventory ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}`,
+    );
+  }
+  return null;
+}
+
+export async function collectPackageDistContentInventoryErrors(
+  packageRoot: string,
+  warnings?: string[],
+): Promise<string[]> {
+  const expected = await readPackageDistContentInventoryIfPresent(packageRoot);
+  if (expected === null) {
+    return [];
+  }
+  return comparePackageDistContentInventory(
+    expected,
+    await collectPackageDistContentInventory(packageRoot),
+    warnings,
+  );
+}

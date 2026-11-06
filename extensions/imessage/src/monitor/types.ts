@@ -1,0 +1,81 @@
+import type {
+  ChannelAccountSnapshot,
+  ChannelRuntimeSurface,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { IMessagePollSentOption as IMessagePollOption } from "../actions.runtime.js";
+
+export type IMessageAttachment = {
+  original_path?: string | null;
+  mime_type?: string | null;
+  missing?: boolean | null;
+  transfer_name?: string | null;
+  uti?: string | null;
+};
+
+type IMessagePollVote = {
+  option_id?: string | null;
+  option_text?: string | null;
+  participant?: string | null;
+  event_type?: string | null;
+};
+
+export type IMessagePoll = {
+  kind?: string | null;
+  question?: string | null;
+  poll_guid?: string | null;
+  original_guid?: string | null;
+  creator?: string | null;
+  options?: IMessagePollOption[] | null;
+  vote?: IMessagePollVote | null;
+  votes?: IMessagePollVote[] | null;
+};
+
+export type IMessagePayload = {
+  id?: number | null;
+  guid?: string | null;
+  poll?: IMessagePoll | null;
+  chat_id?: number | null;
+  sender?: string | null;
+  sender_name?: string | null;
+  destination_caller_id?: string | null;
+  is_from_me?: boolean | null;
+  text?: string | null;
+  // Thread origin owns quote identity; direct reply GUID also links poll captions.
+  thread_originator_guid?: string | null;
+  reply_to_guid?: string | null;
+  reply_to_text?: string | null;
+  reply_to_sender?: string | null;
+  created_at?: string | null;
+  is_reaction?: boolean | null;
+  is_tapback?: boolean | null;
+  associated_message_guid?: string | null;
+  associated_message_type?: number | null;
+  reaction_type?: string | null;
+  reaction_emoji?: string | null;
+  is_reaction_add?: boolean | null;
+  reacted_to_guid?: string | null;
+  attachments?: IMessageAttachment[] | null;
+  chat_identifier?: string | null;
+  chat_guid?: string | null;
+  chat_name?: string | null;
+  participants?: string[] | null;
+  is_group?: boolean | null;
+};
+
+export type MonitorIMessageOpts = {
+  scheduler: PluginServiceSchedulerV1;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  accountId?: string;
+  config?: OpenClawConfig;
+  requireMention?: boolean;
+  /**
+   * Surface for registering channel runtime contexts (e.g. the approval native
+   * runtime). Threaded through from the gateway via ChannelGatewayAccountContext.
+   */
+  channelRuntime?: ChannelRuntimeSurface;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+};

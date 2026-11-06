@@ -1,0 +1,405 @@
+/**
+ * Browser control client transport.
+ *
+ * Sends requests to either an absolute HTTP browser-control URL or the local
+ * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
+ */
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeOptionalString,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "../sdk-node-runtime.js";
+import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { resolveBrowserControlAuth } from "./control-auth.js";
+import {
+  BROWSER_ACT_ERROR_CODES,
+  parseBrowserErrorPayload,
+  type BrowserActErrorCode,
+  type BrowserErrorPayload,
+  type BrowserErrorMetadata,
+  type BrowserNoDisplayErrorDetails,
+} from "./errors.js";
+import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
+import { getBrowserRequestScope } from "./request-scope.js";
+
+// Application-level error from the browser control service (service is reachable
+// but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
+export class BrowserServiceError extends Error {
+  readonly status?: number;
+  readonly code?: BrowserActErrorCode;
+  readonly reason?: BrowserErrorMetadata["reason"];
+  readonly details?: BrowserNoDisplayErrorDetails;
+
+  constructor(message: string, metadata?: BrowserErrorPayload, status?: number) {
+    super(message);
+    this.name = "BrowserServiceError";
+    this.status = status;
+    this.code = metadata?.code;
+    this.reason = metadata && "reason" in metadata ? metadata.reason : undefined;
+    this.details = metadata && "details" in metadata ? metadata.details : undefined;
+  }
+}
+
+function browserServiceErrorFromPayload(
+  value: unknown,
+  fallback: string,
+  status?: number,
+): BrowserServiceError {
+  const parsed = parseBrowserErrorPayload(value);
+  const message = parsed?.error ?? fallback;
+  const modelHint =
+    parsed?.code === BROWSER_ACT_ERROR_CODES.operationFailed && status !== 401
+      ? undefined
+      : resolveBrowserServiceModelHint(message, status);
+  return new BrowserServiceError(
+    modelHint ? appendBrowserToolModelHint(message, modelHint) : message,
+    parsed ?? undefined,
+    status,
+  );
+}
+
+function isAbsoluteHttp(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
+function withLoopbackBrowserAuth(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number }) | undefined,
+): RequestInit & { timeoutMs?: number } {
+  const headers = new Headers(init?.headers ?? {});
+  if (
+    headers.has("authorization") ||
+    headers.has("x-openclaw-password") ||
+    !isLoopbackHost(URL.parse(url)?.hostname ?? "")
+  ) {
+    return { ...init, headers };
+  }
+
+  // A registered listener owns its credential even when Gateway auth differs.
+  for (const resolveAuth of [
+    () => getBridgeAuthForPort(parseBrowserHttpUrl(url, "browser control URL").port),
+    () => resolveBrowserControlAuth(getRuntimeConfig()),
+  ]) {
+    try {
+      const auth = resolveAuth();
+      if (auth?.token) {
+        headers.set("Authorization", `Bearer ${auth.token}`);
+      } else if (auth?.password) {
+        headers.set("x-openclaw-password", auth.password);
+      } else {
+        continue;
+      }
+      return { ...init, headers };
+    } catch {
+      // Fall through to the next auth source or continue without implicit auth.
+    }
+  }
+
+  return { ...init, headers };
+}
+
+const BROWSER_TOOL_PERSISTENT_MODEL_HINT =
+  "Do NOT retry the browser tool — it will keep failing. " +
+  "Use an alternative approach or inform the user that the browser is currently unavailable.";
+const BROWSER_TOOL_TRANSIENT_MODEL_HINT =
+  "This may be a transient browser error. Retry the browser tool once. " +
+  "If the same error persists, use an alternative approach or inform the user that the browser is currently unavailable.";
+
+// Retry history already lives in the model transcript. Keep this classifier stateless so one
+// session's transient failure cannot suppress browser retries in another session.
+const BROWSER_TRANSIENT_NETWORK_ERROR_RE =
+  /\b(?:ECONNRESET|ECONNABORTED|ENETRESET|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET))\b|fetch failed|network error|other side closed|socket (?:hang up|terminated)|connection (?:reset|aborted|timed out)/i;
+const BROWSER_PERSISTENT_FAILURE_RE =
+  /\bECONNREFUSED\b|connection refused|browser control (?:is )?(?:disabled|not enabled)|invalid (?:auth|authentication|credentials|password|token)|authentication (?:failed|required)|unauthorized/i;
+
+const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
+// `response/body` supports 5M characters; 32 MiB covers worst-case JSON escaping while staying bounded.
+const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+
+function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw browserServiceErrorFromPayload(
+      undefined,
+      `Browser control response was not valid UTF-8 (HTTP ${status})`,
+      status,
+    );
+  }
+}
+
+function resolveBrowserFetchOperatorHint(url: string): string {
+  if (isAbsoluteHttp(url)) {
+    return "If this is a sandboxed session, check that the sandbox browser is running.";
+  }
+  try {
+    const cfg = getRuntimeConfig();
+    const resolved = resolveBrowserConfig(cfg?.browser, cfg);
+    const parsed = new URL(url, "http://localhost");
+    const requestedProfile = parsed.searchParams.get("profile")?.trim();
+    const profile = resolveProfile(resolved, requestedProfile || resolved.defaultProfile);
+    if (
+      profile &&
+      (profile.driver !== "openclaw" || !profile.cdpIsLoopback || profile.attachOnly)
+    ) {
+      return (
+        "The browser profile is external to OpenClaw; make sure its browser/CDP endpoint " +
+        "is running and reachable. Restarting the OpenClaw gateway will not launch it."
+      );
+    }
+  } catch {
+    // Unknown profiles and unavailable config use the local diagnostics below.
+  }
+  return `Run \`${formatCliCommand("openclaw browser doctor")}\` and check the Gateway logs.`;
+}
+
+function normalizeErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? normalizeOptionalString(err.message) : undefined;
+  if (message) {
+    return message;
+  }
+  return String(err);
+}
+
+function appendBrowserToolModelHint(message: string, hint: string): string {
+  const messageWithoutHints = message
+    .replaceAll(BROWSER_TOOL_PERSISTENT_MODEL_HINT, "")
+    .replaceAll(BROWSER_TOOL_TRANSIENT_MODEL_HINT, "")
+    .trim();
+  return `${messageWithoutHints} ${hint}`;
+}
+
+type BrowserFetchFailureKind = "timeout" | "aborted" | "transient-network" | "persistent";
+
+function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
+  const directCode = extractErrorCode(err);
+  const formatted = formatErrorMessage(err);
+  const detail = directCode ? `${formatted} | ${directCode}` : formatted;
+  const detailLower = normalizeLowercaseStringOrEmpty(detail);
+  const nameLower = err instanceof Error ? normalizeLowercaseStringOrEmpty(err.name) : "";
+  if (nameLower === "aborterror") {
+    return "aborted";
+  }
+  if (BROWSER_PERSISTENT_FAILURE_RE.test(detail)) {
+    return "persistent";
+  }
+  const looksLikeTimeout =
+    nameLower.includes("timeout") ||
+    detailLower.includes("timed out") ||
+    detailLower.includes("timeout");
+  if (looksLikeTimeout) {
+    return "timeout";
+  }
+  if (BROWSER_TRANSIENT_NETWORK_ERROR_RE.test(detail)) {
+    return "transient-network";
+  }
+  const looksLikeAbort =
+    detailLower.includes("abort") ||
+    detailLower.includes("cancelled") ||
+    detailLower.includes("canceled");
+  return looksLikeAbort ? "aborted" : "persistent";
+}
+
+function resolveBrowserServiceModelHint(
+  message: string,
+  status: number | undefined,
+): string | undefined {
+  if (message.includes(BROWSER_TOOL_PERSISTENT_MODEL_HINT)) {
+    return BROWSER_TOOL_PERSISTENT_MODEL_HINT;
+  }
+  if (message.includes(BROWSER_TOOL_TRANSIENT_MODEL_HINT)) {
+    return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  if (status === 401 || BROWSER_PERSISTENT_FAILURE_RE.test(message)) {
+    return BROWSER_TOOL_PERSISTENT_MODEL_HINT;
+  }
+  if (status === 408 || status === 504) {
+    return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  if (status === undefined || status < 500 || status > 599) {
+    return undefined;
+  }
+  const kind = classifyBrowserFetchFailure(new Error(message));
+  return kind === "persistent" ? undefined : resolveBrowserToolModelHint(kind);
+}
+
+function resolveBrowserToolModelHint(kind: BrowserFetchFailureKind): string | undefined {
+  if (kind === "timeout" || kind === "transient-network") {
+    return BROWSER_TOOL_TRANSIENT_MODEL_HINT;
+  }
+  return kind === "persistent" ? BROWSER_TOOL_PERSISTENT_MODEL_HINT : undefined;
+}
+
+function discardResponseBody(res: Response): void {
+  // Do not await cancel: teed/debug streams can leave cancel pending forever
+  // (same invariant as Google Chat fetchOk / CDP probe release).
+  void res.body?.cancel().catch(() => undefined);
+}
+
+function enhanceDispatcherPathError(url: string, err: unknown): Error {
+  const msg = normalizeErrorMessage(err);
+  const kind = classifyBrowserFetchFailure(err);
+  const operatorHint = resolveBrowserFetchOperatorHint(url);
+  const modelHint = resolveBrowserToolModelHint(kind);
+  const suffix = modelHint ? `${operatorHint} ${modelHint}` : operatorHint;
+  const normalized = msg.endsWith(".") ? msg : `${msg}.`;
+  return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
+}
+
+function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
+  const operatorHint = resolveBrowserFetchOperatorHint(url);
+  const msg = normalizeErrorMessage(err);
+  const kind = classifyBrowserFetchFailure(err);
+  let message: string;
+  if (kind === "timeout") {
+    message = `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`;
+  } else if (kind === "aborted") {
+    message = `Browser control request was cancelled. ${operatorHint}`;
+  } else if (kind === "transient-network") {
+    message = `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg}) ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`;
+  } else {
+    message = appendBrowserToolModelHint(
+      `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
+      BROWSER_TOOL_PERSISTENT_MODEL_HINT,
+    );
+  }
+  return new Error(message, err instanceof Error ? { cause: err } : undefined);
+}
+
+async function fetchHttpJson<T>(
+  url: string,
+  init: RequestInit & { timeoutMs: number },
+): Promise<T> {
+  const { timeoutMs } = init;
+  let release: (() => Promise<void>) | undefined;
+  try {
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      init,
+      // AbortController timer alone does not set Undici connect/headers floors;
+      // forward the resolved budget so a hung control peer fails closed via the
+      // guarded dispatcher instead of waiting on OS timeouts.
+      timeoutMs,
+      policy: { allowPrivateNetwork: true },
+      auditContext: "browser-control-client",
+    });
+    release = guarded.release;
+    const res = guarded.response;
+    if (!res.ok) {
+      if (res.status === 429) {
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        discardResponseBody(res);
+        throw new BrowserServiceError(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,
+        );
+      }
+      // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
+      const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
+        () => undefined,
+      );
+      const text = body ? decodeBrowserControlResponseUtf8(body, res.status) : "";
+      let parsed: unknown;
+      if (text) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          // Plain-text errors remain part of the existing browser-control contract.
+        }
+      }
+      throw browserServiceErrorFromPayload(parsed, text || `HTTP ${res.status}`, res.status);
+    }
+    const body = await readResponseWithLimit(res, BROWSER_SUCCESS_BODY_LIMIT_BYTES, {
+      onOverflow: ({ maxBytes }) =>
+        new BrowserServiceError(`Browser control response exceeded ${maxBytes} bytes`),
+    });
+    return JSON.parse(decodeBrowserControlResponseUtf8(body, res.status)) as T;
+  } finally {
+    await release?.();
+  }
+}
+
+/** Fetch JSON from browser control over HTTP or local dispatcher transport. */
+export async function fetchBrowserJson<T>(
+  url: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const timeoutMs = resolveTimerTimeoutMs(init?.timeoutMs, 5000);
+  const scope = getBrowserRequestScope();
+  let isDispatcherPath = false;
+  try {
+    if (isAbsoluteHttp(url)) {
+      if (scope?.managedOnly) {
+        throw new Error("Dashboard browser requests must stay on the local managed browser");
+      }
+      const httpInit = withLoopbackBrowserAuth(url, init);
+      return await fetchHttpJson<T>(url, { ...httpInit, timeoutMs });
+    }
+    isDispatcherPath = true;
+    const { dispatchBrowserControlRequest } = await import("./local-dispatch.runtime.js");
+    const parsed = new URL(url, "http://localhost");
+    const query: Record<string, unknown> = {};
+    for (const [key, value] of parsed.searchParams.entries()) {
+      query[key] = value;
+    }
+    if (scope?.managedOnly) {
+      query.managedOnly = true;
+    }
+    let body = init?.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        // keep as string
+      }
+    }
+
+    const result = await withTimeout(
+      (signal) =>
+        dispatchBrowserControlRequest({
+          method:
+            init?.method?.toUpperCase() === "DELETE"
+              ? "DELETE"
+              : init?.method?.toUpperCase() === "POST"
+                ? "POST"
+                : "GET",
+          path: parsed.pathname,
+          query,
+          body,
+          signal,
+          ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
+        }),
+      timeoutMs,
+      "Browser request",
+      init?.signal,
+    );
+
+    if (result.status >= 400) {
+      if (result.status === 429) {
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        throw new BrowserServiceError(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,
+        );
+      }
+      throw browserServiceErrorFromPayload(result.body, `HTTP ${result.status}`, result.status);
+    }
+    return result.body as T;
+  } catch (err) {
+    if (err instanceof BrowserServiceError) {
+      throw err;
+    }
+    // Dispatcher-path failures are service-operation failures, not network
+    // reachability failures. Keep the original context, but retain anti-retry hints.
+    if (isDispatcherPath) {
+      throw enhanceDispatcherPathError(url, err);
+    }
+    throw enhanceBrowserFetchError(url, err, timeoutMs);
+  }
+}

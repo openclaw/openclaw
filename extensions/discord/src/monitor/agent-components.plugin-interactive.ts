@@ -1,0 +1,168 @@
+import { ChannelType } from "discord-api-types/v10";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { logError } from "openclaw/plugin-sdk/logging-core";
+import {
+  dispatchDiscordPluginInteractiveHandler,
+  type DiscordInteractiveHandlerContext,
+} from "../interactive-dispatch.js";
+import type { TopLevelComponents } from "../internal/discord.js";
+import { editDiscordComponentMessage } from "../send.components.js";
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
+} from "./agent-components.types.js";
+
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/conversation-runtime"),
+);
+
+export async function dispatchPluginDiscordInteractiveEvent(params: {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentInteraction;
+  interactionCtx: ComponentInteractionContext;
+  channelCtx: DiscordChannelContext;
+  isAuthorizedSender: boolean;
+  data: string;
+  kind: "button" | "select" | "modal";
+  values?: string[];
+  fields?: Array<{ id: string; name: string; values: string[] }>;
+  messageId?: string;
+}): Promise<"handled" | "unmatched"> {
+  const normalizedConversationId =
+    params.interactionCtx.rawGuildId || params.channelCtx.channelType === ChannelType.GroupDM
+      ? `channel:${params.interactionCtx.channelId}`
+      : `user:${params.interactionCtx.userId}`;
+  let responded = false;
+  let acknowledged = false;
+  const updateOriginalMessage = async (input: {
+    text?: string;
+    components?: TopLevelComponents[];
+  }) => {
+    const payload = {
+      ...(input.text !== undefined ? { content: input.text } : {}),
+      ...(input.components !== undefined ? { components: input.components } : {}),
+    };
+    if (acknowledged) {
+      await params.interaction.reply(payload);
+      return;
+    }
+    if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
+      throw new Error("Discord interaction cannot update the source message");
+    }
+    await params.interaction.update(payload);
+  };
+  const replyWithText = async (
+    method: "reply" | "followUp",
+    { text, ephemeral = true }: { text: string; ephemeral?: boolean },
+  ) => {
+    responded = true;
+    await params.interaction[method]({ content: text, ephemeral });
+  };
+  const respond: DiscordInteractiveHandlerContext["respond"] = {
+    acknowledge: async () => {
+      if (responded) {
+        return;
+      }
+      await params.interaction.acknowledge();
+      acknowledged = true;
+      responded = true;
+    },
+    // Deferred component replies edit the public source; follow-ups preserve reply visibility.
+    reply: (payload) => replyWithText(acknowledged ? "followUp" : "reply", payload),
+    followUp: (payload) => replyWithText("followUp", payload),
+    editMessage: async (input) => {
+      const { text, components } = input;
+      responded = true;
+      await updateOriginalMessage({
+        text,
+        components: components as TopLevelComponents[] | undefined,
+      });
+    },
+    clearComponents: async (input?: { text?: string }) => {
+      responded = true;
+      await updateOriginalMessage({
+        text: input?.text,
+        components: [],
+      });
+    },
+  };
+  const acknowledgeSilently = async () => {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // An expired interaction must not prevent an admitted plugin handler from settling.
+    }
+  };
+  const conversationRuntime = await loadConversationRuntime();
+  const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
+  if (pluginBindingApproval) {
+    const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
+      conversationRuntime;
+    await acknowledgeSilently();
+    const resolved = await resolvePluginConversationBindingApproval({
+      approvalId: pluginBindingApproval.approvalId,
+      decision: pluginBindingApproval.decision,
+      senderId: params.interactionCtx.userId,
+    });
+    const approvalMessageId = params.messageId?.trim() || params.interaction.message?.id?.trim();
+    if (approvalMessageId) {
+      try {
+        await editDiscordComponentMessage(
+          normalizedConversationId,
+          approvalMessageId,
+          {
+            text: buildPluginBindingResolvedText(resolved),
+          },
+          {
+            cfg: params.ctx.cfg,
+            accountId: params.ctx.accountId,
+          },
+        );
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to clear prompt: ${String(err)}`);
+      }
+    }
+    if (resolved.status !== "approved") {
+      try {
+        await respond.followUp({
+          text: buildPluginBindingResolvedText(resolved),
+          ephemeral: true,
+        });
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
+      }
+    }
+    return "handled";
+  }
+  const dispatched = await dispatchDiscordPluginInteractiveHandler({
+    data: params.data,
+    interactionId: params.interaction.id,
+    ctx: {
+      accountId: params.ctx.accountId,
+      interactionId: params.interaction.id,
+      conversationId: normalizedConversationId,
+      parentConversationId: params.channelCtx.parentId,
+      guildId: params.interactionCtx.rawGuildId,
+      senderId: params.interactionCtx.userId,
+      senderUsername: params.interactionCtx.username,
+      auth: { isAuthorizedSender: params.isAuthorizedSender },
+      interaction: {
+        kind: params.kind,
+        messageId: params.messageId,
+        values: params.values,
+        fields: params.fields,
+      },
+    },
+    respond,
+    onMatched: acknowledgeSilently,
+  });
+  if (dispatched.matched && dispatched.handled) {
+    if (!responded) {
+      await acknowledgeSilently();
+    }
+    return "handled";
+  }
+  return "unmatched";
+}

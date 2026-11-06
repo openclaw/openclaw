@@ -1,0 +1,106 @@
+---
+summary: "CLI reference for `openclaw proxy`, including operator-managed proxy validation and the local debug proxy capture inspector"
+read_when:
+  - You need to validate operator-managed proxy routing before deployment
+  - You need to capture OpenClaw transport traffic locally for debugging
+  - You want to inspect debug proxy sessions, blobs, or built-in query presets
+title: "Proxy"
+---
+
+# `openclaw proxy`
+
+Validate operator-managed proxy routing, or run the local explicit debug proxy and inspect captured traffic.
+
+```bash
+openclaw proxy validate [--json] [--proxy-url <url>] [--proxy-ca-file <path>] [--allowed-url <url>] [--denied-url <url>] [--apns-reachable] [--apns-authority <url>] [--timeout-ms <ms>]
+openclaw proxy start [--host <host>] [--port <port>]
+openclaw proxy run [--host <host>] [--port <port>] -- <cmd...>
+openclaw proxy coverage [--json]
+openclaw proxy sessions [--limit <count>] [--json]
+openclaw proxy query --preset <name> [--session <id>] [--json]
+openclaw proxy blob --id <blobId>
+openclaw proxy purge
+```
+
+`validate` preflights an operator-managed forward proxy. The rest are debugging tools for transport-level investigation: start a local capturing proxy, run a child command through it, list capture sessions, query traffic patterns, read captured blobs, and purge local capture data.
+
+## Validate
+
+Checks the effective operator-managed proxy URL from `--proxy-url`, config (`proxy.proxyUrl`), or `OPENCLAW_PROXY_URL`, in that precedence order. Reports a config problem if no proxy is enabled and configured. Pass `--proxy-url` for a one-off preflight without touching config.
+
+Managed proxy URLs use `http://` for a plain forward-proxy listener, or `https://` when OpenClaw must open TLS to the proxy endpoint itself before sending proxy requests. Use `--proxy-ca-file` to trust a private CA for that TLS connection.
+
+By default it runs:
+
+- one **allowed** check against `https://example.com/` (override/add with `--allowed-url`, repeatable)
+- one **denied** check against a temporary loopback canary (override with `--denied-url`, repeatable)
+
+Custom `--denied-url` targets need a verified denial signal: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
+
+Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the proxy and confirm sandbox APNs responds. The check sends an intentionally invalid provider token, so an APNs `403 InvalidProviderToken` response counts as a successful reachability signal (not a failure).
+
+### Options
+
+| Flag                     | Effect                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `--json`                 | print machine-readable JSON                                                                                        |
+| `--proxy-url <url>`      | validate this `http://`/`https://` proxy URL instead of config or env                                              |
+| `--proxy-ca-file <path>` | trust this PEM CA file for TLS verification of an HTTPS proxy endpoint                                             |
+| `--allowed-url <url>`    | destination expected to succeed through the proxy (repeatable)                                                     |
+| `--denied-url <url>`     | destination expected to be blocked by the proxy (repeatable)                                                       |
+| `--apns-reachable`       | also verify sandbox APNs HTTP/2 is reachable through the proxy                                                     |
+| `--apns-authority <url>` | APNs authority to check (default `https://api.sandbox.push.apple.com`; production is `https://api.push.apple.com`) |
+| `--timeout-ms <ms>`      | per-request timeout                                                                                                |
+
+Exits with code 1 when proxy config or destination checks fail.
+
+See [Network Proxy](/security/network-proxy) for deployment guidance and denial semantics.
+
+## Debug proxy
+
+`start` launches a local capturing proxy and prints its URL, CA cert path, and capture DB path. Stop it with Ctrl+C. Defaults to binding `127.0.0.1` unless `--host` is set.
+
+`run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session. An OpenClaw child forwards instrumented HTTPS and WebSocket payloads to the parent through an ephemeral, session-bound capture token in its debug endpoint URL. Normal HTTP proxy variables and stored capture URLs remain credential-free. The parent remains the only persistence client; the child does not open a capture database. The private capture endpoint cannot read or purge captures and closes with the proxy. For child commands that mutate other OpenClaw state, run the Gateway first so those commands can route their writes. Offline capture retains exclusive parent ownership until the child exits.
+
+If `run` has no command after `--`, or `blob` cannot find the requested id,
+the CLI prints the specific reason on stderr and exits with status `1`.
+
+Capture persistence uses asynchronous worker operations. When a local Gateway owns the state directory, the CLI keeps the proxy listener and child command local and routes capture reads and writes through that Gateway. With the Gateway stopped, the CLI holds exclusive offline ownership through capture cleanup. A failed or uncertain Gateway request is never replayed locally. Older Gateways without capture routing require an update or an orderly stop before offline capture. On orderly shutdown,
+`start` and `run` wait for admitted capture writes and session cleanup. Capture
+failures remain reportable during cleanup even when the original HTTP response
+was already delivered to its caller.
+
+Integrations using the [proxy capture SDK](/plugins/sdk-subpaths#asynchronous-proxy-capture)
+must await capture finalization and release their async store leases. Direct
+database maintenance close invalidates capture admission and is not a substitute
+for that cleanup; the synchronous finalizer cannot drain async capture work.
+
+The debug proxy's direct upstream forwarding opens upstream sockets for diagnostics. When OpenClaw managed proxy mode is active, direct forwarding for proxy requests and CONNECT tunnels is disabled by default. Set `OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY=1` only for approved local diagnostics.
+
+`coverage` prints a JSON report (`summary` + per-transport `entries`) of which transports are captured, proxy-only, or uncovered.
+
+`sessions` lists recent capture sessions (`--limit`, default 20).
+
+`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Unknown or empty preset names exit with code 1 and list the accepted choices, including with `--json`. Presets:
+
+- `double-sends`
+- `retry-storms`
+- `cache-busting`
+- `ws-duplicate-frames`
+- `missing-ack`
+- `error-bursts`
+
+`coverage`, `sessions`, and `query` already return JSON by default. They also
+accept `--json` as an explicit machine-output spelling for consistent scripts.
+In that mode, `coverage` keeps its report object, while `sessions` and `query`
+wrap their rows under `sessions` and `rows`, respectively.
+
+`blob --id <blobId>` prints a captured payload blob's raw content.
+
+`purge` deletes all captured traffic metadata and blobs. Captures are local debugging data. Purge them when you finish.
+
+## Related
+
+- [CLI reference](/cli)
+- [Network Proxy](/security/network-proxy)
+- [Trusted proxy auth](/gateway/trusted-proxy-auth)

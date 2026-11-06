@@ -1,0 +1,269 @@
+import { resolveStateDir } from "../config/paths.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { isProgressCardRendererClient } from "../utils/message-channel.js";
+import {
+  preparePairedDeviceAccessPatch,
+  type DevicePairingAccessIdentity,
+} from "./device-pairing-access.js";
+// Device pairing owns the worker operations and publishes their committed facts.
+import {
+  invalidatePairedCardRendererCache,
+  readPairedCardRendererCache,
+} from "./device-pairing-card-renderer.js";
+import type {
+  PairedDeviceMetadataPatch,
+  PrunedSupersededPairedDevice,
+  RequestDevicePairingResult,
+} from "./device-pairing-core.types.js";
+import type { NodePairingGeneration } from "./device-pairing-identity.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
+import {
+  publishDevicePairingResolution,
+  refreshDevicePairingResolutionWaiters,
+} from "./device-pairing-resolution.js";
+import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
+import {
+  listDevicePairingStoreRecordsReadOnly,
+  loadPairedDevicePairingStoreRecordReadOnly,
+  loadPendingDevicePairingStoreRecordReadOnly,
+} from "./device-pairing-store-readonly.js";
+import { persistDevicePairingStoreState } from "./device-pairing-store.js";
+import {
+  DevicePairingAuthorityRefusedError,
+  executeDevicePairingMutation,
+} from "./device-pairing-worker.js";
+import type { DevicePairingPendingRequest, PairedDevice } from "./device-pairing.types.js";
+
+export {
+  clearNodePairingGenerationState,
+  hasEffectivePairedDeviceRole,
+  listApprovedPairedDeviceRoles,
+  listEffectivePairedDeviceRoles,
+  resolveNodePairingGeneration,
+  resolveNodePairingState,
+  type NodePairingGeneration,
+  type NodePairingState,
+} from "./device-pairing-identity.js";
+export type { PrunedSupersededPairedDevice } from "./device-pairing-core.types.js";
+export type {
+  DeviceAuthToken,
+  DevicePairingPendingRequest,
+  PairedDevice,
+} from "./device-pairing.types.js";
+
+/** Return whether this Gateway has a paired client that can render progress cards. */
+export function hasPairedCardRenderer(baseDir?: string): Promise<boolean> {
+  const stateDir = baseDir ?? resolveStateDir();
+  return readPairedCardRendererCache(stateDir, () =>
+    listDevicePairingReadOnly(stateDir)
+      .then(({ paired }) => paired.some(isProgressCardRendererClient))
+      .catch(() => false),
+  );
+}
+
+/** Boot/Doctor migrations retain their synchronous snapshot transaction under the pairing lock. */
+export async function withPairedDeviceRecords<T>(
+  baseDir: string | undefined,
+  operate: (
+    pairedByDeviceId: Record<string, PairedDevice>,
+  ) => { value: T; persist: boolean } | Promise<{ value: T; persist: boolean }>,
+): Promise<T> {
+  return await withDevicePairingLock(async () => {
+    const state = loadDevicePairingStateForMutation(Date.now(), baseDir);
+    const outcome = await operate(state.pairedByDeviceId);
+    if (outcome.persist) {
+      persistDevicePairingStoreState(state, baseDir, "paired");
+      invalidatePairedCardRendererCache();
+    }
+    return outcome.value;
+  }, "devicePairing.migrate");
+}
+
+export function listDevicePairing(baseDir?: string) {
+  return listDevicePairingStoreRecordsReadOnly(baseDir, true);
+}
+
+/** List pairing state without creating or migrating shared state. */
+export function listDevicePairingReadOnly(baseDir?: string) {
+  return listDevicePairingStoreRecordsReadOnly(baseDir);
+}
+
+export function getPairedDevice(deviceId: string, baseDir?: string): Promise<PairedDevice | null> {
+  return loadPairedDevicePairingStoreRecordReadOnly(deviceId, baseDir);
+}
+
+export function getPendingDevicePairing(requestId: string, baseDir?: string) {
+  return loadPendingDevicePairingStoreRecordReadOnly(requestId, baseDir);
+}
+
+export async function requestDevicePairing(
+  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  baseDir?: string,
+  onPending?: (pairing: RequestDevicePairingResult) => void,
+): Promise<RequestDevicePairingResult> {
+  return await withDevicePairingLock(async () => {
+    const pairing = await executeDevicePairingMutation(
+      { type: "devicePairing.request", input: { request: req, nowMs: Date.now() } },
+      { baseDir },
+    );
+    for (const superseded of pairing.superseded ?? []) {
+      publishDevicePairingResolution(superseded, "superseded", baseDir);
+    }
+    refreshDevicePairingResolutionWaiters(pairing.request, pairing.expiresAtMs, baseDir);
+    onPending?.(pairing);
+    return pairing;
+  }, "devicePairing.request");
+}
+
+export async function rejectDevicePairing(requestId: string, baseDir?: string) {
+  return await withDevicePairingLock(async () => {
+    const rejected = await executeDevicePairingMutation(
+      { type: "devicePairing.reject", input: { requestId, nowMs: Date.now() } },
+      { baseDir },
+    );
+    if (rejected) {
+      publishDevicePairingResolution(rejected, "rejected", baseDir);
+    }
+    return rejected;
+  }, "devicePairing.reject");
+}
+
+export async function removePairedDevice(deviceId: string, baseDir?: string) {
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.remove", input: { deviceId, nowMs: Date.now() } },
+    { baseDir },
+  );
+}
+
+export async function pruneSupersededSilentPairedDevices(params: {
+  deviceId: string;
+  baseDir?: string;
+  protectedDeviceIds?: readonly string[];
+  isDeviceConnected?: (deviceId: string) => boolean;
+  nowMs?: number;
+}): Promise<PrunedSupersededPairedDevice[]> {
+  return await executeDevicePairingMutation(
+    {
+      type: "devicePairing.pruneSilent",
+      input: {
+        deviceId: params.deviceId,
+        protectedDeviceIds: params.protectedDeviceIds ?? [],
+        nowMs: params.nowMs ?? Date.now(),
+      },
+    },
+    {
+      baseDir: params.baseDir,
+      onAuthorityRefused: () => [],
+      admit: (facts) => {
+        if (
+          facts.kind === "pairing-prune" &&
+          facts.deviceIds.some((deviceId) => params.isDeviceConnected?.(deviceId))
+        ) {
+          throw new DevicePairingAuthorityRefusedError(
+            "Pairing prune candidate connected before commit",
+          );
+        }
+      },
+    },
+  );
+}
+
+export async function removePairedDeviceRole(params: { deviceId: string }) {
+  return await executeDevicePairingMutation({
+    type: "devicePairing.removeRole",
+    input: { deviceId: params.deviceId, role: "node", nowMs: Date.now() },
+  });
+}
+
+export async function updatePairedDeviceMetadata(
+  deviceId: string,
+  patch: Partial<PairedDeviceMetadataPatch>,
+  baseDir?: string,
+): Promise<boolean> {
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.updateMetadata", input: { deviceId, patch } },
+    { baseDir },
+  );
+}
+
+export async function updatePairedDevicePresence(
+  deviceId: string,
+  patch: { lastSeenAtMs: number; lastSeenReason: string },
+  expectedPairingGeneration: NodePairingGeneration,
+  baseDir?: string,
+): Promise<boolean> {
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.updatePresence", input: { deviceId, patch, expectedPairingGeneration } },
+    { baseDir },
+  );
+}
+
+const reconnects = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairingReconnects"),
+  () =>
+    new Map<
+      string,
+      {
+        patch?: Partial<PairedDeviceMetadataPatch>;
+        identity: DevicePairingAccessIdentity;
+        done: Promise<void>;
+      }
+    >(),
+);
+
+/** One tracked post-hello writer per device; queued tabs contribute their latest metadata. */
+export function recordPairedDeviceAccess(
+  deviceId: string,
+  patch: Partial<PairedDeviceMetadataPatch>,
+  identity: DevicePairingAccessIdentity,
+  baseDir?: string,
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext(
+    baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
+  );
+  const key = `${context.admission.identity.key}:${deviceId}`;
+  const pending = reconnects.get(key);
+  if (pending) {
+    pending.patch =
+      pending.identity.publicKey === identity.publicKey &&
+      pending.identity.approvedAtMs === identity.approvedAtMs
+        ? { ...pending.patch, ...patch }
+        : patch;
+    pending.identity = identity;
+    return pending.done;
+  }
+  const entry: NonNullable<ReturnType<typeof reconnects.get>> = {
+    patch,
+    identity,
+    done: Promise.resolve(),
+  };
+  reconnects.set(key, entry);
+  entry.done = withDevicePairingLock(async () => {
+    while (entry.patch) {
+      const next = entry.patch;
+      const expected = entry.identity;
+      entry.patch = undefined;
+      context.admission.assertCurrent();
+      const device = await getPairedDevice(deviceId, baseDir);
+      if (
+        !device ||
+        device.publicKey !== expected.publicKey ||
+        device.approvedAtMs !== expected.approvedAtMs
+      ) {
+        continue;
+      }
+      const changed = preparePairedDeviceAccessPatch(device, next);
+      if (changed) {
+        await executeDevicePairingMutation(
+          {
+            type: "devicePairing.updateMetadata",
+            input: { deviceId, patch: changed, accessIdentity: expected },
+          },
+          { context },
+        );
+      }
+    }
+  }, "devicePairing.updateMetadata").finally(() => reconnects.delete(key));
+  return entry.done;
+}

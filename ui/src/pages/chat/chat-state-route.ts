@@ -1,0 +1,151 @@
+import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
+import {
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  createUiSessionRowMatcher,
+  readSessionDefaults,
+} from "../../lib/sessions/session-key.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+
+export { resolveChatAgentId } from "./chat-agent-id.ts";
+
+export function bindChatPageSession(
+  context: ApplicationContext,
+  routeKey: string,
+  routeAgentId?: string,
+): void {
+  const agentId = parseAgentSessionKey(routeKey)?.agentId ?? routeAgentId?.trim();
+  if (parseCatalogSessionKey(routeKey)) {
+    if (agentId) {
+      context.agentSelection.set(agentId, { background: true });
+    }
+    return;
+  }
+  const sessionKey = resolveSessionKey(routeKey, context.gateway.snapshot.hello);
+  const settings = loadSettings();
+  // Navigation owns these bindings; focusing or sending from a dock does not.
+  if (settings.sessionKey !== sessionKey || settings.lastActiveSessionKey !== sessionKey) {
+    patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
+  }
+  if (
+    context.gateway.snapshot.sessionKey !== sessionKey ||
+    (agentId && context.agentSelection.state.selectedId !== agentId)
+  ) {
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId,
+      background: true,
+    });
+  }
+}
+
+export function canCreateChatSession(state: ChatPageHost) {
+  return (
+    !state.chatLoading &&
+    !state.chatSending &&
+    !state.chatRunId &&
+    state.chatStream === null &&
+    (state.chatQueue.length === 0 || isExpiredIncognitoSession(state))
+  );
+}
+
+const selectedRows = new WeakMap<
+  NonNullable<ChatPageHost["sessionsResult"]>,
+  WeakMap<
+    ChatPageHost,
+    {
+      inputs: readonly unknown[];
+      row: NonNullable<ChatPageHost["sessionsResult"]>["sessions"][number] | undefined;
+    }
+  >
+>();
+
+export function selectedChatSessionRow(state: ChatPageHost) {
+  const result = state.sessionsResult;
+  if (!result) {
+    return undefined;
+  }
+  const defaults = readSessionDefaults(state);
+  const inputs = [
+    state.sessionKey,
+    state.assistantAgentId,
+    state.agentsList != null,
+    state.agentsList?.defaultId,
+    state.agentsList?.mainKey,
+    state.agentsList?.scope,
+    defaults !== undefined,
+    defaults?.defaultAgentId,
+    defaults?.mainKey,
+    defaults?.mainSessionKey,
+    result.sessions,
+  ];
+  let panes = selectedRows.get(result);
+  if (!panes) {
+    panes = new WeakMap();
+    selectedRows.set(result, panes);
+  }
+  const cached = panes.get(state);
+  let row = cached?.row;
+  if (!cached || !inputs.every((value, index) => value === cached.inputs[index])) {
+    const matches = createUiSessionRowMatcher(state, state.sessionKey);
+    row = result.sessions.find((candidate) => matches(candidate.key, candidate.agentId));
+    // Panes keep independent selections; retired results and panes release their cached rows.
+    panes.set(state, { inputs, row });
+  }
+  if (!row || !isUiGlobalSessionKey(row.key)) {
+    return row;
+  }
+  const selectedAgentId = resolveChatAgentId(state);
+  if (
+    state.sessionsResultAgentId &&
+    normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
+  ) {
+    return undefined;
+  }
+  if (
+    row.observerDigest?.agentId &&
+    normalizeAgentId(row.observerDigest.agentId) !== selectedAgentId
+  ) {
+    return { ...row, observerDigest: undefined };
+  }
+  return row;
+}
+
+export function resolveChatAvatarUrl(state: ChatPageHost): string | null {
+  const agentId = resolveChatAgentId(state);
+  if (state.chatAvatarUrl) {
+    return state.chatAvatarUrl;
+  }
+  const localAvatar = loadLocalAssistantIdentity({ agentId }).avatar;
+  if (localAvatar) {
+    return localAvatar;
+  }
+  const avatarMissing =
+    (state.chatAvatarStatus ?? state.assistantAvatarStatus) === "none" &&
+    (state.chatAvatarReason ?? state.assistantAvatarReason) === "missing";
+  const assistantAvatar = state.assistantAvatar;
+  if (
+    !avatarMissing &&
+    assistantAvatar &&
+    isRenderableControlUiAvatarUrl(assistantAvatar) &&
+    state.assistantAgentId === agentId
+  ) {
+    return assistantAvatar;
+  }
+  const agentsList: ApplicationContext["agents"]["state"]["agentsList"] = state.agentsList;
+  const agent = agentsList?.agents?.find((candidate) => candidate.id === agentId);
+  const identity = agent?.identity;
+  const avatar = identity?.avatarUrl ?? identity?.avatar;
+  return typeof avatar === "string" && isRenderableControlUiAvatarUrl(avatar) ? avatar : null;
+}

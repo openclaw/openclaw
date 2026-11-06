@@ -1,0 +1,94 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionAbortTargetCutoff } from "../../config/sessions/session-accessor.types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { MsgContext } from "../templating.js";
+
+export type AbortCutoff = SessionAbortTargetCutoff;
+
+type SessionAbortCutoffEntry = Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">;
+
+function buildAbortCutoff(
+  messageSid: string | undefined,
+  rawTimestamp: unknown,
+): AbortCutoff | undefined {
+  const timestamp = asFiniteNumber(rawTimestamp);
+  return messageSid || timestamp !== undefined ? { messageSid, timestamp } : undefined;
+}
+
+export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
+  return buildAbortCutoff(
+    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+    ctx.Timestamp,
+  );
+}
+
+export function readAbortCutoffFromSessionEntry(
+  entry: SessionAbortCutoffEntry | undefined,
+): AbortCutoff | undefined {
+  return buildAbortCutoff(
+    normalizeOptionalString(entry?.abortCutoffMessageSid),
+    entry?.abortCutoffTimestamp,
+  );
+}
+
+export function hasAbortCutoff(entry: SessionAbortCutoffEntry | undefined): boolean {
+  return readAbortCutoffFromSessionEntry(entry) !== undefined;
+}
+
+export function applyAbortCutoffToSessionEntry(
+  entry: SessionAbortCutoffEntry,
+  cutoff: AbortCutoff | undefined,
+): void {
+  entry.abortCutoffMessageSid = cutoff?.messageSid;
+  entry.abortCutoffTimestamp = cutoff?.timestamp;
+}
+
+function toNumericMessageSid(value: string): bigint | undefined {
+  if (!/^\d+$/.test(value)) {
+    return undefined;
+  }
+  try {
+    return BigInt(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export function shouldSkipMessageByAbortCutoff(params: {
+  cutoffMessageSid?: string;
+  cutoffTimestamp?: number;
+  messageSid?: string;
+  timestamp?: number;
+}): boolean {
+  const cutoffSid = normalizeOptionalString(params.cutoffMessageSid);
+  const currentSid = normalizeOptionalString(params.messageSid);
+  if (cutoffSid && currentSid) {
+    const cutoffNumeric = toNumericMessageSid(cutoffSid);
+    const currentNumeric = toNumericMessageSid(currentSid);
+    if (cutoffNumeric !== undefined && currentNumeric !== undefined) {
+      return currentNumeric <= cutoffNumeric;
+    }
+    if (currentSid === cutoffSid) {
+      return true;
+    }
+  }
+  const cutoffTimestamp = asFiniteNumber(params.cutoffTimestamp);
+  const timestamp = asFiniteNumber(params.timestamp);
+  return cutoffTimestamp !== undefined && timestamp !== undefined && timestamp <= cutoffTimestamp;
+}
+
+export function shouldPersistAbortCutoff(params: {
+  commandSessionKey?: string;
+  targetSessionKey?: string;
+}): boolean {
+  const commandSessionKey = normalizeOptionalString(params.commandSessionKey);
+  const targetSessionKey = normalizeOptionalString(params.targetSessionKey);
+  if (!commandSessionKey || !targetSessionKey) {
+    return true;
+  }
+  // Native targeted /stop can run from a slash/session-control key while the
+  // actual target session uses different message id/timestamp spaces.
+  // Persist cutoff only when command source and target are the same session.
+  return commandSessionKey === targetSessionKey;
+}

@@ -1,0 +1,92 @@
+import {
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
+  parseNonNegativeByteSize,
+  resolveCronStyleNow,
+  resolveEffectiveCompactionReserveTokens,
+  SILENT_REPLY_TOKEN,
+  type MemoryFlushPlan,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveMemoryCoreNowMs } from "./time.js";
+
+const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+
+const MEMORY_FLUSH_TARGET_HINT =
+  "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
+const MEMORY_FLUSH_APPEND_ONLY_HINT =
+  "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
+const MEMORY_FLUSH_READ_ONLY_HINT =
+  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+const DEFAULT_MEMORY_FLUSH_PROMPT = [
+  "Pre-compaction memory flush.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the standard YYYY-MM-DD.md filename.",
+  `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
+].join(" ");
+
+const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
+  "Pre-compaction memory flush turn.",
+  "The session is near auto-compaction; capture durable memories to disk.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
+].join(" ");
+
+function normalizeNonNegativeInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const int = Math.floor(value);
+  return int >= 0 ? int : null;
+}
+
+export function buildMemoryFlushPlan(
+  params: {
+    cfg?: OpenClawConfig;
+    nowMs?: number;
+    contextWindowTokens?: number;
+  } = {},
+): MemoryFlushPlan | null {
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const cfg = params.cfg;
+  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
+  if (defaults?.enabled === false) {
+    return null;
+  }
+
+  let softThresholdTokens =
+    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+  const forceFlushTranscriptBytes =
+    parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
+    DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
+  let reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const contextWindowTokens = normalizeNonNegativeInt(params.contextWindowTokens);
+  if (contextWindowTokens !== null && contextWindowTokens > 0) {
+    reserveTokensFloor = resolveEffectiveCompactionReserveTokens({
+      contextTokenBudget: contextWindowTokens,
+      reserveTokens: reserveTokensFloor,
+    });
+    softThresholdTokens = Math.min(
+      softThresholdTokens,
+      Math.floor((contextWindowTokens - reserveTokensFloor) / 2),
+    );
+  }
+
+  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const dateStamp = formatMemoryDreamingDay(nowMs, userTimezone);
+  const relativePath = `memory/${dateStamp}.md`;
+
+  return {
+    softThresholdTokens,
+    forceFlushTranscriptBytes,
+    reserveTokensFloor,
+    prompt: `${DEFAULT_MEMORY_FLUSH_PROMPT.replaceAll("YYYY-MM-DD", dateStamp)}\n${timeLine}`,
+    systemPrompt: DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT.replaceAll("YYYY-MM-DD", dateStamp),
+    relativePath,
+  };
+}

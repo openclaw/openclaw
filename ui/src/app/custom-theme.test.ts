@@ -1,0 +1,289 @@
+// @vitest-environment node
+// Control UI tests cover custom theme behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
+import {
+  createImportedCustomThemeFixture as createImportedTheme,
+  createTweakcnThemePayload as createTweakcnPayload,
+} from "../test-helpers/custom-theme.ts";
+import {
+  describeThemeLabel,
+  parseImportedCustomTheme,
+  syncCustomThemeStyleTag,
+} from "./custom-theme.ts";
+import type { ImportedCustomTheme } from "./custom-theme.ts";
+
+describe("custom theme localized validation", () => {
+  it("routes validation through the lazy importer without translating token names", async () => {
+    const translate = vi
+      .spyOn(i18n, "t")
+      .mockImplementation((key, params) => key + ":" + (params?.token ?? ""));
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/invalid%20theme"),
+    ).rejects.toThrow("configView.appearance.themeImport.invalidLink:");
+    for (const value of ["", "x".repeat(241), "url(x)", "red;", "re\nd", "invalid-color"]) {
+      const payload = createTweakcnPayload();
+      payload.cssVars.light.background = value;
+      vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+      await expect(importCustomThemeFromUrl("test-theme")).rejects.toThrow(
+        value === ""
+          ? "configView.appearance.themeImport.missingToken:background"
+          : "configView.appearance.themeImport.invalidToken:background",
+      );
+    }
+    const payload = createTweakcnPayload();
+    vi.mocked(fetch).mockResolvedValue(
+      createResponse(
+        JSON.stringify({
+          ...payload,
+          cssVars: {
+            ...payload.cssVars,
+            light: { ...payload.cssVars.light, "font-sans": "font!" },
+          },
+        }),
+      ),
+    );
+    await expect(importCustomThemeFromUrl("test-theme")).rejects.toThrow(
+      "configView.appearance.themeImport.invalidToken:font-sans",
+    );
+    expect(translate).toHaveBeenCalledWith("configView.appearance.themeImport.invalidToken", {
+      token: "background",
+    });
+  });
+
+  it("preserves missing and user-supplied names for localized display", () => {
+    expect(describeThemeLabel(undefined)).toBe("");
+    expect(describeThemeLabel("  My theme  ")).toBe("My theme");
+  });
+});
+
+beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function createResponse(
+  body: string,
+  options: {
+    body?: ReadableStream<Uint8Array> | null;
+    headers?: HeadersInit;
+    status?: number;
+    url?: string;
+  } = {},
+) {
+  return {
+    ok: (options.status ?? 200) >= 200 && (options.status ?? 200) < 300,
+    status: options.status ?? 200,
+    headers: new Headers(options.headers),
+    body:
+      options.body === undefined
+        ? new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(body));
+              controller.close();
+            },
+          })
+        : options.body,
+    text: vi.fn(async () => body),
+    url: options.url ?? "",
+  } as unknown as Response;
+}
+
+function firstFetchCall(): [string, { headers?: unknown; redirect?: unknown; signal?: unknown }] {
+  const call = vi.mocked(fetch).mock.calls[0] as
+    | [string, { headers?: unknown; redirect?: unknown; signal?: unknown }]
+    | undefined;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
+describe("custom theme import helpers", () => {
+  it("keeps imported theme labels on a UTF-16 boundary", () => {
+    const parsed = parseImportedCustomTheme({
+      ...createImportedTheme(),
+      label: `${"a".repeat(79)}🚀tail`,
+    });
+
+    expect(parsed?.label).toBe("a".repeat(79));
+  });
+
+  it("fetches tweakcn themes with bounded no-redirect requests", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()));
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    const imported = await importCustomThemeFromUrl(
+      "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+    );
+
+    expect(imported.label).toBe("Light Green");
+    expect(imported.sourceUrl).toBe("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(imported.light.bg).toBe("oklch(0.98 0.01 120)");
+    expect(imported.dark.bg).toBe("oklch(0.12 0.04 265)");
+    expect(imported.light["font-body"]).toBe("Inter, system-ui, sans-serif");
+    expect(imported.dark["accent-hover"]).toBe("color-mix(in srgb, var(--accent) 82%, white 18%)");
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchOptions] = firstFetchCall();
+    expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions).toEqual({
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: fetchOptions.signal,
+    });
+  });
+
+  it.each([
+    "https://tweakcn.com/editor/theme?theme=cmlhfpjhw000004l4f4ax3m7z",
+    "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    "cmlhfpjhw000004l4f4ax3m7z",
+    "Theme link: https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z.",
+  ])("imports supported tweakcn input form %s", async (input) => {
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(createTweakcnPayload())));
+
+    const imported = await importCustomThemeFromUrl(input);
+
+    expect(imported.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    expect(imported.sourceUrl).toBe("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(firstFetchCall()[0]).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
+  });
+
+  it("rejects oversized tweakcn theme responses before parsing", async () => {
+    const response = createResponse("{}", {
+      headers: { "content-length": "200001" },
+    });
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("too large");
+  });
+
+  it("rejects unsafe tweakcn content-length values before acquiring the body reader", async () => {
+    const cancel = vi.fn(() => Promise.resolve());
+    const getReader = vi.fn(() => {
+      throw new Error("reader should not be acquired");
+    });
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body: { cancel, getReader },
+      url: "",
+    } as unknown as Response;
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("too large");
+    expect(getReader).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects tweakcn theme responses without a bounded body stream", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()), { body: null });
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("unreadable theme file");
+    expect(response["text"]).not.toHaveBeenCalled();
+  });
+
+  it("rejects redirected tweakcn import responses", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()), {
+      url: "https://example.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    });
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("redirected to an unexpected URL");
+  });
+
+  it.each([
+    ['url("https://example.com/track")', "background"],
+    ["oklch(0.98 0.01 120)/*", "background"],
+    ['image-set("https://example.com/pixel.png" 1x)', "background"],
+    ["var(--attacker-font)", "font-sans"],
+  ])("rejects unsafe imported CSS token %s", async (token, key) => {
+    const payload = createTweakcnPayload();
+    if (key === "font-sans") {
+      payload.cssVars.theme[key] = token;
+    } else {
+      payload.cssVars.light.background = token;
+    }
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("Unsupported tweakcn token");
+  });
+
+  it("validates imported font families without regex backtracking", async () => {
+    const payload = createTweakcnPayload();
+    payload.cssVars.theme["font-sans"] = `${"Inter, ".repeat(20)}@bad`;
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("Unsupported tweakcn token");
+  });
+
+  it("parses stored imported themes and rejects malformed records", () => {
+    const imported = createImportedTheme();
+
+    const parsed = parseImportedCustomTheme(imported);
+    if (!parsed) {
+      throw new Error("Expected imported custom theme to parse");
+    }
+    expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    expect(parseImportedCustomTheme({ ...imported, themeId: "claude" })?.themeId).toBe("claude");
+    expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
+  });
+
+  it("syncs the managed custom theme style tag in the document head", () => {
+    const appendChild = vi.fn();
+    const remove = vi.fn();
+    const style = { id: "", textContent: "", remove } as unknown as HTMLStyleElement;
+    const createElement = vi.fn(() => style);
+    const documentStub = {
+      head: { appendChild },
+      createElement,
+      getElementById: vi.fn(() => null),
+    } as unknown as Document;
+    vi.stubGlobal("document", documentStub);
+
+    syncCustomThemeStyleTag(createImportedTheme());
+
+    expect(appendChild).toHaveBeenCalledWith(style);
+    expect(style.id).toBe("openclaw-custom-theme");
+    expect(style.textContent).toContain(':root[data-theme="custom"]');
+
+    vi.stubGlobal("document", {
+      head: documentStub.head,
+      createElement,
+      getElementById: vi.fn(() => style),
+    } as unknown as Document);
+    syncCustomThemeStyleTag(null);
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("removes the managed style tag when a stored theme is missing tokens", () => {
+    const remove = vi.fn();
+    vi.stubGlobal("document", {
+      getElementById: vi.fn(() => ({ remove })),
+    } as unknown as Document);
+    const theme = { ...createImportedTheme(), light: undefined } as unknown as ImportedCustomTheme;
+
+    syncCustomThemeStyleTag(theme);
+
+    expect(remove).toHaveBeenCalledOnce();
+  });
+});

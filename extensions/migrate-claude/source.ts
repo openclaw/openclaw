@@ -1,0 +1,339 @@
+import crypto from "node:crypto";
+import type { Dirent } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { exists, isDirectory, readJsonObject, resolveHomePath } from "./helpers.js";
+
+type ClaudeArchivePath = {
+  id: string;
+  path: string;
+  relativePath: string;
+};
+
+type ClaudeAutoMemorySource = {
+  id: string;
+  label: string;
+  path: string;
+};
+
+export const CLAUDE_AUTO_MEMORY_MAX_FILES = 2000;
+export const CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES = 20_000;
+
+export type ClaudeSource = {
+  root: string;
+  confidence: "low" | "medium" | "high";
+  homeDir?: string;
+  projectDir?: string;
+  homeProjectsDir?: string;
+  userSettingsPath?: string;
+  userLocalSettingsPath?: string;
+  userClaudeJsonPath?: string;
+  userMemoryPath?: string;
+  projectSettingsPath?: string;
+  projectLocalSettingsPath?: string;
+  projectMcpPath?: string;
+  projectMemoryPath?: string;
+  projectDotClaudeMemoryPath?: string;
+  projectLocalMemoryPath?: string;
+  projectRulesDir?: string;
+  userSkillsDir?: string;
+  projectSkillsDir?: string;
+  userCommandsDir?: string;
+  projectCommandsDir?: string;
+  userAgentsDir?: string;
+  projectAgentsDir?: string;
+  desktopConfigPath?: string;
+  autoMemorySources: ClaudeAutoMemorySource[];
+  archivePaths: ClaudeArchivePath[];
+};
+
+const HOME_ARCHIVE_DIRS = ["projects", "cache", "plans"] as const;
+const PROJECT_ARCHIVE_FILES = [".claude/scheduled_tasks.json"] as const;
+
+function defaultClaudeHome(): string {
+  // Preserve a nonempty CLAUDE_CONFIG_DIR verbatim (only an empty value is
+  // unset); trimming would change valid paths whose bytes include spaces.
+  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
+  return configuredDir ? resolveHomePath(configuredDir) : path.join(os.homedir(), ".claude");
+}
+
+async function addArchivePath(
+  archivePaths: ClaudeArchivePath[],
+  id: string,
+  candidate: string,
+  relativePath: string,
+): Promise<void> {
+  if (await exists(candidate)) {
+    archivePaths.push({ id, path: candidate, relativePath });
+  }
+}
+
+async function safeReadDir(dir: string): Promise<Dirent[]> {
+  try {
+    return await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return [];
+    }
+    throw new Error(`Unable to read Claude Code projects directory: ${dir}`, { cause: error });
+  }
+}
+
+async function readMemoryDir(dir: string): Promise<Dirent[]> {
+  try {
+    return await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`Unable to read Claude Code auto-memory directory: ${dir}`, {
+      cause: error,
+    });
+  }
+}
+
+async function isConfiguredAutoMemoryDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw new Error(`Unable to access configured Claude Code auto-memory directory: ${dir}`, {
+      cause: error,
+    });
+  }
+}
+
+type MarkdownFileScan = {
+  files: string[];
+  truncatedBy?: "files" | "entries";
+};
+
+export async function listMarkdownFiles(root: string, maxFiles: number): Promise<MarkdownFileScan> {
+  const files: string[] = [];
+  const pending = [""];
+  let visited = 0;
+  let truncatedBy: MarkdownFileScan["truncatedBy"];
+  scan: while (pending.length > 0) {
+    const relativeDir = pending.pop();
+    if (relativeDir === undefined) {
+      break;
+    }
+    for (const entry of await readMemoryDir(path.join(root, relativeDir))) {
+      visited += 1;
+      if (visited > CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES) {
+        truncatedBy = "entries";
+        break scan;
+      }
+      const relativePath = path.join(relativeDir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(relativePath);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        files.push(relativePath);
+        if (files.length > maxFiles) {
+          truncatedBy = "files";
+          break scan;
+        }
+      }
+    }
+  }
+  return {
+    files: files.toSorted((left, right) => left.localeCompare(right)),
+    ...(truncatedBy ? { truncatedBy } : {}),
+  };
+}
+
+function autoMemorySourceId(sourcePath: string): string {
+  return crypto.createHash("sha256").update(path.resolve(sourcePath)).digest("hex").slice(0, 10);
+}
+
+export async function discoverClaudeSource(input?: string): Promise<ClaudeSource> {
+  const explicitInput = Boolean(input?.trim());
+  const root = resolveHomePath(input?.trim() || defaultClaudeHome());
+  // Home detection stays on unambiguous signals only: the `.claude` basename or
+  // the resolved default (which honors CLAUDE_CONFIG_DIR). An explicit `--from`
+  // is treated as a project root otherwise — inferring a relocated home from
+  // generic markers like `projects/` or `settings.json` misreads ordinary repos.
+  const rootIsHome =
+    path.basename(root) === ".claude" || (!explicitInput && root === defaultClaudeHome());
+  const inspectGlobal = !explicitInput || rootIsHome;
+  const homeDir = inspectGlobal ? (rootIsHome ? root : defaultClaudeHome()) : undefined;
+  const projectDir = rootIsHome ? undefined : root;
+  const archivePaths: ClaudeArchivePath[] = [];
+
+  const userSettingsPath = homeDir ? path.join(homeDir, "settings.json") : undefined;
+  const userLocalSettingsPath = homeDir ? path.join(homeDir, "settings.local.json") : undefined;
+  const userClaudeJsonPath = inspectGlobal ? path.join(os.homedir(), ".claude.json") : undefined;
+  const userMemoryPath = homeDir ? path.join(homeDir, "CLAUDE.md") : undefined;
+  const desktopConfigPath = inspectGlobal
+    ? path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "Claude",
+        "claude_desktop_config.json",
+      )
+    : undefined;
+  const homeProjectsDir = homeDir ? path.join(homeDir, "projects") : undefined;
+  const userSkillsDir = homeDir ? path.join(homeDir, "skills") : undefined;
+  const userCommandsDir = homeDir ? path.join(homeDir, "commands") : undefined;
+  const userAgentsDir = homeDir ? path.join(homeDir, "agents") : undefined;
+
+  if (homeDir) {
+    for (const dir of HOME_ARCHIVE_DIRS) {
+      await addArchivePath(archivePaths, `archive:home:${dir}`, path.join(homeDir, dir), dir);
+    }
+  }
+
+  const source: ClaudeSource = {
+    root,
+    confidence: "low",
+    autoMemorySources: [],
+    archivePaths,
+    ...(homeDir && (await isDirectory(homeDir)) ? { homeDir } : {}),
+    ...(homeProjectsDir && (await isDirectory(homeProjectsDir)) ? { homeProjectsDir } : {}),
+    ...(projectDir ? { projectDir } : {}),
+  };
+  for (const [key, candidate, probe] of [
+    ["userSettingsPath", userSettingsPath, exists],
+    ["userLocalSettingsPath", userLocalSettingsPath, exists],
+    ["userClaudeJsonPath", userClaudeJsonPath, exists],
+    ["userMemoryPath", userMemoryPath, exists],
+    ["userSkillsDir", userSkillsDir, isDirectory],
+    ["userCommandsDir", userCommandsDir, isDirectory],
+    ["userAgentsDir", userAgentsDir, isDirectory],
+    ["desktopConfigPath", desktopConfigPath, exists],
+  ] as const) {
+    if (candidate && (await probe(candidate))) {
+      source[key] = candidate;
+    }
+  }
+
+  if (projectDir) {
+    for (const [key, candidate, probe] of [
+      ["projectSettingsPath", path.join(projectDir, ".claude", "settings.json"), exists],
+      ["projectLocalSettingsPath", path.join(projectDir, ".claude", "settings.local.json"), exists],
+      ["projectMcpPath", path.join(projectDir, ".mcp.json"), exists],
+      ["projectMemoryPath", path.join(projectDir, "CLAUDE.md"), exists],
+      ["projectDotClaudeMemoryPath", path.join(projectDir, ".claude", "CLAUDE.md"), exists],
+      ["projectLocalMemoryPath", path.join(projectDir, "CLAUDE.local.md"), exists],
+      ["projectRulesDir", path.join(projectDir, ".claude", "rules"), isDirectory],
+      ["projectSkillsDir", path.join(projectDir, ".claude", "skills"), isDirectory],
+      ["projectCommandsDir", path.join(projectDir, ".claude", "commands"), isDirectory],
+      ["projectAgentsDir", path.join(projectDir, ".claude", "agents"), isDirectory],
+    ] as const) {
+      if (await probe(candidate)) {
+        source[key] = candidate;
+      }
+    }
+    for (const file of PROJECT_ARCHIVE_FILES) {
+      await addArchivePath(
+        archivePaths,
+        `archive:project:${file}`,
+        path.join(projectDir, file),
+        file,
+      );
+    }
+  }
+
+  const memoryHomeProjectsDir = source.homeProjectsDir;
+  const memoryUserSettingsPath = source.userSettingsPath;
+  const candidates: Array<{ configured?: boolean; label: string; path: string }> = [];
+  if (memoryHomeProjectsDir) {
+    for (const entry of await safeReadDir(memoryHomeProjectsDir)) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      candidates.push({
+        label: entry.name,
+        path: path.join(memoryHomeProjectsDir, entry.name, "memory"),
+      });
+    }
+  }
+  const userSettings = await readJsonObject(memoryUserSettingsPath);
+  const customDirectory = userSettings.autoMemoryDirectory;
+  if (typeof customDirectory === "string" && customDirectory.trim()) {
+    const configuredPath = customDirectory.trim();
+    // Bare ~ would select the whole home tree; Claude only permits absolute or ~/-prefixed paths.
+    if (!path.isAbsolute(configuredPath) && !configuredPath.startsWith("~/")) {
+      throw new Error("Claude autoMemoryDirectory must be absolute or start with ~/.");
+    }
+    const customPath = resolveHomePath(configuredPath);
+    candidates.push({
+      configured: true,
+      label: path.basename(customPath) || "custom",
+      path: customPath,
+    });
+  }
+  if (path.basename(root) === "memory") {
+    candidates.push({
+      label: path.basename(path.dirname(root)) || "project",
+      path: root,
+    });
+  }
+
+  const seen = new Set<string>();
+  const sources: ClaudeAutoMemorySource[] = [];
+  for (const candidate of candidates) {
+    const directoryExists = candidate.configured
+      ? await isConfiguredAutoMemoryDirectory(candidate.path)
+      : await isDirectory(candidate.path);
+    if (!directoryExists) {
+      continue;
+    }
+    // A capped discovery probe must remain conservative: planning performs the
+    // full bounded scan and reports oversized trees instead of hiding them.
+    const scan = await listMarkdownFiles(candidate.path, 0);
+    if (scan.files.length === 0 && !scan.truncatedBy) {
+      continue;
+    }
+    const canonical = await fs.realpath(candidate.path).catch(() => path.resolve(candidate.path));
+    if (seen.has(canonical)) {
+      continue;
+    }
+    seen.add(canonical);
+    sources.push({
+      id: autoMemorySourceId(canonical),
+      label: candidate.label,
+      path: candidate.path,
+    });
+  }
+  source.autoMemorySources = sources.toSorted((left, right) =>
+    left.label.localeCompare(right.label),
+  );
+
+  const claudeJson = await readJsonObject(source.userClaudeJsonPath);
+  const hasClaudeJsonState = Boolean(claudeJson.mcpServers || claudeJson.projects);
+  const desktopConfig = await readJsonObject(source.desktopConfigPath);
+  const hasDesktopMcp = Boolean(desktopConfig.mcpServers);
+  const high = Boolean(
+    source.userSettingsPath ||
+    source.userMemoryPath ||
+    source.projectSettingsPath ||
+    source.projectMcpPath ||
+    source.projectMemoryPath ||
+    source.projectDotClaudeMemoryPath ||
+    hasClaudeJsonState ||
+    hasDesktopMcp,
+  );
+  const medium = Boolean(
+    source.userSkillsDir ||
+    source.projectSkillsDir ||
+    source.userCommandsDir ||
+    source.projectCommandsDir ||
+    source.userAgentsDir ||
+    source.projectAgentsDir ||
+    source.projectRulesDir ||
+    source.projectLocalMemoryPath ||
+    source.homeProjectsDir ||
+    source.autoMemorySources.length > 0,
+  );
+  source.confidence = high ? "high" : medium ? "medium" : "low";
+  return source;
+}
+
+export function hasClaudeSource(source: ClaudeSource): boolean {
+  return source.confidence !== "low";
+}

@@ -1,0 +1,1242 @@
+/* The schema-driven form itself renders through the settings design
+   language (settings-section/settings-group/settings-row; see
+   ui/src/styles/settings.css). This file keeps only the config page
+   chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
+   pieces layered on top of the settings primitives. */
+
+/* Mirrors the .settings-page column so config chrome lines up with it. */
+.config-lead,
+.config-content-callout {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-lead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.session-source__icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.config-validity-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-validity-warning__icon {
+  flex: none;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+}
+
+.config-validity-warning__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-validity-warning .btn {
+  flex: none;
+}
+
+.config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+
+.config-raw-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.config-diff {
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.config-diff__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  list-style: none;
+}
+
+.config-diff__summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-diff__chevron {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.config-diff__chevron svg {
+  width: 100%;
+  height: 100%;
+}
+
+.config-diff[open] .config-diff__chevron {
+  transform: rotate(90deg);
+}
+
+.config-diff__content {
+  padding: 0 16px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.config-diff__item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+}
+
+.config-diff__path {
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.config-diff__values {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.config-diff__from {
+  color: var(--danger);
+  opacity: 0.85;
+}
+
+.config-diff__arrow {
+  color: var(--muted);
+}
+
+.config-diff__to {
+  color: var(--ok);
+}
+
+/* The settings page inside owns the column and its inset, as on every other page. */
+.config-content {
+  flex: 1;
+  overflow-y: auto;
+  padding-block: 20px;
+  min-width: 0;
+  scroll-behavior: smooth;
+}
+
+/* The schema form nests a full settings-page inside this scroller; both carry
+   top padding, which stacks into a dead band between the accordion nav and
+   the first section. Keep one spacing owner. */
+.config-lead + .config-content {
+  padding-top: 0;
+}
+
+/* Tabs sit between the route introduction and the active section. Remove the
+   generic lead inset; the workspace gap plus 4px content inset then matches
+   the 24px introduction-to-tabs rhythm. */
+.config-lead:has(.config-sections-hub-tabs) {
+  padding-top: 0;
+}
+
+.config-lead:has(.config-sections-hub-tabs) + .config-content {
+  padding-top: var(--space-1);
+}
+
+.config-content > .settings-page {
+  padding-top: 0;
+}
+
+/* Keep Setup from painting above its final position while form sections append. */
+.config-content > .settings-page[aria-busy="true"] + .settings-page {
+  visibility: hidden;
+}
+
+.config-content-callout .callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.config-content-callout__text {
+  min-width: 0;
+  flex: 1 1 420px;
+}
+
+.settings-theme-grid {
+  --settings-theme-tile: calc(96px * var(--control-ui-text-scale));
+
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--settings-theme-tile), 100%), 1fr));
+  gap: var(--space-4) var(--space-3);
+  width: 100%;
+}
+
+/* A theme is picked by its look, so the swatch is the control and the label sits
+   under it. Selection is the same in every theme: a ring and check in the theme's
+   strongest text color, never its accent, which can match the surface. */
+.settings-theme-card {
+  /* stylelint-disable-next-line color-no-hex */
+  --theme-chip-ink: #fff;
+
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--muted-strong);
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+:root[data-theme-mode="light"] .settings-theme-card {
+  /* stylelint-disable-next-line color-no-hex */
+  --theme-chip-ink: #000;
+}
+
+.settings-theme-card__swatch {
+  position: relative;
+  display: grid;
+  height: calc(56px * var(--control-ui-text-scale));
+  padding: 10px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--theme-chip-bg, var(--bg-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+/* The import slot has no palette until an imported theme is active. */
+.settings-theme-card:has(.settings-theme-card__icon) .settings-theme-card__swatch {
+  place-items: center;
+  background: var(--bg-hover);
+}
+
+.settings-theme-card:hover .settings-theme-card__swatch {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
+}
+
+.settings-theme-card--active .settings-theme-card__swatch,
+.settings-theme-card--active:hover .settings-theme-card__swatch {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
+}
+
+.settings-theme-card:focus-visible {
+  outline: none;
+}
+
+.settings-theme-card:focus-visible .settings-theme-card__swatch {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
+}
+
+.settings-theme-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.settings-theme-card__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-theme-card__check {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.settings-theme-card__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3px;
+}
+
+.settings-accent-swatch__check svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-theme-card__label {
+  overflow: hidden;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-theme-card--active .settings-theme-card__label {
+  color: var(--text-strong);
+}
+
+/* Real-palette previews. Colors mirror the :root[data-theme] blocks in base.css
+   (claw = the default :root palette); keep both in sync when retuning a theme.
+   The custom card reads the live variables instead: it is only rendered with a
+   palette while the imported theme is active. */
+.settings-theme-card__palette {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  grid-template-rows: auto auto 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-theme-card__line {
+  width: 62%;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--theme-chip-ink) 45%, transparent);
+}
+
+.settings-theme-card__line--short {
+  width: 38%;
+  background: color-mix(in srgb, var(--theme-chip-ink) 22%, transparent);
+}
+
+.settings-theme-card__chips {
+  display: inline-flex;
+  align-items: center;
+  align-self: end;
+  gap: 4px;
+}
+
+.settings-theme-card__chip {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.settings-theme-card__chip--accent {
+  width: 18px;
+  background: var(--theme-chip-accent);
+}
+
+.settings-theme-card__chip--accent-2 {
+  background: var(--theme-chip-accent-2);
+}
+
+/* Preview swatches are theme-invariant and must not inherit the active theme. */
+/* stylelint-disable color-no-hex */
+.settings-theme-card--claw,
+.settings-accent-theme--claw {
+  --theme-chip-bg: #111318;
+  --theme-chip-accent: #ff5c5c;
+  --theme-chip-accent-2: #14b8a6;
+}
+
+.settings-theme-card--knot,
+.settings-accent-theme--knot {
+  --theme-chip-bg: #0c0c0c;
+  --theme-chip-accent: #e5243b;
+  --theme-chip-accent-2: #b8bdc4;
+}
+
+.settings-theme-card--dash,
+.settings-accent-theme--dash {
+  --theme-chip-bg: #1e1613;
+  --theme-chip-accent: #cf8b4d;
+  --theme-chip-accent-2: #dcb878;
+}
+
+.settings-theme-card--absolutely,
+.settings-accent-theme--absolutely {
+  --theme-chip-bg: #1f1f1e;
+  --theme-chip-accent: #d97757;
+  --theme-chip-accent-2: #b8926a;
+}
+
+.settings-theme-card--tide,
+.settings-accent-theme--tide {
+  --theme-chip-bg: #14191f;
+  --theme-chip-accent: #5ab6d8;
+  --theme-chip-accent-2: #7f9bb5;
+}
+
+.settings-theme-card--beacon,
+.settings-accent-theme--beacon {
+  --theme-chip-bg: #050505;
+  --theme-chip-accent: #ffc233;
+  --theme-chip-accent-2: #8ecdff;
+}
+
+.settings-theme-card--phosphor,
+.settings-accent-theme--phosphor {
+  --theme-chip-bg: #0e130e;
+  --theme-chip-accent: #4ade80;
+  --theme-chip-accent-2: #8fd6a5;
+}
+
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
+  --theme-chip-bg: #0d0e0d;
+  --theme-chip-accent: #e8e8e8;
+  --theme-chip-accent-2: #ffcf5c;
+}
+
+.settings-theme-card--manuscript,
+.settings-accent-theme--manuscript {
+  --theme-chip-bg: #25221b;
+  --theme-chip-accent: #8fa8e0;
+  --theme-chip-accent-2: #cfa85e;
+}
+
+.settings-theme-card--rose,
+.settings-accent-theme--rose {
+  --theme-chip-bg: #1d1b28;
+  --theme-chip-accent: #ebbcba;
+  --theme-chip-accent-2: #f6c177;
+}
+
+.settings-theme-card--miami,
+.settings-accent-theme--miami {
+  --theme-chip-bg: #181322;
+  --theme-chip-accent: #f472b6;
+  --theme-chip-accent-2: #5fd7e8;
+}
+
+:root[data-theme-mode="light"] {
+  .settings-theme-card--claw,
+  .settings-accent-theme--claw {
+    --theme-chip-bg: #f4f4f4;
+    --theme-chip-accent: #bd4531;
+    --theme-chip-accent-2: #0d9488;
+  }
+
+  .settings-theme-card--knot,
+  .settings-accent-theme--knot {
+    --theme-chip-bg: #f0f0f3;
+    --theme-chip-accent: #c41e30;
+    --theme-chip-accent-2: #5a626e;
+  }
+
+  .settings-theme-card--dash,
+  .settings-accent-theme--dash {
+    --theme-chip-bg: #e8e2dc;
+    --theme-chip-accent: #8a512c;
+    --theme-chip-accent-2: #7d6027;
+  }
+
+  .settings-theme-card--absolutely,
+  .settings-accent-theme--absolutely {
+    --theme-chip-bg: #f3f2f1;
+    --theme-chip-accent: #cc7d5d;
+    --theme-chip-accent-2: #8a6a44;
+  }
+
+  .settings-theme-card--tide,
+  .settings-accent-theme--tide {
+    --theme-chip-bg: #edeff1;
+    --theme-chip-accent: #1f6f8f;
+    --theme-chip-accent-2: #3d6d88;
+  }
+
+  .settings-theme-card--beacon,
+  .settings-accent-theme--beacon {
+    --theme-chip-bg: #f3f3f3;
+    --theme-chip-accent: #6e4a00;
+    --theme-chip-accent-2: #09428d;
+  }
+
+  .settings-theme-card--phosphor,
+  .settings-accent-theme--phosphor {
+    --theme-chip-bg: #edf0ed;
+    --theme-chip-accent: #10693a;
+    --theme-chip-accent-2: #2f6b47;
+  }
+
+  .settings-theme-card--crt,
+  .settings-accent-theme--crt {
+    --theme-chip-bg: #f0f0f0;
+    --theme-chip-accent: #1f1f1f;
+    --theme-chip-accent-2: #7a5d10;
+  }
+
+  .settings-theme-card--manuscript,
+  .settings-accent-theme--manuscript {
+    --theme-chip-bg: #edece6;
+    --theme-chip-accent: #31549b;
+    --theme-chip-accent-2: #7d6118;
+  }
+
+  .settings-theme-card--rose,
+  .settings-accent-theme--rose {
+    --theme-chip-bg: #edeae7;
+    --theme-chip-accent: #9c4f66;
+    --theme-chip-accent-2: #286983;
+  }
+
+  .settings-theme-card--miami,
+  .settings-accent-theme--miami {
+    --theme-chip-bg: #f2eef1;
+    --theme-chip-accent: #b0246f;
+    --theme-chip-accent-2: #0f6f7d;
+  }
+}
+/* stylelint-enable color-no-hex */
+
+.settings-theme-card--custom,
+.settings-accent-theme--custom {
+  --theme-chip-bg: var(--bg);
+  --theme-chip-accent: var(--accent);
+  --theme-chip-accent-2: var(--accent-2);
+}
+
+.settings-accent-swatches {
+  --settings-accent-swatch-size: 28px;
+
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-accent-swatch {
+  display: inline-flex;
+  flex: none;
+  width: var(--settings-accent-swatch-size);
+  height: var(--settings-accent-swatch-size);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 50%;
+  background: var(--settings-accent-swatch, var(--accent));
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-accent-swatch--active {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
+}
+
+.settings-accent-swatch__check {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  color: var(--settings-accent-swatch-ink, var(--accent-foreground));
+}
+
+/* Six across, five under: two even rows instead of one orphan on a phone. */
+@media (max-width: 768px) {
+  .settings-accent-swatches {
+    --settings-accent-swatch-size: 36px;
+
+    display: grid;
+    grid-template-columns: repeat(6, var(--settings-accent-swatch-size));
+    justify-content: space-between;
+    gap: var(--space-3) 0;
+    width: 100%;
+  }
+}
+
+.settings-accent-swatch--custom {
+  position: relative;
+  overflow: hidden;
+}
+
+.settings-accent-swatch__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+}
+
+.settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+  outline: 2px solid var(--text-strong);
+  outline-offset: 4px;
+}
+
+.settings-accent-swatch__picker {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: var(--settings-accent-swatch-ink, var(--accent-foreground));
+  pointer-events: none;
+}
+
+.settings-accent-swatch__picker svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-accent-swatch__reset {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  color: var(--theme-chip-bg);
+}
+
+.settings-accent-swatch__reset svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (forced-colors: active) {
+  .settings-accent-swatch__picker {
+    color: CanvasText;
+  }
+
+  .settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+.settings-theme-import {
+  display: grid;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-theme-import__head,
+.settings-theme-import__meta,
+.settings-theme-import__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.settings-theme-import__head {
+  align-items: flex-start;
+}
+
+.settings-theme-import__external {
+  flex: none;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.settings-theme-import__external svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.settings-theme-import__field .settings-theme-import__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-theme-import__field .btn {
+  flex: none;
+}
+
+.settings-theme-import__meta-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-theme-import__meta .btn {
+  flex: none;
+}
+
+.settings-theme-import__message {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.settings-theme-import__message--error {
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .settings-theme-import__head,
+  .settings-theme-import__meta,
+  .settings-theme-import__field {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.cfg-collection-draft__controls {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.config-raw-field textarea {
+  min-height: 500px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.config-raw-field .config-raw-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+  min-width: 32px;
+}
+
+.config-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 80px 24px;
+  color: var(--muted);
+}
+
+.config-loading__spinner {
+  width: 20px;
+  height: 20px;
+}
+
+.cfg-field__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.cfg-structured-draft {
+  display: contents;
+}
+
+.cfg-structured-draft__error .settings-row__control,
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret,
+.cfg-array .settings-row--stacked .settings-row__control {
+  width: 100%;
+}
+
+.cfg-json-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+/* A list of plain values is one row per value: the field, then its remove button. */
+.cfg-array__item--row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--list-row-padding);
+  padding-inline-start: var(--space-7);
+
+  > .cfg-array__value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  > .cfg-array__value > .settings-row {
+    min-height: 0;
+    padding: 0;
+  }
+
+  /* A list value is required by being in the list. */
+  .settings-row__control > .settings-row__desc[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+/* A collection's head and entry rows hold one small action, which stays beside its text. */
+@media (max-width: 640px) {
+  .cfg-collection-row {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
+      width: auto;
+      max-width: none;
+    }
+  }
+}
+
+/* A number and its step buttons are one control, on the input's own surface. */
+.cfg-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  height: var(--settings-control-height);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+}
+
+.cfg-stepper:focus-within {
+  border-color: var(--ring);
+}
+
+.settings-row .cfg-stepper > .settings-input,
+.settings-row .cfg-stepper > input[type="number"].settings-input {
+  flex: 0 1 72px;
+  width: 72px;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  padding-inline: var(--space-1);
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: textfield;
+}
+
+.cfg-stepper > .settings-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.cfg-stepper > .settings-input::-webkit-inner-spin-button,
+.cfg-stepper > .settings-input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* On a phone a number sits under its label like every other field, at the same width. */
+@media (max-width: 640px) {
+  .cfg-stepper {
+    width: 100%;
+  }
+
+  .settings-row .cfg-stepper > .settings-input,
+  .settings-row .cfg-stepper > input[type="number"].settings-input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
+.cfg-stepper__button {
+  flex: 0 0 auto;
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--field-radius);
+  cursor: var(--cursor-action);
+}
+
+.cfg-stepper__button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.cfg-stepper__button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.cfg-stepper__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cfg-collection-draft__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.config-content :is(input, textarea, select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.cfg-redacted {
+  opacity: 0.7;
+}
+
+/* Collapsible nested-object summary behaves like a nav row. */
+.cfg-object__summary {
+  cursor: var(--cursor-action);
+  list-style: none;
+  transition: background var(--duration-fast) ease;
+}
+
+.cfg-object__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cfg-object__summary:hover {
+  background: var(--bg-hover);
+}
+
+/* A closed group on a curated page is one line; its help arrives with its settings. */
+.cfg-object--quiet:not([open]) > .cfg-object__summary .settings-row__desc {
+  display: none;
+}
+
+/* The curated rows and the schema editor read as one column of sections. */
+.security-page > .settings-page {
+  padding-bottom: 0;
+}
+
+.security-page > .config-content {
+  padding-top: var(--space-8);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .settings-theme-import__input,
+  .config-raw-field textarea {
+    font-size: 16px;
+  }
+}
+
+.memory-page__panel {
+  display: grid;
+  gap: 14px;
+}
+
+.mcp-page {
+  display: grid;
+  gap: var(--space-8);
+  margin-top: 12px;
+}
+
+.memory-page {
+  display: grid;
+  gap: 0;
+}
+
+/* Memory subviews vary substantially in height. Keep the shared hero anchored
+   when switching between a view that needs the content scrollbar and one that
+   does not. */
+.shell--settings .content.content--memory-page {
+  scrollbar-gutter: stable;
+}
+
+.memory-page__nav-row {
+  text-decoration: none;
+}
+
+.curated-settings__disclosure svg {
+  transition: transform 140ms ease;
+}
+
+.curated-settings__disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.curated-settings__details {
+  padding-inline-start: var(--space-4);
+}
+
+/* One server: the line says what it is and whether it works; the panel holds the rest. */
+.mcp-server-row__head {
+  display: flex;
+  align-items: center;
+  padding-inline-end: var(--space-4);
+}
+
+.mcp-server-row__head:has(.mcp-server-row__summary:hover) {
+  background: var(--surface-hover);
+}
+
+.mcp-server-row__summary {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "name status chevron"
+    "target target chevron";
+  align-items: center;
+  column-gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.mcp-server-row__summary:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: -2px;
+}
+
+.mcp-server-row__name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-row--off .mcp-server-row__name {
+  color: var(--muted);
+}
+
+.mcp-server-row__status {
+  display: flex;
+  grid-area: status;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.mcp-server-row__target {
+  grid-area: target;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-row__chevron {
+  grid-area: chevron;
+  inline-size: var(--list-row-icon-size);
+  block-size: var(--list-row-icon-size);
+  opacity: 0.7;
+  transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
+}
+
+.mcp-server-row--open .mcp-server-row__chevron {
+  transform: rotate(180deg);
+}
+
+/* Inset like an open tool in the Agents catalog, so it's clear where a server ends. */
+.mcp-server-row__detail {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding-block: var(--space-1) var(--space-5);
+  padding-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
+}
+
+.mcp-server-row__detail > :not(.mcp-server-editor) {
+  margin-inline: var(--space-4);
+}
+
+.mcp-server-row__facts:empty {
+  display: none;
+}
+
+.mcp-server-row__note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.mcp-server-row__note .mcp-server-row__note-error {
+  color: var(--danger);
+}
+
+.mcp-server-row__label {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 580;
+}
+
+.mcp-server-tools__list {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.mcp-server-tools__list li {
+  display: grid;
+  min-width: 0;
+}
+
+.mcp-server-tools__list code,
+.mcp-command code {
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* The panel is already a surface; its fields sit on it without a second card. */
+.mcp-server-editor .settings-group {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.mcp-server-editor .settings-row__title {
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.mcp-server-editor .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+.mcp-server-row__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* A ghost button's label lines up with the text above it. */
+.mcp-server-row__footer > .btn--ghost {
+  margin-inline-start: calc(var(--space-3) * -1);
+}
+
+.mcp-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.mcp-page .settings-page {
+  padding-block: 0;
+}
+
+/* No description sits under the heading here, so its actions share its line at every width. */
+.mcp-page .mcp-server-list .settings-section__header {
+  flex-direction: row;
+  align-items: center;
+}
+
+.mcp-page .mcp-server-list .settings-section__header .settings-section__actions {
+  align-self: center;
+}
+
+/* The "?" sits at the page edge here, so its touch area stops at the page's padding. */
+.mcp-page .settings-section__help-button::after {
+  inset-inline-end: calc(var(--space-3) * -1);
+}
+
+/* Disclosures closing a page read as one list, not separate sections. */
+.mcp-page .mcp-page__commands {
+  margin-top: calc(var(--space-3) - var(--space-8));
+}
+
+.shell--settings .mcp-page .config-content {
+  padding-block: 0;
+}
+
+/* The shared summary stacks at phone width, which orphans its chevron on a line of its own. */
+.mcp-page .cfg-object__summary.settings-row {
+  flex-wrap: nowrap;
+}
+
+.mcp-page .cfg-object__summary.settings-row > .settings-row__control {
+  width: auto;
+}
+
+.config-accordion-nav {
+  margin-bottom: 20px;
+}
+
+.config-accordion-group__header .settings-row__chevron {
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.config-accordion-group__header[aria-expanded="true"] .settings-row__chevron {
+  transform: rotate(90deg);
+}
+
+.config-accordion-group__items {
+  padding-block-end: var(--space-2);
+}
+
+/* Sections are children of their category: inset under its title, with the
+   sidebar's rounded row and selected fill so square themes stay square. */
+.config-accordion-nav .config-accordion-group__item {
+  width: calc(100% - 2 * var(--space-4));
+  min-height: 36px;
+  margin-inline: var(--space-4);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.config-accordion-nav .config-accordion-group__item .settings-row__title {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.config-accordion-nav .config-accordion-group__item--active {
+  background: var(--surface-selected);
+}
+
+.config-accordion-nav .config-accordion-group__item--active:hover {
+  background: var(--surface-selected-hover);
+}
+
+.config-accordion-nav .config-accordion-group__item--active .settings-row__title {
+  color: var(--text-strong);
+}

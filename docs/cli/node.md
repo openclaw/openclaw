@@ -1,0 +1,459 @@
+---
+summary: "CLI reference for `openclaw node` (headless node host)"
+read_when:
+  - Running the headless node host
+  - Pairing a non-macOS node for system.run
+title: "Node"
+---
+
+# `openclaw node`
+
+Run a **headless node host** that connects to the Gateway WebSocket and exposes
+`system.run` / `system.which` on this machine by default. Use `--commands` to
+restrict the advertised surface, for example to read-only session sharing.
+
+On macOS, the menu bar app already embeds this node-host runtime into its own
+node connection and adds native Mac capabilities. Use `openclaw node run` on a
+Mac only when you intentionally want a headless node without the app. Running
+both creates two node identities for the same machine.
+
+## Why use a node host?
+
+Use a node host when you want agents to **run commands on other machines** in your
+network without installing a full macOS companion app there.
+
+Common use cases:
+
+- Run commands on remote Linux/Windows boxes (build servers, lab machines, NAS).
+- Keep exec **sandboxed** on the gateway, but delegate approved runs to other hosts.
+- Provide a lightweight, headless execution target for automation or CI nodes.
+
+Execution is still guarded by **exec approvals** and per-agent allowlists on the
+node host, so you can keep command access scoped and explicit.
+
+`openclaw node run` can publish plugin or MCP-backed tools after it connects.
+The Gateway trusts descriptors from the paired node by default, while requiring
+each descriptor's command to remain in the node's approved command surface. The
+agent sees each accepted descriptor as a normal plugin tool, but execution still
+goes through `node.invoke`, so disconnecting the node removes the tool from new
+agent runs. Gateway operators can disable publication with
+`gateway.nodes.pluginTools.enabled: false`.
+
+For declarative MCP tools, add the normal MCP server shape under
+`nodeHost.mcp.servers` in `openclaw.json` on the node machine, then restart the
+node host. The node declares the approval-gated `mcp.tools.call.v1` command
+family and publishes listed tools after connecting; changing the server list
+later does not require re-pairing. See
+[Node-hosted MCP servers](/nodes/mcp-and-skills#node-hosted-mcp-servers).
+
+## Browser proxy (zero-config)
+
+Node hosts automatically advertise a browser proxy if `browser.enabled` is not
+disabled on the node. This lets the agent use browser automation on that node
+without extra configuration.
+
+By default, the proxy exposes the node's normal browser profile surface. If you
+set `nodeHost.browserProxy.allowProfiles`, the proxy becomes restrictive:
+non-allowlisted profile targeting is rejected, and persistent profile
+create/delete routes are blocked through the proxy.
+
+Disable it on the node if needed:
+
+```json5
+{
+  nodeHost: {
+    browserProxy: {
+      enabled: false,
+    },
+  },
+}
+```
+
+## Run (foreground)
+
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
+single-use join URL or the same setup code forms as `--pair`, then runs this
+node-host runtime.
+
+```bash
+openclaw node run --host <gateway-host> --port 18789
+```
+
+Or paste a short-lived node setup link from the Control UI Devices page:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
+```
+
+Stopping a foreground node also cancels startup. If termination arrives before
+the Gateway connection is ready, the node drains its prepared resources and exits.
+
+Options:
+
+- `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
+- `--pair <code-or-url>`: Read the Gateway endpoint, bootstrap token, TLS mode,
+  and optional certificate pin from a setup code or `oc-pair://` URL. Explicit
+  gateway flags override values from `--pair`.
+- `--pair-if-needed <code-or-url>`: Use the same endpoint options as `--pair`, but
+  prefer the saved device token when present. A supervisor can restart the same
+  command after pairing. Cannot be combined with `--pair`.
+- `--port <port>`: Gateway WebSocket port (default: `18789`)
+- `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
+- `--tls`: Use TLS for the gateway connection
+- `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
+- `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
+- `--display-name <name>`: Override the node display name
+- `--session-host`: Host worker sessions for this foreground process without changing the saved worker-hosting preference
+- `--auth-from-env`: Explicitly use environment Gateway credentials instead of the saved paired credential
+- `--commands <ids>`: Persist an exact comma-separated command allowlist (repeatable); advertise only available matches and their required capabilities. Disables computer use, skills, plugin tools, MCP servers, and worker hosting. Omitting the flag preserves the saved list.
+- `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
+
+## Gateway auth for node host
+
+`--pair` uses a 10-minute single-use bootstrap token for the first connection.
+After pairing, reconnects use the durable device credential. Administrator-minted
+bootstrap enrollment approves the device and its first declared command surface,
+including `system.run` when declared. Later command, capability, or permission
+expansion still requires `openclaw nodes approve`. Gateway command policy and
+the node host's [exec approvals](/tools/exec-approvals) remain separate gates.
+Local exec approvals default to `full` with `ask: "off"`; configure them before
+using a setup link if that access is too broad. `node install --pair` is
+intentionally unavailable because a short-lived bearer setup link must not be
+persisted in service arguments.
+
+For a managed foreground process, `--pair-if-needed` reuses native device-token
+storage across restarts; it does not keep a separate enrollment marker. Preserve
+the node state directory. After the setup code expires, the node can still reconnect
+when its saved identity and node token exist and every selected Gateway endpoint
+matches the saved Gateway scope. The expired bootstrap token is never sent.
+An expired setup code cannot enroll a new state directory or replace a revoked
+device token; provision a fresh code when needed. Explicit `--pair` still rejects
+expired setup codes.
+
+`openclaw node run` and `openclaw node install` use the paired device credential
+when reconnecting to the saved Gateway endpoint. Ambient credentials from
+`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, config `env.vars`,
+the state-directory `.env`, or a co-located Gateway's `gateway.auth.*` do not
+override that pairing. A paired service install does not save those ambient
+Gateway credentials in its service environment.
+
+For an intentional shared-token or password connection, use `--auth-from-env`:
+
+```bash
+openclaw node run --auth-from-env
+openclaw node install --auth-from-env --force
+```
+
+Set `OPENCLAW_GATEWAY_TOKEN` or `OPENCLAW_GATEWAY_PASSWORD` for the target
+Gateway before running these commands. The install command saves the selected
+environment credentials and the explicit flag for restarts. Reapply the flag
+when reinstalling if you want to retain this override. When this replaces an
+available paired credential, startup names the selected environment variable
+in a warning without printing its value.
+
+Without an existing pairing for the selected endpoint, normal config/env
+resolution remains available (there are no `--token`/`--password` flags):
+
+- `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` are checked first.
+- Otherwise, local config fallback applies: `gateway.auth.token` / `gateway.auth.password`.
+- In local mode, node host intentionally does not inherit `gateway.remote.token` / `gateway.remote.password`.
+- If config fallback selects an unresolved `gateway.auth.token` / `gateway.auth.password` SecretRef, node authentication stops without falling back to remote credentials.
+- In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
+- Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+- A CWD `.env` cannot supply `OPENCLAW_*` variables; those are blocked by workspace dotenv policy.
+
+The saved endpoint includes its host, port, TLS mode, and context path. Changing
+any of these restores normal config/env auth resolution. A node can therefore
+share its state directory with a local Gateway while reconnecting to a different
+paired Gateway, without sending the local Gateway's password on restart.
+
+For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` together before `openclaw connect`, `openclaw node
+run`, or `openclaw node install`. The node stores env SecretRefs under its
+current `gateway.cloudflareAccess.clientId` and `clientSecret` connection
+keys. Installed services keep the values in the managed service environment
+file, not in service arguments or inline supervisor definitions. Access
+credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
+resolution while credential-free plaintext node routes remain unchanged. See
+[Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
+
+For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
+literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
+trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; without
+it, node startup stops and asks you to use `wss://`, an SSH tunnel, or
+Tailscale. This is a process-environment opt-in, not an `openclaw.json` config
+key.
+`openclaw node install` persists it into the supervised node service when it is
+present in the install command environment.
+
+## Service (background)
+
+Install a headless node host as a user service (launchd on macOS, systemd on
+Linux, Windows Task Scheduler on Windows).
+
+```bash
+openclaw node install --host <gateway-host> --port 18789
+```
+
+Options:
+
+- `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
+- `--port <port>`: Gateway WebSocket port (default: `18789`)
+- `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
+- `--tls`: Use TLS for the gateway connection
+- `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
+- `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
+- `--display-name <name>`: Override the node display name
+- `--commands <ids>`: Persist the command allowlist for the installed service (repeatable), with the same restrictions as `node run`.
+- `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+- `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
+- `--auth-from-env`: Persist environment Gateway credentials and select them explicitly on service restarts
+- `--force`: Reinstall/overwrite if already installed
+
+The explicit pin is saved in machine-state metadata and retained
+across restarts and forced reinstalls. Replace it with another `--runtime-path`,
+or use `openclaw node install --runtime node --force` without `--runtime-path`
+to return to automatic selection. An unavailable or unsupported pin fails
+instead of silently selecting another runtime. Quote paths containing spaces.
+
+Set `OPENCLAW_WRAPPER` to an executable wrapper file to use it instead of the
+selected runtime and CLI entrypoint. The wrapper receives `node run` and the
+connection arguments; it must launch OpenClaw and forward those arguments.
+
+If installation reports a runtime check failure, check the executable and
+working directory named in the error. For example, when switching users with
+`runuser`, first change to a directory that the target user can read. A failed
+check does not mean that the installed Node version is unsupported; upgrade
+advice is reserved for missing or unsupported runtimes.
+
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
+
+Manage the service:
+
+```bash
+openclaw node status
+openclaw node start
+openclaw node stop
+openclaw node restart
+openclaw node uninstall
+```
+
+Use `openclaw node run` for a foreground node host (no service).
+To remove a saved command allowlist, run `openclaw node run --all-commands`
+in the foreground, or reinstall the service with
+`openclaw node install --force --all-commands`. The reset is durable; the
+replacement service arguments no longer carry `--commands`.
+
+Service commands accept `--json` for machine-readable output.
+`node start` and `node restart` print install hints and exit nonzero when no
+managed node service is installed; run `openclaw node install` first. Stopping
+an absent service remains a successful no-op.
+
+Profile node commands leave conflicting Gateway service definitions unchanged.
+On Linux, a profile's node name can match another profile's legacy Gateway name
+(for example, profile `work` uses `openclaw-node-work.service`). If a command
+reports that the selected service is not a node service, move the conflicting
+Gateway service to its current name before installing or managing the node.
+
+The node host retries Gateway restart and network closes in-process. If the
+Gateway reports a terminal token/password/bootstrap auth pause, the node host
+logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
+restart it with fresh config and credentials. While device pairing is pending,
+the node keeps reconnecting with exponential backoff capped at 30 seconds and
+connects automatically after approval. Startup failures, such as an expired
+setup code or an unavailable Gateway credential, print a redacted
+`[openclaw] Reason:` without requiring debug mode, including in service logs.
+Set `OPENCLAW_DEBUG=1` to include stack traces.
+
+## Automatic updates
+
+Long-running packaged `node run` processes and installed node services check
+hourly for updates by default. A new version is prepared in a separate node
+runtime, leaving the global CLI package and a co-located Gateway in place.
+Activation waits until commands, terminals, workers, plugin work, pending output,
+and cleanup are idle. The node then restarts with its existing identity, pairing,
+settings, and launch options. Automatic activations are at least 12 hours apart;
+there is no deadline that interrupts busy work.
+
+Disable this on the node machine with:
+
+```bash
+openclaw config set nodeHost.autoUpdate.enabled false
+```
+
+`update.checkOnStart: false` and `OPENCLAW_NO_AUTO_UPDATE=1` also disable node
+automatic updates. The Gateway's `update.auto.enabled` preference is separate.
+Source checkouts, native app nodes, private workers, `dev`, and
+`extended-stable` installs do not auto-apply. Releases requiring database
+migrations defer to the normal update workflow. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates).
+
+## Pairing
+
+The first connection creates a pending device pairing request (`role: node`) on the Gateway.
+
+When the Gateway host can SSH to the node host non-interactively (same user,
+trusted host key), the pending request is approved automatically: the Gateway
+runs `openclaw node identity --json` on the node host over SSH and approves on
+an exact device-key match. This is on by default; see
+[SSH-verified device auto-approval](/gateway/pairing#ssh-verified-device-auto-approval-default)
+for requirements and how to disable it (`gateway.nodes.pairing.sshVerify: false`).
+
+Otherwise approve manually via:
+
+```bash
+openclaw devices list
+openclaw devices approve <deviceRequestId>
+```
+
+Device approval admits the connection; the command surface needs separate
+approval. The node keeps reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, its next reconnect
+creates a separate command-surface request on the Gateway:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <nodeRequestId>
+openclaw nodes describe --node <idOrNameOrIp>
+```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
+
+The device and node request IDs are distinct. An initial unapproved surface has
+no effective commands. SSH-verified and bootstrap enrollment can approve the
+first surface automatically; later expansions require approval. Previously
+approved commands that remain declared and allowed stay effective while an
+expansion waits.
+
+Inspect the local node identity the Gateway verifies against:
+
+```bash
+openclaw node identity --json
+```
+
+It prints the device ID and public key from the `primary` row in
+`client/credentials.sqlite` and never creates the database or a new identity.
+Use `--identity node` or `--identity shareExtension` to inspect the corresponding
+native identity profile. An incomplete credential migration requires
+`openclaw doctor --fix` from the matching installation.
+
+On tightly controlled node networks, the Gateway operator can explicitly opt in
+to auto-approving first-time node pairing from trusted CIDRs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This is disabled by default (`autoApproveCidrs` is unset). It only applies to
+fresh `role: node` pairing with no requested scopes, from a client IP the
+Gateway trusts. Operator/browser clients, Control UI, WebChat, and role,
+scope, metadata, or public-key upgrades still require manual approval.
+
+Trusted-network device approval does not approve the node's command surface.
+Inspect `openclaw nodes pending` and approve the separate surface request.
+
+If the node retries pairing with changed auth details (role/scopes/public key),
+the previous pending request is superseded and a new `requestId` is created.
+Run `openclaw devices list` again before approval.
+
+### Identity and pairing state
+
+The headless node separates its client instance ID from the signed device
+identity that the Gateway uses for pairing and routing. This state lives in the
+OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
+when set):
+
+| State                                                                              | Purpose                                                                                                                          |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`)            | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `client/credentials.sqlite` (`device_identities`, `primary`)                       | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `client/credentials.sqlite` (`device_auth_tokens`, `gateway_origin_device_tokens`) | Paired device tokens, keyed by cryptographic device ID, role, and Gateway scope.                                                 |
+
+`gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
+primary device identity in the Gateway's state directory. Overriding `--node-id`
+does not change it. A node with its own state directory and key is separate, even
+on the same machine. Listing or describing nodes does not create identity credentials.
+
+`--node-id` changes only the client instance ID in shared SQLite state. It does
+not change the cryptographic device ID or clear pairing auth. Migrating a retired
+`node.json` with `openclaw doctor --fix` likewise does not reset pairing. To
+revoke and re-pair a node:
+
+1. On the Gateway, run `openclaw nodes remove --node <id|name|ip>`.
+2. On the node, restart the installed service with `openclaw node restart`, or
+   stop and rerun the foreground `openclaw node run` command. This starts the
+   device-pairing flow. If `openclaw devices list` does not show a request
+   and the node reports `AUTH_DEVICE_TOKEN_MISMATCH`, restart or rerun it once
+   more. The rejected attempt clears the now-revoked local token; the next
+   attempt can request pairing.
+3. On the Gateway, run `openclaw devices list`, then
+   `openclaw devices approve <deviceRequestId>`.
+4. Wait for the node's automatic reconnect, which creates the separate
+   command-surface request. If an older client already paused for pairing,
+   restart or rerun it once.
+5. On the Gateway, run `openclaw nodes pending`, then
+   `openclaw nodes approve <nodeRequestId>`.
+
+The two request IDs are distinct. An applicable trusted-CIDR policy can
+auto-approve the first-time device-pairing step; command-surface approval remains
+a separate check.
+
+Older OpenClaw releases stored node-host state in `node.json`, the signed
+identity in `identity/device.json`, and paired auth in
+`identity/device-auth.json`. Node startup, including the macOS app's worker,
+automatically prepares legacy credentials and exec approvals before capabilities
+are prepared. It uses the same backup and migration owner as Doctor, preserving
+the existing keypair and pairing tokens. Retained credential JSON stays consumed
+even if an older release recreates it; an existing valid stored identity remains
+authoritative. Malformed or conflicting sources remain unchanged and require the
+repair described in the diagnostic. Keep `client/credentials.sqlite` private;
+it contains the device keypair and auth tokens. Other retired node state remains
+part of `openclaw doctor --fix`.
+
+Retired `node.json` and interrupted Doctor claims must contain valid UTF-8.
+Doctor reports malformed text as a recoverable warning and preserves its bytes
+for repair. Keep a backup, correct the encoding in a copy, replace the affected
+file, then rerun `openclaw doctor --fix` before starting the node host.
+
+## Exec approvals
+
+`system.run` is gated by local exec approvals:
+
+- `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
+  `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is unset
+- [Exec approvals](/tools/exec-approvals)
+- From the Gateway, inspect with `openclaw approvals get --node <id|name|ip>` or
+  replace with `openclaw approvals set --node <id|name|ip> --file <path>`; see the
+  [Approvals CLI](/cli/approvals).
+
+For approved async node exec, OpenClaw prepares a `systemRunPlan`
+before prompting. The later approved `system.run` forward reuses that stored
+plan, so edits to command/cwd/session fields after the approval request was
+created are rejected instead of changing what the node executes.
+
+## Related
+
+- [CLI reference](/cli)
+- [Connect a device](/cli/connect)
+- [Nodes](/nodes)

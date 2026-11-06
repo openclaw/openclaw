@@ -1,0 +1,121 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+
+const runtimeModelAuthMocks = vi.hoisted(() => ({
+  getApiKeyForModel: vi.fn(),
+  getRuntimeAuthForModelCore: vi.fn(),
+  resolveProviderRuntimeApiKey: vi.fn(),
+}));
+// mock-isolation: Exercise the lazy runtime facade without loading credential-backed model auth.
+vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+// mock-isolation: Gateway presence must not initialize server orchestration.
+vi.mock("../../gateway/server-plugins.js", () => {
+  throw new Error("Gateway availability must not load server plugin orchestration");
+});
+
+import { createPluginRuntime } from "./index.js";
+
+describe("plugin runtime command execution", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    Object.values(runtimeModelAuthMocks).forEach((mock) => mock.mockReset());
+    resetConfigRuntimeState();
+  });
+
+  it("resolves thinking policy with configured model compat from runtime config", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT 5.4 via GMN",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    };
+    const providers = { gmn: { baseUrl: "https://gmn.example.com/v1", models: [model] } };
+    setRuntimeConfigSnapshot({ models: { providers } } as unknown as OpenClawConfig);
+
+    const runtime = createPluginRuntime();
+    const policy = runtime.agent.resolveThinkingPolicy({ provider: "gmn", model: "gpt-5.4" });
+
+    expect(policy.levels.map((level) => level.id)).toContain("xhigh");
+  });
+
+  it("includes persisted session exec overrides in sandbox authority", () => {
+    const runtime = createPluginRuntime();
+    vi.spyOn(runtime.agent.session, "getSessionEntry").mockReturnValue({
+      sessionId: "session",
+      updatedAt: 1,
+      execHost: "gateway",
+    });
+    const config: OpenClawConfig = {
+      agents: { defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } } },
+      tools: { elevated: { enabled: false } },
+    };
+
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+    };
+    const result = runtime.sandbox.resolveWorkspaceAuthority({ config, ...scope });
+
+    expect(result.confinementError).toContain("outside the sandbox");
+  });
+
+  it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
+    const runtime = createPluginRuntime();
+    const model = {
+      id: "workspace-cloud/model",
+      provider: "workspace-cloud",
+    };
+    const cfg: OpenClawConfig = { plugins: { allow: ["workspace-cloud"] } };
+    const scope = {
+      cfg,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      store: { version: 1, profiles: {} },
+    };
+    for (const [method, mockName, apiKey] of [
+      ["getApiKeyForModel", "getApiKeyForModel", "model-key"],
+      ["getRuntimeAuthForModel", "getRuntimeAuthForModelCore", "runtime-key"],
+      ["resolveApiKeyForProvider", "resolveProviderRuntimeApiKey", "provider-key"],
+    ] as const) {
+      const mock = runtimeModelAuthMocks[mockName];
+      const target =
+        method === "resolveApiKeyForProvider" ? { provider: "workspace-cloud" } : { model };
+      mock.mockResolvedValue({ apiKey, source: "workspace cloud credentials", mode: "api-key" });
+      const auth = await runtime.modelAuth[method]({ ...scope, ...target } as never);
+      expect(auth.apiKey).toBe(apiKey);
+      expect(mock).toHaveBeenCalledWith({ ...target, cfg, workspaceDir: scope.workspaceDir });
+    }
+  });
+
+  it("keeps subagent unavailable by default", () => {
+    expect(() =>
+      createPluginRuntime().subagent.run({ sessionKey: "s-1", message: "hello" }),
+    ).toThrow("Plugin runtime subagent methods are only available during a gateway request.");
+  });
+
+  it("reads Gateway availability from the request scope without loading server orchestration", async () => {
+    const runtime = createPluginRuntime();
+    await expect(runtime.gateway.isAvailable()).resolves.toBe(false);
+    const context = createContext();
+    await withPluginRuntimeGatewayRequestScope(
+      { context, isWebchatConnect: () => false },
+      async () => {
+        await expect(runtime.gateway.isAvailable()).resolves.toBe(true);
+        await withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => undefined, isWebchatConnect: () => false },
+          async () => expect(await runtime.gateway.isAvailable()).toBe(false),
+        );
+      },
+    );
+    await expect(runtime.gateway.isAvailable()).resolves.toBe(false);
+    expect(() => runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
+      "only available inside the Gateway",
+    );
+  });
+});

@@ -1,0 +1,185 @@
+import crypto from "node:crypto";
+import type {
+  ChannelAccountSnapshot,
+  ChannelGatewayContextV2,
+  ChannelOutboundContext,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { monitorTlonProvider } from "./monitor/index.js";
+import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
+import { resolveTlonAccount } from "./types.js";
+import { authenticate } from "./urbit/auth.js";
+import { pokeUrbitChannel } from "./urbit/channel-ops.js";
+import {
+  normalizeUrbitCookie,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+} from "./urbit/context.js";
+import { urbitFetch } from "./urbit/fetch.js";
+import { buildMediaStory, sendDmWithStory, sendGroupMessageWithStory } from "./urbit/send.js";
+import { markdownToStory } from "./urbit/story.js";
+import { uploadImageFromUrl } from "./urbit/upload.js";
+export { tlonSetupWizard } from "./setup-surface.js";
+
+type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
+type ConfiguredTlonAccount = ResolvedTlonAccount & {
+  ship: string;
+  url: string;
+  code: string;
+};
+
+function resolveReplyId(replyToId?: string | null, threadId?: string | number | null) {
+  return (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
+}
+
+async function sendTlonOutbound(params: ChannelOutboundContext, kind: "text" | "media") {
+  const { cfg, to, text, accountId, replyToId, threadId, assertDirectAdapterHandoff } = params;
+  const resolvedAccount = resolveTlonAccount(cfg, accountId);
+  if (
+    !resolvedAccount.configured ||
+    !resolvedAccount.ship ||
+    !resolvedAccount.url ||
+    !resolvedAccount.code
+  ) {
+    const missingFields = [
+      resolvedAccount.ship ? undefined : "ship",
+      resolvedAccount.url ? undefined : "url",
+      resolvedAccount.code ? undefined : "code",
+    ].filter((field) => field !== undefined);
+    throw new Error(
+      `Tlon account ${resolvedAccount.accountId} not configured (missing ${missingFields.join(", ")})`,
+    );
+  }
+
+  const parsed = parseTlonTarget(to);
+  if (!parsed) {
+    throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
+  }
+  const account = resolvedAccount as ConfiguredTlonAccount;
+
+  let uploadedUrl: string | undefined;
+  if (kind === "media") {
+    const { mediaUrl } = params;
+    uploadedUrl = mediaUrl
+      ? await uploadImageFromUrl(
+          mediaUrl,
+          {
+            shipUrl: account.url,
+            shipName: account.ship,
+            getCode: async () => account.code,
+            dangerouslyAllowPrivateNetwork: account.dangerouslyAllowPrivateNetwork ?? undefined,
+            assertDirectAdapterHandoff,
+          },
+          account.mediaMaxBytes,
+        )
+      : undefined;
+  }
+
+  const { url, ship, code, dangerouslyAllowPrivateNetwork } = account;
+  const onPlatformSendDispatch = params.onPlatformSendDispatch;
+  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    dangerouslyAllowPrivateNetwork ?? undefined,
+  );
+  const cookie = await authenticate(url, code, {
+    ssrfPolicy,
+    beforeRequest: assertDirectAdapterHandoff,
+  });
+  const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID()}`;
+  const shipName = ship.replace(/^~/, "");
+  const api = {
+    poke: async (pokeParams: { app: string; mark: string; json: unknown }) => {
+      assertDirectAdapterHandoff?.();
+      await onPlatformSendDispatch?.();
+      return await pokeUrbitChannel(
+        {
+          baseUrl: url,
+          channelId,
+          ship: shipName,
+          cookie: normalizeUrbitCookie(cookie),
+          ssrfPolicy,
+        },
+        {
+          ...pokeParams,
+          auditContext: "tlon-poke",
+          beforeRequest: assertDirectAdapterHandoff,
+        },
+      );
+    },
+  };
+  const fromShip = normalizeShip(account.ship);
+  const story = kind === "media" ? buildMediaStory(text, uploadedUrl) : markdownToStory(text);
+  if (parsed.kind === "dm") {
+    return await sendDmWithStory({
+      api,
+      fromShip,
+      toShip: parsed.ship,
+      story,
+      kind,
+    });
+  }
+  return await sendGroupMessageWithStory({
+    api,
+    fromShip,
+    hostShip: parsed.hostShip,
+    channelName: parsed.channelName,
+    story,
+    replyToId: resolveReplyId(replyToId, threadId),
+    kind,
+  });
+}
+
+export const tlonRuntimeOutbound: Pick<ChannelOutboundAdapter, "sendText" | "sendMedia"> = {
+  sendText: (params) => sendTlonOutbound(params, "text"),
+  sendMedia: (params) => sendTlonOutbound(params, "media"),
+};
+
+export async function probeTlonAccount(account: ConfiguredTlonAccount, timeoutMs?: number) {
+  return await runChannelProbe(
+    timeoutMs,
+    async () => {
+      const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+        account.dangerouslyAllowPrivateNetwork,
+      );
+      const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
+      const { response, release } = await urbitFetch({
+        baseUrl: account.url,
+        path: "/~/name",
+        init: {
+          method: "GET",
+          headers: { Cookie: cookie },
+        },
+        ssrfPolicy,
+        timeoutMs: 30_000,
+        auditContext: "tlon-probe-account",
+      });
+      try {
+        if (!response.ok) {
+          return { ok: false, error: `Name request failed: ${response.status}` };
+        }
+        return { ok: true };
+      } finally {
+        await release();
+      }
+    },
+    (error) => ({
+      ok: false,
+      error: (error as { message?: string })?.message ?? String(error),
+    }),
+  );
+}
+
+export async function startTlonGatewayAccount(ctx: ChannelGatewayContextV2<ResolvedTlonAccount>) {
+  const account = ctx.account;
+  ctx.setStatus({
+    accountId: account.accountId,
+    ship: account.ship,
+    url: account.url,
+  } as ChannelAccountSnapshot);
+  ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
+  return monitorTlonProvider({
+    scheduler: ctx.scheduler,
+    runtime: ctx.runtime,
+    abortSignal: ctx.abortSignal,
+    accountId: account.accountId,
+  });
+}

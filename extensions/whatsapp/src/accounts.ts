@@ -1,0 +1,144 @@
+import path from "node:path";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveUserPath,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-core";
+import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
+import {
+  listConfiguredAccountIds,
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+} from "./account-ids.js";
+import type { WhatsAppAccountConfig } from "./account-types.js";
+import { collectWhatsAppAuthDirs, hasWebCredsSync } from "./creds-files.js";
+
+export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
+
+export type ResolvedWhatsAppAccount = {
+  accountId: string;
+  name?: string;
+  enabled: boolean;
+  sendReadReceipts: boolean;
+  messagePrefix?: string;
+  defaultTo?: string;
+  authDir: string;
+  isLegacyAuthDir: boolean;
+  selfChatMode?: boolean;
+  allowFrom?: string[];
+  groupAllowFrom?: string[];
+  groupPolicy?: GroupPolicy;
+  mentionPatterns?: WhatsAppAccountConfig["mentionPatterns"];
+  dmPolicy?: DmPolicy;
+  historyLimit?: number;
+  textChunkLimit?: number;
+  streaming?: WhatsAppAccountConfig["streaming"];
+  mediaMaxMb?: number;
+  ackReaction?: WhatsAppAccountConfig["ackReaction"];
+  reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
+  groups?: WhatsAppAccountConfig["groups"];
+  direct?: WhatsAppAccountConfig["direct"];
+  replyToMode?: ReplyToMode;
+};
+
+export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
+
+export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
+  const oauthDir = resolveOAuthDir();
+  const whatsappDir = path.join(oauthDir, "whatsapp");
+  const authDirs = new Set<string>([path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+
+  const accountIds = listConfiguredAccountIds(cfg);
+  for (const accountId of accountIds) {
+    authDirs.add(resolveWhatsAppAuthDir({ cfg, accountId }).authDir);
+  }
+
+  return collectWhatsAppAuthDirs(whatsappDir, authDirs);
+}
+
+export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
+  return listWhatsAppAuthDirs(cfg).some((authDir) => hasWebCredsSync(authDir));
+}
+
+function resolveDefaultAuthDir(accountId: string, env?: NodeJS.ProcessEnv): string {
+  return path.join(resolveOAuthDir(env), "whatsapp", normalizeAccountId(accountId));
+}
+
+export function resolveWhatsAppAuthDir(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): {
+  authDir: string;
+  isLegacy: boolean;
+} {
+  const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
+  const account = resolveMergedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
+  const configured = account?.authDir?.trim();
+  if (configured) {
+    return { authDir: resolveUserPath(configured, params.env), isLegacy: false };
+  }
+
+  return { authDir: resolveDefaultAuthDir(accountId, params.env), isLegacy: false };
+}
+
+export function resolveWhatsAppAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ResolvedWhatsAppAccount {
+  const merged = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg),
+  });
+  const accountId = merged.accountId;
+  const enabled = merged.enabled !== false;
+  const { authDir, isLegacy } = resolveWhatsAppAuthDir({
+    cfg: params.cfg,
+    accountId,
+  });
+  return {
+    accountId,
+    name: normalizeOptionalString(merged.name),
+    enabled,
+    sendReadReceipts: merged.sendReadReceipts ?? true,
+    messagePrefix: merged.responsePrefix,
+    defaultTo: merged.defaultTo,
+    authDir,
+    isLegacyAuthDir: isLegacy,
+    selfChatMode: merged.selfChatMode,
+    dmPolicy: merged.dmPolicy,
+    allowFrom: merged.allowFrom,
+    groupAllowFrom: merged.groupAllowFrom,
+    groupPolicy: merged.groupPolicy,
+    mentionPatterns: merged.mentionPatterns,
+    historyLimit: merged.historyLimit,
+    textChunkLimit: merged.textChunkLimit,
+    streaming: merged.streaming,
+    mediaMaxMb: merged.mediaMaxMb,
+    ackReaction: merged.ackReaction,
+    reactionLevel: merged.reactionLevel,
+    groups: merged.groups,
+    direct: merged.direct,
+    replyToMode: merged.replyToMode,
+  };
+}
+
+export function resolveWhatsAppMediaMaxBytes(
+  account: Pick<ResolvedWhatsAppAccount, "mediaMaxMb">,
+): number {
+  const mediaMaxMb =
+    account.mediaMaxMb !== undefined && account.mediaMaxMb > 0
+      ? account.mediaMaxMb
+      : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
+  return Math.floor(mediaMaxMb * 1024 * 1024);
+}
+
+export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {
+  return listWhatsAppAccountIds(cfg)
+    .map((accountId) => resolveWhatsAppAccount({ cfg, accountId }))
+    .filter((account) => account.enabled);
+}

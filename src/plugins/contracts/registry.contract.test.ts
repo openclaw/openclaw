@@ -1,0 +1,194 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { describe, expect, it } from "vitest";
+import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
+import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
+import { getPluginRegistrationContracts } from "./registry.js";
+
+const activationScopedSearchIds = ["codex", "qa-lab"] as const;
+function registeredPluginIds(key: "webFetchProviderIds" | "webSearchProviderIds") {
+  return sortUniqueStrings(
+    getPluginRegistrationContracts()
+      .filter((entry) => entry[key].length > 0)
+      .map((entry) => entry.pluginId),
+  );
+}
+
+describe("plugin contract registry", () => {
+  function expectUniqueIds(ids: readonly string[]) {
+    expect(ids).toEqual([...new Set(ids)]);
+  }
+
+  it("isolates nested capability metadata between snapshot reads", () => {
+    const first = getPluginRegistrationContracts().find((entry) => entry.pluginId === "google");
+    if (!first) {
+      throw new Error("Google contract fixture missing");
+    }
+    first.providerIds.push("fixture-only");
+    first.providerEnvVars["fixture-only"] = ["FIXTURE_ONLY_API_KEY"];
+
+    const next = getPluginRegistrationContracts().find((entry) => entry.pluginId === "google");
+    expect(next?.providerIds).toContain("google");
+    expect(next?.providerIds).not.toContain("fixture-only");
+    expect(next?.providerEnvVars).not.toHaveProperty("fixture-only");
+  });
+
+  it.each([
+    {
+      name: "does not duplicate bundled provider ids",
+      ids: () => getPluginRegistrationContracts().flatMap((entry) => entry.providerIds),
+    },
+    {
+      name: "does not duplicate bundled worker provider ids",
+      ids: () => getPluginRegistrationContracts().flatMap((entry) => entry.workerProviderIds),
+    },
+    {
+      name: "does not duplicate bundled web fetch provider ids",
+      ids: () => getPluginRegistrationContracts().flatMap((entry) => entry.webFetchProviderIds),
+    },
+    {
+      name: "does not duplicate bundled web search provider ids",
+      ids: () => getPluginRegistrationContracts().flatMap((entry) => entry.webSearchProviderIds),
+    },
+    {
+      name: "does not duplicate bundled migration provider ids",
+      ids: () => getPluginRegistrationContracts().flatMap((entry) => entry.migrationProviderIds),
+    },
+    {
+      name: "does not duplicate bundled media provider ids",
+      ids: () =>
+        getPluginRegistrationContracts().flatMap((entry) => entry.mediaUnderstandingProviderIds),
+    },
+    {
+      name: "does not duplicate bundled transcripts source provider ids",
+      ids: () =>
+        getPluginRegistrationContracts().flatMap((entry) => entry.transcriptSourceProviderIds),
+    },
+    {
+      name: "does not duplicate bundled realtime transcription provider ids",
+      ids: () =>
+        getPluginRegistrationContracts().flatMap((entry) => entry.realtimeTranscriptionProviderIds),
+    },
+    {
+      name: "does not duplicate bundled realtime voice provider ids",
+      ids: () =>
+        getPluginRegistrationContracts().flatMap((entry) => entry.realtimeVoiceProviderIds),
+    },
+    {
+      name: "does not duplicate bundled image-generation provider ids",
+      ids: () =>
+        getPluginRegistrationContracts().flatMap((entry) => entry.imageGenerationProviderIds),
+    },
+  ] as const)("$name", ({ ids }) => {
+    expectUniqueIds(ids());
+  });
+
+  it("does not duplicate bundled speech provider ids", () => {
+    expectUniqueIds(getPluginRegistrationContracts().flatMap((entry) => entry.speechProviderIds));
+  });
+
+  it.each([
+    ["azure-speech", "speechProviderIds", ["azure-speech", "azure"]],
+    ["volcengine", "speechProviderIds", ["volcengine", "bytedance", "doubao"]],
+    ["xiaomi", "speechProviderIds", ["xiaomi", "mimo"]],
+    ["xai", "realtimeVoiceProviderIds", ["xai", "grok-voice", "xai-realtime-voice"]],
+  ] as const)("declares canonical-first %s %s aliases", (pluginId, contract, providerIds) => {
+    expect(
+      getPluginRegistrationContracts().find((entry) => entry.pluginId === pluginId)?.[contract],
+    ).toEqual(providerIds);
+  });
+
+  it("keeps video-only provider auth choices out of text onboarding", () => {
+    const registry = loadPluginManifestRegistryCore({});
+
+    for (const pluginId of ["alibaba", "runway"]) {
+      const plugin = registry.plugins.find(
+        (entry) => entry.origin === "bundled" && entry.id === pluginId,
+      );
+      expect(plugin?.providerAuthChoices).toEqual([
+        {
+          provider: pluginId,
+          method: "api-key",
+          choiceId: pluginId === "alibaba" ? "alibaba-model-studio-api-key" : "runway-api-key",
+          choiceLabel: pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+          groupId: pluginId,
+          groupLabel: pluginId === "alibaba" ? "Alibaba Model Studio" : "Runway",
+          groupHint: pluginId === "alibaba" ? "DashScope / Model Studio API key" : "API key",
+          onboardingScopes: ["image-generation"],
+          optionKey: pluginId === "alibaba" ? "alibabaModelStudioApiKey" : "runwayApiKey",
+          cliFlag: pluginId === "alibaba" ? "--alibaba-model-studio-api-key" : "--runway-api-key",
+          cliOption:
+            pluginId === "alibaba"
+              ? "--alibaba-model-studio-api-key <key>"
+              : "--runway-api-key <key>",
+          cliDescription:
+            pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+        },
+      ]);
+    }
+  });
+
+  it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
+    const registry = loadPluginManifestRegistryCore({});
+    const plugin = registry.plugins.find(
+      (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
+    );
+
+    expect(plugin?.providerAuthChoices).toEqual([
+      {
+        provider: "github-copilot",
+        method: "device",
+        appGuidedAuth: "device-code",
+        credentialOnly: true,
+        channelLogin: {},
+        appGuidedSecret: true,
+        choiceId: "github-copilot",
+        choiceLabel: "GitHub Copilot",
+        choiceHint: "Device login with your GitHub account",
+        assistantPriority: 1,
+        groupId: "copilot",
+        groupLabel: "Copilot",
+        groupHint: "GitHub, GitHub Enterprise + Local Proxy",
+        optionKey: "githubCopilotToken",
+        cliFlag: "--github-copilot-token",
+        cliOption: "--github-copilot-token <token>",
+        cliDescription: "GitHub Copilot OAuth token",
+      },
+      {
+        provider: "github-copilot",
+        method: "device-enterprise",
+        appGuidedAuth: "device-code",
+        credentialOnly: true,
+        choiceId: "github-copilot-enterprise",
+        choiceLabel: "GitHub Copilot (Enterprise / data residency)",
+        choiceHint: "Device login against your GitHub Enterprise (*.ghe.com) tenant",
+        assistantPriority: 2,
+        groupId: "copilot",
+        groupLabel: "Copilot",
+        groupHint: "GitHub, GitHub Enterprise + Local Proxy",
+      },
+    ]);
+  });
+
+  it("covers every bundled web fetch plugin from the shared resolver", () => {
+    expect(registeredPluginIds("webFetchProviderIds")).toEqual(
+      resolveManifestContractPluginIds({ contract: "webFetchProviders", origin: "bundled" }),
+    );
+  });
+
+  it("covers every bundled web search plugin from the shared resolver", () => {
+    const snapshotPluginIds = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
+    );
+    const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
+      contract: "webSearchProviders",
+      origin: "bundled",
+    }).filter(
+      (pluginId) =>
+        snapshotPluginIds.has(pluginId) && !activationScopedSearchIds.some((id) => id === pluginId),
+    );
+    expect(registeredPluginIds("webSearchProviderIds")).toEqual(
+      sortUniqueStrings([...bundledWebSearchPluginIds, ...activationScopedSearchIds]),
+    );
+  });
+});

@@ -1,0 +1,603 @@
+// Default token auth suite covers gateway handshake auth, nonce validation,
+// protocol version checks, and token-backed operator/node clients.
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import type { WebSocket } from "ws";
+import {
+  type HelloOk,
+  MIN_NODE_PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
+import { resetLogger, setLoggerOverride } from "../logging.js";
+import { loggingState } from "../logging/state.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import {
+  connectReq,
+  ConnectErrorDetailCodes,
+  createSignedDevice,
+  expectHelloOkServerVersion,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  MIN_PROBE_PROTOCOL_VERSION,
+  NODE_CLIENT,
+  onceMessage,
+  openWs,
+  PROTOCOL_VERSION,
+  readConnectChallengeNonce,
+  resolveGatewayTokenOrEnv,
+  resolvePreauthHandshakeTimeoutMs,
+  rpcReq,
+  sendRawConnectReq,
+  startTestGatewayServer,
+  TEST_OPERATOR_CLIENT,
+  waitForWsClose,
+  withGatewayServer,
+  withRuntimeVersionEnv,
+} from "./server.auth.test-helpers.js";
+
+export function registerDefaultAuthTokenSuite(): void {
+  describe("default auth (token)", () => {
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+    let port: number;
+
+    beforeAll(async () => {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
+    });
+
+    afterAll(async () => {
+      await server?.close();
+      server = undefined;
+    });
+
+    async function expectNonceValidationError(params: {
+      connectId: string;
+      mutateNonce: (nonce: string) => string;
+      expectedMessage: string;
+      expectedCode: string;
+      expectedReason: string;
+    }) {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: params.connectId,
+        token,
+        device: { ...device, nonce: params.mutateNonce(nonce) },
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain(params.expectedMessage);
+      expect(connectRes.error?.details?.code).toBe(params.expectedCode);
+      expect(connectRes.error?.details?.reason).toBe(params.expectedReason);
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+    }
+
+    async function expectStatusMissingScopeButHealthAvailable(ws: WebSocket): Promise<void> {
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message).toContain("missing scope");
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(true);
+    }
+
+    function readHelloOkAuth(payload: unknown): HelloOk["auth"] | undefined {
+      return (payload as { auth?: HelloOk["auth"] } | undefined)?.auth;
+    }
+
+    test("closes silent handshakes after timeout", async () => {
+      vi.useRealTimers();
+      const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
+      try {
+        await withGatewayServer(async ({ port: isolatedPort }) => {
+          const ws = await openWs(isolatedPort);
+          const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs();
+          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 10_000);
+          expect(closed).toBe(true);
+        });
+      } finally {
+        if (prevHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+      }
+    });
+
+    test("hello policy counts canonical session-sharing identities", async () => {
+      const { ensureProfileForEmail } = await import("../state/user-profiles.js");
+      const { linkEmail } = await import("../state/user-profile-writes.worker.js");
+      const suffix = `${process.pid}-${Date.now()}`;
+      ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
+      const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);
+      ensureProfileForEmail(`hello-merged-${suffix}@example.invalid`);
+      linkEmail(`hello-merged-${suffix}@example.invalid`, target.id);
+
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws);
+        const payload = res.payload as
+          | { policy?: { hasMultipleSessionSharingIdentities?: unknown } }
+          | undefined;
+        expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("connect (req) handshake resolves server version from runtime precedence", async () => {
+      const { VERSION } = await import("../version.js");
+      for (const testCase of [
+        {
+          env: {
+            OPENCLAW_VERSION: " ",
+            npm_package_version: "1.0.0-package",
+          },
+          expectedVersion: VERSION,
+        },
+        {
+          env: {
+            OPENCLAW_VERSION: "9.9.9-cli",
+            npm_package_version: "1.0.0-package",
+          },
+          expectedVersion: "9.9.9-cli",
+        },
+      ]) {
+        await withRuntimeVersionEnv(testCase.env, async () =>
+          expectHelloOkServerVersion(port, testCase.expectedVersion),
+        );
+      }
+    });
+
+    test("device-less auth matrix", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const matrix: Array<{
+        name: string;
+        opts: Parameters<typeof connectReq>[1];
+        expectConnectOk: boolean;
+        expectConnectError?: string;
+        expectStatusOk?: boolean;
+        expectStatusError?: string;
+      }> = [
+        {
+          name: "operator + valid shared token => connected with cleared scopes",
+          opts: { role: "operator", token, device: null },
+          expectConnectOk: true,
+          expectStatusOk: false,
+          expectStatusError: "missing scope",
+        },
+        {
+          name: "node + valid shared token => rejected without device",
+          opts: { role: "node", token, device: null, client: NODE_CLIENT },
+          expectConnectOk: false,
+          expectConnectError: "device identity required",
+        },
+        {
+          name: "operator + invalid shared token => unauthorized",
+          opts: { role: "operator", token: "wrong", device: null },
+          expectConnectOk: false,
+          expectConnectError: "unauthorized",
+        },
+      ];
+
+      for (const scenario of matrix) {
+        const ws = await openWs(port);
+        try {
+          const res = await connectReq(ws, scenario.opts);
+          expect(res.ok, scenario.name).toBe(scenario.expectConnectOk);
+          if (!scenario.expectConnectOk) {
+            expect(res.error?.message ?? "", scenario.name).toContain(
+              scenario.expectConnectError ?? "",
+            );
+            continue;
+          }
+          if (scenario.expectStatusOk !== undefined) {
+            const status = await rpcReq(ws, "status");
+            expect(status.ok, scenario.name).toBe(scenario.expectStatusOk);
+            if (!scenario.expectStatusOk && scenario.expectStatusError) {
+              expect(status.error?.message ?? "", scenario.name).toContain(
+                scenario.expectStatusError,
+              );
+            }
+          }
+        } finally {
+          ws.close();
+        }
+      }
+    });
+
+    test("hello-ok separates effective scopes from a reused device token grant", async () => {
+      const { randomUUID } = await import("node:crypto");
+      const path = await import("node:path");
+      const token = resolveGatewayTokenOrEnv();
+      const deviceIdentityPath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        `shared-auth-scope-reuse-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
+      );
+      const wsInitial = await openWs(port);
+      let pairedDeviceToken: string | undefined;
+      let recoveryScope: string | undefined;
+      const expectedAuthKeys = [
+        "deviceToken",
+        "issuedAtMs",
+        "method",
+        "recoveryMigrationAllowed",
+        "recoveryScope",
+        "role",
+        "roleAllowsAdmin",
+        "scopes",
+      ];
+      try {
+        const initial = await connectReq(wsInitial, {
+          token,
+          scopes: ["operator.admin"],
+          deviceIdentityPath,
+        });
+        expect(initial.ok).toBe(true);
+        const auth = readHelloOkAuth(initial.payload);
+        expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
+        expect(auth?.scopes).toEqual(["operator.admin"]);
+        expect(typeof auth?.deviceToken).toBe("string");
+        expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
+        pairedDeviceToken = auth?.deviceToken as string | undefined;
+        recoveryScope = auth?.recoveryScope;
+      } finally {
+        wsInitial.close();
+      }
+
+      const wsReconnect = await openWs(port);
+      try {
+        const reconnect = await connectReq(wsReconnect, {
+          token,
+          scopes: ["operator.read"],
+          deviceIdentityPath,
+        });
+        expect(reconnect.ok).toBe(true);
+        const auth = readHelloOkAuth(reconnect.payload);
+        expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
+        expect(auth?.deviceToken).toBe(pairedDeviceToken);
+        expect(auth?.recoveryScope).toBe(recoveryScope);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
+        expect(auth?.scopes).toEqual(["operator.read"]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
+        const schema = await rpcReq(wsReconnect, "config.schema");
+        expect(schema.ok).toBe(true);
+        const admin = await rpcReq(wsReconnect, "config.patch");
+        expect(admin.ok).toBe(false);
+        expect(admin.error?.message).toBe("missing scope: operator.admin");
+      } finally {
+        wsReconnect.close();
+      }
+    });
+
+    test("does not grant admin when scopes are omitted", async () => {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+
+      const { randomUUID } = await import("node:crypto");
+      const path = await import("node:path");
+      // Fresh identity avoids inheriting a previously paired device's grant.
+      const { device } = await createSignedDevice({
+        token,
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.TEST,
+        clientMode: GATEWAY_CLIENT_MODES.TEST,
+        identityPath: path.join(
+          process.env.OPENCLAW_STATE_DIR!,
+          "test-device-identities",
+          randomUUID(),
+          "client",
+          "credentials.sqlite",
+        ),
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-no-scopes",
+        token,
+        device,
+      });
+      expect(connectRes.ok).toBe(true);
+      expect(readHelloOkAuth(connectRes.payload)).toMatchObject({ role: "operator", scopes: [] });
+      expect(connectRes.payload).toMatchObject({ snapshot: { presence: [] } });
+      const presence = await rpcReq(ws, "system-presence");
+      expect(presence.ok).toBe(false);
+      expect(presence.error?.message).toBe("missing scope: operator.sessions.read");
+      expect(presence.payload).toBeUndefined();
+
+      await expectStatusMissingScopeButHealthAvailable(ws);
+
+      ws.close();
+    });
+
+    test("rejects device signature when scopes are omitted but signed with admin", async () => {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: GATEWAY_CLIENT_NAMES.TEST,
+        clientMode: GATEWAY_CLIENT_MODES.TEST,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-no-scopes-signed-admin",
+        token,
+        device,
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain("device signature invalid");
+      expect(connectRes.error?.details?.code).toBe(
+        ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
+      );
+      expect(connectRes.error?.details?.reason).toBe("device-signature");
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+    });
+
+    test("keeps protocol-v4 Mac apps connected after widget retirement", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: 4,
+          maxProtocol: 4,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+            version: "2026.10.3",
+            platform: "macos",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+        expect(res.payload).toMatchObject({ type: "hello-ok", protocol: 4 });
+        expect((await rpcReq(ws, "health")).ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows previous protocol for restart health probes", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        minProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        client: {
+          id: GATEWAY_CLIENT_NAMES.PROBE,
+          version: "2026.5.7",
+          platform: "cli",
+          mode: GATEWAY_CLIENT_MODES.PROBE,
+        },
+      });
+      expect(res.ok).toBe(true);
+      expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
+      ws.close();
+    });
+
+    test("auto-approves authenticated previous-protocol local node-host maintenance commands", async () => {
+      const nodeWs = await openWs(port);
+      const operatorWs = await openWs(port);
+      try {
+        const legacyVersion = "2026.5.7";
+        const nodeRes = await connectReq(nodeWs, {
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          role: "node",
+          client: { ...NODE_CLIENT, version: legacyVersion, platform: "linux" },
+          caps: ["system"],
+          commands: ["system.which"],
+        });
+        expect(nodeRes.ok).toBe(true);
+
+        const operatorRes = await connectReq(operatorWs);
+        expect(operatorRes.ok).toBe(true);
+        type LegacyNodeStatus = {
+          approvalState?: string;
+          commands?: string[];
+          connected?: boolean;
+          deviceFamily?: string;
+          pendingDeclaredCommands?: string[];
+          pendingRequestId?: string;
+          platform?: string;
+          version?: string;
+        };
+        const nodeList = await rpcReq<{
+          nodes?: LegacyNodeStatus[];
+        }>(operatorWs, "node.list", {});
+        expect(nodeList.ok).toBe(true);
+        const legacyNode = nodeList.payload?.nodes?.find(
+          (node) => node.connected === true && node.version === legacyVersion,
+        );
+        expect(legacyNode).toMatchObject({
+          approvalState: "approved",
+          commands: ["system.which"],
+          deviceFamily: "Linux",
+          platform: "linux",
+        });
+        expect(legacyNode?.pendingDeclaredCommands).toBeUndefined();
+        expect(legacyNode?.pendingRequestId).toBeUndefined();
+      } finally {
+        nodeWs.close();
+        operatorWs.close();
+      }
+    });
+
+    test("keeps previous-protocol node connections behind gateway auth", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          role: "node",
+          client: NODE_CLIENT,
+          token: "invalid-token",
+        });
+        expect(res.ok).toBe(false);
+        expect((res.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("rejects node protocols older than the N-1 window", async () => {
+      const ws = await openWs(port);
+      try {
+        const unsupportedProtocol = MIN_NODE_PROTOCOL_VERSION - 1;
+        const res = await connectReq(ws, {
+          minProtocol: unsupportedProtocol,
+          maxProtocol: unsupportedProtocol,
+          role: "node",
+          client: NODE_CLIENT,
+        });
+        expect(res.ok).toBe(false);
+        expect((res.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("keeps peer-supplied connect metadata inside one console line", async () => {
+      const forged = "2026-11-02T00:00:00.000Z info gateway forged-entry";
+      const client = {
+        ...TEST_OPERATOR_CLIENT,
+        displayName: "\u001b]0;pwned\u0007name",
+        version: `1.0.0\r${forged}\u2028${forged}`,
+        platform: `linux\n${forged}\u2029${forged}`,
+        instanceId: `\u001b[2J${forged}`,
+      };
+      const warnings: string[] = [];
+      loggingState.rawConsole = {
+        log: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn((line: string) => warnings.push(line)),
+        error: vi.fn(),
+      };
+      setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
+      try {
+        for (const opts of [
+          { token: "wrong", device: null, client },
+          { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 1, client },
+        ]) {
+          const ws = await openWs(port);
+          const res = await connectReq(ws, opts);
+          expect(res.ok).toBe(false);
+          expect(await waitForWsClose(ws, 5_000)).toBe(true);
+        }
+      } finally {
+        loggingState.rawConsole = null;
+        resetLogger();
+      }
+
+      const lines = warnings.join("\n");
+      expect(lines).toContain("unauthorized conn=");
+      expect(lines).toContain("protocol mismatch conn=");
+      expect(lines).toContain("closed before connect conn=");
+      // Only the logger's own SGR colors may carry an escape; peer text must not add controls.
+      const loggerColors = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "gu");
+      for (const line of warnings) {
+        expect(line.replace(loggerColors, "")).not.toMatch(/[\p{Cc}\u2028\u2029]/u);
+      }
+    });
+
+    test("rejects non-connect first request", async () => {
+      const ws = await openWs(port);
+      ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
+      const res: { type?: string; id?: string; ok?: boolean; error?: unknown } = await onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "h1",
+      );
+      expect(res.ok).toBe(false);
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+    });
+
+    test("returns nonce-required detail code when nonce is blank", async () => {
+      await expectNonceValidationError({
+        connectId: "c-blank-nonce",
+        mutateNonce: () => "   ",
+        expectedMessage: "device nonce required",
+        expectedCode: ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
+        expectedReason: "device-nonce-missing",
+      });
+    });
+
+    test("returns nonce-mismatch detail code when nonce does not match challenge", async () => {
+      await expectNonceValidationError({
+        connectId: "c-wrong-nonce",
+        mutateNonce: (nonce) => `${nonce}-stale`,
+        expectedMessage: "device nonce mismatch",
+        expectedCode: ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
+        expectedReason: "device-nonce-mismatch",
+      });
+    });
+
+    test("invalid connect params surface in response and close reason", async () => {
+      const ws = await openWs(port);
+      const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "h-bad",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "bad-client",
+              version: "dev",
+              platform: "web",
+              mode: "webchat",
+            },
+            device: {
+              id: 123,
+              publicKey: "bad",
+              signature: "bad",
+              signedAt: "bad",
+            },
+          },
+        }),
+      );
+
+      const res = await onceMessage<{
+        ok: boolean;
+        error?: { message?: string };
+      }>(
+        ws,
+        (o) => (o as { type?: string }).type === "res" && (o as { id?: string }).id === "h-bad",
+      );
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("invalid connect params");
+
+      const closeInfo = await closeInfoPromise;
+      expect(closeInfo.code).toBe(1008);
+      expect(closeInfo.reason).toContain("invalid connect params");
+    });
+  });
+}

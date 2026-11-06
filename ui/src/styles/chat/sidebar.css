@@ -1,0 +1,577 @@
+.chat-workbench {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-icon-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
+}
+/* The workspace rail docks flush to the window edge like the terminal panel:
+   drop the chat content's right gutter and square the card's right corners in
+   both rail states. Guarded to wide viewports; narrow ones keep the gutter
+   because the rail presents as a bottom strip there. */
+@media (min-width: 1121px) {
+  .content--chat.content--workbench .chat {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+
+.chat-split-container {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+}
+
+.chat-main,
+.chat-main__conversation-column {
+  /* Positioning context for floating overlays and the optional session rail. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1 1 0;
+}
+
+.chat-main {
+  min-width: 312px;
+  transition: flex 250ms ease-out;
+}
+
+.chat-main__conversation-column {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Header-to-transcript blend. It stops one thread gutter short of both pane
+   edges: the transcript's scrollbar lives in that strip, and a full-width
+   overlay paints over the thumb's top (it vanishes under the fade while
+   scrolling). Transcript content never enters the gutter, so nothing escapes
+   the blend. Both edges stay symmetric so RTL keeps the same clearance. */
+.chat-main__conversation::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0 var(--chat-thread-gutter) auto;
+  height: 24px;
+  pointer-events: none;
+  /* Panes that tint their backdrop (Incognito) hand in the tint so the blend
+     matches it; resolved here, where the pane surface is defined. */
+  --chat-header-blend-color: color-mix(
+    in srgb,
+    var(--chat-header-tint, transparent) var(--chat-header-tint-strength, 0%),
+    var(--chat-surface)
+  );
+
+  background: linear-gradient(
+    to bottom,
+    var(--chat-header-blend-color) 2px,
+    color-mix(in srgb, var(--chat-header-blend-color) 88%, transparent) 25%,
+    color-mix(in srgb, var(--chat-header-blend-color) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-header-blend-color) 12%, transparent) 75%,
+    transparent
+  );
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation::before {
+    display: none;
+  }
+}
+
+/* New Session attachments use these wrappers before the Chat panels load. */
+.sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--panel);
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--panel);
+}
+
+.sidebar-header .btn {
+  padding: 4px 8px;
+  font-size: var(--control-ui-text-md);
+  min-width: auto;
+  line-height: 1;
+}
+
+.sidebar-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-title {
+  font-weight: 600;
+  font-size: var(--control-ui-text-md);
+}
+
+.sidebar-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+
+  &:has(.sidebar-file-toolbar) {
+    padding-top: 0;
+  }
+
+  &:has(.sidebar-pdf-preview) {
+    display: flex;
+    overflow: hidden;
+    padding: 0;
+  }
+}
+
+/* Full-height panel kinds need a bounded wrapper so their inner content can
+   shrink and scroll instead of expanding past the rail. */
+.sidebar-panel-host--fill,
+.session-discussion__open,
+.sidebar-pdf-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-discussion__empty,
+.sidebar-attachment-preview__unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.sidebar-file-view__canvas[hidden],
+.file-view[hidden],
+.chat-html-preview[hidden],
+.sidebar-attachment-preview__text[hidden] {
+  display: none;
+}
+
+.chat-html-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-html-preview__frame,
+.sidebar-pdf-preview__frame {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
+}
+
+.chat-html-preview__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--text);
+}
+
+/* Code syntax palette is shared with highlighted message code via base tokens. */
+:is(.file-view, .code-highlight) .tok-comment {
+  color: var(--muted);
+  font-style: italic;
+}
+
+:is(.file-view, .code-highlight) .tok-keyword {
+  color: var(--hljs-keyword);
+}
+
+:is(.file-view, .code-highlight) :where(.tok-number),
+:is(.file-view, .code-highlight) :where(.tok-literal),
+:is(.file-view, .code-highlight) :where(.tok-atom),
+:is(.file-view, .code-highlight) :where(.tok-bool),
+:is(.file-view, .code-highlight) :where(.tok-variableName),
+:is(.file-view, .code-highlight) :where(.tok-variableName2) {
+  color: var(--hljs-number);
+}
+
+:is(.file-view, .code-highlight) :where(.tok-string),
+:is(.file-view, .code-highlight) :where(.tok-string2) {
+  color: var(--hljs-string);
+}
+
+:is(.file-view, .code-highlight) :where(.tok-heading),
+:is(.file-view, .code-highlight) :where(.tok-definition) {
+  color: var(--hljs-title);
+}
+
+:is(.file-view, .code-highlight) :where(.tok-typeName),
+:is(.file-view, .code-highlight) :where(.tok-className),
+:is(.file-view, .code-highlight) :where(.tok-namespace),
+:is(.file-view, .code-highlight) :where(.tok-macroName) {
+  color: var(--hljs-type);
+}
+
+:is(.file-view, .code-highlight) :where(.tok-propertyName),
+:is(.file-view, .code-highlight) :where(.tok-labelName) {
+  color: var(--hljs-attribute);
+}
+
+:is(.file-view, .code-highlight) :where(.tok-link),
+:is(.file-view, .code-highlight) :where(.tok-url) {
+  color: var(--accent-2);
+}
+
+:is(.file-view, .code-highlight) .tok-meta {
+  color: var(--hljs-meta);
+}
+
+:is(.file-view, .code-highlight) .tok-deleted {
+  color: var(--hljs-deletion);
+  background: var(--danger-subtle);
+}
+
+:is(.file-view, .code-highlight) .tok-inserted {
+  color: var(--hljs-addition);
+  background: var(--ok-subtle);
+}
+
+:is(.file-view, .code-highlight) .tok-emphasis {
+  font-style: italic;
+}
+
+:is(.file-view, .code-highlight) .tok-strong {
+  font-weight: 600;
+}
+
+.sidebar-attachment-preview {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+
+  &:has(.chat-html-preview:not([hidden])),
+  &:has(.sidebar-pdf-preview) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+  }
+}
+
+.sidebar-pdf-preview {
+  width: 100%;
+}
+
+.sidebar-pdf-preview__surface {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.sidebar-pdf-preview__surface > .sidebar-attachment-preview__unavailable {
+  flex: 1;
+  padding: 16px;
+}
+
+.sidebar-pdf-preview__surface > .sidebar-attachment-preview__loading {
+  flex: 1;
+}
+
+.sidebar-pdf-preview__frame {
+  min-width: 0;
+}
+
+.sidebar-attachment-preview__markdown {
+  min-width: 0;
+  margin-top: 16px;
+}
+
+.sidebar-attachment-preview__text {
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+
+.sidebar-attachment-preview__image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  object-fit: contain;
+}
+
+.sidebar-attachment-preview__unavailable {
+  min-height: 180px;
+}
+
+.sidebar-attachment-preview__state-card .chat-assistant-attachment-card__actions {
+  min-height: 30px;
+}
+
+:is(.chat-assistant-attachment-card--video, .chat-assistant-attachment-card--image)
+  .sidebar-attachment-preview__state {
+  min-height: 0;
+  aspect-ratio: var(--preview-ratio, 16 / 9);
+
+  > .sidebar-attachment-preview__loading {
+    display: block;
+    padding: 0;
+
+    > :first-child {
+      height: 100%;
+      border-radius: var(--radius-md);
+    }
+
+    > :not(:first-child) {
+      display: none;
+    }
+  }
+}
+
+.sidebar-attachment-preview__state {
+  display: grid;
+  position: relative;
+  min-height: 180px;
+  background: var(--bg);
+
+  > * {
+    grid-area: 1 / 1;
+  }
+
+  > .sidebar-attachment-preview__image {
+    position: absolute;
+    height: 100%;
+  }
+
+  &:has(img:not([data-preview="error"])) > .sidebar-attachment-preview__unavailable,
+  &:has(img[data-preview]) > .sidebar-attachment-preview__loading,
+  > img:not([data-preview="ready"]) {
+    display: none;
+  }
+}
+
+.sidebar-attachment-preview__loading {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+}
+
+/* Match the native player's 48px control row and 4px track, without interactive placeholders. */
+.chat-video-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--media-bg);
+  color: var(--muted);
+}
+
+.sidebar-attachment-preview__loading,
+.chat-video-skeleton,
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading
+  .chat-assistant-attachment-card__header {
+  opacity: 0;
+  animation: fade-in 0s 150ms forwards;
+}
+
+/* Keep loading paint local: aria-busy on large lists must not restyle every SVG. */
+.chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading {
+  video {
+    opacity: 0;
+  }
+  .chat-assistant-attachment-card__separator,
+  .skeleton > svg {
+    visibility: hidden;
+  }
+  .skeleton {
+    color: transparent;
+    background: var(--skeleton-base, var(--bg-muted));
+  }
+}
+
+.chat-video-skeleton__controls {
+  position: absolute;
+  inset: auto 0 24px;
+  display: grid;
+  grid-template-columns: 48px 1fr repeat(3, 48px);
+  height: 48px;
+  place-items: center;
+  letter-spacing: normal;
+  font:
+    14px / 48px Roboto-Regular,
+    Roboto,
+    sans-serif;
+
+  > span {
+    display: flex;
+    gap: 4px;
+    justify-self: start;
+    white-space: nowrap;
+  }
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+  > svg:last-child {
+    transform: rotate(90deg);
+  }
+}
+
+.chat-video-skeleton__timeline {
+  position: absolute;
+  inset: auto 16px 20px;
+  height: 4px;
+}
+
+.sidebar-markdown-reader {
+  --md-preview-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  position: relative;
+  padding: 20px 18px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--secondary) 54%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+}
+
+.sidebar-markdown-reader::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 32%);
+}
+
+.sidebar-markdown-reader > * {
+  position: relative;
+  z-index: 1;
+}
+
+.sidebar-markdown-reader.sidebar-markdown {
+  font-size: calc(14.5px * var(--control-ui-text-scale));
+  line-height: 1.72;
+}
+
+.sidebar-markdown-reader.sidebar-markdown :where(h1, h2) {
+  font-family: var(--md-preview-serif);
+  letter-spacing: -0.03em;
+}
+
+.sidebar-markdown-reader.sidebar-markdown :where(h1) {
+  font-size: 1.95em;
+  line-height: 1.05;
+}
+
+.sidebar-markdown-reader.sidebar-markdown :where(h2) {
+  font-size: 1.5em;
+}
+
+.sidebar-markdown-reader.sidebar-markdown :where(p, ul, ol, pre, blockquote, table, details) {
+  margin-bottom: 0.95em;
+}
+
+@media (max-width: 768px) {
+  .sidebar-markdown-shell__toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sidebar-markdown-reader {
+    padding: 18px 14px 20px;
+  }
+}
+
+.review-unavailable {
+  display: grid;
+  flex: 1;
+  align-self: flex-start;
+  min-width: 0;
+  margin: 16px;
+  gap: 4px;
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-file-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: none;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.sidebar-file-toolbar__type {
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.sidebar-file-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: none;
+}
+.sidebar-panel-host--mobile-reader .sidebar-attachment-preview {
+  position: static;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-panel-host--mobile-reader
+  :is(.sidebar-attachment-preview__text, .sidebar-attachment-preview__markdown) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}

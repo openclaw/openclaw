@@ -1,0 +1,287 @@
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import {
+  getWideAreaZonePath,
+  normalizeWideAreaDomain,
+  replaceWideAreaZoneFile,
+  resolveWideAreaDiscoveryDomain,
+} from "../infra/widearea-dns.js";
+import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
+import { formatDocsHelp } from "./help-format.js";
+
+type RunOpts = { allowFailure?: boolean; inherit?: boolean; timeoutMs?: number };
+
+// Report a deadline kill or signal by name instead of a bare launch error or "exit unknown".
+function assertSpawnSucceeded(
+  label: string,
+  res: SpawnSyncReturns<string>,
+  opts?: Pick<RunOpts, "allowFailure" | "timeoutMs">,
+): void {
+  if (res.error) {
+    if (opts?.timeoutMs !== undefined && "code" in res.error && res.error.code === "ETIMEDOUT") {
+      throw new Error(
+        `${label} failed: timed out after ${opts.timeoutMs / 1000} seconds (signal ${res.signal ?? "SIGKILL"})`,
+        { cause: res.error },
+      );
+    }
+    throw res.error;
+  }
+  if (opts?.allowFailure || res.status === 0) {
+    return;
+  }
+  const stderr = typeof res.stderr === "string" ? res.stderr.trim() : "";
+  const reason = res.signal ? `signal ${res.signal}` : `exit ${res.status ?? "unknown"}`;
+  throw new Error(`${label} failed: ${stderr || reason}`);
+}
+
+function run(cmd: string, args: string[], opts?: RunOpts): string {
+  const res = spawnSync(cmd, args, {
+    encoding: "utf-8",
+    stdio: opts?.inherit ? "inherit" : "pipe",
+    // Timeout stays opt-in: install/restart/sudo-write steps may legitimately run
+    // long, so only fast probes pass a deadline. SIGKILL guarantees a
+    // signal-resistant hung probe still dies at the deadline.
+    ...(opts?.timeoutMs === undefined
+      ? {}
+      : { timeout: opts.timeoutMs, killSignal: "SIGKILL" as const }),
+  });
+  assertSpawnSucceeded(`${cmd} ${args.join(" ")}`, res, opts);
+  return typeof res.stdout === "string" ? res.stdout : "";
+}
+
+function writeFileSudoIfNeeded(filePath: string, content: string): void {
+  // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
+  try {
+    fs.writeFileSync(filePath, content, "utf-8");
+    return;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "EACCES" && code !== "EPERM") {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  const res = spawnSync("sudo", ["tee", filePath], {
+    input: content,
+    encoding: "utf-8",
+    stdio: ["pipe", "ignore", "inherit"],
+  });
+  assertSpawnSucceeded(`sudo tee ${filePath}`, res);
+}
+
+function mkdirSudoIfNeeded(dirPath: string): void {
+  try {
+    fs.mkdirSync(dirPath, { recursive: true });
+    return;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "EACCES" && code !== "EPERM") {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  run("sudo", ["mkdir", "-p", dirPath], { inherit: true });
+}
+
+function zoneFileNeedsBootstrap(zonePath: string): boolean {
+  if (!fs.existsSync(zonePath)) {
+    return true;
+  }
+  try {
+    const content = fs.readFileSync(zonePath, "utf-8");
+    return !/\bSOA\b/.test(content) || !/\bNS\b/.test(content);
+  } catch {
+    return true;
+  }
+}
+
+export function registerDnsCli(program: Command) {
+  const dns = program
+    .command("dns")
+    .description("DNS helpers for wide-area discovery (Tailscale + CoreDNS)")
+    .addHelpText("after", () => formatDocsHelp("/cli/dns"));
+
+  dns
+    .command("setup")
+    .description(
+      "Set up CoreDNS to serve your discovery domain for unicast DNS-SD (Wide-Area Bonjour)",
+    )
+    .option("--domain <domain>", "Wide-area discovery domain (e.g. openclaw.internal)")
+    .option(
+      "--apply",
+      "Install/update CoreDNS config and (re)start the service (requires sudo)",
+      false,
+    )
+    .action(async (opts) => {
+      const cfg = await captureRuntimeConfigAsyncReader()();
+      const tailnetIPv4 = pickPrimaryTailnetIPv4();
+      const tailnetIPv6 = pickPrimaryTailnetIPv6();
+      const explicitDomain = (opts.domain as string | undefined) ?? cfg.discovery?.wideArea?.domain;
+      if (explicitDomain) {
+        // Throw on invalid CLI/config input before resolveWideAreaDiscoveryDomain
+        // silently swallows the validation error and falls back to env.
+        try {
+          normalizeWideAreaDomain(explicitDomain);
+        } catch (err) {
+          throwExpectedCliError(formatErrorMessage(err));
+        }
+      }
+      const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: explicitDomain });
+      if (!wideAreaDomain) {
+        throwExpectedCliError(
+          "No wide-area domain configured. Set discovery.wideArea.domain or pass --domain.",
+        );
+      }
+      const zonePath = getWideAreaZonePath(wideAreaDomain);
+
+      const tableWidth = getTerminalTableWidth();
+      defaultRuntime.log(theme.heading("DNS setup"));
+      defaultRuntime.log(
+        renderTerminalSafeTable({
+          width: tableWidth,
+          columns: [
+            { key: "Key", header: "Key", minWidth: 18 },
+            { key: "Value", header: "Value", minWidth: 24, flex: true },
+          ],
+          rows: [
+            { Key: "Domain", Value: wideAreaDomain },
+            { Key: "Zone file", Value: zonePath },
+            {
+              Key: "Tailnet IP",
+              Value: `${tailnetIPv4 ?? "—"}${tailnetIPv6 ? ` (v6 ${tailnetIPv6})` : ""}`,
+            },
+          ],
+        }).trimEnd(),
+      );
+      defaultRuntime.log("");
+      defaultRuntime.log(
+        theme.heading(
+          "Recommended config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json):",
+        ),
+      );
+      defaultRuntime.writeJson({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { domain: wideAreaDomain } },
+      });
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
+      defaultRuntime.log(
+        theme.muted(
+          terminalText`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
+        ),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          terminalText`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`,
+        ),
+      );
+
+      if (!opts.apply) {
+        defaultRuntime.log("");
+        defaultRuntime.log(theme.muted("Run with --apply to install CoreDNS and configure it."));
+        return;
+      }
+
+      if (process.platform !== "darwin") {
+        throwExpectedCliError("dns setup is currently supported on macOS only");
+      }
+      if (!tailnetIPv4 && !tailnetIPv6) {
+        throwExpectedCliError(
+          "no tailnet IP detected; check that Tailscale is running on this machine",
+        );
+      }
+
+      // A hung brew shim can block setup indefinitely; bound only this fast probe.
+      const out = run("brew", ["--prefix"], { timeoutMs: 15_000 });
+      const prefix = out.trim();
+      if (!prefix) {
+        throw new Error("failed to resolve Homebrew prefix");
+      }
+      const etcDir = path.join(prefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const confDir = path.join(etcDir, "conf.d");
+      const importGlob = path.join(confDir, "*.server");
+      const serverPath = path.join(confDir, `${wideAreaDomain.replace(/\.$/, "")}.server`);
+
+      run("brew", ["list", "coredns"], { allowFailure: true });
+      run("brew", ["install", "coredns"], {
+        inherit: true,
+        allowFailure: true,
+      });
+
+      mkdirSudoIfNeeded(confDir);
+
+      if (!fs.existsSync(corefilePath)) {
+        writeFileSudoIfNeeded(corefilePath, `import ${importGlob}\n`);
+      } else {
+        const existing = fs.readFileSync(corefilePath, "utf-8");
+        if (!existing.includes(importGlob)) {
+          const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
+          writeFileSudoIfNeeded(corefilePath, next);
+        }
+      }
+
+      const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string => Boolean(v?.trim()));
+
+      const server = [
+        `${wideAreaDomain.replace(/\.$/, "")}:53 {`,
+        `  bind ${bindArgs.join(" ")}`,
+        `  file ${zonePath} {`,
+        `    reload 10s`,
+        `  }`,
+        `  errors`,
+        `  log`,
+        `}`,
+        ``,
+      ].join("\n");
+      writeFileSudoIfNeeded(serverPath, server);
+
+      // Ensure the gateway can write its zone file path.
+      if (zoneFileNeedsBootstrap(zonePath)) {
+        const y = new Date().getUTCFullYear();
+        const m = String(new Date().getUTCMonth() + 1).padStart(2, "0");
+        const d = String(new Date().getUTCDate()).padStart(2, "0");
+        const serial = `${y}${m}${d}01`;
+
+        const zoneLines = [
+          `; created by openclaw dns setup (will be overwritten by the gateway when wide-area discovery is enabled)`,
+          `$ORIGIN ${wideAreaDomain}`,
+          `$TTL 60`,
+          `@ IN SOA ns1 hostmaster ${serial} 7200 3600 1209600 60`,
+          `@ IN NS ns1`,
+          tailnetIPv4 ? `ns1 IN A ${tailnetIPv4}` : null,
+          tailnetIPv6 ? `ns1 IN AAAA ${tailnetIPv6}` : null,
+          ``,
+        ].filter((line): line is string => Boolean(line));
+
+        await replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
+      }
+
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Starting CoreDNS (sudo)…"));
+      run("sudo", ["brew", "services", "restart", "coredns"], {
+        inherit: true,
+      });
+
+      if (!cfg.discovery?.wideArea?.domain?.trim()) {
+        defaultRuntime.log("");
+        defaultRuntime.log(
+          theme.muted(
+            "Note: set discovery.wideArea.domain in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
+          ),
+        );
+      }
+    });
+}

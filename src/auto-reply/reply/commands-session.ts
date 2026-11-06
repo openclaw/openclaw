@@ -1,0 +1,495 @@
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveNonNegativeIntegerOption,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
+import {
+  setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
+  setChannelConversationBindingMaxAgeBySessionKeyAsync,
+} from "../../channels/plugins/conversation-bindings.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import {
+  clearRestartSentinelIfRevision,
+  formatDoctorNonInteractiveHint,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
+import { scheduleGatewayRestart, triggerOpenClawRestart } from "../../infra/restart.js";
+import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
+import { normalizeCommandBody } from "../commands-registry.js";
+import { parseActivationCommand } from "../group-activation.js";
+import {
+  isSessionDefaultDirectiveValue,
+  normalizeFastMode,
+  normalizeUsageDisplay,
+  resolveEffectiveResponseUsage,
+} from "../thinking.js";
+import {
+  commandReply as sessionCommandReply,
+  defineAuthorizedTextCommand,
+  defineGatewayControlCommand,
+  matchCommandPrefix,
+  rejectNonOwnerCommand,
+  rejectUnauthorizedCommand,
+} from "./command-gates.js";
+import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
+import {
+  persistCommandSession,
+  sessionEntryPersistenceConflictReply,
+} from "./commands-session-store.js";
+import { parseSendPolicyCommandBody } from "./commands-slash-parse.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
+import { stripInboundMetadata } from "./strip-inbound-meta.js";
+
+const SESSION_COMMAND_PREFIX = "/session";
+const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
+const SESSION_ACTION_IDLE = "idle";
+const SESSION_ACTION_MAX_AGE = "max-age";
+const SESSION_ACTION_UNBIND = "unbind";
+const SESSION_COMMAND_USAGE =
+  "Usage: /session idle <duration|off> | /session max-age <duration|off> | /session unbind (example: /session idle 24h)";
+
+async function buildRestartCommandSentinel(
+  params: HandleCommandsParams,
+): Promise<RestartSentinelPayload | null> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const { deliveryContext, threadId } = await extractDeliveryInfo(sessionKey);
+  return {
+    kind: "restart",
+    status: "ok",
+    ts: Date.now(),
+    sessionKey,
+    deliveryContext,
+    threadId,
+    message: "/restart",
+    continuation: null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: "gateway.restart",
+      reason: "/restart",
+    },
+  };
+}
+
+function parseSessionDurationMs(raw: string): number {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    throw new Error("missing duration");
+  }
+  if (SESSION_DURATION_OFF_VALUES.has(normalized)) {
+    return 0;
+  }
+  return parseDurationMs(normalized, { defaultUnit: "h" });
+}
+
+function formatSessionExpiry(expiresAt: number) {
+  return timestampMsToIsoString(expiresAt) ?? "n/a";
+}
+
+function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
+  const raw = asDateTimestampMs(binding.metadata?.lastActivityAt);
+  if (raw === undefined) {
+    return binding.boundAt;
+  }
+  return Math.max(Math.floor(raw), binding.boundAt);
+}
+
+async function persistSessionCommandSetting<
+  Key extends "sendPolicy" | "responseUsage" | "fastMode",
+>(
+  params: HandleCommandsParams,
+  field: Key,
+  value: NonNullable<HandleCommandsParams["sessionEntry"]>[Key],
+  text: string,
+) {
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    if (value === undefined) {
+      delete params.sessionEntry[field];
+    } else {
+      params.sessionEntry[field] = value;
+    }
+    if (!(await persistCommandSession({ ...params, touchedFields: [field] }))) {
+      return sessionEntryPersistenceConflictReply();
+    }
+  }
+  return sessionCommandReply(text);
+}
+
+export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const activationCommand = parseActivationCommand(params.command.commandBodyNormalized);
+  if (!activationCommand.hasCommand) {
+    return null;
+  }
+  if (!params.isGroup) {
+    return sessionCommandReply("⚙️ Group activation only applies to group chats.");
+  }
+  const unauthorizedResult = rejectUnauthorizedCommand(params, "/activation");
+  if (unauthorizedResult) {
+    return unauthorizedResult;
+  }
+  const nonOwnerResult = rejectNonOwnerCommand(params, "/activation");
+  if (nonOwnerResult) {
+    return nonOwnerResult;
+  }
+  if (!activationCommand.mode) {
+    return sessionCommandReply("⚙️ Usage: /activation mention|always");
+  }
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    params.sessionEntry.groupActivation = activationCommand.mode;
+    params.sessionEntry.groupActivationNeedsSystemIntro = true;
+    if (
+      !(await persistCommandSession({
+        ...params,
+        touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
+  }
+  return sessionCommandReply(`⚙️ Group activation set to ${activationCommand.mode}.`);
+};
+
+export const handleSendPolicyCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/send",
+    match: (body) => {
+      const trimmed = body.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const command = parseSendPolicyCommandBody(
+        normalizeCommandBody(stripInboundMetadata(trimmed)),
+      );
+      return command.hasCommand ? command : null;
+    },
+    ownerOnly: true,
+  },
+  async (params, sendPolicyCommand) => {
+    if (!sendPolicyCommand.mode) {
+      return sessionCommandReply("⚙️ Usage: /send on|off|inherit");
+    }
+    const label =
+      sendPolicyCommand.mode === "inherit"
+        ? "inherit"
+        : sendPolicyCommand.mode === "allow"
+          ? "on"
+          : "off";
+    return persistSessionCommandSetting(
+      params,
+      "sendPolicy",
+      sendPolicyCommand.mode === "inherit" ? undefined : sendPolicyCommand.mode,
+      `⚙️ Send policy set to ${label}.`,
+    );
+  },
+);
+
+export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/usage",
+    match: (body) => matchCommandPrefix(body, "/usage"),
+    silentUnauthorized: true,
+  },
+  async (params, rawArgs) => {
+    const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
+    if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+      const { formatSessionUsageCostSummary } = await import("./commands-session-cost.runtime.js");
+      return sessionCommandReply(
+        await formatSessionUsageCostSummary({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+          storePath: params.storePath,
+        }),
+      );
+    }
+
+    const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+
+    if (rawArgs && !requested && !isReset) {
+      return sessionCommandReply("⚙️ Usage: /usage off|tokens|full|reset|cost");
+    }
+
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+    let next: ReturnType<typeof normalizeUsageDisplay>;
+    if (!isReset) {
+      const current = resolveEffectiveResponseUsage(
+        targetSessionEntry?.responseUsage,
+        params.cfg.messages?.responseUsage,
+        params.command.channel,
+      );
+      next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+    }
+
+    return persistSessionCommandSetting(
+      { ...params, sessionEntry: targetSessionEntry },
+      "responseUsage",
+      next,
+      isReset ? "⚙️ Usage footer: reset to default." : `⚙️ Usage footer: ${next}.`,
+    );
+  },
+);
+
+export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast"), silentUnauthorized: true },
+  async (params, rawArgs) => {
+    const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
+    if (!rawMode || rawMode === "status") {
+      const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+      const state = resolveFastModeState({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: params.agentId,
+        sessionEntry: targetSessionEntry,
+      });
+      return sessionCommandReply(
+        formatFastModeCurrentStatus({
+          mode: state.mode,
+          source: state.source,
+          fastAutoOnSeconds: state.fastAutoOnSeconds,
+          label: "⚙️ Current fast mode",
+        }),
+      );
+    }
+
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+    const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
+    if (nextMode === undefined && !resetsToDefault) {
+      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|ultrafast|default");
+    }
+
+    return persistSessionCommandSetting(
+      { ...params, sessionEntry: targetSessionEntry },
+      "fastMode",
+      nextMode,
+      resetsToDefault
+        ? "⚙️ Fast mode reset to default."
+        : `⚙️ ${formatFastModeConfirmation(nextMode)}`,
+    );
+  },
+);
+
+export const handleSessionCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: SESSION_COMMAND_PREFIX,
+    match: (body) =>
+      /^\/session(?:\s|$)/.test(body) ? body.slice(SESSION_COMMAND_PREFIX.length).trim() : null,
+    silentUnauthorized: true,
+  },
+  async (params, rest) => {
+    const tokens = rest.split(/\s+/).filter(Boolean);
+    const action = normalizeOptionalLowercaseString(tokens[0]);
+    if (
+      (action !== SESSION_ACTION_IDLE &&
+        action !== SESSION_ACTION_MAX_AGE &&
+        action !== SESSION_ACTION_UNBIND) ||
+      (action === SESSION_ACTION_UNBIND && tokens.length > 1)
+    ) {
+      return sessionCommandReply(SESSION_COMMAND_USAGE);
+    }
+
+    const bindingContext = resolveConversationBindingContextFromAcpCommand(params);
+    if (!bindingContext) {
+      return sessionCommandReply(
+        "⚠️ /session commands must be run inside a bindable conversation.",
+      );
+    }
+    // Detaching only needs the binding service; not every binding adapter offers
+    // lifecycle updates (for example, generic current-conversation bindings).
+    if (action !== SESSION_ACTION_UNBIND) {
+      const conversationBindings = getChannelPlugin(bindingContext.channel)?.conversationBindings;
+      const supportsLifecycleUpdate =
+        action === SESSION_ACTION_IDLE
+          ? typeof conversationBindings?.setIdleTimeoutBySessionKeyAsync === "function" ||
+            typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
+          : typeof conversationBindings?.setMaxAgeBySessionKeyAsync === "function" ||
+            typeof conversationBindings?.setMaxAgeBySessionKey === "function";
+      if (!conversationBindings?.supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
+        return sessionCommandReply(
+          "⚠️ /session idle and /session max-age are currently available only on channels that support conversation binding lifecycle updates.",
+        );
+      }
+    }
+
+    const sessionBindingService = getSessionBindingService();
+
+    const activeBinding = await sessionBindingService.resolveByConversationAsync(bindingContext);
+    params.opts?.abortSignal?.throwIfAborted();
+    if (!activeBinding) {
+      return sessionCommandReply("ℹ️ This conversation is not currently bound.");
+    }
+
+    const durationArgRaw = tokens.slice(1).join("");
+    if (action === SESSION_ACTION_UNBIND || durationArgRaw) {
+      const senderId = normalizeOptionalString(params.command.senderId) ?? "";
+      const boundBy = normalizeOptionalString(activeBinding.metadata?.boundBy) ?? "";
+      if (boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
+        return sessionCommandReply(
+          action === SESSION_ACTION_UNBIND
+            ? `⚠️ Only ${boundBy} can unbind this conversation.`
+            : `⚠️ Only ${boundBy} can update session lifecycle settings for this conversation.`,
+        );
+      }
+      if (action === SESSION_ACTION_UNBIND) {
+        const removed = await sessionBindingService.unbind({
+          bindingId: activeBinding.bindingId,
+          scope: activeBinding.conversation,
+          reason: "manual",
+        });
+        return sessionCommandReply(
+          removed.length > 0
+            ? "✅ Conversation unbound."
+            : "⚠️ No binding was removed; this conversation may still be bound.",
+        );
+      }
+    }
+
+    const isIdle = action === SESSION_ACTION_IDLE;
+    const settingLabel = isIdle ? "Idle timeout" : "Max age";
+    const expiryDescription = isIdle ? "next auto-unbind" : "hard auto-unbind";
+
+    if (!durationArgRaw) {
+      const durationMs = resolveNonNegativeIntegerOption(
+        isIdle ? activeBinding.metadata?.idleTimeoutMs : activeBinding.metadata?.maxAgeMs,
+        isIdle ? 24 * 60 * 60 * 1000 : 0,
+      );
+      const expiresAt = resolveExpiresAtMsFromDurationMs(durationMs, {
+        nowMs: isIdle ? resolveSessionBindingLastActivityAt(activeBinding) : activeBinding.boundAt,
+      });
+      if (expiresAt !== undefined && expiresAt > Date.now()) {
+        return sessionCommandReply(
+          `ℹ️ ${settingLabel} active (${formatThreadBindingDurationLabel(durationMs)}, ${expiryDescription} at ${formatSessionExpiry(expiresAt)}).`,
+        );
+      }
+      return sessionCommandReply(
+        `ℹ️ ${settingLabel} is currently disabled for this bound session.`,
+      );
+    }
+
+    let durationMs: number;
+    try {
+      durationMs = parseSessionDurationMs(durationArgRaw);
+    } catch {
+      return sessionCommandReply(SESSION_COMMAND_USAGE);
+    }
+
+    const updatedBindings =
+      action === SESSION_ACTION_IDLE
+        ? await setChannelConversationBindingIdleTimeoutBySessionKeyAsync({
+            channelId: bindingContext.channel,
+            targetSessionKey: activeBinding.targetSessionKey,
+            accountId: bindingContext.accountId,
+            idleTimeoutMs: durationMs,
+          })
+        : await setChannelConversationBindingMaxAgeBySessionKeyAsync({
+            channelId: bindingContext.channel,
+            targetSessionKey: activeBinding.targetSessionKey,
+            accountId: bindingContext.accountId,
+            maxAgeMs: durationMs,
+          });
+    if (updatedBindings.length === 0) {
+      return sessionCommandReply(
+        `⚠️ Failed to update ${settingLabel.toLowerCase()} for the current binding.`,
+      );
+    }
+
+    if (durationMs <= 0) {
+      return sessionCommandReply(
+        `✅ ${settingLabel} disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`,
+      );
+    }
+
+    const expiries = updatedBindings.flatMap((binding) => {
+      const expiresAt = resolveExpiresAtMsFromDurationMs(
+        (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0,
+        { nowMs: isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt },
+      );
+      return expiresAt === undefined ? [] : [expiresAt];
+    });
+    const expiryLabel = formatSessionExpiry(Math.min(...expiries));
+
+    return sessionCommandReply(
+      `✅ ${settingLabel} set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (${expiryDescription} at ${expiryLabel}).`,
+    );
+  },
+);
+export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
+  "/restart",
+  async (params) => {
+    const sentinelPayload = await buildRestartCommandSentinel(params);
+    let sentinelRevision: number | undefined;
+    const prepareSentinel = async () => {
+      if (sentinelPayload) {
+        sentinelRevision = (await writeRestartSentinel(sentinelPayload)).revision;
+      }
+    };
+    const clearSentinel = async () => {
+      if (sentinelRevision !== undefined) {
+        await clearRestartSentinelIfRevision(sentinelRevision);
+      }
+    };
+    if (process.listenerCount("SIGUSR2") > 0) {
+      scheduleGatewayRestart({
+        reason: "/restart",
+        // The routed restart acknowledgement and scheduler must own the same
+        // pending session key to avoid cross-session overwrite (#86742).
+        sessionKey: sentinelPayload?.sessionKey,
+        emitHooks: {
+          assertCurrent: params.command.assertOwnerCurrent,
+          beforeEmit: prepareSentinel,
+          afterEmitRejected: clearSentinel,
+        },
+      });
+      return sessionCommandReply(
+        "⚙️ Restarting OpenClaw in-process (SIGUSR2); back in a few seconds.",
+      );
+    }
+    try {
+      await prepareSentinel();
+    } catch (err) {
+      logVerbose(`failed to write /restart sentinel: ${String(err)}`);
+      return sessionCommandReply(
+        "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
+      );
+    }
+    const nonOwner = rejectNonOwnerCommand(params, "/restart");
+    if (nonOwner) {
+      await clearSentinel();
+      return nonOwner;
+    }
+    const restartMethod = triggerOpenClawRestart();
+    if (!restartMethod.ok) {
+      await clearSentinel();
+      const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
+      return sessionCommandReply(`⚠️ Restart failed (${restartMethod.method}).${detail}`);
+    }
+    return sessionCommandReply(
+      `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+    );
+  },
+);
+
+export { handleAbortTrigger, handleStopCommand };

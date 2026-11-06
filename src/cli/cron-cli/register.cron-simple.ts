@@ -1,0 +1,311 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { Option, type Command } from "commander";
+import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
+import type { CronRunLogEntry } from "../../cron/run-log-types.js";
+import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { parseDurationMs } from "../parse-duration.js";
+import { parseTimeoutMs } from "../parse-timeout.js";
+import { CronCliError } from "./cron-cli-error.js";
+import { findCronJobByIdOrName } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
+import {
+  enrichCronJsonWithStatus,
+  formatCronLookupMiss,
+  handleCronCliError,
+  parseCronIntegerOption,
+  printCronJson,
+  printCronShow,
+  requireCronJobId,
+  warnIfCronSchedulerDisabled,
+} from "./shared.js";
+
+const CRON_RUN_WAIT_TIMEOUT_DEFAULT = "10m";
+const CRON_RUN_WAIT_POLL_INTERVAL_DEFAULT = "2s";
+
+type CronRunCommandResult = {
+  ok?: boolean;
+  ran?: boolean;
+  enqueued?: boolean;
+  runId?: string;
+};
+
+function parseCronRunWaitDuration(raw: unknown): number {
+  const input =
+    typeof raw === "string" || typeof raw === "number" || typeof raw === "bigint"
+      ? String(raw)
+      : "";
+  let durationMs: number;
+  try {
+    durationMs = parseDurationMs(input, { defaultUnit: "ms" });
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new CronCliError(error);
+    }
+    throw error;
+  }
+  return resolveTimerTimeoutMs(durationMs, 0, 0);
+}
+
+async function waitForCronRunCompletion(params: {
+  opts: GatewayRpcOpts;
+  jobId: string;
+  runId: string;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  signal?: AbortSignal;
+}): Promise<CronRunLogEntry> {
+  // Poll the task ledger rather than cron.run because completion state is written asynchronously.
+  const startedAt = performance.now();
+  let hasPolled = false;
+  for (;;) {
+    params.signal?.throwIfAborted();
+    const elapsedBeforePollMs = Math.floor(performance.now() - startedAt);
+    if (hasPolled && elapsedBeforePollMs >= params.timeoutMs) {
+      throw new CronCliError(`timed out waiting for cron run ${params.runId}`);
+    }
+    const remainingMs = Math.max(1, params.timeoutMs - elapsedBeforePollMs);
+    const configuredTimeoutMs = parseTimeoutMs(params.opts.timeout);
+    const pollTimeoutMs =
+      configuredTimeoutMs === undefined ? remainingMs : Math.min(configuredTimeoutMs, remainingMs);
+    hasPolled = true;
+    // History reads share the wait deadline, but enqueue keeps its own RPC
+    // timeout and a zero-duration wait still gets one immediate ledger poll.
+    const pollOpts = { ...params.opts, timeout: String(pollTimeoutMs) };
+    const page = (await callGatewayFromCli(
+      "cron.runs",
+      pollOpts,
+      { id: params.jobId, runId: params.runId, limit: 1 },
+      { signal: params.signal },
+    )) as { entries?: CronRunLogEntry[] };
+    params.signal?.throwIfAborted();
+    const entry = page.entries?.[0];
+    if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
+      return entry;
+    }
+    const elapsedMs = Math.floor(performance.now() - startedAt);
+    if (elapsedMs >= params.timeoutMs) {
+      throw new CronCliError(`timed out waiting for cron run ${params.runId}`);
+    }
+    await delay(Math.min(params.pollIntervalMs, params.timeoutMs - elapsedMs), undefined, {
+      signal: params.signal,
+    });
+  }
+}
+
+export function registerCronSimpleCommands(cron: Command) {
+  for (const [name, description, method] of [
+    ["rm", "Remove an automation", "cron.remove"],
+    ["enable", "Enable an automation", "cron.update"],
+    ["disable", "Disable an automation", "cron.update"],
+    ["get", "Get an automation as JSON", "cron.get"],
+    // The Gateway admits bind only from the parent conversation's signed agent turn and
+    // refuses this shell caller with that instruction.
+    [
+      "bind",
+      "Link a key-only automation to its parent conversation (ask the agent in that conversation)",
+      "cron.bind",
+    ],
+  ] as const) {
+    addGatewayClientOptions(
+      createCronOutputCommand(cron, name)
+        .description(description)
+        .argument("<id>", "Job id")
+        .action(async (id, opts) => {
+          try {
+            const res = await callGatewayFromCli(method, opts, {
+              id: requireCronJobId(id),
+              ...(method === "cron.update" ? { patch: { enabled: name === "enable" } } : {}),
+            });
+            printCronJson(res);
+            if (name === "disable" && process.stderr.isTTY) {
+              process.stderr.write(
+                `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
+              );
+            }
+            if (method === "cron.update") {
+              await warnIfCronSchedulerDisabled(opts);
+            }
+          } catch (err) {
+            handleCronCliError(err);
+          }
+        }),
+    );
+  }
+
+  addGatewayClientOptions(
+    cron
+      .command("show")
+      .description("Show an automation")
+      .argument("<id>", "Job id or exact name")
+      .option("--json", "Output JSON", false)
+      .action(async (idArg, opts) => {
+        try {
+          const id = requireCronJobId(idArg);
+          const { job, deliveryPreview } = await findCronJobByIdOrName(opts, id, {
+            includeDeliveryPreview: !opts.json,
+          });
+          if (!job) {
+            throw new CronCliError(formatCronLookupMiss(id));
+          }
+          if (opts.json) {
+            printCronJson(enrichCronJsonWithStatus(job));
+            return;
+          }
+          printCronShow(job, defaultRuntime, { deliveryPreview });
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    createCronOutputCommand(cron, "runs")
+      .description("Show automation run history")
+      .argument("[id]", "Job id")
+      .option("--id <id>", "Job id (alternative to positional argument)")
+      .option("--all", "Show run history across all visible automations", false)
+      .option("--run-id <runId>", "Filter by cron run id")
+      .addOption(
+        new Option("--status <status>", "Filter by run status").choices([
+          "all",
+          "ok",
+          "error",
+          "skipped",
+        ]),
+      )
+      .addOption(
+        new Option("--delivery-status <status>", "Filter by delivery status").choices([
+          "delivered",
+          "not-delivered",
+          "unknown",
+          "not-requested",
+        ]),
+      )
+      .option("--query <text>", "Filter by run summary or error text")
+      .option("--offset <n>", "Entries to skip before returning results")
+      .addOption(new Option("--sort <direction>", "Sort by run time").choices(["asc", "desc"]))
+      .option("--limit <n>", "Max entries (default 50)", "50")
+      .action(async (idArg, opts) => {
+        try {
+          const argId = normalizeOptionalString(idArg);
+          const flagId = normalizeOptionalString(opts.id);
+          if (argId && flagId && argId !== flagId) {
+            throw new CronCliError(
+              `Conflicting job ids: positional "${argId}" and --id "${flagId}".`,
+            );
+          }
+          if (opts.all && (idArg !== undefined || opts.id !== undefined)) {
+            throw new CronCliError("--all cannot be combined with a job id");
+          }
+          const id = opts.all
+            ? undefined
+            : requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
+          const limit = parseCronIntegerOption(opts.limit ?? "50", "--limit");
+          const offset = parseCronIntegerOption(opts.offset, "--offset", "non-negative");
+          if (typeof opts.runId === "string" && !opts.runId.trim()) {
+            throw new CronCliError("--run-id must not be blank");
+          }
+          const res = await callGatewayFromCli("cron.runs", opts, {
+            ...(opts.all ? { scope: "all" } : { id }),
+            ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
+            ...(typeof opts.status === "string" ? { status: opts.status } : {}),
+            ...(typeof opts.deliveryStatus === "string"
+              ? { deliveryStatus: opts.deliveryStatus }
+              : {}),
+            ...(typeof opts.query === "string" ? { query: opts.query } : {}),
+            ...(offset !== undefined ? { offset } : {}),
+            ...(typeof opts.sort === "string" ? { sortDir: opts.sort } : {}),
+            limit,
+          });
+          printCronJson(res);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    createCronOutputCommand(cron, "run")
+      .description("Run an automation now (debug)")
+      .argument("<id>", "Job id")
+      .option("--due", "Run only when due (default behavior in older versions)", false)
+      .option("--wait", "Wait for the queued run to finish", false)
+      .option(
+        "--wait-timeout <duration>",
+        "Maximum time to wait for --wait",
+        CRON_RUN_WAIT_TIMEOUT_DEFAULT,
+      )
+      .option(
+        "--poll-interval <duration>",
+        "Polling interval for --wait",
+        CRON_RUN_WAIT_POLL_INTERVAL_DEFAULT,
+      )
+      .action(async (idArg, opts, command) => {
+        const signal = opts.wait ? getAsyncWorkSignal() : undefined;
+        try {
+          const id = requireCronJobId(idArg);
+          let waitTimeoutMs = 0;
+          let pollIntervalMs = 0;
+          if (opts.wait) {
+            waitTimeoutMs = parseCronRunWaitDuration(opts.waitTimeout);
+            pollIntervalMs = parseCronRunWaitDuration(opts.pollInterval);
+            if (pollIntervalMs <= 0) {
+              throw new CronCliError("invalid --poll-interval");
+            }
+          }
+          if (command.getOptionValueSource("timeout") === "default") {
+            opts.timeout = "600000";
+          }
+          const res = await callGatewayFromCli("cron.run", opts, {
+            id,
+            mode: opts.due ? "due" : "force",
+          });
+          const result = res as CronRunCommandResult | undefined;
+          if (opts.wait && result?.ok && result.enqueued) {
+            if (!result.runId) {
+              throw new Error("cron run did not return a runId to wait for");
+            }
+            const run = await waitForCronRunCompletion({
+              opts,
+              jobId: id,
+              runId: result.runId,
+              timeoutMs: waitTimeoutMs,
+              pollIntervalMs,
+              signal,
+            });
+            signal?.throwIfAborted();
+            const completionStatus =
+              run.completionStatus ??
+              resolveCronCompletionStatus({
+                status: run.status,
+                delivered: run.delivered,
+                deliveryStatus: run.deliveryStatus,
+              });
+            const completedRun = { ...run, completionStatus };
+            printCronJson({
+              ...res,
+              completed: true,
+              status: run.status,
+              completionStatus,
+              run: completedRun,
+            });
+            exitCliAfterOutput(defaultRuntime, completionStatus === "succeeded" ? 0 : 1);
+          }
+          printCronJson(res);
+          exitCliAfterOutput(defaultRuntime, result?.ok && (result.ran || result.enqueued) ? 0 : 1);
+        } catch (err) {
+          if (signal?.aborted) {
+            // The root command signal owner records the exit status after cleanup.
+            return;
+          }
+          handleCronCliError(err);
+        }
+      }),
+  );
+}

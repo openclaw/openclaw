@@ -1,0 +1,178 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
+import { EXEC_APPROVAL_DECISIONS, type ExecApprovalDecision } from "./exec-approvals-core.js";
+
+type PluginApprovalActionView = {
+  kind?: "command" | "decision";
+  label: string;
+  command: string;
+  decision?: ExecApprovalDecision;
+  style?: "primary" | "secondary" | "success" | "danger";
+};
+
+/** Gateway-minted placement identity; plugin and RPC callers never supply this authority. */
+type PluginApprovalPlacementGrantBinding = {
+  pluginId: string;
+  command: string;
+  approvalScope: string;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  nodeId: string;
+  pairingGeneration: string;
+  environmentId: string;
+  ownerEpoch: number;
+  placementGeneration: number;
+  cwd: string;
+};
+
+export type PluginApprovalRequestPayload = {
+  pluginId?: string | null;
+  title: string;
+  description: string;
+  detail?: string | null;
+  severity?: "info" | "warning" | "critical" | null;
+  /** Owner-declared blast-radius facts; display-only, never authorization. */
+  scope?: ApprovalScope | null;
+  toolName?: string | null;
+  toolCallId?: string | null;
+  /** Trusted harness-selected policy subject; distinct from display-only toolName. */
+  policySubject?: { pluginKey: string; tool?: string };
+  /** Exact MCP persistence intent; the host separately binds live tool-call proof. */
+  mcpTool?: { server: string; tool: string };
+  allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  /** Trusted in-process metadata; public Gateway callers cannot submit this field. */
+  externalResolution?: {
+    label: string;
+    decisions?: readonly ("allow-once" | "allow-always")[];
+  } | null;
+  actions?: readonly PluginApprovalActionView[] | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+  /** Host-derived source run; never accepted from plugin approval RPC params. */
+  runId?: string | null;
+  /** Host-derived grant binding; never accepted from plugin approval RPC params. */
+  placementGrant?: PluginApprovalPlacementGrantBinding | null;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+};
+
+/** Timed plugin approval request persisted while awaiting a decision. */
+export type PluginApprovalRequest = {
+  /** Descriptive wire metadata; readers derive it from the payload when absent. */
+  approvalKind?: "plugin";
+  id: string;
+  request: PluginApprovalRequestPayload;
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+export type PluginApprovalResolved = {
+  id: string;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  ts: number;
+  request?: PluginApprovalRequestPayload;
+};
+
+export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
+export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
+export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
+export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
+const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
+const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
+
+/** Caps reviewer-only plugin detail by Unicode code point without splitting surrogate pairs. */
+export function truncatePluginApprovalDetail(value: string): string {
+  if (value.length <= PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) {
+    return value;
+  }
+  const bounded = truncateCodePoints(value, PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+  if (bounded === value) {
+    return value;
+  }
+  const contentLimit =
+    PLUGIN_APPROVAL_DETAIL_MAX_LENGTH - Array.from(PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX).length;
+  return `${truncateCodePoints(bounded, contentLimit)}${PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX}`;
+}
+
+export function resolvePluginApprovalTimeoutMs(value: unknown): number {
+  const candidate =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+  return Math.min(MAX_PLUGIN_APPROVAL_TIMEOUT_MS, Math.max(1, Math.floor(candidate)));
+}
+
+export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
+  if (decision === "allow-once") {
+    return "allowed once";
+  }
+  if (decision === "allow-always") {
+    return "allowed always";
+  }
+  return "denied";
+}
+
+export function resolvePluginApprovalRequestAllowedDecisions(params?: {
+  allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+}): readonly ExecApprovalDecision[] {
+  const explicit: ExecApprovalDecision[] = [];
+  if (Array.isArray(params?.allowedDecisions)) {
+    for (const decision of params.allowedDecisions) {
+      if (
+        (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
+        !explicit.includes(decision)
+      ) {
+        explicit.push(decision);
+      }
+    }
+  }
+  return explicit.length > 0 ? explicit : EXEC_APPROVAL_DECISIONS;
+}
+
+export function buildPluginApprovalRequestMessage(
+  request: PluginApprovalRequest,
+  nowMsValue: number,
+): string {
+  const lines: string[] = [];
+  const severity = request.request.severity ?? "warning";
+  const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
+  lines.push(`${icon} Plugin approval required`);
+  lines.push(`Title: ${request.request.title}`);
+  // Reviewer-only detail stays off channel messages; channels receive the bounded description.
+  lines.push(`Description: ${request.request.description}`);
+  if (request.request.scope) {
+    lines.push(`Scope: ${summarizeApprovalScope(request.request.scope)}`);
+  }
+  if (request.request.toolName) {
+    lines.push(`Tool: ${request.request.toolName}`);
+  }
+  if (request.request.pluginId) {
+    lines.push(`Plugin: ${request.request.pluginId}`);
+  }
+  if (request.request.agentId) {
+    lines.push(`Agent: ${request.request.agentId}`);
+  }
+  lines.push(`ID: ${request.id}`);
+  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
+  lines.push(`Expires in: ${expiresIn}s`);
+  lines.push(
+    `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
+      request.request,
+    ).join("|")}`,
+  );
+  return lines.join("\n");
+}
+
+export function buildPluginApprovalResolvedMessage(resolved: PluginApprovalResolved): string {
+  const base = `✅ Plugin approval ${approvalDecisionLabel(resolved.decision)}.`;
+  const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
+  return `${base}${by} ID: ${resolved.id}`;
+}
+
+export function buildPluginApprovalExpiredMessage(request: PluginApprovalRequest): string {
+  return `⏱️ Plugin approval expired. ID: ${request.id}`;
+}

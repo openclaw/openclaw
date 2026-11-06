@@ -1,0 +1,60 @@
+import type { BaseComponentInteraction } from "./interactions.js";
+export { stripUndefinedFields as clean } from "./undefined-fields.js";
+
+export type ComponentParserResult = {
+  key: string;
+  data: Record<string, string | boolean>;
+};
+export type ComponentData<
+  T extends keyof ComponentParserResult["data"] = keyof ComponentParserResult["data"],
+> = {
+  [K in T]: ComponentParserResult["data"][K];
+};
+type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
+
+export function parseCustomId(id: string): ComponentParserResult {
+  const [rawKey = "", ...parts] = id.split(";");
+  const [keyPart = "", firstValue] = rawKey.split("=");
+  const key = keyPart.split(":", 1)[0] ?? "";
+  const data: ComponentParserResult["data"] = {};
+  const entries = firstValue === undefined ? parts : [rawKey.slice(key.length + 1), ...parts];
+  for (const entry of entries) {
+    const index = entry.indexOf("=");
+    if (index < 0) {
+      continue;
+    }
+    const name = entry.slice(0, index).replace(/^[^:]+:/, "");
+    const raw = entry.slice(index + 1);
+    data[name] = raw === "true" ? true : raw === "false" ? false : raw;
+  }
+  return { key, data };
+}
+
+export function colorToNumber(value: string | number | undefined): number | undefined {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value >= 0 && value <= 0xffffff ? value : undefined;
+  }
+  if (typeof value === "string" && /^#?[0-9a-f]{6}$/i.test(value)) {
+    return Number.parseInt(value.replace(/^#/, ""), 16);
+  }
+  return undefined;
+}
+
+export abstract class BaseComponent {
+  abstract readonly type: number;
+  readonly isV2: boolean = false;
+  abstract serialize(): unknown;
+}
+
+export abstract class BaseMessageInteractiveComponent {
+  abstract readonly type: number;
+  declare defer?: boolean | ConditionalComponentOption;
+  declare ephemeral?: boolean | ConditionalComponentOption;
+  abstract customId: string;
+  declare customIdParser?: typeof parseCustomId;
+  abstract run(interaction: BaseComponentInteraction, data: ComponentData): unknown;
+}
+
+export abstract class BaseModalComponent extends BaseComponent {
+  abstract customId: string;
+}

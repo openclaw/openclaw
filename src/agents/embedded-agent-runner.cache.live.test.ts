@@ -1,0 +1,1262 @@
+// Live cache-behavior checks for embedded-agent direct provider runs.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core/model-contracts/anthropic";
+import { expectDefined } from "@openclaw/normalization-core";
+import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import {
+  buildEmbeddedCachePrompt,
+  buildEmbeddedRunnerConfig,
+  normalizeLiveUsage,
+  runEmbeddedReleasePrefixScenario,
+} from "./embedded-agent-runner.cache.test-support.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
+import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
+import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
+import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
+import {
+  resolveLiveCacheModel,
+  buildAssistantHistoryTurn as makeAssistantHistoryTurn,
+  buildStableCachePrefix,
+  completeSimpleWithLiveTimeout,
+  computeCacheHitRate,
+  LIVE_CACHE_TEST_ENABLED,
+  type LiveResolvedModel,
+  logLiveCache,
+  resolveLiveDirectModel,
+  withLiveCacheHeartbeat,
+} from "./live-cache-test-support.js";
+import { createSingleUserPromptMessage, useLiveTestRuntimeConfig } from "./live-test-helpers.js";
+
+const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
+
+const OPENAI_TIMEOUT_MS = 120_000;
+const ANTHROPIC_TIMEOUT_MS = 120_000;
+const OPENAI_SESSION_ID = "live-cache-openai-stable-session";
+const ANTHROPIC_SESSION_ID = "live-cache-anthropic-stable-session";
+const OPENAI_PREFIX = buildStableCachePrefix("openai");
+const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
+const OPENAI_STABLE_PREFIX_MIN_CACHE_READ = 4_608;
+const OPENAI_STABLE_PREFIX_MIN_HIT_RATE = 0.9;
+const OPENAI_TOOL_MIN_CACHE_READ = 4_096;
+const OPENAI_TOOL_MIN_HIT_RATE = 0.85;
+const OPENAI_IMAGE_MIN_CACHE_READ = 3_840;
+const OPENAI_IMAGE_MIN_HIT_RATE = 0.82;
+const LARGE_CACHE_PROMPT_SECTIONS = 1_024;
+const LIVE_TEST_PNG_URL = new URL(
+  "../../apps/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
+  import.meta.url,
+);
+
+type CacheRun = {
+  hitRate: number;
+  suffix: string;
+  text: string;
+  usage: AssistantMessage["usage"];
+};
+type CacheTraceEvent = {
+  runId?: string;
+  sessionId?: string;
+  stage?: string;
+  note?: string;
+  options?: {
+    snapshot?: ReturnType<typeof beginPromptCacheObservation>["snapshot"];
+    previousCacheRead?: number;
+    cacheRead?: number;
+    input?: number;
+    cacheWrite?: number;
+    requestGapMs?: number;
+    providerPrefix?: string;
+    changes?: Array<{ code?: string; detail?: string }>;
+  };
+};
+
+const NOOP_TOOL: Tool = {
+  name: "noop",
+  description: "Return ok.",
+  parameters: Type.Object({}, { additionalProperties: false }),
+};
+let liveTestPngBase64 = "";
+let liveRunnerPaths: { rootDir: string; agentDir: string; storePath: string } | undefined;
+let liveCacheTraceFile: string | undefined;
+let previousCacheTraceEnv: ReturnType<typeof captureEnv> | undefined;
+
+type UserContent = Extract<Message, { role: "user" }>["content"];
+
+function makeUserHistoryTurn(content: UserContent): Message {
+  return {
+    role: "user",
+    content,
+    timestamp: Date.now(),
+  };
+}
+
+function makeImageUserTurn(text: string): Message {
+  // Image cache tests use a small repo fixture so payload bytes are stable across
+  // runs and do not require external downloads.
+  if (!liveTestPngBase64) {
+    throw new Error("live test PNG not loaded");
+  }
+  return makeUserHistoryTurn([
+    { type: "text", text },
+    { type: "image", mimeType: "image/png", data: liveTestPngBase64 },
+  ]);
+}
+
+function buildRunnerSessionPaths(sessionId: string) {
+  if (!liveRunnerPaths) {
+    throw new Error("live runner temp root not initialized");
+  }
+  return {
+    agentDir: liveRunnerPaths.agentDir,
+    sessionTarget: {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:live-cache:${sessionId}`,
+      storePath: liveRunnerPaths.storePath,
+    },
+    workspaceDir: path.join(liveRunnerPaths.rootDir, `${sessionId}-workspace`),
+  };
+}
+
+async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
+  // Trace events are JSONL so live assertions can inspect cache state transitions
+  // after the provider call completes.
+  if (!liveCacheTraceFile) {
+    throw new Error("live cache trace file not initialized");
+  }
+  const raw = await fs.readFile(liveCacheTraceFile, "utf8").catch(() => "");
+  const events: CacheTraceEvent[] = [];
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (line.length > 0) {
+      const event = JSON.parse(line) as CacheTraceEvent;
+      if (event.sessionId === sessionId) {
+        events.push(event);
+      }
+    }
+  }
+  return events;
+}
+
+async function expectCacheTraceStages(
+  sessionId: string,
+  requiredStages: Array<"cache:state" | "cache:result">,
+): Promise<void> {
+  const events = await readCacheTraceEvents(sessionId);
+  const stages = new Set(events.map((event) => event.stage));
+  for (const stage of requiredStages) {
+    expect(stages.has(stage)).toBe(true);
+  }
+}
+
+function buildNoisyStructuredPromptVariant(text: string): string {
+  return `\r\n${text
+    .split("\n")
+    .map((line) => `${line}  \t`)
+    .join("\r\n")}\r\n\r\n`;
+}
+
+function extractRunPayloadText(payloads: Array<{ text?: string } | undefined> | undefined): string {
+  return (
+    payloads
+      ?.map((payload) => payload?.text?.trim())
+      .filter((text): text is string => Boolean(text))
+      .join(" ") ?? ""
+  );
+}
+
+async function runEmbeddedCacheProbe(params: {
+  apiKey: string;
+  cacheRetention: "none" | "short" | "long";
+  model: LiveResolvedModel["model"];
+  prefix: string;
+  providerTag: "anthropic" | "openai";
+  sessionId: string;
+  suffix: string;
+  transport?: "sse" | "websocket";
+  promptSections?: number;
+  config?: OpenClawConfig;
+  toolLoop?: boolean;
+}): Promise<CacheRun> {
+  const sessionPaths = buildRunnerSessionPaths(params.sessionId);
+  const runId = `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`;
+  const prompt = params.toolLoop
+    ? `Call cache_probe with step 1, then after its result call cache_probe with step 2. Only after both results: Reply with exactly CACHE-OK ${params.suffix}. Do not summarize the records.`
+    : buildEmbeddedCachePrompt(params.suffix, params.promptSections);
+  await fs.mkdir(sessionPaths.workspaceDir, { recursive: true });
+  const config =
+    params.config ??
+    buildEmbeddedRunnerConfig({
+      agentDir: sessionPaths.agentDir,
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      model: params.model,
+      transport: params.transport,
+    });
+  using _ = useLiveTestRuntimeConfig(config);
+  // Full-runner probes own a real admission through settlement, just like production callers.
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(config, runId, "main", "live-cache");
+  const recorder = createUserTurnTranscriptRecorder({
+    target: {
+      ...sessionPaths.sessionTarget,
+      sessionEntry: undefined,
+      cwd: sessionPaths.workspaceDir,
+      config,
+    },
+    input: { text: prompt, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
+  });
+  try {
+    const result = await withLiveCacheHeartbeat(
+      runEmbeddedAgent({
+        preparedRunAdmission,
+        userTurnTranscriptRecorder: recorder,
+        sessionId: params.sessionId,
+        sessionKey: sessionPaths.sessionTarget.sessionKey,
+        sessionTarget: sessionPaths.sessionTarget,
+        workspaceDir: sessionPaths.workspaceDir,
+        agentDir: sessionPaths.agentDir,
+        config,
+        prompt,
+        transcriptPrompt: prompt,
+        provider: params.model.provider,
+        model: params.model.id,
+        timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+        runId,
+        extraSystemPrompt: params.prefix,
+        disableTools: !params.toolLoop,
+        ...(params.toolLoop
+          ? { toolsAllow: ["cache_probe"], codeModeOverride: false as const }
+          : {}),
+        cleanupBundleMcpOnRunEnd: true,
+        ...(params.config ? { thinkLevel: "off", streamParams: { maxTokens: 128 } } : {}),
+      }),
+      `${params.providerTag} embedded cache probe ${params.suffix}${params.transport ? ` (${params.transport})` : ""}`,
+    );
+    if (result.meta.error) {
+      const { kind, message } = result.meta.error;
+      const historySegment = message.match(
+        /message (\d+) \((user|assistant|toolResult|system)\) differs/,
+      );
+      throw new Error(
+        `Embedded cache probe ${params.suffix} failed: ${JSON.stringify({
+          kind,
+          stopReason: result.meta.stopReason,
+          providerStarted: result.meta.providerStarted,
+          aborted: result.meta.aborted,
+          replayInvalid: result.meta.replayInvalid,
+          segment: historySegment
+            ? `history[${historySegment[1]}] (${historySegment[2]})`
+            : undefined,
+          detailDigest: createHash("sha256").update(message).digest("hex"),
+        })}`,
+      );
+    }
+    const text = extractRunPayloadText(result.payloads);
+    expect(text.toLowerCase().includes(params.suffix.toLowerCase()), "expected reply marker").toBe(
+      true,
+    );
+    const usage = normalizeLiveUsage(result.meta.agentMeta?.usage);
+    return {
+      suffix: params.suffix,
+      text,
+      usage,
+      hitRate: computeCacheHitRate(usage),
+    };
+  } finally {
+    preparedRunAdmission.close();
+  }
+}
+
+async function runReleasePrefixScenario(
+  fixture: LiveResolvedModel,
+  provider: "openai" | "anthropic",
+): Promise<void> {
+  const sessionId = `live-cache-release-prefix-${provider}`;
+  await runEmbeddedReleasePrefixScenario({
+    ...fixture,
+    provider,
+    sessionId,
+    ...buildRunnerSessionPaths(sessionId),
+    readTraceEvents: () => readCacheTraceEvents(sessionId),
+    probe: async (config, suffix) => {
+      const run = await runEmbeddedCacheProbe({
+        ...fixture,
+        config,
+        cacheRetention: "short",
+        prefix: "Preserve prior instructions and answer only the latest requested marker.",
+        providerTag: provider,
+        sessionId,
+        suffix,
+        transport: "sse",
+        promptSections: 0,
+        toolLoop: provider === "openai",
+      });
+      return run.usage;
+    },
+  });
+}
+
+async function compactLiveCacheSession(params: {
+  apiKey: string;
+  cacheRetention: "none" | "short" | "long";
+  model: LiveResolvedModel["model"];
+  providerTag: "anthropic" | "openai";
+  sessionId: string;
+}) {
+  const sessionPaths = buildRunnerSessionPaths(params.sessionId);
+  await fs.mkdir(sessionPaths.workspaceDir, { recursive: true });
+  return await withLiveCacheHeartbeat(
+    compactEmbeddedAgentSessionOnDemand({
+      sessionId: params.sessionId,
+      sessionTarget: sessionPaths.sessionTarget,
+      workspaceDir: sessionPaths.workspaceDir,
+      agentDir: sessionPaths.agentDir,
+      config: buildEmbeddedRunnerConfig({
+        agentDir: sessionPaths.agentDir,
+        apiKey: params.apiKey,
+        cacheRetention: params.cacheRetention,
+        compactionModel: "live-compaction",
+        model: params.model,
+        modelAlias: "live-compaction",
+      }),
+      provider: params.model.provider,
+      model: params.model.id,
+      force: true,
+      trigger: "manual",
+      runId: `${params.sessionId}-compact`,
+      tokenBudget: 512,
+    }),
+    `${params.providerTag} embedded compaction ${params.sessionId}`,
+  );
+}
+
+function extractFirstToolCall(message: AssistantMessage) {
+  return message.content.find((block) => block.type === "toolCall");
+}
+
+function buildToolResultMessage(
+  toolCallId: string,
+  toolName = "noop",
+  text = "ok",
+): Extract<Message, { role: "toolResult" }> {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp: Date.now(),
+  };
+}
+
+async function runToolOnlyTurn(params: {
+  apiKey: string;
+  cacheRetention: "none" | "short" | "long";
+  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
+  providerTag: "anthropic" | "openai";
+  sessionId: string;
+  systemPrompt: string;
+  tool: Tool;
+}) {
+  const complete = (prompt: string, label: string) =>
+    completeSimpleWithLiveTimeout(
+      params.model,
+      {
+        systemPrompt: params.systemPrompt,
+        messages: createSingleUserPromptMessage(prompt),
+        tools: [params.tool],
+      },
+      {
+        apiKey: params.apiKey,
+        cacheRetention: params.cacheRetention,
+        sessionId: params.sessionId,
+        maxTokens: 128,
+        temperature: 0,
+        ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
+      },
+      label,
+      params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+    );
+
+  let prompt = `Call the tool \`${params.tool.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
+  let response = await complete(prompt, `${params.providerTag} tool-only turn`);
+
+  let toolCall = extractFirstToolCall(response);
+  let text = extractEmbeddedAssistantText(response);
+  for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
+    prompt = `Return only a tool call for \`${params.tool.name}\` with {}. No text.`;
+    response = await complete(prompt, `${params.providerTag} tool-only retry ${attempt + 1}`);
+    toolCall = extractFirstToolCall(response);
+    text = extractEmbeddedAssistantText(response);
+  }
+
+  expect(text.length).toBe(0);
+  if (!toolCall || toolCall.type !== "toolCall") {
+    throw new Error("expected tool call");
+  }
+  expect(toolCall.name).toBe(params.tool.name);
+
+  return {
+    prompt,
+    response,
+    toolCall,
+  };
+}
+
+type DirectCacheProbeParams = LiveResolvedModel & {
+  providerTag: "anthropic" | "openai";
+  cacheRetention: "none" | "short" | "long";
+  sessionId: string;
+  suffix: string;
+};
+
+function cacheRunFromResponse(response: AssistantMessage, suffix: string): CacheRun {
+  const text = extractEmbeddedAssistantText(response);
+  expect(text.toLowerCase()).toContain(suffix.toLowerCase());
+  return {
+    suffix,
+    text,
+    usage: response.usage,
+    hitRate: computeCacheHitRate(response.usage),
+  };
+}
+
+async function runToolCacheProbe(params: DirectCacheProbeParams): Promise<CacheRun> {
+  const prefix = params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX;
+  const toolTurn = await runToolOnlyTurn({
+    apiKey: params.apiKey,
+    cacheRetention: params.cacheRetention,
+    model: params.model,
+    providerTag: params.providerTag,
+    sessionId: params.sessionId,
+    systemPrompt: prefix,
+    tool: NOOP_TOOL,
+  });
+  const response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: prefix,
+      messages: [
+        makeUserHistoryTurn(toolTurn.prompt),
+        toolTurn.response,
+        buildToolResultMessage(toolTurn.toolCall.id, NOOP_TOOL.name, "ok"),
+        makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED", params.model),
+        makeUserHistoryTurn("Keep the tool output stable in history."),
+        makeAssistantHistoryTurn("TOOL HISTORY PRESERVED", params.model),
+        makeUserHistoryTurn(`Reply with exactly CACHE-OK ${params.suffix}.`),
+      ],
+      tools: [NOOP_TOOL],
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      sessionId: params.sessionId,
+      maxTokens: 64,
+      temperature: 0,
+      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
+    },
+    `${params.providerTag} cache probe ${params.suffix}${params.providerTag === "anthropic" ? ` (${params.cacheRetention})` : ""}`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+  );
+  return cacheRunFromResponse(response, params.suffix);
+}
+
+async function runTextCacheProbe(params: DirectCacheProbeParams): Promise<CacheRun> {
+  const response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX,
+      messages: createSingleUserPromptMessage(`Reply with exactly CACHE-OK ${params.suffix}.`),
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      sessionId: params.sessionId,
+      maxTokens: 32,
+      temperature: 0,
+    },
+    `${params.providerTag} cache probe ${params.suffix}${params.providerTag === "anthropic" ? ` (${params.cacheRetention})` : ""}`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+  );
+  return cacheRunFromResponse(response, params.suffix);
+}
+
+async function runImageCacheProbe(params: DirectCacheProbeParams): Promise<CacheRun> {
+  const response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX,
+      messages: [
+        makeImageUserTurn(
+          "An image is attached. Ignore image semantics but keep the bytes in history.",
+        ),
+        makeAssistantHistoryTurn("IMAGE HISTORY ACKNOWLEDGED", params.model),
+        makeUserHistoryTurn("Keep the earlier image turn stable in context."),
+        makeAssistantHistoryTurn("IMAGE HISTORY PRESERVED", params.model),
+        makeUserHistoryTurn(`Reply with exactly CACHE-OK ${params.suffix}.`),
+      ],
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      sessionId: params.sessionId,
+      maxTokens: 64,
+      temperature: 0,
+      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
+    },
+    `${params.providerTag} image cache probe ${params.suffix}${params.providerTag === "anthropic" ? ` (${params.cacheRetention})` : ""}`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+  );
+  return cacheRunFromResponse(response, params.suffix);
+}
+
+describeCacheLive("embedded agent runner prompt caching (live)", () => {
+  beforeAll(async () => {
+    // Live runs build the real plugin runtime on a shared, often busy host; the
+    // default 120 s publication budget is sized for CI, not for this proof.
+    await import("./prepared-model-runtime.js");
+    (
+      (globalThis as Record<PropertyKey, unknown>)[
+        Symbol.for("openclaw.preparedModelRuntimeTestApi")
+      ] as { setModelRuntimeBuildTimeoutMsForTest(timeoutMs: number): void }
+    ).setModelRuntimeBuildTimeoutMsForTest(10 * 60_000);
+    // Database disposal must use the registered path even when the temporary root is a symlink.
+    const rootDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-")),
+    );
+    // Auth/catalog and transcript state share this database and must agree on its agent owner.
+    const agentDir = path.join(rootDir, "agents", "main", "agent");
+    liveRunnerPaths = {
+      rootDir,
+      agentDir,
+      storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+    };
+    liveCacheTraceFile = path.join(rootDir, "cache-trace.jsonl");
+    liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
+    previousCacheTraceEnv = captureEnv([
+      "OPENCLAW_CACHE_TRACE",
+      "OPENCLAW_PROMPT_CACHE_ASSERT",
+      "OPENCLAW_CACHE_TRACE_FILE",
+      "OPENCLAW_CACHE_TRACE_MESSAGES",
+      "OPENCLAW_CACHE_TRACE_PROMPT",
+      "OPENCLAW_CACHE_TRACE_SYSTEM",
+    ]);
+    setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE", "1");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_FILE", liveCacheTraceFile);
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_MESSAGES", "0");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_PROMPT", "0");
+    setTestEnvValue("OPENCLAW_CACHE_TRACE_SYSTEM", "0");
+  }, 120_000);
+
+  afterAll(async () => {
+    previousCacheTraceEnv?.restore();
+    previousCacheTraceEnv = undefined;
+    liveCacheTraceFile = undefined;
+    if (liveRunnerPaths) {
+      await disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);
+      await fs.rm(liveRunnerPaths.rootDir, { recursive: true, force: true });
+    }
+    liveRunnerPaths = undefined;
+  });
+
+  describe("openai", () => {
+    let fixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
+
+    beforeAll(async () => {
+      fixture = await resolveLiveCacheModel("openai");
+      logLiveCache(`openai model=${fixture.model.provider}/${fixture.model.id}`);
+    }, 120_000);
+
+    it(
+      "hits the expected OpenAI cache plateau on repeated stable prefixes",
+      async () => {
+        const warmup = await runTextCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: OPENAI_SESSION_ID,
+          suffix: "warmup",
+        });
+        logLiveCache(
+          `openai warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const hitRuns = [
+          await runTextCacheProbe({
+            providerTag: "openai",
+            cacheRetention: "short",
+            ...fixture,
+            sessionId: OPENAI_SESSION_ID,
+            suffix: "hit-a",
+          }),
+          await runTextCacheProbe({
+            providerTag: "openai",
+            cacheRetention: "short",
+            ...fixture,
+            sessionId: OPENAI_SESSION_ID,
+            suffix: "hit-b",
+          }),
+        ];
+
+        const bestHit = hitRuns.reduce((best, candidate) =>
+          (candidate.usage.cacheRead ?? 0) > (best.usage.cacheRead ?? 0) ? candidate : best,
+        );
+        logLiveCache(
+          `openai stable-prefix plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(
+          OPENAI_STABLE_PREFIX_MIN_CACHE_READ,
+        );
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_STABLE_PREFIX_MIN_HIT_RATE);
+      },
+      6 * 60_000,
+    );
+
+    it(
+      "keeps the expected OpenAI cache plateau across tool-call followup turns",
+      async () => {
+        const warmup = await runToolCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-tool`,
+          suffix: "tool-warmup",
+        });
+        logLiveCache(
+          `openai tool warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const hitA = await runToolCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-tool`,
+          suffix: "tool-hit-a",
+        });
+        const hitB = await runToolCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-tool`,
+          suffix: "tool-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai tool plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_TOOL_MIN_CACHE_READ);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_TOOL_MIN_HIT_RATE);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "keeps the expected OpenAI cache plateau across image-heavy followup turns",
+      async () => {
+        const warmup = await runImageCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-image`,
+          suffix: "image-warmup",
+        });
+        logLiveCache(
+          `openai image warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const hitA = await runImageCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-image`,
+          suffix: "image-hit-a",
+        });
+        const hitB = await runImageCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-image`,
+          suffix: "image-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai image plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_IMAGE_MIN_CACHE_READ);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_IMAGE_MIN_HIT_RATE);
+      },
+      6 * 60_000,
+    );
+
+    it(
+      "passes the release prompt-prefix gate across instruction refresh, hooks and reopen",
+      () => runReleasePrefixScenario(fixture, "openai"),
+      8 * 60_000,
+    );
+
+    it(
+      "keeps high cache-read rates when the same embedded session flips from websocket to sse",
+      async () => {
+        const sessionId = `${OPENAI_SESSION_ID}-transport-flip`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "ws-warmup",
+          transport: "websocket",
+        });
+        logLiveCache(
+          `openai transport warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "sse-hit-a",
+          transport: "sse",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "sse-hit-b",
+          transport: "sse",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai transport-flip best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "keeps OpenAI cache reuse across a large embedded prompt",
+      async () => {
+        const sessionId = `${OPENAI_SESSION_ID}-large`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "large-warmup",
+          promptSections: LARGE_CACHE_PROMPT_SECTIONS,
+        });
+        const hit = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "large-hit",
+          promptSections: LARGE_CACHE_PROMPT_SECTIONS,
+        });
+        logLiveCache(
+          `openai large prompt sections=${LARGE_CACHE_PROMPT_SECTIONS} warmup=${warmup.usage.cacheWrite} hit=${hit.usage.cacheRead} input=${hit.usage.input} rate=${hit.hitRate.toFixed(3)}`,
+        );
+
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+        expect(hit.usage.cacheRead ?? 0).toBeGreaterThan(4_096);
+        expect(hit.hitRate).toBeGreaterThanOrEqual(0.4);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      12 * 60_000,
+    );
+
+    it(
+      "keeps OpenAI cache reuse when structured system context only changes by whitespace and line endings",
+      async () => {
+        const sessionId = `${OPENAI_SESSION_ID}-structured-normalization`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-warmup",
+        });
+        logLiveCache(
+          `openai structured warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const noisyPrefix = buildNoisyStructuredPromptVariant(OPENAI_PREFIX);
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai structured best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
+    );
+  });
+
+  describe("anthropic", () => {
+    let fixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
+
+    beforeAll(async () => {
+      fixture = await resolveLiveCacheModel("anthropic");
+      logLiveCache(`anthropic model=${fixture.model.provider}/${fixture.model.id}`);
+    }, 120_000);
+
+    it(
+      "writes cache on warmup and reads it back on repeated stable prefixes",
+      async () => {
+        const warmup = await runTextCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: ANTHROPIC_SESSION_ID,
+          suffix: "warmup",
+          cacheRetention: "short",
+        });
+        logLiveCache(
+          `anthropic warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const hitRuns = [
+          await runTextCacheProbe({
+            providerTag: "anthropic",
+            ...fixture,
+            sessionId: ANTHROPIC_SESSION_ID,
+            suffix: "hit-a",
+            cacheRetention: "short",
+          }),
+          await runTextCacheProbe({
+            providerTag: "anthropic",
+            ...fixture,
+            sessionId: ANTHROPIC_SESSION_ID,
+            suffix: "hit-b",
+            cacheRetention: "short",
+          }),
+        ];
+
+        const bestHit = hitRuns.reduce((best, candidate) =>
+          (candidate.usage.cacheRead ?? 0) > (best.usage.cacheRead ?? 0) ? candidate : best,
+        );
+        logLiveCache(
+          `anthropic best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+      },
+      6 * 60_000,
+    );
+
+    it(
+      "keeps high cache-read rates across tool-call followup turns",
+      async () => {
+        const warmup = await runToolCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
+          suffix: "tool-warmup",
+          cacheRetention: "short",
+        });
+        logLiveCache(
+          `anthropic tool warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const hitA = await runToolCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
+          suffix: "tool-hit-a",
+          cacheRetention: "short",
+        });
+        const hitB = await runToolCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
+          suffix: "tool-hit-b",
+          cacheRetention: "short",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic tool best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "keeps high cache-read rates across image-heavy followup turns",
+      async () => {
+        const warmup = await runImageCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-image`,
+          suffix: "image-warmup",
+          cacheRetention: "short",
+        });
+        logLiveCache(
+          `anthropic image warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const hitA = await runImageCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-image`,
+          suffix: "image-hit-a",
+          cacheRetention: "short",
+        });
+        const hitB = await runImageCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-image`,
+          suffix: "image-hit-b",
+          cacheRetention: "short",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic image best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.6);
+      },
+      6 * 60_000,
+    );
+
+    it(
+      "does not report meaningful cache activity when retention is disabled",
+      async () => {
+        const disabled = await runTextCacheProbe({
+          providerTag: "anthropic",
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-disabled`,
+          suffix: "no-cache",
+          cacheRetention: "none",
+        });
+        logLiveCache(
+          `anthropic none cacheWrite=${disabled.usage.cacheWrite} cacheRead=${disabled.usage.cacheRead} input=${disabled.usage.input}`,
+        );
+
+        expect(disabled.usage.cacheRead ?? 0).toBeLessThanOrEqual(32);
+        expect(disabled.usage.cacheWrite ?? 0).toBeLessThanOrEqual(32);
+      },
+      3 * 60_000,
+    );
+
+    it(
+      "passes the release prompt-prefix gate across instruction refresh, hooks and reopen",
+      () => runReleasePrefixScenario(fixture, "anthropic"),
+      8 * 60_000,
+    );
+
+    it(
+      "keeps the cached prefix when workspace instructions change between embedded turns",
+      async ({ skip }) => {
+        if (!supportsClaudeInHistorySystemMessages(fixture.model)) {
+          skip();
+        }
+        const sessionId = `${ANTHROPIC_SESSION_ID}-system-update`;
+        const { workspaceDir } = buildRunnerSessionPaths(sessionId);
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const instructionsFile = path.join(workspaceDir, "AGENTS.md");
+        const payloadFile = path.join(workspaceDir, "anthropic-payload.jsonl");
+        const stableInstructions = buildStableCachePrefix("anthropic-system-update", 96);
+        const originalRule = "Workspace cache probe revision: initial.";
+        const updatedRule = "Workspace cache probe revision: updated.";
+        await fs.writeFile(
+          instructionsFile,
+          `${stableInstructions}\n\n## Cache probe rule\n${originalRule}\n`,
+        );
+
+        await withEnvAsync(
+          {
+            OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1",
+            OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE: payloadFile,
+          },
+          async () => {
+            const probe = {
+              ...fixture,
+              cacheRetention: "short" as const,
+              prefix: ANTHROPIC_PREFIX,
+              providerTag: "anthropic" as const,
+              sessionId,
+            };
+            const warmup = await runEmbeddedCacheProbe({
+              ...probe,
+              suffix: "system-update-warmup",
+            });
+            await fs.writeFile(
+              instructionsFile,
+              `${stableInstructions}\n\n## Cache probe rule\n${updatedRule}\n`,
+            );
+            const hit = await runEmbeddedCacheProbe({ ...probe, suffix: "system-update-hit" });
+            const cachedPrefixTokens =
+              (warmup.usage.cacheRead ?? 0) + (warmup.usage.cacheWrite ?? 0);
+            logLiveCache(
+              `anthropic system update prefix=${cachedPrefixTokens} hit=${hit.usage.cacheRead} input=${hit.usage.input}`,
+            );
+            expect(cachedPrefixTokens).toBeGreaterThan(4_096);
+            expect(hit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(cachedPrefixTokens);
+
+            type RequestEvent = {
+              stage: string;
+              payload: {
+                system: Array<{ type: string; text: string; cache_control?: unknown }>;
+                messages: Array<{
+                  role: string;
+                  content: string | Array<{ type: string; text?: string }>;
+                  clear_at?: string;
+                }>;
+              };
+            };
+            const requests = (await fs.readFile(payloadFile, "utf8"))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as RequestEvent)
+              .filter((event) => event.stage === "request")
+              .map((event) => event.payload);
+            expect(requests).toHaveLength(2);
+            const firstRequest = expectDefined(requests[0], "warmup request");
+            const secondRequest = expectDefined(requests[1], "follow-up request");
+            const firstPrefix = firstRequest.system.find((block) => block.cache_control)?.text;
+            expect(firstPrefix).toContain(originalRule);
+            expect(secondRequest.system.find((block) => block.cache_control)?.text).toBe(
+              firstPrefix,
+            );
+            expect(secondRequest.system.map((block) => block.text).join("\n")).not.toContain(
+              updatedRule,
+            );
+            const lastUserIndex = secondRequest.messages.findLastIndex(
+              (message) => message.role === "user",
+            );
+            expect(lastUserIndex).toBeGreaterThanOrEqual(0);
+            const operatorMessages = secondRequest.messages.slice(lastUserIndex + 1);
+            expect(operatorMessages.length).toBeGreaterThan(0);
+            expect(operatorMessages.every((message) => message.role === "system")).toBe(true);
+            expect(operatorMessages).toContainEqual({
+              role: "system",
+              content: [
+                {
+                  type: "text",
+                  text: expect.stringContaining(`## Cache probe rule\n${updatedRule}`),
+                },
+              ],
+            });
+            await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+          },
+        );
+      },
+      15 * 60_000,
+    );
+
+    it(
+      "preserves cache-safe shaping across compaction followup turns",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-compaction`;
+        const { workspaceDir } = buildRunnerSessionPaths(sessionId);
+        await fs.mkdir(workspaceDir, { recursive: true });
+        // Extra system context sits after the cache boundary. Workspace context must
+        // make the marked prefix exceed Haiku 4.5's 4,096-token cache minimum.
+        await fs.writeFile(
+          path.join(workspaceDir, "AGENTS.md"),
+          buildStableCachePrefix("anthropic-compaction", 96),
+        );
+        await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "compact-prime-a",
+          promptSections: 96,
+        });
+        await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "compact-prime-b",
+          promptSections: 96,
+        });
+
+        const compacted = await compactLiveCacheSession({
+          ...fixture,
+          cacheRetention: "short",
+          providerTag: "anthropic",
+          sessionId,
+        });
+        logLiveCache(
+          `anthropic compaction ok=${compacted.ok} compacted=${compacted.compacted} reason=${compacted.reason ?? "none"}`,
+        );
+        expect(compacted.ok).toBe(true);
+        expect(compacted.compacted).toBe(true);
+
+        const followup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "compact-hit",
+        });
+        logLiveCache(
+          `anthropic compaction followup cacheWrite=${followup.usage.cacheWrite} cacheRead=${followup.usage.cacheRead} input=${followup.usage.input} rate=${followup.hitRate.toFixed(3)}`,
+        );
+
+        expect(followup.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        // Only previously written prefixes can hit; compacted history must be written again.
+        // Compare the marked stable prefix and policy, not the whole prompt's cache-hit fraction.
+        const cacheEvents = await readCacheTraceEvents(sessionId);
+        const cacheRunIds = ["compact-prime-a", "compact-prime-b", "compact-hit"].map(
+          (suffix) => `${sessionId}-${suffix}-default`,
+        );
+        const cacheSnapshots = cacheRunIds.map(
+          (runId) =>
+            cacheEvents.find((event) => event.stage === "cache:state" && event.runId === runId)
+              ?.options?.snapshot,
+        );
+        const primedCachePolicy = cacheSnapshots[0];
+        expect(primedCachePolicy).toMatchObject({
+          provider: fixture.model.provider,
+          modelId: fixture.model.id,
+          modelApi: "anthropic-messages",
+          cacheRetention: "short",
+          systemPromptDigest: expect.stringMatching(/\S/),
+          toolDigest: expect.stringMatching(/\S/),
+          toolCount: 0,
+        });
+        for (const [index, snapshot] of cacheSnapshots.entries()) {
+          expect(snapshot, `cache:state for ${cacheRunIds[index]}`).toEqual(primedCachePolicy);
+        }
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      10 * 60_000,
+    );
+
+    it(
+      "keeps Anthropic cache reuse when structured system context only changes by whitespace and line endings",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-structured-normalization`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-warmup",
+        });
+        logLiveCache(
+          `anthropic structured warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const noisyPrefix = buildNoisyStructuredPromptVariant(ANTHROPIC_PREFIX);
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic structured best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "keeps Anthropic cache reuse across a large embedded prompt",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-large`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "large-warmup",
+          promptSections: LARGE_CACHE_PROMPT_SECTIONS,
+        });
+        const hit = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "large-hit",
+          promptSections: LARGE_CACHE_PROMPT_SECTIONS,
+        });
+        logLiveCache(
+          `anthropic large prompt sections=${LARGE_CACHE_PROMPT_SECTIONS} warmup=${warmup.usage.cacheWrite} hit=${hit.usage.cacheRead} input=${hit.usage.input} rate=${hit.hitRate.toFixed(3)}`,
+        );
+
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+        expect(hit.usage.cacheRead ?? 0).toBeGreaterThan(4_096);
+        expect(hit.hitRate).toBeGreaterThanOrEqual(0.3);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      12 * 60_000,
+    );
+  });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

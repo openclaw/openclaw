@@ -1,0 +1,580 @@
+import type { FileContents, FileDiffMetadata } from "@pierre/diffs";
+import { parsePatchFiles } from "@pierre/diffs";
+import { preloadDiffHTML, type PreloadDiffOptions } from "@pierre/diffs/ssr";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  collectDiffPayloadLanguageHints,
+  isBaseDiffViewerLanguage,
+  normalizeDiffViewerPayloadLanguages,
+  normalizeSupportedLanguageHint,
+} from "./language-hints.js";
+import type {
+  DiffInput,
+  DiffRenderOptions,
+  DiffRenderTarget,
+  DiffViewerOptions,
+  DiffViewerPayload,
+} from "./types.js";
+
+const DEFAULT_FILE_NAME = "diff.txt";
+const MAX_PATCH_FILE_COUNT = 128;
+const MAX_PATCH_TOTAL_LINES = 120_000;
+const VIEWER_LOADER_DOCUMENT_PATH = "../../assets/viewer.js";
+const LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH = "../../../diffs-language-pack/assets/viewer.js";
+
+export class DiffInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
+function escapeCssString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+function escapeJsonScript(value: unknown): string {
+  return JSON.stringify(value).replaceAll("<", "\\u003c");
+}
+
+function buildDiffTitle(input: DiffInput): string {
+  if (input.title?.trim()) {
+    return input.title.trim();
+  }
+  if (input.kind === "before_after") {
+    return input.path?.trim() || "Text diff";
+  }
+  return "Patch diff";
+}
+
+function resolveDiffTypography(presentation: DiffRenderOptions["presentation"]) {
+  const { fontSize, lineSpacing } = presentation;
+  const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
+  return { fontSize, lineHeight };
+}
+
+function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
+  const fontFamily = escapeCssString(options.presentation.fontFamily);
+  const { fontSize, lineHeight } = resolveDiffTypography(options.presentation);
+  return {
+    theme: {
+      light: "pierre-light",
+      dark: "pierre-dark",
+    },
+    diffStyle: options.presentation.layout,
+    diffIndicators: options.presentation.diffIndicators,
+    disableLineNumbers: !options.presentation.showLineNumbers,
+    expandUnchanged: options.expandUnchanged,
+    themeType: options.presentation.theme,
+    backgroundEnabled: options.presentation.background,
+    overflow: options.presentation.wordWrap ? "wrap" : "scroll",
+    unsafeCSS: `
+      :host {
+        --diffs-font-family: "${fontFamily}", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --diffs-header-font-family: "${fontFamily}", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --diffs-font-size: ${fontSize}px;
+        --diffs-line-height: ${lineHeight}px;
+      }
+
+      [data-diffs-header] {
+        min-height: 64px;
+        padding-inline: 18px 14px;
+      }
+
+      [data-header-content] {
+        gap: 10px;
+      }
+
+      [data-metadata] {
+        gap: 10px;
+      }
+
+      .oc-diff-toolbar {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-inline-start: 6px;
+        flex: 0 0 auto;
+      }
+
+      .oc-diff-toolbar-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        opacity: 0.6;
+        line-height: 0;
+        overflow: visible;
+        transition: opacity 120ms ease;
+        flex: 0 0 auto;
+      }
+
+      .oc-diff-toolbar-button:hover {
+        opacity: 1;
+      }
+
+      .oc-diff-toolbar-button[data-active="true"] {
+        opacity: 0.92;
+      }
+
+      .oc-diff-toolbar-button svg {
+        display: block;
+        width: 16px;
+        height: 16px;
+        min-width: 16px;
+        min-height: 16px;
+        overflow: visible;
+        flex: 0 0 auto;
+        color: inherit;
+        fill: currentColor;
+        pointer-events: none;
+      }
+    `,
+  };
+}
+
+function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions {
+  return {
+    ...options,
+    presentation: {
+      ...options.presentation,
+      fontSize: Math.max(16, options.presentation.fontSize),
+    },
+  };
+}
+
+function buildRenderVariants(options: DiffRenderOptions, target: DiffRenderTarget) {
+  const viewerOptions =
+    target === "viewer" || target === "both" ? buildDiffOptions(options) : undefined;
+  const imageOptions =
+    target === "image" || target === "both"
+      ? buildDiffOptions(buildImageRenderOptions(options))
+      : undefined;
+  const preloadOptions = viewerOptions ?? imageOptions;
+  if (!preloadOptions) {
+    throw new Error(`Unsupported diff render target: ${target}`);
+  }
+  return { viewerOptions, imageOptions, preloadOptions };
+}
+
+function renderDiffCard(payload: DiffViewerPayload, anchorId?: string): string {
+  return `<section class="oc-diff-card"${anchorId ? ` id="${anchorId}"` : ""}>
+    <diffs-container class="oc-diff-host" data-openclaw-diff-host>
+      <template shadowrootmode="open">${payload.prerenderedHTML}</template>
+    </diffs-container>
+    <script type="application/json" data-openclaw-diff-payload>${escapeJsonScript(payload)}</script>
+  </section>`;
+}
+
+type FileDiffStats = ReturnType<typeof computeFileDiffStats>;
+
+type FileNavEntry = {
+  anchorId: string;
+  fileDiff: FileDiffMetadata;
+  stats: FileDiffStats;
+};
+
+// Hunk.additionLines/deletionLines count only +/- lines (not context), so the
+// sums match the built-in per-file header counts rendered by @pierre/diffs.
+function computeFileDiffStats(fileDiff: FileDiffMetadata) {
+  let additions = 0;
+  let deletions = 0;
+  for (const hunk of fileDiff.hunks) {
+    additions += hunk.additionLines;
+    deletions += hunk.deletionLines;
+  }
+  return { additions, deletions };
+}
+
+function renderNavChangeBadge(changeType: FileDiffMetadata["type"]): string {
+  const label =
+    changeType === "new"
+      ? "added"
+      : changeType === "deleted"
+        ? "deleted"
+        : changeType === "rename-pure" || changeType === "rename-changed"
+          ? "renamed"
+          : undefined;
+  return label ? `<span class="oc-diff-nav-badge" data-change="${label}">${label}</span>` : "";
+}
+
+function renderNavStats(stats: FileDiffStats): string {
+  return `<span class="oc-diff-nav-stats"><span class="oc-diff-nav-additions">+${stats.additions}</span><span class="oc-diff-nav-deletions">-${stats.deletions}</span></span>`;
+}
+
+function renderNavEntryName(fileDiff: FileDiffMetadata): string {
+  const renamed = fileDiff.prevName && fileDiff.prevName !== fileDiff.name;
+  return renamed
+    ? `${escapeHtml(fileDiff.prevName ?? "")} &rarr; ${escapeHtml(fileDiff.name)}`
+    : escapeHtml(fileDiff.name);
+}
+
+// Multi-file patches render as stacked cards; this summary card gives per-file
+// stats plus anchor links so long diffs stay navigable without extra JS.
+function renderFileSummaryNav(entries: ReadonlyArray<FileNavEntry>): string {
+  const totals = entries.reduce<FileDiffStats>(
+    (sum, entry) => ({
+      additions: sum.additions + entry.stats.additions,
+      deletions: sum.deletions + entry.stats.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+  const items = entries
+    .map(
+      (entry) =>
+        `<li><a href="#${entry.anchorId}"><code>${renderNavEntryName(entry.fileDiff)}</code></a>${renderNavChangeBadge(entry.fileDiff.type)}${renderNavStats(entry.stats)}</li>`,
+    )
+    .join("\n      ");
+  return `<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files">
+    <p class="oc-diff-nav-summary">${entries.length} changed files${renderNavStats(totals)}</p>
+    <ol class="oc-diff-nav-list">
+      ${items}
+    </ol>
+  </nav>`;
+}
+
+async function renderSection(
+  input: { oldFile: FileContents; newFile: FileContents } | { fileDiff: FileDiffMetadata },
+  { viewerOptions, imageOptions, preloadOptions }: ReturnType<typeof buildRenderVariants>,
+  languagePackAvailable: boolean,
+  anchorId?: string,
+) {
+  const prerenderedHTML = await preloadDiffHTMLWithFallback({ ...input, options: preloadOptions });
+  const payload = await normalizeDiffViewerPayloadLanguages(
+    {
+      prerenderedHTML,
+      ...input,
+      options: preloadOptions,
+      langs: collectDiffPayloadLanguageHints(input),
+    },
+    { languagePackAvailable },
+  );
+  return {
+    ...(viewerOptions
+      ? { viewer: renderDiffCard({ ...payload, options: viewerOptions }, anchorId) }
+      : {}),
+    ...(imageOptions
+      ? { image: renderDiffCard({ ...payload, options: imageOptions }, anchorId) }
+      : {}),
+    usesLanguagePack: payload.langs.some((lang) => !isBaseDiffViewerLanguage(lang)),
+  };
+}
+
+export async function renderDiffDocument(
+  input: DiffInput,
+  options: DiffRenderOptions,
+  target: DiffRenderTarget = "both",
+) {
+  const title = buildDiffTitle(input);
+  let sections: Array<Awaited<ReturnType<typeof renderSection>>>;
+  let leadingHtml: string | undefined;
+  if (input.kind === "before_after") {
+    const languagePackAvailable = options.languagePackAvailable === true;
+    const lang = await normalizeSupportedLanguageHint(input.lang, { languagePackAvailable });
+    const fileName =
+      input.path?.trim() ||
+      (lang && lang !== "text" ? `diff.${lang.replace(/^\.+/, "")}` : DEFAULT_FILE_NAME);
+    const oldFile: FileContents = {
+      name: fileName,
+      contents: input.before,
+      ...(lang ? { lang } : {}),
+    };
+    const newFile: FileContents = {
+      name: fileName,
+      contents: input.after,
+      ...(lang ? { lang } : {}),
+    };
+    const section = await renderSection(
+      { oldFile, newFile },
+      buildRenderVariants(options, target),
+      languagePackAvailable,
+    );
+
+    sections = [section];
+  } else {
+    const languagePackAvailable = options.languagePackAvailable === true;
+    const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
+    if (files.length === 0) {
+      throw new DiffInputError("Patch input did not contain any file diffs.");
+    }
+    if (files.length > MAX_PATCH_FILE_COUNT) {
+      throw new DiffInputError(
+        `Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`,
+      );
+    }
+    const totalLines = files.reduce((sum, fileDiff) => {
+      const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
+      const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount)
+        ? fileDiff.unifiedLineCount
+        : 0;
+      return sum + Math.max(splitLines, unifiedLines, 0);
+    }, 0);
+    if (totalLines > MAX_PATCH_TOTAL_LINES) {
+      throw new DiffInputError(
+        `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
+      );
+    }
+
+    const variants = buildRenderVariants(options, target);
+    const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
+      anchorId: `oc-diff-file-${index + 1}`,
+      fileDiff,
+      stats: computeFileDiffStats(fileDiff),
+    }));
+    sections = await Promise.all(
+      files.map((fileDiff, index) =>
+        renderSection({ fileDiff }, variants, languagePackAvailable, navEntries[index]?.anchorId),
+      ),
+    );
+    // Single-file patches skip the summary card; one file needs no navigation.
+    leadingHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
+  }
+  const lead = leadingHtml ? [leadingHtml] : [];
+  const viewerSections = sections.flatMap((section) => (section.viewer ? [section.viewer] : []));
+  const imageSections = sections.flatMap((section) => (section.image ? [section.image] : []));
+  const viewerBodyHtml = viewerSections.length
+    ? [...lead, ...viewerSections].join("\n")
+    : undefined;
+  const imageBodyHtml = imageSections.length ? [...lead, ...imageSections].join("\n") : undefined;
+  const viewerRuntime = sections.some((section) => section.usesLanguagePack)
+    ? "language-pack"
+    : "base";
+  const imageTypography = resolveDiffTypography(buildImageRenderOptions(options).presentation);
+  const document = (bodyHtml: string, runtimeMode: "viewer" | "image") => {
+    const theme = options.presentation.theme;
+    const imageMaxWidth = options.image.maxWidth;
+    const viewerLoaderPath =
+      viewerRuntime === "language-pack"
+        ? LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH
+        : VIEWER_LOADER_DOCUMENT_PATH;
+    const imageTypographyCss =
+      runtimeMode === "image"
+        ? `
+      .oc-frame[data-render-mode="image"] .oc-diff-host {
+        --diffs-font-size: ${imageTypography.fontSize}px;
+        --diffs-line-height: ${imageTypography.lineHeight}px;
+      }
+`
+        : "";
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      html {
+        background: #05070b;
+        scroll-behavior: smooth;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 22px;
+        font-family:
+          "Fira Code",
+          "SF Mono",
+          Monaco,
+          Consolas,
+          monospace;
+        background: #05070b;
+        color: #f8fafc;
+      }
+
+      body[data-theme="light"] {
+        background: #f3f5f8;
+        color: #0f172a;
+      }
+
+      .oc-frame {
+        max-width: 1560px;
+        margin: 0 auto;
+      }
+
+      .oc-frame[data-render-mode="image"] {
+        max-width: ${Math.max(640, Math.round(imageMaxWidth))}px;
+      }
+${imageTypographyCss}
+
+      [data-openclaw-diff-root] {
+        display: grid;
+        gap: 18px;
+      }
+
+      .oc-diff-card {
+        overflow: hidden;
+        border-radius: 18px;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(15, 23, 42, 0.14);
+        box-shadow: 0 18px 48px rgba(2, 6, 23, 0.22);
+      }
+
+      body[data-theme="light"] .oc-diff-card {
+        border-color: rgba(148, 163, 184, 0.22);
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+      }
+
+      .oc-diff-host {
+        display: block;
+      }
+
+      .oc-diff-nav {
+        padding: 14px 18px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .oc-diff-nav-summary {
+        display: flex;
+        align-items: center;
+        margin: 0 0 10px;
+        font-weight: 600;
+      }
+
+      .oc-diff-nav-list {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .oc-diff-nav-list li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .oc-diff-nav-list code {
+        overflow-wrap: anywhere;
+      }
+
+      .oc-diff-nav-list a {
+        color: inherit;
+        text-decoration: none;
+        min-width: 0;
+      }
+
+      .oc-diff-nav-list a:hover {
+        text-decoration: underline;
+      }
+
+      .oc-diff-nav-stats {
+        display: inline-flex;
+        gap: 8px;
+        margin-inline-start: auto;
+        padding-inline-start: 12px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .oc-diff-nav-summary .oc-diff-nav-stats {
+        margin-inline-start: 10px;
+        padding-inline-start: 0;
+      }
+
+      .oc-diff-nav-additions {
+        color: #4ade80;
+      }
+
+      .oc-diff-nav-deletions {
+        color: #f87171;
+      }
+
+      .oc-diff-nav-badge {
+        flex: 0 0 auto;
+        padding: 1px 7px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        font-size: 11px;
+        opacity: 0.85;
+      }
+
+      body[data-theme="light"] .oc-diff-nav-additions {
+        color: #15803d;
+      }
+
+      body[data-theme="light"] .oc-diff-nav-deletions {
+        color: #b91c1c;
+      }
+
+      /* Nav summary cards are short; the diff-card floor would pad them with
+         empty space in static PNG/PDF captures. */
+      .oc-frame[data-render-mode="image"] .oc-diff-card:not(.oc-diff-nav) {
+        min-height: 240px;
+      }
+
+      @media (max-width: 720px) {
+        body {
+          padding: 12px;
+        }
+
+        [data-openclaw-diff-root] {
+          gap: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body data-theme="${theme}">
+    <main class="oc-frame" data-render-mode="${runtimeMode}">
+      <div data-openclaw-diff-root>
+        ${bodyHtml}
+      </div>
+    </main>
+    <script type="module" src="${viewerLoaderPath}"></script>
+  </body>
+</html>`;
+  };
+
+  return {
+    ...(viewerBodyHtml ? { html: document(viewerBodyHtml, "viewer") } : {}),
+    ...(imageBodyHtml ? { imageHtml: document(imageBodyHtml, "image") } : {}),
+    title,
+    fileCount: sections.length,
+    inputKind: input.kind,
+  };
+}
+
+async function preloadDiffHTMLWithFallback(
+  params: PreloadDiffOptions<undefined, undefined>,
+): Promise<string> {
+  try {
+    return await preloadDiffHTML(params);
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message.includes('needs an import attribute of "type: json"')
+    ) {
+      return "";
+    }
+    throw error;
+  }
+}

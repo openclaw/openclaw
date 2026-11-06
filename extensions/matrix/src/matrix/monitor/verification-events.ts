@@ -1,0 +1,503 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  normalizeNullableString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MatrixClient } from "../sdk.js";
+import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
+import { resolveMatrixMonitorAccessState } from "./access-state.js";
+import { setBoundedMap } from "./bounded-cache.js";
+import type { MatrixRawEvent } from "./types.js";
+import { EventType } from "./types.js";
+import {
+  isMatrixVerificationEventType,
+  isMatrixVerificationRequestMsgType,
+  matrixVerificationConstants,
+} from "./verification-utils.js";
+
+const MAX_TRACKED_VERIFICATION_EVENTS = 1024;
+const SAS_NOTICE_RETRY_DELAY_MS = 750;
+const VERIFICATION_EVENT_STARTUP_GRACE_MS = 30_000;
+
+type MatrixVerificationStage = "request" | "ready" | "start" | "cancel" | "done" | "other";
+
+const loadMatrixDirectRoomDeps = createLazyRuntimeModule(() =>
+  Promise.all([import("../direct-management.js"), import("../direct-room.js")]).then(
+    ([directManagementModule, directRoomModule]) => ({
+      inspectMatrixDirectRooms: directManagementModule.inspectMatrixDirectRooms,
+      isStrictDirectRoom: directRoomModule.isStrictDirectRoom,
+    }),
+  ),
+);
+
+function readVerificationSignal(event: MatrixRawEvent): {
+  stage: MatrixVerificationStage;
+  flowId: string | null;
+} | null {
+  const type = normalizeNullableString(event?.type) ?? "";
+  const content = event?.content ?? {};
+  const msgtype = normalizeNullableString((content as { msgtype?: unknown }).msgtype) ?? "";
+  const relatedEventId = normalizeNullableString(
+    (content as { "m.relates_to"?: { event_id?: unknown } })["m.relates_to"]?.event_id,
+  );
+  const transactionId = normalizeNullableString(
+    (content as { transaction_id?: unknown }).transaction_id,
+  );
+  if (type === EventType.RoomMessage && isMatrixVerificationRequestMsgType(msgtype)) {
+    return {
+      stage: "request",
+      flowId: normalizeNullableString(event.event_id) ?? transactionId ?? relatedEventId,
+    };
+  }
+  if (!isMatrixVerificationEventType(type)) {
+    return null;
+  }
+  const flowId = transactionId ?? relatedEventId ?? normalizeNullableString(event.event_id);
+  if (type === `${matrixVerificationConstants.eventPrefix}request`) {
+    return { stage: "request", flowId };
+  }
+  if (type === `${matrixVerificationConstants.eventPrefix}ready`) {
+    return { stage: "ready", flowId };
+  }
+  if (type === "m.key.verification.start") {
+    return { stage: "start", flowId };
+  }
+  if (type === "m.key.verification.cancel") {
+    return { stage: "cancel", flowId };
+  }
+  if (type === "m.key.verification.done") {
+    return { stage: "done", flowId };
+  }
+  return { stage: "other", flowId };
+}
+
+function formatVerificationStageNotice(params: {
+  stage: MatrixVerificationStage;
+  senderId: string;
+  event: MatrixRawEvent;
+}): string | null {
+  const { stage, senderId, event } = params;
+  const content = event.content as { code?: unknown; reason?: unknown };
+  switch (stage) {
+    case "request":
+      return `Matrix verification request received from ${senderId}. Open "Verify by emoji" in your Matrix client to continue.`;
+    case "ready":
+      return `Matrix verification is ready with ${senderId}. Choose "Verify by emoji" to reveal the emoji sequence.`;
+    case "start":
+      return `Matrix verification started with ${senderId}.`;
+    case "done":
+      return `Matrix verification completed with ${senderId}.`;
+    case "cancel": {
+      const code = normalizeNullableString(content.code);
+      const reason = normalizeNullableString(content.reason);
+      if (code && reason) {
+        return `Matrix verification cancelled by ${senderId} (${code}: ${reason}).`;
+      }
+      if (reason) {
+        return `Matrix verification cancelled by ${senderId} (${reason}).`;
+      }
+      return `Matrix verification cancelled by ${senderId}.`;
+    }
+    default:
+      return null;
+  }
+}
+
+function formatVerificationSasNotice(summary: MatrixVerificationSummary): string | null {
+  const sas = summary.sas;
+  if (!sas) {
+    return null;
+  }
+  const emojiLine = sas.emoji?.length
+    ? `SAS emoji: ${sas.emoji
+        .map(
+          ([emoji, name]) =>
+            `${normalizeNullableString(emoji) ?? "?"} ${normalizeNullableString(name) ?? "?"}`,
+        )
+        .join(" | ")}`
+    : null;
+  const decimalLine = sas.decimal ? `SAS decimal: ${sas.decimal.join(" ")}` : null;
+  if (!emojiLine && !decimalLine) {
+    return null;
+  }
+  const lines = [`Matrix verification SAS with ${summary.otherUserId}:`];
+  if (emojiLine) {
+    lines.push(emojiLine);
+  }
+  if (decimalLine) {
+    lines.push(decimalLine);
+  }
+  lines.push("If both sides match, choose 'They match' in your Matrix app.");
+  return lines.join("\n");
+}
+
+function resolveVerificationFlowCandidates(params: {
+  event: MatrixRawEvent;
+  flowId: string | null;
+}): string[] {
+  const { event, flowId } = params;
+  const content = event.content as {
+    transaction_id?: unknown;
+    "m.relates_to"?: { event_id?: unknown };
+  };
+  return normalizeUniqueTrimmedStringList([
+    flowId,
+    event.event_id,
+    content.transaction_id,
+    content["m.relates_to"]?.event_id,
+  ]);
+}
+
+function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolean {
+  if (summary.completed) {
+    return false;
+  }
+  if (summary.phaseName === "cancelled" || summary.phaseName === "done") {
+    return false;
+  }
+  if (summary.phase >= 4) {
+    return false;
+  }
+  return true;
+}
+
+function trackBounded(set: Set<string>, value: string): boolean {
+  if (!value || set.has(value)) {
+    return false;
+  }
+  set.add(value);
+  if (set.size > MAX_TRACKED_VERIFICATION_EVENTS) {
+    const oldest = set.values().next().value;
+    if (oldest !== undefined) {
+      set.delete(oldest);
+    }
+  }
+  return true;
+}
+
+export function createMatrixVerificationEventRouter(params: {
+  client: MatrixClient;
+  allowFrom: string[];
+  dmEnabled: boolean;
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  readStoreAllowFrom: () => Promise<string[]>;
+  logVerboseMessage: (message: string) => void;
+  sasNoticeRetryDelayMs?: number;
+  runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
+}) {
+  const routerStartedAtMs = Date.now();
+  const routedVerificationEvents = new Set<string>();
+  const routedVerificationSasFingerprints = new Set<string>();
+  const routedVerificationStageNotices = new Set<string>();
+  const verificationFlowRooms = new Map<string, string>();
+  const verificationUserRooms = new Map<string, string>();
+
+  async function sendVerificationNotice(rawRoomId: string, body: string): Promise<void> {
+    const roomId = normalizeNullableString(rawRoomId);
+    if (!roomId) {
+      return;
+    }
+    try {
+      await params.client.sendMessage(roomId, {
+        msgtype: "m.notice",
+        body,
+      });
+    } catch (err) {
+      params.logVerboseMessage(
+        `matrix: failed sending verification notice room=${roomId}: ${String(err)}`,
+      );
+    }
+  }
+
+  async function isVerificationNoticeAuthorized(senderId: string): Promise<boolean> {
+    // Verification notices are DM-only. If DM ingress is disabled, there is no
+    // policy-compatible path for posting these notices back into the room.
+    if (!params.dmEnabled || params.dmPolicy === "disabled") {
+      params.logVerboseMessage(
+        `matrix: blocked verification sender ${senderId} (dmPolicy=${params.dmPolicy}, dmEnabled=${String(params.dmEnabled)})`,
+      );
+      return false;
+    }
+    const storeAllowFrom =
+      params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
+        ? await params.readStoreAllowFrom()
+        : [];
+    const accessState = await resolveMatrixMonitorAccessState({
+      allowFrom: params.allowFrom,
+      storeAllowFrom,
+      dmPolicy: params.dmPolicy,
+      // Verification flows only exist in strict DMs, so room/group allowlists do
+      // not participate in the authorization decision here.
+      groupPolicy: "open",
+      groupAllowFrom: [],
+      roomUsers: [],
+      senderId,
+      isRoom: false,
+    });
+    if (accessState.messageIngress.senderAccess.decision === "allow") {
+      return true;
+    }
+    params.logVerboseMessage(
+      `matrix: blocked verification sender ${senderId} (dmPolicy=${params.dmPolicy})`,
+    );
+    return false;
+  }
+
+  async function canRouteVerificationNotice(
+    roomId: string,
+    senderId: string,
+    source: "event" | "summary",
+  ): Promise<boolean> {
+    const { isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
+    if (!(await isStrictDirectRoom({ client: params.client, roomId, remoteUserId: senderId }))) {
+      params.logVerboseMessage(
+        `matrix: ignoring verification ${source} outside strict DM room=${roomId} sender=${senderId}`,
+      );
+      return false;
+    }
+    return await isVerificationNoticeAuthorized(senderId);
+  }
+
+  async function resolveActiveDirectRoomId(remoteUserId: string): Promise<string | null> {
+    const { inspectMatrixDirectRooms } = await loadMatrixDirectRoomDeps();
+    const inspection = await inspectMatrixDirectRooms({
+      client: params.client,
+      remoteUserId,
+    }).catch(() => null);
+    return normalizeNullableString(inspection?.activeRoomId);
+  }
+
+  function shouldEmitVerificationEventNotice(event: MatrixRawEvent): boolean {
+    const eventTs =
+      typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
+        ? event.origin_server_ts
+        : null;
+    if (eventTs === null) {
+      return true;
+    }
+    return eventTs >= routerStartedAtMs - VERIFICATION_EVENT_STARTUP_GRACE_MS;
+  }
+
+  function rememberVerificationRoom(roomId: string, event: MatrixRawEvent, flowId: string | null) {
+    for (const candidate of resolveVerificationFlowCandidates({ event, flowId })) {
+      setBoundedMap(verificationFlowRooms, candidate, roomId, MAX_TRACKED_VERIFICATION_EVENTS);
+    }
+  }
+
+  function rememberVerificationUserRoom(remoteUserId: string, roomId: string): void {
+    const normalizedUserId = normalizeNullableString(remoteUserId);
+    const normalizedRoomId = normalizeNullableString(roomId);
+    if (!normalizedUserId || !normalizedRoomId) {
+      return;
+    }
+    verificationUserRooms.delete(normalizedUserId);
+    setBoundedMap(
+      verificationUserRooms,
+      normalizedUserId,
+      normalizedRoomId,
+      MAX_TRACKED_VERIFICATION_EVENTS,
+    );
+  }
+
+  async function resolveSummaryRoomId(summary: MatrixVerificationSummary): Promise<string | null> {
+    const mappedRoomId =
+      normalizeNullableString(summary.roomId) ??
+      normalizeNullableString(
+        summary.transactionId ? verificationFlowRooms.get(summary.transactionId) : null,
+      ) ??
+      normalizeNullableString(verificationFlowRooms.get(summary.id));
+    if (mappedRoomId) {
+      return mappedRoomId;
+    }
+
+    const remoteUserId = normalizeNullableString(summary.otherUserId);
+    if (!remoteUserId) {
+      return null;
+    }
+    const recentRoomId = normalizeNullableString(verificationUserRooms.get(remoteUserId));
+    const activeRoomId = await resolveActiveDirectRoomId(remoteUserId);
+    if (activeRoomId) {
+      return activeRoomId;
+    }
+    if (
+      recentRoomId &&
+      (await (
+        await loadMatrixDirectRoomDeps()
+      ).isStrictDirectRoom({
+        client: params.client,
+        roomId: recentRoomId,
+        remoteUserId,
+      }))
+    ) {
+      return recentRoomId;
+    }
+    return null;
+  }
+
+  async function routeVerificationSummary(summary: MatrixVerificationSummary): Promise<void> {
+    const roomId = await resolveSummaryRoomId(summary);
+    if (!roomId || !isActiveVerificationSummary(summary)) {
+      return;
+    }
+    if (!(await canRouteVerificationNotice(roomId, summary.otherUserId, "summary"))) {
+      return;
+    }
+    const sasNotice = formatVerificationSasNotice(summary);
+    if (!sasNotice) {
+      return;
+    }
+    const sasFingerprint = `${summary.id}:${JSON.stringify(summary.sas)}`;
+    if (!trackBounded(routedVerificationSasFingerprints, sasFingerprint)) {
+      return;
+    }
+    await sendVerificationNotice(roomId, sasNotice);
+  }
+
+  function routeVerificationEvent(roomId: string, event: MatrixRawEvent): boolean {
+    const senderId = normalizeNullableString(event?.sender);
+    if (!senderId) {
+      return false;
+    }
+    const signal = readVerificationSignal(event);
+    if (!signal) {
+      return false;
+    }
+    rememberVerificationRoom(roomId, event, signal.flowId);
+
+    const routeTask = async () => {
+      if (!shouldEmitVerificationEventNotice(event)) {
+        params.logVerboseMessage(
+          `matrix: ignoring historical verification event room=${roomId} id=${event.event_id ?? "unknown"} type=${event.type ?? "unknown"}`,
+        );
+        return;
+      }
+      const flowId = signal.flowId;
+      const sourceEventId = normalizeNullableString(event?.event_id);
+      const sourceFingerprint = sourceEventId ?? `${senderId}:${event.type}:${flowId ?? "none"}`;
+      if (!(await canRouteVerificationNotice(roomId, senderId, "event"))) {
+        return;
+      }
+      rememberVerificationUserRoom(senderId, roomId);
+      if (!trackBounded(routedVerificationEvents, sourceFingerprint)) {
+        return;
+      }
+
+      const stageNotice = formatVerificationStageNotice({ stage: signal.stage, senderId, event });
+      const { client, sasNoticeRetryDelayMs } = params;
+      const resolveSummary = async (): Promise<MatrixVerificationSummary | null> => {
+        if (!client.crypto) {
+          return null;
+        }
+        await client.crypto
+          .ensureVerificationDmTracked({
+            roomId,
+            userId: senderId,
+          })
+          .catch(() => null);
+        const list = await client.crypto.listVerifications();
+        if (list.length === 0) {
+          return null;
+        }
+        const candidates = resolveVerificationFlowCandidates({
+          event,
+          flowId,
+        });
+        const byTransactionId = list.find((entry) =>
+          candidates.some((candidate) => entry.transactionId === candidate),
+        );
+        if (byTransactionId) {
+          return byTransactionId;
+        }
+
+        // Only fall back by user inside the active DM with that user. Otherwise a
+        // spoofed verification event in an unrelated room can leak the current SAS
+        // prompt into that room.
+        const { inspectMatrixDirectRooms, isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
+        const inspection = await inspectMatrixDirectRooms({
+          client,
+          remoteUserId: senderId,
+        }).catch(() => null);
+        const activeRoomId = normalizeNullableString(inspection?.activeRoomId);
+        if (activeRoomId) {
+          if (activeRoomId !== roomId) {
+            return null;
+          }
+        } else if (
+          !(await isStrictDirectRoom({
+            client,
+            roomId,
+            remoteUserId: senderId,
+          }))
+        ) {
+          // If we cannot determine a canonical active DM, preserve the older
+          // strict-room fallback so transient m.direct or joined-room read failures
+          // do not suppress SAS notices for the current DM.
+          return null;
+        }
+
+        // Fallback for DM flows where transaction IDs do not match room event IDs consistently.
+        // The verification manager already orders summaries newest-first.
+        const activeByUser = list.filter(
+          (entry) => entry.otherUserId === senderId && isActiveVerificationSummary(entry),
+        );
+        return (
+          activeByUser.find((entry) => normalizeNullableString(entry.roomId) === roomId) ??
+          activeByUser[0] ??
+          null
+        );
+      };
+
+      const resolveSasNotice = async (): Promise<{
+        summary: MatrixVerificationSummary | null;
+        sasNotice: string | null;
+      }> => {
+        for (let attempt = 0; ; attempt += 1) {
+          const summary = await resolveSummary();
+          const sasNotice =
+            summary && isActiveVerificationSummary(summary)
+              ? formatVerificationSasNotice(summary)
+              : null;
+          if (sasNotice || attempt > 0 || (signal.stage !== "ready" && signal.stage !== "start")) {
+            return { summary, sasNotice };
+          }
+          await new Promise((resolve) => {
+            setTimeout(resolve, sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
+          });
+        }
+      };
+
+      const { summary, sasNotice } = await resolveSasNotice().catch(() => ({
+        summary: null,
+        sasNotice: null,
+      }));
+
+      const notices: string[] = [];
+      if (stageNotice) {
+        const stageKey = `${roomId}:${senderId}:${flowId ?? sourceFingerprint}:${signal.stage}`;
+        if (trackBounded(routedVerificationStageNotices, stageKey)) {
+          notices.push(stageNotice);
+        }
+      }
+      if (summary && sasNotice) {
+        const sasFingerprint = `${summary.id}:${JSON.stringify(summary.sas)}`;
+        if (trackBounded(routedVerificationSasFingerprints, sasFingerprint)) {
+          notices.push(sasNotice);
+        }
+      }
+      for (const body of notices) {
+        await sendVerificationNotice(roomId, body);
+      }
+    };
+    void params.runDetachedTask(
+      `verification event handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+      routeTask,
+    );
+
+    return true;
+  }
+
+  return {
+    routeVerificationEvent,
+    routeVerificationSummary,
+  };
+}

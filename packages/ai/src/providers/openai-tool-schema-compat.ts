@@ -1,0 +1,155 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { TSchema } from "typebox";
+import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
+import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-depth.js";
+import { normalizeToolSchema } from "./tool-schema-normalization.js";
+
+/** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
+export function normalizeOpenAIStrictCompatSchema(schema: unknown, toolName?: string): TSchema {
+  return normalizeToolSchema(schema, "compat", toolName) as TSchema;
+}
+
+/** Finds nested open dictionaries whose keys compatibility normalization closes. */
+export function findCompatClosedObjectPaths(schema: unknown, path: string): string[] {
+  return collectCompatClosedObjectPaths(truncateToolSchemaDepth(schema), path);
+}
+
+function collectCompatClosedObjectPaths(schema: unknown, path: string, nested = false): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) =>
+      collectCompatClosedObjectPaths(entry, `${path}[${index}]`, true),
+    );
+  }
+  if (!isRecord(schema)) {
+    return [];
+  }
+  const violations =
+    nested &&
+    schema.type === "object" &&
+    !("additionalProperties" in schema) &&
+    (!isRecord(schema.patternProperties) || Object.keys(schema.patternProperties).length === 0) &&
+    (!("properties" in schema) ||
+      (isRecord(schema.properties) && Object.keys(schema.properties).length === 0))
+      ? [path]
+      : [];
+  for (const key of SCHEMA_MAP_KEYS) {
+    const map = schema[key];
+    if (isRecord(map)) {
+      for (const [name, child] of Object.entries(map)) {
+        violations.push(...collectCompatClosedObjectPaths(child, `${path}.${key}.${name}`, true));
+      }
+    }
+  }
+  for (const key of SCHEMA_NESTED_KEYS) {
+    violations.push(...collectCompatClosedObjectPaths(schema[key], `${path}.${key}`, true));
+  }
+  return violations;
+}
+
+/**
+ * Returns whether a regex pattern contains a lookahead or lookbehind group.
+ * Escaped parentheses, character classes, and named groups are not lookarounds.
+ */
+function hasRegexLookaround(pattern: string): boolean {
+  let inCharacterClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "\\") {
+      index += 1;
+    } else if (inCharacterClass) {
+      inCharacterClass = char !== "]";
+    } else if (char === "[") {
+      inCharacterClass = true;
+    } else if (char === "(" && /^\?<?[=!]/.test(pattern.slice(index + 1, index + 4))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Finds schema paths that violate OpenAI strict tool-schema requirements. */
+export function findOpenAIStrictSchemaViolations(
+  schema: unknown,
+  path: string,
+  options?: { requireObjectRoot?: boolean },
+): string[] {
+  const bounded = truncateToolSchemaDepth(schema);
+  return wasToolSchemaTruncated(bounded)
+    ? [`${path}.depth`]
+    : collectStrictSchemaViolations(bounded, path, options);
+}
+
+function collectStrictSchemaViolations(
+  schema: unknown,
+  path: string,
+  options?: { requireObjectRoot?: boolean },
+): string[] {
+  if (Array.isArray(schema)) {
+    if (options?.requireObjectRoot) {
+      return [`${path}.type`];
+    }
+    return schema.flatMap((item, index) =>
+      collectStrictSchemaViolations(item, `${path}[${index}]`),
+    );
+  }
+  if (!schema || typeof schema !== "object") {
+    return options?.requireObjectRoot ? [`${path}.type`] : [];
+  }
+
+  const record = schema as Record<string, unknown>;
+  const violations: string[] = [];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    if (key in record) {
+      violations.push(`${path}.${key}`);
+    }
+  }
+  if (Array.isArray(record.type)) {
+    violations.push(`${path}.type`);
+  }
+  if (typeof record.pattern === "string" && hasRegexLookaround(record.pattern)) {
+    violations.push(`${path}.pattern`);
+  }
+
+  const properties = isRecord(record.properties) ? record.properties : undefined;
+
+  if (record.type === "object") {
+    if (record.additionalProperties !== false) {
+      violations.push(`${path}.additionalProperties`);
+    }
+    const required = Array.isArray(record.required)
+      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    if (!required) {
+      violations.push(`${path}.required`);
+    } else if (properties) {
+      const requiredSet = new Set(required);
+      for (const key of Object.keys(properties)) {
+        if (!requiredSet.has(key)) {
+          violations.push(`${path}.required.${key}`);
+        }
+      }
+    }
+  }
+
+  // Schema maps contain user-chosen names. Walk their values as schemas, but
+  // never interpret map keys such as `$defs.anyOf` as schema keywords.
+  for (const key of SCHEMA_MAP_KEYS) {
+    const schemaMap = record[key];
+    if (!isRecord(schemaMap)) {
+      continue;
+    }
+    for (const [entryKey, value] of Object.entries(schemaMap)) {
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
+    }
+  }
+  // Only recurse through JSON Schema applicators. Annotation payloads such as
+  // examples/default may contain arbitrary objects that are not schemas.
+  for (const key of SCHEMA_NESTED_KEYS) {
+    const value = record[key];
+    if (value && typeof value === "object") {
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}`));
+    }
+  }
+
+  return violations;
+}

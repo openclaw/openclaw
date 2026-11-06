@@ -1,0 +1,82 @@
+import Foundation
+import Testing
+@testable import OpenClaw
+
+@Suite(.serialized)
+@MainActor
+struct VoiceWakeOverlayControllerTests {
+    @Test func `overlay controller lifecycle without UI`() async {
+        let controller = VoiceWakeOverlayController(enableUI: false)
+        let token = controller.startSession(
+            transcript: "hello",
+            attributed: nil,
+            forwardEnabled: true,
+            isFinal: false)
+
+        #expect(controller.snapshot().token == token)
+        #expect(controller.snapshot().isVisible == true)
+
+        controller.updatePartial(token: token, transcript: "hello world")
+        #expect(controller.snapshot().text == "hello world")
+
+        controller.updateLevel(token: token, -0.5)
+        #expect(controller.model.level == 0)
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        controller.updateLevel(token: token, 2.0)
+        #expect(controller.model.level == 1)
+
+        controller.dismiss(token: token, reason: .explicit, outcome: .empty)
+        #expect(controller.snapshot().isVisible == false)
+        #expect(controller.snapshot().token == nil)
+    }
+
+    @Test func `sending a cleared edited transcript dismisses without stale recognition`() throws {
+        let coordinator = VoiceSessionCoordinator.shared
+        let controller = VoiceWakeOverlayController.shared
+        let token = coordinator.startSession(
+            text: "recognized words",
+            forwardEnabled: true)
+        defer { coordinator.dismiss(token: token, reason: .explicit, outcome: .empty) }
+
+        controller.userBeganEditing()
+        controller.updateText("corrected words")
+        try #require(coordinator.snapshot().text == "corrected words")
+
+        controller.updateText(" \n ")
+        controller.requestSend(token: token)
+
+        #expect(coordinator.snapshot().token == nil)
+        #expect(controller.snapshot().token == nil)
+        #expect(!controller.model.isSending)
+    }
+
+    @Test func `evaluate token drops mismatch and no active`() {
+        let active = UUID()
+        #expect(VoiceWakeOverlayController.evaluateToken(active: nil, incoming: active) == .dropNoActive)
+        #expect(VoiceWakeOverlayController.evaluateToken(active: active, incoming: UUID()) == .dropMismatch)
+        #expect(VoiceWakeOverlayController.evaluateToken(active: active, incoming: active) == .accept)
+        #expect(VoiceWakeOverlayController.evaluateToken(active: active, incoming: nil) == .accept)
+    }
+
+    @Test func `update level throttles rapid changes`() async {
+        let controller = VoiceWakeOverlayController(enableUI: false)
+        let token = controller.startSession(
+            transcript: "level test",
+            attributed: nil,
+            forwardEnabled: false,
+            isFinal: false)
+
+        controller.updateLevel(token: token, 0.25)
+        let first = controller.model.level
+
+        controller.updateLevel(token: token, 0.9)
+        #expect(controller.model.level == first)
+
+        controller.updateLevel(token: token, 0)
+        #expect(controller.model.level == 0)
+
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        controller.updateLevel(token: token, 0.9)
+        #expect(controller.model.level == 0.9)
+    }
+}

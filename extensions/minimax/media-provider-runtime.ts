@@ -1,0 +1,120 @@
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  assertOkOrThrowHttpError,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
+  resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+  type postJsonRequest,
+  type ProviderOperationRetryStage,
+  type ProviderOperationTimeoutMs,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const DEFAULT_MINIMAX_MEDIA_BASE_URL = "https://api.minimax.io";
+
+export type MinimaxBaseResp = {
+  status_code?: number;
+  status_msg?: string;
+};
+
+export type MinimaxRequestPolicy = Pick<
+  Parameters<typeof postJsonRequest>[0],
+  "allowPrivateNetwork" | "dispatcherPolicy"
+>;
+
+function resolveMinimaxMediaBaseUrl(
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+  providerId: string,
+): string {
+  const configured = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
+  return new URL(configured ?? DEFAULT_MINIMAX_MEDIA_BASE_URL).origin;
+}
+
+export async function resolveMinimaxMediaRequestConfig(params: {
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"];
+  providerId: string;
+  agentDir?: string;
+  authStore?: Parameters<typeof resolveApiKeyForProvider>[0]["store"];
+  capability: "image" | "audio" | "video";
+  baseUrl?: string;
+}) {
+  return resolveProviderApiKeyHttpRequestConfig({
+    req: params,
+    missingApiKeyMessage: "MiniMax API key missing",
+    jsonContentType: params.capability !== "audio",
+    baseUrl: params.baseUrl ?? resolveMinimaxMediaBaseUrl(params.cfg, params.providerId),
+    defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
+    provider: params.providerId,
+    capability: params.capability,
+    request: sanitizeConfiguredModelProviderRequest(
+      params.cfg?.models?.providers?.[params.providerId]?.request,
+    ),
+  });
+}
+
+export function assertMinimaxBaseResp(value: unknown, context: string): void {
+  const baseResp = asOptionalRecord(value);
+  if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
+    throw new Error(
+      `${context} (${baseResp.status_code}): ${readStringField(baseResp, "status_msg") ?? "unknown error"}`,
+    );
+  }
+}
+
+export function normalizeMinimaxHexAudio(data: string, label: string): string {
+  const normalized = data.trim();
+  if (!/^[0-9a-f]+$/iu.test(normalized) || normalized.length % 2 !== 0) {
+    throw new Error(`${label} returned malformed hex audio`);
+  }
+  return normalized;
+}
+
+function resolveMinimaxGuardedRequestOptions(
+  policy: MinimaxRequestPolicy,
+): Parameters<typeof fetchWithTimeoutGuarded>[4] {
+  return policy.allowPrivateNetwork || policy.dispatcherPolicy
+    ? {
+        ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+        ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
+      }
+    : undefined;
+}
+
+export async function fetchMinimaxResponse(params: {
+  stage: ProviderOperationRetryStage;
+  url: string;
+  init?: RequestInit;
+  timeoutMs?: ProviderOperationTimeoutMs;
+  requestFailedMessage: string;
+  policy: MinimaxRequestPolicy;
+}) {
+  return await executeProviderOperationWithRetry({
+    provider: "minimax",
+    stage: params.stage,
+    operation: async () => {
+      const timeoutMs =
+        typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init ?? {},
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? timeoutMs
+          : undefined,
+        fetch,
+        resolveMinimaxGuardedRequestOptions(params.policy),
+      );
+      try {
+        await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
+      return result;
+    },
+  });
+}

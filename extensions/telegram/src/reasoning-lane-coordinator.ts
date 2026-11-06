@@ -1,0 +1,135 @@
+import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  findCodeRegions,
+  isInsideCode,
+  stripReasoningTagsFromText,
+} from "openclaw/plugin-sdk/text-chunking";
+
+// A durable reasoning message already marked channel-side: 🧠 + italic body
+// (see markReasoningMessage). Detect it so a re-split passes it through
+// unchanged instead of re-marking.
+const REASONING_MESSAGE_RE = /^🧠\s+_/u;
+// Core's formatReasoningMessage prefixes the italic body with a literal
+// "Thinking" header. Telegram renders durable thoughts with the 🧠 marker
+// (Discord parity), so this header must be rewritten channel-side.
+const CORE_THINKING_HEADER_RE = /^Thinking\.{0,3}\s*\n+/u;
+
+// Rewrite core's "Thinking\n\n_body_" into "🧠 _body_": strip the header word
+// and prefix the first italic line with 🧠. Keeps the italic body intact so
+// Telegram HTML renders it as before.
+function markReasoningMessage(formatted: string): string {
+  const withoutHeader = formatted.replace(CORE_THINKING_HEADER_RE, "");
+  return withoutHeader.replace(/^_/u, "🧠 _");
+}
+const REASONING_TAG_PREFIXES = [
+  "think",
+  "thinking",
+  "thought",
+  "internal",
+  "antthinking",
+  "mm:think",
+].flatMap((name) => [`<${name}`, `</${name}`]);
+const THINKING_TAG_RE =
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
+
+function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let lastIndex = 0;
+  let inThinking = false;
+  for (const match of text.matchAll(THINKING_TAG_RE)) {
+    const idx = match.index;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+    if (inThinking) {
+      result += text.slice(lastIndex, idx);
+    }
+    inThinking = match[1] !== "/";
+    lastIndex = idx + match[0].length;
+  }
+  if (inThinking) {
+    result += text.slice(lastIndex);
+  }
+  return result.trim();
+}
+
+function isPartialReasoningTagPrefix(text: string): boolean {
+  const trimmed = text
+    .trim()
+    .replace(/^<\s*(\/?)\s+/u, "<$1")
+    .toLowerCase();
+  return (
+    trimmed.startsWith("<") && REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed))
+  );
+}
+
+type TelegramReasoningSplit =
+  | { reasoningText?: string; answerText?: never }
+  | { reasoningText?: never; answerText: string };
+
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
+  if (typeof text !== "string") {
+    return {};
+  }
+
+  if (isReasoning !== true) {
+    return { answerText: text };
+  }
+
+  const trimmed = text.trim();
+  if (isPartialReasoningTagPrefix(trimmed)) {
+    return {};
+  }
+  if (REASONING_MESSAGE_RE.test(trimmed)) {
+    return { reasoningText: trimmed };
+  }
+  // Durable reasoning payloads arrive pre-formatted by core with the "Thinking"
+  // header; rewrite that to the 🧠 marker rather than passing it through.
+  if (CORE_THINKING_HEADER_RE.test(trimmed)) {
+    return { reasoningText: markReasoningMessage(trimmed) };
+  }
+  const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
+  const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  const reasoningText = taggedReasoning || strippedAnswer;
+  if (!reasoningText) {
+    return {};
+  }
+
+  return {
+    reasoningText: markReasoningMessage(formatReasoningMessage(reasoningText)),
+  };
+}
+
+export function createTelegramReasoningStepState() {
+  let reasoningStatus: "none" | "hinted" | "delivered" = "none";
+  let bufferedFinalAnswer: ReplyPayload | undefined;
+
+  return {
+    noteReasoningHint() {
+      if (reasoningStatus === "none") {
+        reasoningStatus = "hinted";
+      }
+    },
+    noteReasoningDelivered() {
+      reasoningStatus = "delivered";
+    },
+    shouldBufferFinalAnswer: () => reasoningStatus === "hinted" && !bufferedFinalAnswer,
+    bufferFinalAnswer(value: ReplyPayload) {
+      bufferedFinalAnswer = value;
+    },
+    takeBufferedFinalAnswer() {
+      const value = bufferedFinalAnswer;
+      bufferedFinalAnswer = undefined;
+      return value;
+    },
+    resetForNextStep() {
+      reasoningStatus = "none";
+      bufferedFinalAnswer = undefined;
+    },
+  };
+}

@@ -1,0 +1,184 @@
+import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
+import { withProgress } from "../cli/progress.js";
+import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { resolveSystemAgentOperation } from "./dialogue.js";
+import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
+import {
+  executeSystemAgentOperation,
+  isPersistentSystemAgentOperation,
+  parseSystemAgentOperation,
+  type SystemAgentOperation,
+} from "./operations.js";
+import { formatSystemAgentOverview, loadSystemAgentOverview } from "./overview.js";
+import {
+  hasCurrentSystemAgentOwnerPluginArtifacts,
+  type SystemAgentVerifiedInferenceBinding,
+} from "./verified-inference.js";
+
+export type RunSystemAgentOptions = {
+  message?: string;
+  yes?: boolean;
+  json?: boolean;
+  interactive?: boolean;
+  /** "onboarding" swaps the greeting for the first-run setup proposal. */
+  welcomeVariant?: "onboarding";
+  /** Workspace override for the proposed first-run setup (from --workspace). */
+  setupWorkspace?: string;
+  setupAgentName?: string;
+  onReady?: () => void;
+  input?: NodeJS.ReadableStream;
+  output?: NodeJS.WritableStream;
+  /** Exact live-tested route supplied by the inference gate. */
+  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+};
+
+/** User-supplied command options before the inference gate binds the run. */
+export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
+
+async function runOneShot(
+  operation: SystemAgentOperation,
+  runtime: RuntimeEnv,
+  opts: RunSystemAgentOptions,
+): Promise<void> {
+  if (operation.kind === "none" && operation.message === "") {
+    return;
+  }
+  // The planner may take long enough for the verified route to change. Never
+  // apply its result under a different inference owner.
+  await requireSystemAgentInferenceRoute(opts.verifiedInference, "conversation");
+  const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
+  if (approved && isPersistentSystemAgentOperation(operation)) {
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts.verifiedInference, runtime },
+      (failures) => {
+        if (failures[0] instanceof SystemAgentInferenceUnavailableError) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
+  }
+  await executeSystemAgentOperation(operation, runtime, {
+    approved,
+  });
+}
+
+export async function runSystemAgent(
+  opts: RunSystemAgentOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  const binding = opts?.verifiedInference;
+  if (!binding) {
+    throw new SystemAgentInferenceUnavailableError("conversation");
+  }
+  // Hold one immutable authority snapshot for the whole run. A caller that
+  // mutates its input object cannot swap inference owners between planning and apply.
+  const boundOpts: RunSystemAgentOptions = { ...opts, verifiedInference: binding };
+  const run = () => runBoundSystemAgent(boundOpts, runtime);
+  const route = binding.execution;
+  if (route.runner !== "embedded" || route.agentHarnessRuntimeOverride === "openclaw") {
+    return await run();
+  }
+  const { resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
+  const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
+  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
+  const { withPluginRuntimeRegistryScope } =
+    await import("../plugins/runtime/gateway-request-scope.js");
+  await using cache = createPluginCache();
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const registry = await withPluginLifecycleLeaseAsync({}, async (lease) => {
+    const snapshot = await readConfigFileSnapshot();
+    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, snapshot);
+    if (!currentArtifacts) {
+      throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
+    }
+    const config = snapshot.runtimeConfig ?? snapshot.config;
+    const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
+    // Validate and import under the same lifecycle lease. Frozen probe config could
+    // otherwise re-enable a revoked owner or another configured harness during loading.
+    await lease.assertOwned();
+    return withPluginCache(cache, () =>
+      loadAgentRuntimePluginRegistryHandle({
+        basePluginIds: [],
+        config,
+        workspaceDir,
+        selections: [
+          {
+            provider: route.provider,
+            modelId: route.model,
+            runtime: route.agentHarnessRuntimeOverride,
+            agentId: route.agentId,
+          },
+        ],
+      }),
+    );
+  });
+  // Retain the private harness through the conversation, but do not pin metadata
+  // or hold the install lease across chat and its plugin/config mutations.
+  await withPluginRuntimeRegistryScope(registry, run);
+}
+
+async function runBoundSystemAgent(
+  boundOpts: RunSystemAgentOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  await requireSystemAgentInferenceRoute(boundOpts.verifiedInference, "conversation");
+  if (boundOpts.json) {
+    const overview = await loadSystemAgentOverview();
+    writeRuntimeJson(runtime, overview);
+    return;
+  }
+
+  if (boundOpts.message?.trim()) {
+    const parsed = parseSystemAgentOperation(boundOpts.message);
+    if (parsed.kind === "overview") {
+      await runOneShot(parsed, runtime, boundOpts);
+      return;
+    }
+    // Show local context before an assistant interprets fuzzy input. Reuse the
+    // same snapshot for planning so reply-only plans do not print before it.
+    const overview = await withProgress(
+      {
+        label: "Loading OpenClaw overview…",
+        indeterminate: true,
+        delayMs: 0,
+        fallback: "none",
+      },
+      async () => await loadSystemAgentOverview(),
+    );
+    runtime.log(formatSystemAgentOverview(overview));
+    runtime.log("");
+    const operation = await resolveSystemAgentOperation(boundOpts.message, runtime, {
+      ...boundOpts,
+      loadOverview: async () => overview,
+    });
+    await runOneShot(operation, runtime, boundOpts);
+    return;
+  }
+
+  if (boundOpts.interactive === false) {
+    const overview = await loadSystemAgentOverview();
+    runtime.log(formatSystemAgentOverview(overview));
+    return;
+  }
+
+  const input = boundOpts.input ?? defaultStdin;
+  const output = boundOpts.output ?? defaultStdout;
+  const inputIsTty = (input as { isTTY?: boolean }).isTTY === true;
+  const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
+  if (!inputIsTty || !outputIsTty) {
+    // Without a TTY, OpenClaw cannot safely ask for confirmation; require --message instead.
+    runtime.error("OpenClaw needs an interactive TTY. Use --message for one command.");
+    runtime.exit(1);
+    return;
+  }
+
+  const { runSystemAgentTui } = await import("./tui-backend.js");
+  boundOpts.onReady?.();
+  await runSystemAgentTui(boundOpts, runtime);
+}

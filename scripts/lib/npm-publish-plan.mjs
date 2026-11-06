@@ -1,0 +1,606 @@
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseBytes,
+} from "./bounded-response.mjs";
+import { isRecord } from "./record-shared.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./release-version.mjs";
+
+export function parsePublicationCliValues(command, argv) {
+  const values = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
+      throw new Error(`Invalid ${command} argument near ${key ?? "<missing>"}.`);
+    }
+    const name = key.slice(2).replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
+    if (values[name] !== undefined) {
+      throw new Error(`Duplicate ${command} option: ${key}`);
+    }
+    values[name] = value;
+  }
+  return values;
+}
+
+// npm may accept a publish before its exact version becomes readable. Publication
+// callers keep their one-shot probes; only postpublish readback uses this budget.
+export function npmRegistryReadbackDeadline() {
+  const timeoutMs = Number(process.env.OPENCLAW_NPM_READBACK_TIMEOUT_MS ?? 15 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    throw new Error("OPENCLAW_NPM_READBACK_TIMEOUT_MS must be a positive integer <= 2147483647.");
+  }
+  return Date.now() + timeoutMs;
+}
+
+/**
+ * @typedef {object} NpmPublishPlan
+ * @property {"stable" | "beta"} channel
+ * @property {"latest" | "beta" | "extended-stable"} publishTag
+ * @property {("latest" | "beta")[]} mirrorDistTags
+ */
+
+/**
+ * @typedef {"npm-readback" | "npm-mirror" | "npm-tag-repair"} PublishedNpmVersionRoute
+ */
+
+/**
+ * @typedef {"match" | "missing" | "lagging" | "ahead" | "incomparable" | "conflict"} NpmDistTagVersionState
+ */
+
+/**
+ * @typedef {object} NpmDistTagMirrorAuth
+ * @property {boolean} hasAuth
+ * @property {"node-auth-token" | "npm-token" | "none"} source
+ */
+
+/**
+ * @typedef {"--dry-run" | "--publish"} NpmPublishMode
+ */
+
+/**
+ * @typedef {object} NpmRegistryPackumentResult
+ * @property {number} status
+ * @property {boolean} ok
+ * @property {unknown} packument
+ */
+
+/**
+ * @param {Response} response
+ * @returns {Promise<void>}
+ */
+async function cancelNpmRegistryResponseBody(response) {
+  await response.body?.cancel().catch(() => undefined);
+}
+
+/**
+ * @typedef {{
+ *   packageName: string;
+ *   packageUrl: string;
+ *   attempts?: number;
+ *   timeoutMs?: number;
+ *   deadlineMs?: number;
+ *   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
+ *   sleep?: (delayMs: number) => Promise<void>;
+ *   createSignal?: (timeoutMs: number) => AbortSignal;
+ *   signal?: AbortSignal;
+ * }} NpmRegistryReadOptions
+ */
+
+export class NpmRegistryUnavailableError extends Error {}
+
+class RetryableNpmRegistryError extends Error {
+  constructor(message, retryAfterMs = 0) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function boundedReadLimit(value, fallback, maximum, label) {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result <= 0 || result > maximum) {
+    throw new Error(`Invalid npm ${label}.`);
+  }
+  return result;
+}
+
+function retryAfterMilliseconds(response) {
+  const value = response.headers?.get("retry-after")?.trim();
+  if (!value) {
+    return 0;
+  }
+  if (/^[0-9]+$/u.test(value)) {
+    return Number(value) * 1000;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
+}
+
+/**
+ * Both headers and body belong to one attempt. Successful byte/identity
+ * comparisons stay with callers and never enter this transport retry loop.
+ * @template T
+ * @param {NpmRegistryReadOptions} params
+ * @param {{ label: string; headers?: Record<string, string>; redirect?: RequestRedirect;
+ *   read: (response: Response, signal: AbortSignal) => Promise<T> }} reader
+ * @returns {Promise<{ status: number; ok: boolean; body: T | null }>}
+ */
+async function fetchNpmRegistryWithRetry(params, reader) {
+  const endpoint = new URL(params.packageUrl);
+  const label = `${reader.label} (${endpoint.origin}${endpoint.pathname})`;
+  const attempts = boundedReadLimit(params.attempts, 3, 5, "read attempts");
+  const timeoutMs = boundedReadLimit(params.timeoutMs, 20_000, 60_000, "read timeout");
+  const deadlineMs = Math.min(
+    boundedReadLimit(
+      params.deadlineMs,
+      Date.now() + 180_000,
+      Number.MAX_SAFE_INTEGER,
+      "read deadline",
+    ),
+    Date.now() + 180_000,
+  );
+  const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+  const sleep = params.sleep ?? delay;
+  const createSignal = params.createSignal ?? ((delayMs) => AbortSignal.timeout(delayMs));
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
+    let response;
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      throw new NpmRegistryUnavailableError(
+        `${label} deadline exceeded. Retry readback, not publication.`,
+      );
+    }
+    try {
+      const attemptSignal = createSignal(Math.min(timeoutMs, remainingMs));
+      const signal = params.signal
+        ? AbortSignal.any([params.signal, attemptSignal])
+        : attemptSignal;
+      response = await fetchImpl(params.packageUrl, {
+        headers: reader.headers,
+        redirect: reader.redirect,
+        signal,
+      });
+      if (Date.now() >= deadlineMs) {
+        await cancelNpmRegistryResponseBody(response);
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline exceeded. Retry readback, not publication.`,
+        );
+      }
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        await cancelNpmRegistryResponseBody(response);
+        throw new RetryableNpmRegistryError(
+          `HTTP ${response.status}`,
+          retryAfterMilliseconds(response),
+        );
+      }
+      if (!response.ok) {
+        await cancelNpmRegistryResponseBody(response);
+        return { status: response.status, ok: false, body: null };
+      }
+      const body = await reader.read(response, signal);
+      params.signal?.throwIfAborted();
+      if (Date.now() >= deadlineMs) {
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline exceeded. Retry readback, not publication.`,
+        );
+      }
+      return { status: response.status, ok: true, body };
+    } catch (error) {
+      if (response?.ok) {
+        await cancelNpmRegistryResponseBody(response);
+      }
+      // An owning collection's cancellation is not a transient attempt timeout.
+      params.signal?.throwIfAborted();
+      if (
+        !(error instanceof RetryableNpmRegistryError) &&
+        !["AbortError", "TimeoutError"].includes(error?.name) &&
+        ![
+          "ECONNRESET",
+          "ECONNREFUSED",
+          "EPIPE",
+          "ETIMEDOUT",
+          "EAI_AGAIN",
+          "UND_ERR_SOCKET",
+          "UND_ERR_CONNECT_TIMEOUT",
+          "UND_ERR_HEADERS_TIMEOUT",
+          "UND_ERR_BODY_TIMEOUT",
+        ].some((code) => code === error?.code || code === error?.cause?.code)
+      ) {
+        throw error;
+      }
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      const retryDelayMs = Math.max(attempt * 1000, lastError?.retryAfterMs ?? 0);
+      if (retryDelayMs >= deadlineMs - Date.now()) {
+        throw new NpmRegistryUnavailableError(
+          `${label} deadline would be exceeded before the permitted retry. Retry readback, not publication.`,
+          {
+            cause: lastError,
+          },
+        );
+      }
+      if (params.signal && !params.sleep) {
+        await delay(retryDelayMs, undefined, { signal: params.signal });
+      } else {
+        await sleep(retryDelayMs);
+      }
+      params.signal?.throwIfAborted();
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new NpmRegistryUnavailableError(
+    `${label} did not return a stable response: ${message}. Retry readback, not publication.`,
+    {
+      cause: lastError,
+    },
+  );
+}
+
+/**
+ * @param {NpmRegistryReadOptions & { maxBytes?: number; redirect?: RequestRedirect; exactVersion?: string }} params
+ * @returns {Promise<NpmRegistryPackumentResult>}
+ */
+export async function fetchNpmRegistryPackumentWithRetry(params) {
+  const maxBytes =
+    params.maxBytes === undefined
+      ? undefined
+      : boundedReadLimit(params.maxBytes, undefined, 16 * 1024 * 1024, "packument byte limit");
+  const result = await fetchNpmRegistryWithRetry(params, {
+    label: `${params.packageName}: npm publication-route probe`,
+    headers: { accept: "application/vnd.npm.install-v1+json" },
+    redirect: params.redirect,
+    read: async (response, signal) => {
+      const body =
+        maxBytes === undefined
+          ? await response.text()
+          : (
+              await readBoundedResponseBytes(
+                response,
+                `${params.packageName}: npm packument`,
+                maxBytes,
+                {
+                  signal,
+                  createTooLargeError: createBoundedResponseTooLargeError,
+                },
+              )
+            ).toString("utf8");
+      try {
+        return JSON.parse(body);
+      } catch (error) {
+        // A completed response with invalid content is not registry propagation
+        // or a transport failure; never turn it into deferred publication success.
+        throw new Error(
+          `${params.packageName}: npm publication-route probe returned invalid JSON.`,
+          { cause: error },
+        );
+      }
+    },
+  });
+  if (
+    !params.exactVersion ||
+    !result.ok ||
+    !isRecord(result.body) ||
+    !isRecord(result.body.versions) ||
+    Object.hasOwn(result.body.versions, params.exactVersion)
+  ) {
+    return { status: result.status, ok: result.ok, packument: result.body };
+  }
+
+  if (
+    !/^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/u.test(params.exactVersion) ||
+    params.exactVersion === ".."
+  ) {
+    throw new Error(`${params.packageName}: invalid exact npm version selector.`);
+  }
+  const exactUrl = new URL(params.packageUrl);
+  exactUrl.pathname = `${exactUrl.pathname.replace(/\/$/u, "")}/${params.exactVersion}`;
+  exactUrl.search = "";
+  exactUrl.hash = "";
+  const exact = await fetchNpmRegistryWithRetry(
+    { ...params, packageUrl: exactUrl.href },
+    {
+      label: `${params.packageName}@${params.exactVersion}: exact npm version probe`,
+      headers: { accept: "application/json" },
+      redirect: params.redirect,
+      read: async (response, signal) => {
+        const body = (
+          await readBoundedResponseBytes(
+            response,
+            `${params.packageName}@${params.exactVersion}: exact npm version`,
+            maxBytes ?? 1024 * 1024,
+            {
+              signal,
+              createTooLargeError: createBoundedResponseTooLargeError,
+            },
+          )
+        ).toString("utf8");
+        try {
+          return JSON.parse(body);
+        } catch (error) {
+          throw new Error(
+            `${params.packageName}@${params.exactVersion}: exact npm version probe returned invalid JSON.`,
+            { cause: error },
+          );
+        }
+      },
+    },
+  );
+  if (exact.status === 404) {
+    return { status: result.status, ok: result.ok, packument: result.body };
+  }
+  if (
+    !exact.ok ||
+    !isRecord(exact.body) ||
+    exact.body.name !== params.packageName ||
+    exact.body.version !== params.exactVersion
+  ) {
+    throw new Error(
+      `${params.packageName}@${params.exactVersion}: exact npm version probe returned HTTP ${exact.status} or mismatched package metadata.`,
+    );
+  }
+  return {
+    status: result.status,
+    ok: result.ok,
+    packument: {
+      ...result.body,
+      versions: { ...result.body.versions, [params.exactVersion]: exact.body },
+    },
+  };
+}
+
+/** @param {NpmRegistryReadOptions & { maxBytes: number }} params */
+export async function fetchNpmRegistryTarballWithRetry(params) {
+  const maxBytes = boundedReadLimit(
+    params.maxBytes,
+    undefined,
+    256 * 1024 * 1024,
+    "tarball byte limit",
+  );
+  const label = `${params.packageName}: npm tarball readback`;
+  const result = await fetchNpmRegistryWithRetry(
+    { ...params, timeoutMs: params.timeoutMs ?? 60_000 },
+    {
+      label,
+      // Redirects cannot change the registry owner selected by the verified packument.
+      redirect: "manual",
+      read: (response, signal) =>
+        readBoundedResponseBytes(response, label, maxBytes, {
+          signal,
+          createTooLargeError: createBoundedResponseTooLargeError,
+        }),
+    },
+  );
+  if (result.status === 404) {
+    throw new NpmRegistryUnavailableError(`${label} returned HTTP 404.`);
+  }
+  if (!result.ok || result.body === null) {
+    throw new Error(`${label} returned HTTP ${result.status}.`);
+  }
+  return result.body;
+}
+
+/**
+ * @param {string} version
+ * @param {string | null} [currentBetaVersion]
+ * @param {string | null} [publishTagOverride]
+ * @returns {NpmPublishPlan}
+ */
+export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOverride) {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+  if (parsedVersion.channel === "alpha" || publishTagOverride?.trim() === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const releaseTrain = classifyReleaseTrain(parsedVersion);
+
+  const normalizedOverride = publishTagOverride?.trim();
+  if (normalizedOverride && normalizedOverride !== "extended-stable") {
+    throw new Error(
+      `Unsupported npm publish tag override "${normalizedOverride}". Expected "extended-stable".`,
+    );
+  }
+  if (normalizedOverride === "extended-stable") {
+    if (releaseTrain !== "extended-stable") {
+      throw new Error(
+        `Extended-stable npm publication requires a final YYYY.M.PATCH version with PATCH >= 33; found "${version}".`,
+      );
+    }
+    return {
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    };
+  }
+
+  if (parsedVersion.channel === "beta") {
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  const normalizedCurrentBeta = currentBetaVersion?.trim();
+  if (normalizedCurrentBeta) {
+    const betaVsStable = compareReleaseVersions(normalizedCurrentBeta, version);
+    if (betaVsStable !== null && betaVsStable > 0) {
+      return {
+        channel: "stable",
+        publishTag: "latest",
+        mirrorDistTags: [],
+      };
+    }
+  }
+
+  return {
+    channel: "stable",
+    publishTag: "latest",
+    mirrorDistTags: ["beta"],
+  };
+}
+
+/**
+ * @typedef {object} NpmVersionPublicationDecision
+ * @property {PublishedNpmVersionRoute | null} route Registry route for a published version; null when publication is still planned.
+ * @property {string | null} supersededBy The newer version the primary dist-tag keeps when the published target is skipped.
+ */
+
+/**
+ * @param {{
+ *   packageVersion: string;
+ *   publishPlan: NpmPublishPlan;
+ *   distTags: Record<string, unknown>;
+ * }} params
+ * @returns {PublishedNpmVersionRoute}
+ */
+export function resolvePublishedNpmVersionRoute(params) {
+  return /** @type {PublishedNpmVersionRoute} */ (
+    resolveNpmVersionPublicationDecision({ ...params, published: true }).route
+  );
+}
+
+/**
+ * A published target whose primary dist-tag already points past it was
+ * superseded by a later release: nothing is published and no selector moves.
+ * An unpublished target behind an ahead selector would publish inconsistently.
+ * @param {{
+ *   packageVersion: string;
+ *   publishPlan: NpmPublishPlan;
+ *   distTags: Record<string, unknown>;
+ *   published: boolean;
+ * }} params
+ * @returns {NpmVersionPublicationDecision}
+ */
+export function resolveNpmVersionPublicationDecision(params) {
+  const primaryVersion = params.distTags[params.publishPlan.publishTag];
+  const primaryState = classifyNpmDistTagVersion(primaryVersion, params.packageVersion);
+  if (primaryState === "ahead" && params.published) {
+    return { route: "npm-readback", supersededBy: /** @type {string} */ (primaryVersion) };
+  }
+  if (!params.published) {
+    // Placeholder selectors (0.0.0) are expected before a first real publication.
+    if (primaryState === "ahead") {
+      throwUnsafeNpmDistTag(
+        params.publishPlan.publishTag,
+        primaryVersion,
+        params.packageVersion,
+        primaryState,
+      );
+    }
+    return { route: null, supersededBy: null };
+  }
+  const needsPrimaryRepair = primaryState === "missing" || primaryState === "lagging";
+  if (!needsPrimaryRepair && primaryState !== "match") {
+    throwUnsafeNpmDistTag(
+      params.publishPlan.publishTag,
+      primaryVersion,
+      params.packageVersion,
+      primaryState,
+    );
+  }
+
+  let needsMirrorRepair = false;
+  for (const distTag of params.publishPlan.mirrorDistTags) {
+    const mirrorState = classifyNpmDistTagVersion(params.distTags[distTag], params.packageVersion);
+    if (mirrorState === "missing" || mirrorState === "lagging") {
+      needsMirrorRepair = true;
+      continue;
+    }
+    if (mirrorState !== "match") {
+      throwUnsafeNpmDistTag(distTag, params.distTags[distTag], params.packageVersion, mirrorState);
+    }
+  }
+  if (needsPrimaryRepair) {
+    return { route: "npm-tag-repair", supersededBy: null };
+  }
+  return { route: needsMirrorRepair ? "npm-mirror" : "npm-readback", supersededBy: null };
+}
+
+/**
+ * @param {unknown} currentVersion
+ * @param {string} targetVersion
+ * @returns {NpmDistTagVersionState}
+ */
+export function classifyNpmDistTagVersion(currentVersion, targetVersion) {
+  if (currentVersion === undefined) {
+    return "missing";
+  }
+  if (typeof currentVersion !== "string") {
+    return "incomparable";
+  }
+  if (currentVersion === targetVersion) {
+    return "match";
+  }
+  const comparison = compareReleaseVersions(currentVersion, targetVersion);
+  if (comparison === null) {
+    return "incomparable";
+  }
+  if (comparison < 0) {
+    return "lagging";
+  }
+  if (comparison > 0) {
+    return "ahead";
+  }
+  return "conflict";
+}
+
+/**
+ * @param {string} distTag
+ * @param {unknown} currentVersion
+ * @param {string} targetVersion
+ * @param {NpmDistTagVersionState} state
+ * @returns {never}
+ */
+function throwUnsafeNpmDistTag(distTag, currentVersion, targetVersion, state) {
+  throw new Error(
+    `npm dist-tag "${distTag}" points to ${JSON.stringify(currentVersion)} and cannot be safely moved to "${targetVersion}" (${state}).`,
+  );
+}
+
+/**
+ * @param {{
+ *   nodeAuthToken?: string | null | undefined;
+ *   npmToken?: string | null | undefined;
+ * }} [params]
+ * @returns {NpmDistTagMirrorAuth}
+ */
+export function resolveNpmDistTagMirrorAuth(params = {}) {
+  const nodeAuthToken = params.nodeAuthToken?.trim();
+  if (nodeAuthToken) {
+    return { hasAuth: true, source: "node-auth-token" };
+  }
+
+  const npmToken = params.npmToken?.trim();
+  if (npmToken) {
+    return { hasAuth: true, source: "npm-token" };
+  }
+
+  return { hasAuth: false, source: "none" };
+}
+
+/**
+ * @param {{
+ *   mode: NpmPublishMode;
+ *   mirrorDistTags: string[] | readonly string[];
+ *   hasAuth: boolean;
+ * }} params
+ * @returns {boolean}
+ */
+export function shouldRequireNpmDistTagMirrorAuth(params) {
+  return (
+    params.mode === "--publish" &&
+    params.mirrorDistTags.some((distTag) => distTag.trim().length > 0) &&
+    !params.hasAuth
+  );
+}

@@ -1,0 +1,217 @@
+---
+summary: "Start local model servers on demand before OpenClaw model and embedding requests"
+read_when:
+  - You want OpenClaw to start a local model server only when its model or embedding provider is selected
+  - You run ds4, llmman, vLLM, llama.cpp, MLX, or another OpenAI-compatible local server
+  - You need to control cold start, readiness, and idle shutdown for local providers
+title: "Local model services"
+---
+
+`models.providers.<id>.localService` starts a provider-owned local model server on demand. When a model or embedding request selects that provider, OpenClaw checks the health endpoint, starts the process if it is down, waits for readiness, then sends the request. Use it to avoid keeping expensive local servers running all day.
+
+## How it works
+
+1. A model or embedding request resolves to a configured provider.
+2. If that provider has `localService`, OpenClaw checks `healthUrl`.
+3. On a successful check, OpenClaw uses the already-running server.
+4. On a failed check, OpenClaw spawns `command` with `args`.
+5. OpenClaw polls the health endpoint until `readyTimeoutMs` expires.
+6. The request goes through the normal model or embedding transport.
+7. If OpenClaw started the process and `idleStopMs` is set, it stops the process after the last in-flight request has been idle that long.
+
+OpenClaw does not install launchd, systemd, Docker, or any daemon for this. The server is a plain child process of whichever OpenClaw process first needed it.
+
+Startup is serialized per configured provider and command/argument/env set, so concurrent chat and embedding requests for the same service do not spawn duplicate servers. Each request holds its own lease until response handling completes, so idle shutdown waits for every in-flight model and embedding request. Configured provider aliases remain distinct: two aliases can point at different GPU hosts without collapsing onto the same Ollama, LM Studio, or OpenAI-compatible adapter id.
+
+OpenClaw waits for any idle shutdown already in progress when it closes local services. A new request for the same service waits for that stop before acquiring a replacement. Shutdown errors remain visible; subsequent requests recheck the owned process before starting a replacement.
+
+Shutdown completion requires the child and its output streams to close and pending tree-termination operations to finish. A missing PID alone does not release the service for replacement.
+
+Final exit observation starts after bounded tree-termination helpers finish. On Windows, this lets `taskkill` complete without reporting an already-closed service as a shutdown failure.
+
+If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include timing and exit details.
+
+For a child it started, OpenClaw retains the most recent 8 KiB of raw stderr in memory and exposes up to 64 recent lines with the owning request's failure. Diagnostic output is redacted before it leaves the owner, including configured environment and request credential values. This captures lazy model-load failures that occur after readiness. The output pipes remain unreferenced so they do not keep a one-shot CLI host alive.
+
+Embedding failures also reach the existing Gateway memory diagnostics and `memory status --deep`. A separate process reusing a healthy server cannot read its owner's in-memory tail. Chat HTTP failures include the tail for bounded OpenAI-compatible JSON errors; existing SDK message limits still apply. Successful responses and service exit logs do not emit the tail.
+
+For its pinned managed installation, llama.cpp checks for orphaned servers before
+the first local-service request in a new host process. On native Apple silicon
+macOS, it reclaims a launchd-adopted router only when the native executable
+is exactly this state directory's managed binary and its explicit host, port,
+and preset arguments match; relative presets also require the configured working
+directory. It captures matching descendants, sends SIGTERM, waits up to five
+seconds, then uses SIGKILL if needed. Process birth and executable identities are
+rechecked before each signal. Live parents, custom binaries, other state
+directories, configurations without unique explicit host/port/preset arguments,
+and different ports or presets are left alone. A new managed child
+then starts normally, including after a previous Gateway died from SIGHUP,
+SIGKILL, or a crash. This does not change inherited `nohup` signal handling.
+
+Update the host and plugin together to enable recovery; older compatible hosts
+without the recovery capability keep their existing reuse behavior.
+Hosts without native process identity support, Linux, and Windows retain
+the existing reuse behavior; Linux PID 1 may itself be a live Gateway, so parent
+PID alone cannot identify an orphan. On a supported host, if a matching orphan cannot be safely identified,
+startup reports its PID and asks you to stop it manually before retrying.
+
+## Managed llama.cpp
+
+The official llama.cpp provider generates this shape automatically. Its guided
+setup installs a pinned, verified `llama-server`, writes an absolute command and
+router preset, selects a free loopback port, and stores the resulting `baseUrl`
+and `localService` config. Chat and local embeddings lease the same managed
+router through the normal OpenAI-compatible transports.
+
+Do not copy a generated command path between machines. Run llama.cpp setup on
+each Gateway host so OpenClaw selects and verifies the matching platform build.
+See [llama.cpp Provider](/plugins/llama-cpp).
+
+## Config shape
+
+```json5
+{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://127.0.0.1:8000/v1",
+        apiKey: "local-model",
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        localService: {
+          command: "/absolute/path/to/server",
+          args: ["--host", "127.0.0.1", "--port", "8000"],
+          cwd: "/absolute/path/to/working-dir",
+          env: { LOCAL_MODEL_CACHE: "/absolute/path/to/cache" },
+          healthUrl: "http://127.0.0.1:8000/v1/models",
+          readyTimeoutMs: 180000,
+          idleStopMs: 0,
+        },
+        models: [
+          {
+            id: "my-local-model",
+            name: "My Local Model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 131072,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Set `timeoutSeconds` on the provider entry (not `localService`) so slow cold starts and long generations do not hit the default model request timeout. Set an explicit `healthUrl` whenever your server exposes readiness somewhere other than `/models` on the base URL.
+
+During `memory_search`, managed embedding startup uses `readyTimeoutMs` instead of the search and query-embedding timeouts. Those timers resume after the service is ready. Embedding requests, retrieval, and result processing keep their existing time limits. Concurrent wiki searches and manager cleanup keep separate limits, and caller cancellation can still stop startup.
+
+## Fields
+
+| Field            | Required | Description                                                                                                                          |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `command`        | yes      | Absolute executable path. No shell PATH lookup.                                                                                      |
+| `args`           | no       | Process arguments. No shell expansion, pipes, globbing, or quoting.                                                                  |
+| `cwd`            | no       | Working directory for the process.                                                                                                   |
+| `env`            | no       | Environment variables merged over the OpenClaw process environment.                                                                  |
+| `healthUrl`      | no       | Readiness URL. Defaults to `baseUrl` with `/models` appended (`http://127.0.0.1:8000/v1` becomes `http://127.0.0.1:8000/v1/models`). |
+| `readyTimeoutMs` | no       | Startup readiness deadline. Default: `120000`.                                                                                       |
+| `idleStopMs`     | no       | Idle shutdown delay for an OpenClaw-started process. `0` or omitted keeps it alive until OpenClaw exits.                             |
+
+## llmman example
+
+llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Off loopback it refuses to start without `LLMMAN_API_KEYS`, so keep the default loopback bind unless you need remote access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "llmman/qwen3.8" },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      llmman: {
+        baseUrl: "http://127.0.0.1:17434/v1",
+        apiKey: "${LLMMAN_API_KEY}",
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        localService: {
+          command: "/opt/homebrew/bin/llmman",
+          args: ["serve"],
+          env: { LLMMAN_CONTEXT_LENGTH: "65536" },
+          healthUrl: "http://127.0.0.1:17434/v1/models",
+          readyTimeoutMs: 180000,
+          idleStopMs: 0,
+        },
+        models: [
+          {
+            id: "qwen3.8",
+            name: "Qwen3.8 (llmman)",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 65536,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Replace `command` with the result of `which llmman` on the machine running OpenClaw, and set `LLMMAN_API_KEY=llmman-local` in `~/.openclaw/.env`. Bare `llmman serve` requires no model argument and loads the model on the first request that names it; an optional model argument preloads it instead. Daemon settings such as `LLMMAN_CONTEXT_LENGTH` go in `env`. Full llmman setup, including hybrid local + hosted routing: [llmman](/providers/llmman).
+
+## ds4 example
+
+```json5
+{
+  models: {
+    providers: {
+      ds4: {
+        baseUrl: "http://127.0.0.1:18000/v1",
+        apiKey: "ds4-local",
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        localService: {
+          command: "<DS4_DIR>/ds4-server",
+          args: [
+            "--model",
+            "<DS4_DIR>/ds4flash.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "18000",
+            "--ctx",
+            "32768",
+            "--tokens",
+            "128",
+          ],
+          cwd: "<DS4_DIR>",
+          healthUrl: "http://127.0.0.1:18000/v1/models",
+          readyTimeoutMs: 300000,
+          idleStopMs: 0,
+        },
+        models: [],
+      },
+    },
+  },
+}
+```
+
+Full setup, context sizing, and verification commands: [ds4](/providers/ds4).
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Local models" href="/gateway/local-models" icon="server">
+    Local model setup, provider choices, and safety guidance.
+  </Card>
+  <Card title="llmman" href="/providers/llmman" icon="cpu">
+    Local models, hybrid local + hosted routing, and on-demand startup with llmman.
+  </Card>
+</CardGroup>

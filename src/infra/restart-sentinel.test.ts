@@ -1,0 +1,660 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+const { mockWarn, mockThrowOpen, mockThrowWrite, mockThrowWorkerWrite, mockThrowWorkerRead } =
+  vi.hoisted(() => ({
+    mockWarn: vi.fn(),
+    mockThrowOpen: vi.fn(),
+    mockThrowWrite: vi.fn(),
+    mockThrowWorkerWrite: vi.fn(),
+    mockThrowWorkerRead: vi.fn(),
+  }));
+const admission = vi.hoisted((): { beforeGrant?: (stage: string) => void } => ({}));
+const intercept = vi.hoisted(
+  () =>
+    <Args extends unknown[], Result>(operation: (...args: Args) => Result, before: () => void) =>
+    (...args: Args): Result => {
+      before();
+      return operation(...args);
+    },
+);
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "restart-sentinel" ? { ...logger, warn: mockWarn } : logger;
+    },
+  };
+});
+
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  return {
+    ...actual,
+    openOpenClawStateDatabase: intercept(actual.openOpenClawStateDatabase, mockThrowOpen),
+    runOpenClawStateWriteTransaction: intercept(
+      actual.runOpenClawStateWriteTransaction,
+      mockThrowWrite,
+    ),
+  };
+});
+
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
+
+vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>();
+  return {
+    ...actual,
+    runOpenClawStateWorkerOperation: intercept(
+      actual.runOpenClawStateWorkerOperation,
+      mockThrowWorkerWrite,
+    ),
+  };
+});
+
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>();
+  return {
+    ...actual,
+    executeExistingOpenClawStateRead: intercept(
+      actual.executeExistingOpenClawStateRead,
+      mockThrowWorkerRead,
+    ),
+  };
+});
+
+vi.mock("./sqlite-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sqlite-worker-store.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerWriteAdmission: (
+      assertCurrent: Parameters<typeof actual.createSqliteWorkerWriteAdmission>[0],
+      nativeLocations: readonly string[],
+    ) =>
+      actual.createSqliteWorkerWriteAdmission((request) => {
+        admission.beforeGrant?.(request.stage);
+        assertCurrent(request);
+      }, nativeLocations),
+  };
+});
+
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import {
+  readRestartSentinelRowSync,
+  writeRestartSentinelRowSync,
+  writeRestartSentinelRowIfRevisionSync,
+} from "./restart-sentinel-store.js";
+import {
+  clearRestartSentinelIfRevision,
+  markUpdateFailureReportReceiptPending,
+  markUpdateFailureReportReceiptPrepared,
+  readUpdateFailureReportReceipt,
+  reserveUpdateFailureReportReceipt,
+  finalizeUpdateRestartSentinelRunningVersion,
+  hasRestartSentinel,
+  readRestartSentinel,
+  readRestartSentinelReadOnly,
+  readRestartSentinelSnapshot,
+  readVerifiedGitUpdateReceipt,
+  writeRestartSentinel,
+  writeRestartSentinelIfUnchanged,
+} from "./restart-sentinel.js";
+
+beforeEach(() => {
+  mockWarn.mockClear();
+  mockThrowOpen.mockReset();
+  mockThrowWrite.mockReset();
+  mockThrowWorkerWrite.mockReset();
+  mockThrowWorkerRead.mockReset();
+  admission.beforeGrant = undefined;
+});
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
+const stateDir = tempDirs.make("openclaw-sentinel-");
+
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  sentinelDb().exec("DELETE FROM gateway_restart_sentinel");
+});
+afterEach(() => vi.unstubAllEnvs());
+
+function updatePayload(overrides: Partial<Parameters<typeof writeRestartSentinel>[0]> = {}) {
+  return { kind: "update" as const, status: "ok" as const, ts: Date.now(), ...overrides };
+}
+
+function writeGit(
+  stats: NonNullable<Parameters<typeof writeRestartSentinel>[0]["stats"]> = {},
+  overrides: Partial<Parameters<typeof writeRestartSentinel>[0]> = {},
+) {
+  return writeRestartSentinel(
+    updatePayload({
+      stats: {
+        mode: "git",
+        root: process.cwd(),
+        before: { sha: "aaaaaaaa" },
+        after: { sha: "bbbbbbbb", version: "expected-version" },
+        ...stats,
+      },
+      ...overrides,
+    }),
+  );
+}
+
+const restartPayload = (ts = 1) => ({ kind: "restart" as const, status: "ok" as const, ts });
+
+function retireAtAdmission(stage: string) {
+  let current = true;
+  admission.beforeGrant = (requested) => {
+    if (requested === stage) {
+      current = false;
+    }
+  };
+  return () => current;
+}
+
+async function finalizeGit(commit = "bbbbbbbb", root = process.cwd()) {
+  return finalizeUpdateRestartSentinelRunningVersion("actual-version", process.env, commit, root);
+}
+
+const writeSnapshot = (expectedRevision: number | null, ts = 1) =>
+  writeRestartSentinelIfUnchanged({
+    payload: restartPayload(ts),
+    expectedRevision,
+    isCurrent: () => true,
+  });
+
+async function expectPayload(payload: Partial<Parameters<typeof writeRestartSentinel>[0]>) {
+  await expect(readRestartSentinel()).resolves.toMatchObject({ version: 1, payload });
+}
+
+// Fixture SQL deliberately seeds invalid or historical rows outside the sentinel writer.
+function sentinelDb() {
+  return openOpenClawStateDatabase().db;
+}
+
+function readSentinelRow(key = "current") {
+  return sentinelDb()
+    .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+    .get(key);
+}
+
+function readSentinelRevisionFloor() {
+  return readSentinelRow("revision-floor")?.updated_at_ms;
+}
+
+function deleteSentinelRevisionFloor() {
+  sentinelDb().exec("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'revision-floor'");
+}
+
+function updateSentinelRow(
+  values: Partial<{
+    version: number;
+    kind: string;
+    status: string;
+    continuation_json: string | null;
+    stats_json: string | null;
+    payload_json: string;
+    updated_at_ms: number;
+  }>,
+) {
+  const entries = Object.entries(values);
+  sentinelDb()
+    .prepare(
+      `UPDATE gateway_restart_sentinel SET ${entries.map(([column]) => `"${column}" = ?`).join(", ")} WHERE sentinel_key = 'current'`,
+    )
+    .run(...entries.map(([, value]) => value));
+}
+
+describe("restart sentinel", () => {
+  it("persists and consumes through workers without caller-thread SQL", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-sentinel-"));
+    const rejectHostSql = () => {
+      throw new Error("caller-thread SQL");
+    };
+    mockThrowOpen.mockImplementation(rejectHostSql);
+    mockThrowWrite.mockImplementation(rejectHostSql);
+    await expect(readRestartSentinelReadOnly()).resolves.toBeNull();
+    await expect(fs.access(resolveOpenClawStateSqlitePath())).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+    const written = await writeRestartSentinel(restartPayload());
+    await expect(readRestartSentinel()).resolves.toEqual(written);
+    await expect(readRestartSentinelReadOnly()).resolves.toEqual(written);
+    await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
+    await expect(hasRestartSentinel()).resolves.toBe(false);
+  });
+
+  it("canonicalizes nullable top-level fields and empty delivery context", async () => {
+    const written = await writeRestartSentinel({
+      ...restartPayload(),
+      deliveryContext: {},
+      message: null,
+      continuation: null,
+      doctorHint: null,
+      stats: null,
+    });
+
+    expect(written.payload).toStrictEqual(restartPayload());
+    await expect(readRestartSentinel()).resolves.toEqual(written);
+  });
+
+  it.each(["transaction", "commit"])(
+    "keeps the report prepared when publication authority retires at %s admission",
+    async (stage) => {
+      const receipt = [`receipt-refusal-${stage}`, "report-owner", "a".repeat(64)] as const;
+      await reserveUpdateFailureReportReceipt(...receipt);
+      await markUpdateFailureReportReceiptPrepared(...receipt);
+      const isCurrent = retireAtAdmission(stage);
+      const refusal = new Error("Report publisher retired");
+      const assertCurrent = () => {
+        if (!isCurrent()) {
+          throw refusal;
+        }
+      };
+      await expect(
+        markUpdateFailureReportReceiptPending(...receipt, process.env, undefined, assertCurrent),
+      ).rejects.toBe(refusal);
+      admission.beforeGrant = undefined;
+      await expect(readUpdateFailureReportReceipt(receipt[0])).resolves.toMatchObject({
+        status: "prepared",
+        reservationId: receipt[1],
+        previewDigest: receipt[2],
+      });
+    },
+  );
+
+  it.each(["transaction", "commit"] as const)(
+    "preserves the notification when its producer loses authority at %s admission",
+    async (stage) => {
+      const first = await writeRestartSentinel(restartPayload());
+      const snapshot = await readRestartSentinelSnapshot();
+      const isCurrent = retireAtAdmission(stage);
+      await expect(
+        writeRestartSentinelIfUnchanged({
+          payload: updatePayload({ status: "error", ts: 2 }),
+          expectedRevision: snapshot.revision,
+          isCurrent,
+        }),
+      ).resolves.toBeNull();
+      admission.beforeGrant = undefined;
+      await expect(readRestartSentinelSnapshot()).resolves.toEqual({
+        sentinel: first,
+        revision: first.revision,
+      });
+    },
+  );
+
+  it("ignores legacy files without mutating them", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-sentinel-"));
+    const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
+    const legacyContents = `${JSON.stringify({ version: 1, payload: updatePayload() })}\n`;
+    await fs.writeFile(legacyPath, legacyContents, "utf-8");
+
+    await expect(hasRestartSentinel()).resolves.toBe(false);
+    await expect(readRestartSentinel()).resolves.toBeNull();
+    const written = await writeRestartSentinel(restartPayload(2));
+    await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
+    await expect(fs.readFile(legacyPath, "utf-8")).resolves.toBe(legacyContents);
+  });
+
+  it.each(["corrupt-shadow", "future-recovery-reason", "runtime-verification-failed"])(
+    "keeps notices readable and consumable with %s",
+    async (reason) => {
+      const payload = updatePayload({
+        status: "skipped",
+        ts: 42,
+        sessionKey: "agent:main:webchat:dm:user-123",
+        deliveryContext: { channel: "webchat", to: "user-123", accountId: "default" },
+        threadId: "thread-1",
+        message: "typed state",
+        continuation: { kind: "agentTurn" as const, message: "continue" },
+        doctorHint: "run doctor",
+        stats: {
+          mode: "npm",
+          reason: null,
+          durationMs: null,
+          before: null,
+          after: { version: "2026.9.4", detail: { retained: true } },
+          steps: [
+            {
+              name: "install",
+              command: "install",
+              failureFacts: [{ check: "installation", code: "retained" }],
+              cwd: null,
+              durationMs: 0.5,
+              log: { stdoutTail: null, stderrTail: "", exitCode: null },
+              advisory: false,
+            },
+          ],
+        },
+      });
+      const written = await writeRestartSentinel(payload);
+      expect(written.payload).toEqual(payload);
+      updateSentinelRow(
+        reason === "corrupt-shadow"
+          ? { payload_json: "not-json" }
+          : {
+              stats_json: JSON.stringify({
+                ...payload.stats,
+                recovery: { serviceRestartSafe: false, reason, detail: "new" },
+              }),
+            },
+      );
+
+      const read = await readRestartSentinel();
+      expect(read).toEqual(written);
+      await expect(clearRestartSentinelIfRevision(read!.revision)).resolves.toBe(true);
+      await expect(readRestartSentinel()).resolves.toBeNull();
+    },
+  );
+
+  it.each(["missing", "current", "invalid", "replaced"] as const)(
+    "conditionally publishes only to the captured row (%s)",
+    async (state) => {
+      const first = await writeRestartSentinel(restartPayload());
+      if (state === "missing") {
+        await clearRestartSentinelIfRevision(first.revision);
+      } else if (state === "invalid") {
+        updateSentinelRow({ kind: "not-a-kind" });
+      } else if (state === "replaced") {
+        await writeRestartSentinel({ ...restartPayload(2), message: "replacement" });
+      }
+      const db = sentinelDb();
+      const rows = () =>
+        db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all();
+      const before = rows();
+      const payload = updatePayload({ status: "error", ts: 2 });
+      const write = () =>
+        runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+          state === "replaced"
+            ? writeRestartSentinelRowIfRevisionSync(
+                transactionDb,
+                payload,
+                first.revision,
+                first.revision,
+              )
+            : writeRestartSentinelRowIfRevisionSync(transactionDb, payload, null),
+        );
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(first.revision - 1);
+      const written = write();
+      if (state === "missing") {
+        expect(written).toMatchObject({ payload, revision: first.revision + 1 });
+        expect(readRestartSentinelRowSync(db)).toEqual({ kind: "valid", sentinel: written });
+        expect(readSentinelRevisionFloor()).toBe(first.revision + 1);
+      } else {
+        expect(written).toBeNull();
+        expect(rows()).toEqual(before);
+      }
+      const settled = rows();
+      expect(write()).toBeNull();
+      expect(rows()).toEqual(settled);
+    },
+  );
+
+  it.each([
+    ["kind", "not-a-kind"],
+    ["continuation_json", { kind: "agentTurn", message: 42 }],
+    ["stats_json", { mode: null }],
+    ["stats_json", { before: [] }],
+    ["stats_json", { steps: [{ name: "install", command: "install", log: { exitCode: 0.5 } }] }],
+    ["stats_json", { steps: [{ name: "install", command: "install", advisory: null }] }],
+  ] as const)("rejects malformed %s without consuming the row: %j", async (column, value) => {
+    const payload = updatePayload({ ts: 1 });
+    await writeRestartSentinel(payload);
+    updateSentinelRow({
+      payload_json: column === "kind" ? "{}" : JSON.stringify(payload),
+      [column]: column === "kind" ? value : JSON.stringify(value),
+    });
+    const row = readSentinelRow();
+    await expect(readRestartSentinel()).resolves.toBeNull();
+    await expect(hasRestartSentinel()).resolves.toBe(false);
+    expect(readSentinelRow()).toEqual(row);
+    expect(mockWarn).toHaveBeenCalledWith("Ignoring invalid typed restart sentinel row");
+  });
+
+  it("upgrades pre-floor rows only when the captured revision still exists", async () => {
+    const written = await writeRestartSentinel(restartPayload());
+    // Persist a future revision so the worker must advance the floor independently of its clock.
+    const first = { ...written, revision: Number.MAX_SAFE_INTEGER - 100 };
+    updateSentinelRow({ updated_at_ms: first.revision });
+    deleteSentinelRevisionFloor();
+    await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(true);
+
+    await expect(readRestartSentinel()).resolves.toBeNull();
+    expect(readSentinelRevisionFloor()).toBe(first.revision);
+
+    const second = await writeRestartSentinel(restartPayload(2));
+    expect(second.revision).toBe(first.revision + 1);
+
+    deleteSentinelRevisionFloor();
+    await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(false);
+    expect(readSentinelRevisionFloor()).toBeUndefined();
+    await expect(readRestartSentinel()).resolves.toEqual(second);
+
+    await expect(clearRestartSentinelIfRevision(second.revision)).resolves.toBe(true);
+    expect(readSentinelRevisionFloor()).toBe(second.revision);
+    const third = await writeRestartSentinel(restartPayload(3));
+    expect(third.revision).toBe(second.revision + 1);
+
+    await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(true);
+    deleteSentinelRevisionFloor();
+    await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(false);
+    expect(readSentinelRevisionFloor()).toBeUndefined();
+  });
+
+  it("publishes only the captured sentinel snapshot, including after consumption", async () => {
+    const initial = await readRestartSentinelSnapshot();
+    const first = await writeSnapshot(initial.revision);
+    const snapshot = await readRestartSentinelSnapshot();
+    expect(snapshot).toEqual({ sentinel: first, revision: first!.revision });
+
+    await expect(clearRestartSentinelIfRevision(first!.revision)).resolves.toBe(true);
+    const consumed = await readRestartSentinelSnapshot();
+    expect(consumed).toEqual({ sentinel: null, revision: first!.revision });
+    await expect(writeSnapshot(initial.revision)).resolves.toBeNull();
+    const replacement = await writeSnapshot(consumed.revision, 2);
+    expect(replacement?.revision).toBeGreaterThan(first!.revision);
+    await expect(writeSnapshot(snapshot.revision)).resolves.toBeNull();
+    await expect(readRestartSentinel()).resolves.toEqual(replacement);
+  });
+
+  it("finalizes only the captured database when the environment changes during its read", async () => {
+    const payload = updatePayload({ ts: 1, stats: { after: { version: "before" } } });
+    function seed(message: string) {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make(`openclaw-sentinel-${message}-`) };
+      openOpenClawStateDatabase({ env });
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(1000);
+      const sentinel = runOpenClawStateWriteTransaction(
+        ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message }),
+        { env },
+      );
+      return { env, sentinel };
+    }
+    const { env: originalEnv, sentinel: original } = seed("original");
+    const { env: replacementEnv, sentinel: replacement } = seed("replacement");
+    expect(original.revision).toBe(replacement.revision);
+
+    await withEnvAsync(originalEnv, async () => {
+      mockThrowWorkerRead.mockImplementationOnce(() => {
+        process.env.OPENCLAW_STATE_DIR = replacementEnv.OPENCLAW_STATE_DIR;
+      });
+      await expect(
+        finalizeUpdateRestartSentinelRunningVersion("running-version"),
+      ).resolves.toMatchObject({
+        payload: { message: "original", stats: { after: { version: "running-version" } } },
+      });
+      await expect(readRestartSentinel(originalEnv)).resolves.toMatchObject({
+        payload: { message: "original", stats: { after: { version: "running-version" } } },
+      });
+      await expect(readRestartSentinel(replacementEnv)).resolves.toEqual(replacement);
+    });
+  });
+
+  it("uses the loaded build commit when finalizing an update", async () => {
+    await writeGit({ after: { sha: "aaaaaaa", version: "actual-version" } });
+    await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+    await expectPayload({ status: "ok" });
+  });
+
+  it.each([false, true])("finalizes the running version (already current: %s)", async (current) => {
+    const payload = updatePayload({
+      stats: { after: { version: current ? "actual-version" : "expected-version" } },
+    });
+    await writeRestartSentinel(payload);
+    const finalized = await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+    if (current) {
+      expect(finalized).toBeNull();
+    }
+    await expectPayload({
+      ...payload,
+      stats: { after: { version: "actual-version" } },
+    });
+  });
+  it.each([
+    ["ok", undefined],
+    ["error", "managed-service-handoff-failed"],
+  ] as const)("persists the verified Git install receipt after %s (%s)", async (status, reason) => {
+    const tempDir = tempDirs.make("openclaw-install-root-");
+    const installRoot = path.join(tempDir, "checkout");
+    const installAlias = path.join(tempDir, "checkout-alias");
+    await fs.mkdir(installRoot);
+    await fs.symlink(installRoot, installAlias, "dir");
+    const ts = Date.now();
+    await writeGit(
+      {
+        reason,
+        root: installAlias,
+        after: {
+          sha: " bbbbbbbb ",
+          upstreamRef: " origin/main ",
+          version: "expected-version",
+        },
+      },
+      { status, ts },
+    );
+    const finalized = await finalizeGit("bbbbbbbb1234", installRoot);
+    if (!finalized) {
+      throw new Error("Expected a finalized update sentinel");
+    }
+    await expect(clearRestartSentinelIfRevision(finalized.revision)).resolves.toBe(true);
+
+    await expect(readVerifiedGitUpdateReceipt()).resolves.toEqual({
+      root: await fs.realpath(installRoot),
+      sha: "bbbbbbbb",
+      upstreamRef: "origin/main",
+      installedAtMs: ts,
+    });
+  });
+
+  it("keeps the verified update outcome when optional install history cannot be written", async () => {
+    const continuation = { kind: "agentTurn" as const, message: "Continue after the update." };
+    await writeGit({}, { continuation });
+    const { db } = openOpenClawStateDatabase();
+    db.exec(`
+      CREATE TRIGGER reject_install_history BEFORE INSERT ON gateway_restart_sentinel
+      WHEN NEW.sentinel_key = 'latest-update-install'
+      BEGIN SELECT RAISE(ABORT, 'fixture install history unavailable'); END;
+    `);
+    try {
+      const finalized = await finalizeGit();
+      expect(finalized).toMatchObject({
+        payload: {
+          status: "ok",
+          continuation,
+          stats: { after: { version: "actual-version", sha: "bbbbbbbb" } },
+        },
+      });
+      await expect(readRestartSentinel()).resolves.toEqual(finalized);
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+      expect(mockWarn).toHaveBeenCalledWith(
+        "Failed to record update install history: fixture install history unavailable",
+      );
+    } finally {
+      db.exec("DROP TRIGGER reject_install_history");
+    }
+  });
+
+  it("does not advance install time when a successful Git run keeps the same revision", async () => {
+    await writeGit({ after: { sha: "aaaaaaaa", version: "expected-version" } });
+    await finalizeGit("aaaaaaaa");
+    await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+  });
+
+  it.each([
+    ["ok", "cccccccc", undefined, "restart-revision-mismatch"],
+    ["error", "aaaaaaaa", "aaaaaaaa", "managed-service-handoff-failed"],
+  ] as const)(
+    "rejects a %s update with mismatched Git revision",
+    async (status, commit, beforeSha, reason) => {
+      await writeGit(
+        {
+          before: beforeSha ? { sha: beforeSha } : undefined,
+          reason: status === "error" ? "managed-service-handoff-failed" : undefined,
+        },
+        { status },
+      );
+      await finalizeGit(commit);
+      await expectPayload({ status: "error", stats: { reason } });
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    },
+  );
+
+  it("rejects the same Git revision when the restarted checkout root differs", async () => {
+    const expectedRoot = tempDirs.make("openclaw-install-expected-");
+    const runningRoot = tempDirs.make("openclaw-install-running-");
+    await writeGit({ root: expectedRoot });
+    await finalizeGit("bbbbbbbb1234", runningRoot);
+    await expectPayload({ status: "error", stats: { reason: "restart-root-mismatch" } });
+    await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+  });
+});
+
+describe("restart sentinel error visibility", () => {
+  it("throws when revision-owned cleanup cannot durably delete the row", async () => {
+    const written = await writeRestartSentinel(restartPayload());
+    mockThrowWorkerWrite.mockImplementationOnce(() => {
+      throw new Error("SQLITE_IOERR: disk I/O error");
+    });
+
+    await expect(clearRestartSentinelIfRevision(written.revision)).rejects.toThrow(
+      "SQLITE_IOERR: disk I/O error",
+    );
+    expect(mockWarn).not.toHaveBeenCalled();
+    await expect(readRestartSentinel()).resolves.toEqual(written);
+  });
+
+  it.each([
+    [readRestartSentinel, null, "read"],
+    [hasRestartSentinel, false, "check"],
+  ] as const)("reports failed database %s as %s", async (read, result, action) => {
+    mockThrowWorkerRead.mockImplementationOnce(() => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    });
+    await expect(read()).resolves.toBe(result);
+    expect(mockWarn).toHaveBeenCalledWith(
+      `Failed to ${action} restart sentinel: SQLITE_BUSY: database is locked`,
+    );
+  });
+});

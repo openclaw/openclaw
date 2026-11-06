@@ -1,0 +1,197 @@
+// Used by the wizard flows (doctor/onboard/configure) and the foreground
+// gateway run; non-TTY and CI paths always get the plain static banner.
+import {
+  decorativeEmoji,
+  supportsDecorativeEmoji,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
+
+// Mascot and wordmark are separate so they can be tinted independently; the
+// wordmark starts on mascot row 3, keeping the claws above the text line.
+const MASCOT_ART = [
+  " •●●:.        .:●●•",
+  ":●●●●:        :●●●●:",
+  ".●●●●:.:•●●•:.:●●●●.",
+  " .●●●: •●●●●• :●●●.",
+  " ..:••●●●●●●●●••:..",
+  ".::••••●●●●●●••••::.",
+  " . .:  •●●●●•  :. .",
+  "    .  :●●●●:  .",
+  "      .●●●●●●.",
+  "       :••••:",
+] as const;
+// Claw tips with the pincer notch widened; swapping the top two rows in and
+// out produces the "snip".
+const MASCOT_OPEN_ROWS = ["•●•.:.        .:.•●•", ":●●●•:        :•●●●:"] as const;
+const MASCOT_WIDTH = 20;
+const WORDMARK_ROW_OFFSET = 3;
+
+const WORDMARK_ART = [
+  "█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █ █▀▀▀▀ █     █▀▀▀█ █   █",
+  "█   █ █▀▀▀▀ █▀▀▀  █ ▀▄█ █     █     █▀▀▀█ █▄▀▄█",
+  "▀▀▀▀▀ ▀     ▀▀▀▀▀ ▀   ▀ ▀▀▀▀▀ ▀▀▀▀▀ ▀   ▀ ▀   ▀",
+] as const;
+const GAP = 3;
+const BANNER_WIDTH = MASCOT_WIDTH + GAP + 48;
+const ROWS = MASCOT_ART.length;
+
+export type ClawBannerResult = "static" | "completed" | "settled";
+
+type CellTint = (col: number) => (text: string) => string;
+
+const identityTint: (text: string) => string = (text) => text;
+
+// Composes one banner frame. Tints run per glyph column so the wipe edge and
+// shimmer band can cut through individual letters.
+function composeFrame(params: {
+  mascotRows?: readonly string[];
+  mascotTint?: CellTint;
+  wordmarkTint?: CellTint;
+}): string[] {
+  const mascotRows = params.mascotRows ?? MASCOT_ART;
+  const lines: string[] = [];
+  for (let row = 0; row < ROWS; row++) {
+    const mascotRow = (mascotRows[row] ?? "").padEnd(MASCOT_WIDTH).slice(0, MASCOT_WIDTH);
+    let out = "";
+    for (let col = 0; col < mascotRow.length; col++) {
+      const ch = mascotRow[col] ?? " ";
+      out += ch === " " ? " " : (params.mascotTint?.(col) ?? theme.accent)(ch);
+    }
+    const wordmarkRow = WORDMARK_ART[row - WORDMARK_ROW_OFFSET];
+    if (wordmarkRow) {
+      out += " ".repeat(GAP);
+      for (let col = 0; col < wordmarkRow.length; col++) {
+        const ch = wordmarkRow[col] ?? " ";
+        out +=
+          ch === " " ? " " : (params.wordmarkTint?.(MASCOT_WIDTH + GAP + col) ?? identityTint)(ch);
+      }
+    }
+    lines.push(out.replace(/\s+$/, ""));
+  }
+  return lines;
+}
+
+// One combined entrance: a left-to-right molt wipe reveals the color, a
+// shimmer band sweeps the wordmark, and the claws snip once. The 330ms sequence
+// ends on the exact static banner.
+async function animateBanner(
+  settleWhen?: PromiseLike<unknown>,
+): Promise<Exclude<ClawBannerResult, "static">> {
+  const write = (chunk: string) => process.stdout.write(chunk);
+  let settleRequested = false;
+  let interruptedExitCode: number | undefined;
+  const settleSignal = settleWhen
+    ? Promise.resolve(settleWhen).then(
+        () => {
+          settleRequested = true;
+        },
+        () => {
+          settleRequested = true;
+        },
+      )
+    : null;
+  const pause = async (ms: number): Promise<boolean> => {
+    if (settleSignal) {
+      await Promise.race([sleep(ms), settleSignal]);
+    } else {
+      await sleep(ms);
+    }
+    if (interruptedExitCode !== undefined) {
+      throw new ExitError(interruptedExitCode);
+    }
+    return !settleRequested;
+  };
+  let drewFrame = false;
+  const draw = (lines: string[]) => {
+    const prefix = drewFrame ? `\x1b[${ROWS}F` : "";
+    drewFrame = true;
+    write(`${prefix}${lines.map((line) => `\x1b[K${line}`).join("\n")}\n`);
+  };
+  // Record interruption here and unwind at the next short animation pause.
+  // Throwing from the signal callback would bypass this owner’s cursor cleanup.
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => {
+    interruptedExitCode ??= signal === "SIGINT" ? 130 : 143;
+  };
+  const onSigint = () => onSignal("SIGINT");
+  const onSigterm = () => onSignal("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  write("\x1b[?25l");
+  try {
+    // Molt wipe: dim shell ahead of a bright 2-column edge, color behind it.
+    const wipeSteps = 5;
+    for (let step = 0; step <= wipeSteps; step++) {
+      const edge = Math.round((BANNER_WIDTH * step) / wipeSteps);
+      const tintAt =
+        (colored: (text: string) => string): CellTint =>
+        (col) =>
+          col < edge ? colored : col < edge + 2 ? theme.accentBright : theme.muted;
+      draw(
+        composeFrame({
+          mascotTint: tintAt(theme.accent),
+          wordmarkTint: tintAt(identityTint),
+        }),
+      );
+      if (!(await pause(20))) {
+        return "settled";
+      }
+    }
+    // Shimmer: a wider bright band sweeps the wordmark once.
+    for (let x = MASCOT_WIDTH; x < BANNER_WIDTH + 6; x += 9) {
+      const band: CellTint = (col) => (col >= x && col < x + 9 ? theme.accentBright : identityTint);
+      draw(composeFrame({ wordmarkTint: band }));
+      if (!(await pause(20))) {
+        return "settled";
+      }
+    }
+    // Snip: claws open and close once.
+    draw(composeFrame({ mascotRows: [...MASCOT_OPEN_ROWS, ...MASCOT_ART.slice(2)] }));
+    if (!(await pause(35))) {
+      return "settled";
+    }
+    draw(composeFrame({}));
+    if (!(await pause(35))) {
+      return "settled";
+    }
+    draw(composeFrame({}));
+    return "completed";
+  } finally {
+    try {
+      // Parallel work owns startup latency; leave a complete banner instead of
+      // an interrupted frame before its logs or errors take over the terminal.
+      if (settleRequested && drewFrame && interruptedExitCode === undefined) {
+        draw(composeFrame({}));
+      }
+    } finally {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      write("\x1b[?25h");
+    }
+  }
+}
+
+export async function printClawBanner(
+  runtime: RuntimeEnv,
+  options: {
+    /** Ends the animation on its static frame when parallel startup work settles. */
+    settleWhen?: PromiseLike<unknown>;
+  } = {},
+): Promise<ClawBannerResult> {
+  const columns = process.stdout.columns ?? 80;
+  if (columns < BANNER_WIDTH) {
+    const icon = decorativeEmoji("🦞");
+    const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
+    runtime.log(`${title}\n`);
+    return "static";
+  }
+  const animate = process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
+  if (!animate) {
+    runtime.log(`${composeFrame({}).join("\n")}\n`);
+    return "static";
+  }
+  const result = await animateBanner(options.settleWhen);
+  process.stdout.write("\n");
+  return result;
+}

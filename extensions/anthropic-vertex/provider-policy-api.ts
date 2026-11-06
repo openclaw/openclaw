@@ -1,0 +1,18 @@
+/**
+ * Provider-policy API for Anthropic Vertex. Core asks for thinking profiles
+ * without importing the provider entry or stream runtime.
+ */
+import { resolveClaudeThinkingProfile } from "openclaw/plugin-sdk/claude-model-runtime";
+
+export function resolveThinkingProfile(params: {
+  provider: string;
+  modelId: string;
+  params?: Record<string, unknown>;
+}) {
+  if (params.provider.trim().toLowerCase() !== "anthropic-vertex") {
+    return null;
+  }
+  return resolveClaudeThinkingProfile(params.modelId, params.params, {
+    includeNativeMax: true,
+  });
+}

@@ -1,0 +1,72 @@
+// Gateway path security canonicalizes repeatedly encoded paths and protects
+// plugin HTTP routes even under malformed encoding.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+const MAX_PATH_DECODE_PASSES = 32;
+
+function normalizePathSeparators(pathname: string): string {
+  const collapsed = pathname.replace(/\/{2,}/g, "/");
+  if (collapsed.length <= 1) {
+    return collapsed;
+  }
+  return collapsed.replace(/\/+$/, "");
+}
+
+function normalizePathForSecurity(pathname: string): string {
+  const resolved = URL.parse(pathname, "http://localhost")?.pathname ?? pathname;
+  return normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolved)) || "/";
+}
+
+function buildCanonicalPathCandidates(pathname: string) {
+  const candidates = new Set([normalizePathForSecurity(pathname)]);
+
+  let decoded = pathname;
+  let malformedEncoding = false;
+  for (let pass = 0; pass < MAX_PATH_DECODE_PASSES; pass++) {
+    let nextDecoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      malformedEncoding = true;
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+    candidates.add(normalizePathForSecurity(decoded));
+  }
+  let decodePassLimitReached = false;
+  if (!malformedEncoding) {
+    try {
+      decodePassLimitReached = decodeURIComponent(decoded) !== decoded;
+    } catch {
+      malformedEncoding = true;
+    }
+  }
+  return {
+    candidates: [...candidates],
+    decodePassLimitReached,
+    malformedEncoding,
+  };
+}
+
+export function canonicalizePathVariant(pathname: string): string {
+  const { candidates } = buildCanonicalPathCandidates(pathname);
+  return candidates[candidates.length - 1] ?? "/";
+}
+
+export function canonicalizePathForSecurity(pathname: string) {
+  const { candidates, decodePassLimitReached, malformedEncoding } =
+    buildCanonicalPathCandidates(pathname);
+
+  return {
+    canonicalPath: candidates[candidates.length - 1] ?? "/",
+    candidates,
+    decodePassLimitReached,
+    malformedEncoding,
+    rawNormalizedPath: normalizePathSeparators(normalizeLowercaseStringOrEmpty(pathname)) || "/",
+  };
+}
+
+export const PROTECTED_PLUGIN_ROUTE_PREFIXES = ["/api/channels"] as const;

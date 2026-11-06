@@ -1,0 +1,51 @@
+// Browser tests cover pw tools core.clamps timeoutms scrollintoview plugin behavior.
+import { describe, expect, it, vi } from "vitest";
+import {
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+} from "./pw-tools-core.test-harness.js";
+
+installPwToolsCoreTestHooks();
+const mod = await import("./pw-tools-core.interactions.actions.js");
+
+describe("pw-tools-core", () => {
+  it.each([
+    {
+      name: "strict mode violations into snapshot hints",
+      errorMessage: 'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
+      expectedMessage: /Run a new snapshot/i,
+    },
+    {
+      name: "not-visible timeouts into snapshot hints",
+      errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
+      expectedMessage: /not found or not visible/i,
+    },
+    {
+      name: "bare locator timeouts into snapshot hints",
+      errorMessage:
+        "locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('aria-ref=ax13')",
+      expectedMessage: /not found or not visible/i,
+    },
+    {
+      name: "covered/hidden errors into interactable hints",
+      errorMessage:
+        "Element is not receiving pointer events because another element intercepts pointer events",
+      expectedMessage: /not interactable/i,
+    },
+  ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
+    const click = vi.fn(async () => {
+      throw new Error(errorMessage);
+    });
+    setPwToolsCoreCurrentRefLocator({ click });
+    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
+
+    await expect(
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+      }),
+    ).rejects.toThrow(expectedMessage);
+  });
+});

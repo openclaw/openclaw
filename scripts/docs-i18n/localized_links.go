@@ -1,0 +1,284 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+type routeIndex struct {
+	targetLang      string
+	redirects       map[string]string
+	localizedRoutes map[string]struct{}
+	localePrefixes  map[string]struct{}
+}
+
+type docsConfig struct {
+	Redirects []docsRedirect `json:"redirects"`
+}
+
+type docsRedirect struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+}
+
+var (
+	localeDirRe             = regexp.MustCompile(`^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$`)
+	fencedBacktickCodeBlock = regexp.MustCompile("(?ms)(^|\\n)[ \\t]*```[^\\n]*\\n.*?\\n[ \\t]*```[ \\t]*(?:\\n|$)")
+	fencedTildeCodeBlock    = regexp.MustCompile(`(?ms)(^|\n)[ \t]*~~~[^\n]*\n.*?\n[ \t]*~~~[ \t]*(?:\n|$)`)
+	markdownLinkTargetRe    = regexp.MustCompile(`!?\[[^\]]*\]\(([^)]+)\)`)
+	hrefDoubleQuotedValueRe = regexp.MustCompile(`\bhref\s*=\s*"([^"]*)"`)
+	hrefSingleQuotedValueRe = regexp.MustCompile(`\bhref\s*=\s*'([^']*)'`)
+)
+
+func loadRouteIndex(docsRoot, targetLang string) (*routeIndex, error) {
+	index := &routeIndex{
+		targetLang:      strings.TrimSpace(targetLang),
+		redirects:       map[string]string{},
+		localizedRoutes: map[string]struct{}{},
+		localePrefixes:  map[string]struct{}{},
+	}
+
+	if err := index.loadRedirects(filepath.Join(docsRoot, "docs.json")); err != nil {
+		return nil, err
+	}
+	if err := index.loadRoutes(docsRoot); err != nil {
+		return nil, err
+	}
+
+	return index, nil
+}
+
+func (ri *routeIndex) loadRedirects(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	var config docsConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return err
+	}
+	for _, item := range config.Redirects {
+		source := normalizeRoute(item.Source)
+		destination := normalizeRoute(item.Destination)
+		if source == "" || destination == "" {
+			continue
+		}
+		ri.redirects[source] = destination
+	}
+	return nil
+}
+
+func (ri *routeIndex) loadRoutes(docsRoot string) error {
+	localePrefixes, err := discoverLocalePrefixes(docsRoot)
+	if err != nil {
+		return err
+	}
+	if ri.targetLang != "" {
+		localePrefixes[ri.targetLang] = struct{}{}
+	}
+	ri.localePrefixes = localePrefixes
+
+	return filepath.WalkDir(docsRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !isMarkdownFile(path) {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(docsRoot, path)
+		if err != nil {
+			return err
+		}
+		relPath = normalizeSlashes(relPath)
+		firstSegment := firstPathSegment(relPath)
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if firstSegment == ri.targetLang {
+			trimmedRel := strings.TrimPrefix(relPath, firstSegment+"/")
+			addRouteCandidates(ri.localizedRoutes, trimmedRel, extractPermalinks(content))
+		}
+		return nil
+	})
+}
+
+func discoverLocalePrefixes(docsRoot string) (map[string]struct{}, error) {
+	entries, err := os.ReadDir(docsRoot)
+	if err != nil {
+		return nil, err
+	}
+	locales := map[string]struct{}{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !localeDirRe.MatchString(name) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(docsRoot, name, ".i18n", "README.md")); err != nil {
+			continue
+		}
+		locales[name] = struct{}{}
+	}
+	return locales, nil
+}
+
+func isMarkdownFile(path string) bool {
+	return strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".mdx")
+}
+
+func normalizeSlashes(path string) string {
+	return strings.ReplaceAll(path, "\\", "/")
+}
+
+func firstPathSegment(relPath string) string {
+	segment, _, _ := strings.Cut(relPath, "/")
+	return segment
+}
+
+func addRouteCandidates(routes map[string]struct{}, relPath string, permalinks []string) {
+	base := strings.TrimSuffix(strings.TrimSuffix(relPath, ".md"), ".mdx")
+	if base != relPath {
+		addRoute(routes, normalizeRoute(base))
+		switch {
+		case base == "index":
+			addRoute(routes, "/")
+		case strings.HasSuffix(base, "/index"):
+			addRoute(routes, normalizeRoute(strings.TrimSuffix(base, "/index")))
+		}
+	}
+
+	for _, permalink := range permalinks {
+		addRoute(routes, normalizeRoute(permalink))
+	}
+}
+
+func addRoute(routes map[string]struct{}, route string) {
+	if route == "" {
+		return
+	}
+	routes[route] = struct{}{}
+}
+
+func extractPermalinks(content []byte) []string {
+	frontMatter, _ := splitFrontMatter(string(content))
+	if strings.TrimSpace(frontMatter) == "" {
+		return nil
+	}
+
+	data := map[string]any{}
+	if err := yaml.Unmarshal([]byte(frontMatter), &data); err != nil {
+		return nil
+	}
+
+	raw, ok := data["permalink"].(string)
+	if !ok {
+		return nil
+	}
+	permalink := strings.TrimSpace(raw)
+	if permalink == "" {
+		return nil
+	}
+	return []string{permalink}
+}
+
+func normalizeRoute(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	stripped := strings.Trim(trimmed, "/")
+	if stripped == "" {
+		return "/"
+	}
+	return "/" + stripped
+}
+
+func (ri *routeIndex) localizeBodyLinks(body string) string {
+	if ri == nil || ri.targetLang == "" || strings.EqualFold(ri.targetLang, "en") {
+		return body
+	}
+
+	state := NewPlaceholderState(body)
+	masked := maskMatches(body, fencedBacktickCodeBlock, state)
+	masked = maskMatches(masked, fencedTildeCodeBlock, state)
+	masked = maskMatches(masked, inlineCodeRe, state)
+
+	masked = rewriteCapturedTargets(masked, markdownLinkTargetRe, ri, true)
+	masked = rewriteCapturedTargets(masked, hrefDoubleQuotedValueRe, ri, false)
+	masked = rewriteCapturedTargets(masked, hrefSingleQuotedValueRe, ri, false)
+
+	return unmaskMarkdown(masked, state.placeholders, state.mapping)
+}
+
+func rewriteCapturedTargets(text string, re *regexp.Regexp, ri *routeIndex, skipImages bool) string {
+	return re.ReplaceAllStringFunc(text, func(match string) string {
+		if skipImages && strings.HasPrefix(match, "!") {
+			return match
+		}
+		span := re.FindStringSubmatchIndex(match)
+		start, end := span[2], span[3]
+		return match[:start] + ri.localizeURL(match[start:end]) + match[end:]
+	})
+}
+
+func (ri *routeIndex) localizeURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return raw
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+		return raw
+	}
+
+	pathPart, suffix := splitURLSuffix(trimmed)
+	if !strings.HasPrefix(pathPart, "/") {
+		return raw
+	}
+
+	canonical := normalizeRoute(pathPart)
+	segment := firstPathSegment(strings.TrimPrefix(canonical, "/"))
+	if _, ok := ri.localePrefixes[segment]; segment != "" && ok {
+		return raw
+	}
+
+	seen := map[string]struct{}{canonical: {}}
+	for {
+		next, ok := ri.redirects[canonical]
+		if !ok {
+			break
+		}
+		if _, ok := seen[next]; ok {
+			return raw
+		}
+		seen[next] = struct{}{}
+		canonical = next
+	}
+	if _, ok := ri.localizedRoutes[canonical]; !ok {
+		return raw
+	}
+	if canonical == "/" {
+		canonical = ""
+	}
+	return "/" + ri.targetLang + canonical + suffix
+}
+
+func splitURLSuffix(raw string) (string, string) {
+	index := strings.IndexAny(raw, "?#")
+	if index == -1 {
+		return raw, ""
+	}
+	return raw[:index], raw[index:]
+}

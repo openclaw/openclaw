@@ -1,0 +1,200 @@
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CodeModeConfig as AuthoredCodeModeConfig } from "../config/types.tools.js";
+import { modelKey } from "../shared/model-key.js";
+import { clampNumber } from "../utils.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
+import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
+import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
+import type { ToolSearchConfig } from "./tool-search.js";
+import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
+
+export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
+export const CODE_MODE_RESUME_MARGIN_MS = 250;
+// Reserve the resume floor plus dispatch/settlement slack so a call that runs
+// to its yield still leaves enough budget to resume the guest inline.
+export const CODE_MODE_EXEC_YIELD_MARGIN_MS = 2 * CODE_MODE_RESUME_MARGIN_MS;
+export const DEFAULT_HEADLESS_WALL_CLOCK_MS = 30_000;
+// Cron script payloads persist caps of 900 seconds and 200 tool calls.
+// The shared executor must not silently lower those accepted job limits.
+export const MAX_HEADLESS_WALL_CLOCK_MS = 900_000;
+export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
+export const MAX_HEADLESS_TOOL_CALLS = 200;
+
+export type CodeModeConfig = Omit<AgentToolSurfacePresentation["codeMode"], "enabled"> & {
+  /** Effective activation policy; "auto" follows the model catalog flag. */
+  enabled: boolean | "auto";
+};
+
+export type {
+  CodeModeSettlementMode,
+  PendingBridgeRequest,
+  SettledBridgeRequest,
+} from "./code-mode-worker-types.js";
+
+export type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-executor-types.js";
+export { codeModeFailureCode, codeModeFailureMessage } from "./code-mode-errors.js";
+
+export type CodeModeHeadlessResult =
+  | {
+      status: "completed";
+      value: unknown;
+      output: unknown[];
+      toolCallCount: number;
+    }
+  | {
+      status: "failed";
+      code: CodeModeFailureCode | "tool_budget_exceeded";
+      error: string;
+      output: unknown[];
+      toolCallCount: number;
+    };
+
+type CodeModeOptions = Exclude<AuthoredCodeModeConfig, boolean | "auto">;
+type CodeModeLimit = Exclude<keyof CodeModeOptions, "enabled" | "executor" | "mode">;
+
+function normalizeCodeModeRawConfig(
+  value: AuthoredCodeModeConfig | undefined,
+): CodeModeOptions | undefined {
+  if (typeof value === "boolean" || value === "auto") {
+    return { enabled: value };
+  }
+  return value;
+}
+
+function readCodeModeRawConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+  model?: { provider: string; modelId: string },
+): CodeModeOptions {
+  const globalRaw: CodeModeOptions = normalizeCodeModeRawConfig(config?.tools?.codeMode) ?? {
+    enabled: "auto",
+  };
+  const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
+  const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
+  const key = model
+    ? normalizeAgentModelRefForConfig(modelKey(model.provider, model.modelId))
+    : undefined;
+  // An options-only agent object inherits activation; it must not hide a model
+  // override. Explicit false at either scope remains an authored choice.
+  return {
+    ...globalRaw,
+    ...agentRaw,
+    enabled:
+      (key ? agent?.models?.[key]?.codeMode : undefined) ??
+      agentRaw?.enabled ??
+      (key ? config?.agents?.defaults?.models?.[key]?.codeMode : undefined) ??
+      globalRaw.enabled,
+  };
+}
+
+export function resolveCodeModeConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+  model?: { provider: string; modelId: string },
+): CodeModeConfig {
+  const raw = readCodeModeRawConfig(config, agentId, model);
+  const limit = (key: CodeModeLimit, fallback: number, min: number, max: number) =>
+    clampNumber(asPositiveInteger(raw[key]) ?? fallback, min, max);
+  const maxSearchLimit = limit("maxSearchLimit", 50, 1, 50);
+  return {
+    // Authored option-bearing objects keep their historical opt-in behavior.
+    enabled: raw.enabled ?? false,
+    executor: raw.executor ?? "node",
+    mode: "only",
+    timeoutMs: limit("timeoutMs", 10_000, 100, 60_000),
+    memoryLimitBytes: limit("memoryLimitBytes", 64 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
+    maxOutputBytes: limit("maxOutputBytes", 64 * 1024, 1024, 10 * 1024 * 1024),
+    maxSnapshotBytes: limit("maxSnapshotBytes", 10 * 1024 * 1024, 1024, 256 * 1024 * 1024),
+    maxPendingToolCalls: limit("maxPendingToolCalls", 16, 1, MAX_CODE_MODE_PENDING_TOOL_CALLS),
+    snapshotTtlSeconds: limit("snapshotTtlSeconds", 900, 1, 24 * 60 * 60),
+    searchDefaultLimit: limit("searchDefaultLimit", 8, 1, maxSearchLimit),
+    maxSearchLimit,
+  };
+}
+
+/**
+ * Resolves the effective activation policy against one model's catalog flag.
+ * `true`/`false` are absolute; `"auto"` engages only for models whose catalog
+ * compat declares `codeMode: "preferred"`. This gates the model-facing tool
+ * surface only; runs that route to a provider-native harness (for example the
+ * default OpenAI Codex surface) never reach this embedded-runtime gate.
+ */
+export function isCodeModeEngagedForModel(
+  config: Pick<CodeModeConfig, "enabled">,
+  model: { compat?: unknown } | undefined,
+): boolean {
+  if (config.enabled !== "auto") {
+    return config.enabled;
+  }
+  const compat =
+    model?.compat && typeof model.compat === "object"
+      ? (model.compat as { codeMode?: unknown })
+      : undefined;
+  return compat?.codeMode === "preferred";
+}
+
+export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
+  return {
+    enabled: true,
+    mode: "tools",
+    searchDefaultLimit: config.searchDefaultLimit,
+    maxSearchLimit: config.maxSearchLimit,
+  };
+}
+
+export function readCode(args: unknown): {
+  code: string;
+  awaitResults: boolean;
+} {
+  const params = asToolParamsRecord(args);
+  // Full-schema tool calls can materialize an unused alias as blank.
+  // Only nonblank aliases participate in divergence checks.
+  const codeAlias = readNonBlankString(params.code);
+  const commandAlias = readNonBlankString(params.command);
+  if (codeAlias !== undefined && commandAlias !== undefined && codeAlias !== commandAlias) {
+    throw new ToolInputError("code and command must match when both are provided.");
+  }
+  const code = commandAlias ?? codeAlias;
+  if (code === undefined) {
+    throw new ToolInputError("code or command must be a non-empty string.");
+  }
+  if (params.language !== undefined || params.typecheck !== undefined) {
+    throw new ToolInputError(
+      "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
+    );
+  }
+  const awaitResults = params.awaitResults;
+  if (awaitResults !== undefined && typeof awaitResults !== "boolean") {
+    throw new ToolInputError("awaitResults must be a boolean.");
+  }
+  return {
+    code,
+    awaitResults: awaitResults === true,
+  };
+}
+
+export function readRunId(args: unknown): string {
+  const params = asToolParamsRecord(args);
+  const runId = params.runId ?? params.run_id;
+  if (typeof runId !== "string" || !runId.trim()) {
+    throw new ToolInputError("runId must be a non-empty string.");
+  }
+  return runId.trim();
+}
+
+export function createCodeModeApiFilesForRun(
+  namespaceRuntime: CodeModeNamespaceRuntime,
+  swarmEnabled: boolean,
+) {
+  const { apiFiles: files } = namespaceRuntime;
+  return [
+    CODE_MODE_RESULTS_API_FILE,
+    ...(swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts")),
+  ];
+}

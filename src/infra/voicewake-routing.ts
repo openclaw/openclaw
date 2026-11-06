@@ -1,0 +1,125 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { readVoiceWakeMachineState } from "../state/config-machine-state-async.js";
+
+// Voice wake routing maps normalized wake phrases to an agent, session key, or
+// current session target and persists the mapping under state settings.
+type VoiceWakeRouteTarget =
+  | { mode: "current"; agentId?: undefined; sessionKey?: undefined }
+  | { agentId: string; sessionKey?: undefined; mode?: undefined }
+  | { sessionKey: string; agentId?: undefined; mode?: undefined };
+
+type VoiceWakeRouteRule = {
+  trigger: string;
+  target: VoiceWakeRouteTarget;
+};
+
+export type VoiceWakeRoutingConfig = {
+  version: 1;
+  defaultTarget: VoiceWakeRouteTarget;
+  routes: VoiceWakeRouteRule[];
+  updatedAtMs: number;
+};
+
+const VOICEWAKE_ROUTING_STATE_KEY = "voicewake.routing";
+
+const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
+  version: 1,
+  defaultTarget: { mode: "current" },
+  routes: [],
+  updatedAtMs: 0,
+};
+
+function normalizeVoiceWakeTriggerWord(value: string): string {
+  return value
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, ""))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function normalizeRouteTarget(value: unknown): VoiceWakeRouteTarget | null {
+  const rec = asOptionalObjectRecord(value);
+  if (!rec) {
+    return null;
+  }
+  const mode = normalizeOptionalString(rec.mode);
+  if (mode === "current") {
+    return { mode: "current" };
+  }
+  const agentId = normalizeOptionalString(rec.agentId);
+  const sessionKey = normalizeOptionalString(rec.sessionKey);
+  if (agentId && !sessionKey) {
+    return { agentId: normalizeAgentId(agentId) };
+  }
+  if (sessionKey && !agentId) {
+    return { sessionKey };
+  }
+  return null;
+}
+
+function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
+  const rec = asOptionalObjectRecord(value);
+  if (!rec) {
+    return null;
+  }
+  const triggerRaw = normalizeOptionalString(rec.trigger);
+  if (!triggerRaw) {
+    return null;
+  }
+  const trigger = normalizeVoiceWakeTriggerWord(triggerRaw);
+  if (!trigger) {
+    return null;
+  }
+  const target = normalizeRouteTarget(rec.target);
+  if (!target) {
+    return null;
+  }
+  return { trigger, target };
+}
+
+function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
+  const rec = asOptionalObjectRecord(input);
+  if (!rec) {
+    return { ...DEFAULT_ROUTING };
+  }
+  const defaultTarget = normalizeRouteTarget(rec.defaultTarget) ?? { mode: "current" as const };
+  const routes = Array.isArray(rec.routes)
+    ? rec.routes
+        .map((entry) => normalizeRouteRule(entry))
+        .filter((entry): entry is VoiceWakeRouteRule => Boolean(entry))
+    : [];
+  const updatedAtMs = floorPositiveFiniteNumber(rec.updatedAtMs) ?? 0;
+  return {
+    version: 1,
+    defaultTarget,
+    routes,
+    updatedAtMs,
+  };
+}
+
+export async function loadVoiceWakeRoutingConfig(
+  baseDir?: string,
+): Promise<VoiceWakeRoutingConfig> {
+  const config = await readVoiceWakeMachineState(
+    VOICEWAKE_ROUTING_STATE_KEY,
+    baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
+  );
+  return config ? normalizeVoiceWakeRoutingConfig(config.value) : { ...DEFAULT_ROUTING };
+}
+
+type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };
+
+export function resolveVoiceWakeRouteByTrigger(params: {
+  trigger: string | undefined;
+  config: VoiceWakeRoutingConfig;
+}): VoiceWakeResolvedRoute {
+  const normalizedTrigger = normalizeVoiceWakeTriggerWord(params.trigger ?? "");
+  const matched = normalizedTrigger
+    ? params.config.routes.find((route) => route.trigger === normalizedTrigger)
+    : undefined;
+  return matched ? matched.target : params.config.defaultTarget;
+}

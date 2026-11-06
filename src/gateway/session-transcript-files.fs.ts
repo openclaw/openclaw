@@ -1,0 +1,390 @@
+// Resolves, archives, and cleans up transcript files owned by Gateway sessions.
+import fs from "node:fs";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { readSessionArchivePrefix } from "../config/sessions/archive-compression.js";
+import {
+  formatSessionArchiveTimestamp,
+  parseSessionArchiveTimestamp,
+  type SessionArchiveReason,
+} from "../config/sessions/artifacts.js";
+import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
+import {
+  resolveSessionArtifactDirectory,
+  resolveSessionFilePathCore,
+  resolveSessionTranscriptPath,
+  resolveSessionTranscriptPathInDir,
+} from "../config/sessions/paths.js";
+import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
+import { hasErrnoCode } from "../infra/errno.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+
+type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
+export type ArchivedSessionTranscript = {
+  sourcePath: string;
+  archivedPath: string;
+};
+
+const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
+const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
+
+const resetArchiveDiscoveryCache = new Map<
+  string,
+  {
+    dirMtimeMs: number;
+    dirSize: number;
+    archives: ResetArchiveCandidate[];
+  }
+>();
+
+export function resolveSessionTranscriptCandidates(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): string[] {
+  const candidates: string[] = [];
+  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  const staleSessionFile = Boolean(transcriptSessionId && transcriptSessionId !== sessionId);
+  const pushCandidate = (resolve: () => string): void => {
+    try {
+      candidates.push(resolve());
+    } catch {
+      // Ignore invalid paths/IDs and keep scanning other safe candidates.
+    }
+  };
+
+  if (storePath) {
+    const sessionsDir = resolveSessionArtifactDirectory(storePath);
+    if (sessionFile && !staleSessionFile) {
+      pushCandidate(() =>
+        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
+      );
+    }
+    pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
+    if (sessionFile && staleSessionFile) {
+      pushCandidate(() =>
+        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
+      );
+    }
+  } else if (sessionFile) {
+    if (agentId) {
+      if (!staleSessionFile) {
+        pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
+      }
+    } else {
+      const trimmed = sessionFile.trim();
+      if (trimmed) {
+        candidates.push(path.resolve(trimmed));
+      }
+    }
+  }
+
+  if (agentId) {
+    pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
+    if (sessionFile && staleSessionFile) {
+      pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
+    }
+  }
+
+  return uniqueStrings(candidates);
+}
+
+async function resetArchiveHeaderMatchesSessionId(
+  sessionId: string,
+  archivePath: string,
+): Promise<boolean> {
+  // Discovery needs only the header, not a plaintext copy of every candidate.
+  try {
+    const buffer = await readSessionArchivePrefix(archivePath, 64 * 1024);
+    const lines = buffer.toString("utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const record = JSON.parse(trimmed) as unknown;
+      return isRecord(record) && record.type === "session" && record.id === sessionId;
+    }
+    return false;
+  } catch (error) {
+    if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+async function listResetArchiveCandidatesForTranscriptAsync(
+  transcriptPath: string,
+): Promise<ResetArchiveCandidate[] | undefined> {
+  const base = path.basename(transcriptPath);
+  if (!base.endsWith(".jsonl")) {
+    return undefined;
+  }
+  const dir = path.dirname(transcriptPath);
+  const dirStat = await fs.promises.stat(dir).catch(() => null);
+  if (!dirStat?.isDirectory()) {
+    return undefined;
+  }
+  const cacheKey = `${dir}\0${base}`;
+  const cached = resetArchiveDiscoveryCache.get(cacheKey);
+  if (cached && cached.dirMtimeMs === dirStat.mtimeMs && cached.dirSize === dirStat.size) {
+    resetArchiveDiscoveryCache.delete(cacheKey);
+    resetArchiveDiscoveryCache.set(cacheKey, cached);
+    return cached.archives;
+  }
+
+  const archives: ResetArchiveCandidate[] = [];
+  try {
+    for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(`${base}.reset.`)) {
+        continue;
+      }
+      const timestamp = parseSessionArchiveTimestamp(entry.name, "reset");
+      if (timestamp == null) {
+        continue;
+      }
+      archives.push({ archivePath: path.join(dir, entry.name), name: entry.name, timestamp });
+    }
+  } catch {
+    return undefined;
+  }
+  archives.sort(
+    (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+  );
+  const boundedArchives = archives.slice(0, MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT);
+  resetArchiveDiscoveryCache.set(cacheKey, {
+    dirMtimeMs: dirStat.mtimeMs,
+    dirSize: dirStat.size,
+    archives: boundedArchives,
+  });
+  pruneMapToMaxSize(resetArchiveDiscoveryCache, MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES);
+  return boundedArchives;
+}
+
+export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string[]> {
+  const candidatesByIdentity = new Map<string, string[]>();
+  for (const candidate of resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  )) {
+    const key = path.basename(candidate);
+    const candidates = candidatesByIdentity.get(key) ?? [];
+    candidates.push(candidate);
+    candidatesByIdentity.set(key, candidates);
+  }
+  const archives = (
+    await Promise.all(
+      Array.from(candidatesByIdentity.values(), async (candidates) => {
+        const matching = await Promise.all(
+          candidates.map(async (candidate) => {
+            const generations =
+              (await listResetArchiveCandidatesForTranscriptAsync(candidate)) ?? [];
+            if (extractGeneratedTranscriptSessionId(candidate) === sessionId) {
+              return generations;
+            }
+            const matches: ResetArchiveCandidate[] = [];
+            for (const archive of generations) {
+              if (await resetArchiveHeaderMatchesSessionId(sessionId, archive.archivePath)) {
+                matches.push(archive);
+              }
+            }
+            return matches;
+          }),
+        );
+        return matching
+          .flat()
+          .toSorted(
+            (left, right) =>
+              right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+          );
+      }),
+    )
+  ).flat();
+  return uniqueStrings(archives.map((archive) => archive.archivePath));
+}
+
+function archiveFileOnDisk(filePath: string, reason: SessionArchiveReason): string {
+  const ts = formatSessionArchiveTimestamp();
+  const archived = `${filePath}.${reason}.${ts}`;
+  fs.renameSync(filePath, archived);
+  resetArchiveDiscoveryCache.clear();
+  // Memory observes session mutations through this bus, not filesystem watchers.
+  emitSessionTranscriptUpdate({ sessionFile: archived });
+  return archived;
+}
+
+export function archiveSessionTranscriptPaths(opts: {
+  paths: Iterable<string>;
+  reason: SessionArchiveReason;
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
+}): ArchivedSessionTranscript[] {
+  const archived: ArchivedSessionTranscript[] = [];
+  const paths = uniqueStrings(
+    Array.from(opts.paths, (candidate) => canonicalizePathForComparison(candidate)),
+  );
+  for (const sourcePath of paths) {
+    if (!fs.existsSync(sourcePath)) {
+      continue;
+    }
+    try {
+      archived.push({
+        sourcePath,
+        archivedPath: archiveFileOnDisk(sourcePath, opts.reason),
+      });
+    } catch (err) {
+      opts.onArchiveError?.(err, sourcePath);
+    }
+  }
+  return archived;
+}
+
+export function archiveSessionTranscriptsDetailed(opts: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  reason: "reset" | "deleted";
+  /**
+   * When true, only archive files resolved under the session store directory.
+   * This prevents maintenance operations from mutating paths outside the agent sessions dir.
+   */
+  restrictToStoreDir?: boolean;
+  /**
+   * Invoked when an individual transcript candidate fails to archive. The
+   * caller decides whether to log, warn-deliver, or escalate.
+   */
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
+}): ArchivedSessionTranscript[] {
+  const candidatePaths: string[] = [];
+  const storeDir =
+    opts.restrictToStoreDir && opts.storePath
+      ? canonicalizePathForComparison(path.dirname(opts.storePath))
+      : null;
+  for (const candidate of resolveSessionTranscriptCandidates(
+    opts.sessionId,
+    opts.storePath,
+    opts.sessionFile,
+  )) {
+    const candidatePath = canonicalizePathForComparison(candidate);
+    if (storeDir) {
+      const relative = path.relative(storeDir, candidatePath);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
+    }
+    candidatePaths.push(candidatePath);
+  }
+  return archiveSessionTranscriptPaths({
+    paths: candidatePaths,
+    reason: opts.reason,
+    onArchiveError: opts.onArchiveError,
+  });
+}
+
+export function resolveStableSessionEndTranscript(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  archivedTranscripts?: ArchivedSessionTranscript[];
+}): { sessionFile?: string; transcriptArchived?: boolean } {
+  const archivedTranscripts = params.archivedTranscripts ?? [];
+  if (archivedTranscripts.length > 0) {
+    const preferredPath = params.sessionFile?.trim()
+      ? canonicalizePathForComparison(params.sessionFile)
+      : undefined;
+    const archivedMatch =
+      preferredPath == null
+        ? undefined
+        : archivedTranscripts.find(
+            (entry) => canonicalizePathForComparison(entry.sourcePath) === preferredPath,
+          );
+    const archivedPath = archivedMatch?.archivedPath ?? archivedTranscripts[0]?.archivedPath;
+    if (archivedPath) {
+      return { sessionFile: archivedPath, transcriptArchived: true };
+    }
+  }
+
+  for (const candidate of resolveSessionTranscriptCandidates(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    params.agentId,
+  )) {
+    const candidatePath = canonicalizePathForComparison(candidate);
+    if (fs.existsSync(candidatePath)) {
+      return { sessionFile: candidatePath, transcriptArchived: false };
+    }
+  }
+
+  return {};
+}
+
+type SessionArchiveCleanupRule = {
+  reason: SessionArchiveReason;
+  olderThanMs: number;
+};
+
+async function ignoreMissingArchivePath<T>(operation: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return fallback;
+    }
+    throw error;
+  }
+}
+
+// Archive-retention sweeps share one directory listing across all rules. A
+// listing per reason would multiply READDIR load on networked filesystems.
+export async function cleanupArchivedSessionTranscripts(opts: {
+  directories: string[];
+  rules: readonly SessionArchiveCleanupRule[];
+  nowMs?: number;
+  removeFile?: (filePath: string) => Promise<void>;
+}): Promise<void> {
+  const rules = opts.rules.filter(
+    (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
+  );
+  if (rules.length === 0) {
+    return;
+  }
+  const now = opts.nowMs ?? Date.now();
+  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
+
+  for (const dir of directories) {
+    const entries = await ignoreMissingArchivePath(() => fs.promises.readdir(dir), []);
+    for (const entry of entries) {
+      for (const rule of rules) {
+        const timestamp = parseSessionArchiveTimestamp(entry, rule.reason);
+        if (timestamp == null) {
+          continue;
+        }
+        if (now - timestamp > rule.olderThanMs) {
+          const fullPath = path.join(dir, entry);
+          const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
+          if (stat?.isFile()) {
+            await ignoreMissingArchivePath(
+              () => opts.removeFile?.(fullPath) ?? fs.promises.rm(fullPath),
+              undefined,
+            );
+          }
+        }
+        // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
+        // so the first matching rule owns the entry.
+        break;
+      }
+    }
+  }
+}

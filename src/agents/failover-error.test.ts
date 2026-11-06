@@ -1,0 +1,698 @@
+import { describe, expect, it, vi } from "vitest";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.js";
+import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import {
+  buildFailoverRemediationHint,
+  buildProviderReauthCommand,
+  coerceToFailoverError,
+  describeFailoverError,
+  FailoverError,
+  findCliTimeoutError,
+  isNonProviderRuntimeCoordinationError,
+  isSignalTimeoutReason,
+  isTimeoutError,
+  resolveFailoverReasonFromError,
+  resolveModelFallbackError,
+} from "./failover-error.js";
+import { isLikelyContextOverflowError } from "./failover/classify.js";
+import { getFailoverErrorCode } from "./failover/error.js";
+import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
+import type { FailoverReason } from "./failover/signal.js";
+import { AgentHarnessPreflightError } from "./harness/errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+
+// These fixtures exercise core classification without cold-loading provider runtimes.
+vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
+
+function expectReason(error: unknown, reason: FailoverReason | null) {
+  expect(resolveFailoverReasonFromError(error)).toBe(reason);
+}
+
+function expectReasons(reason: FailoverReason | null, errors: unknown[]) {
+  for (const error of errors) {
+    expectReason(error, reason);
+  }
+}
+
+function expectCoordination(error: unknown) {
+  expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+  expect(coerceToFailoverError(error)).toBeNull();
+}
+
+function providerTimeout() {
+  return Object.assign(
+    new Error("worker task timed out", {
+      cause: new WorkerTaskError("worker task timed out", "timeout"),
+    }),
+    { status: 408 },
+  );
+}
+
+describe("failover-error", () => {
+  it("preserves transcript admission conflicts through error wrappers", () => {
+    const conflict = new Error(
+      'Transcript idempotency key "channel-user:v1:conflicting-input" conflicts with the admitted message.',
+    );
+    for (const error of [
+      conflict,
+      new Error("preparation failed", { cause: conflict }),
+      new AggregateError([conflict], "run failed"),
+    ]) {
+      expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
+      expect(coerceToFailoverError(error)).toBeNull();
+    }
+  });
+
+  it("preserves an Ollama model-retirement error instead of coercing it to a timeout", () => {
+    const body = JSON.stringify({
+      error: "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    });
+    const error = Object.assign(new Error(`410 ${body}`), { status: 410, body });
+    expect(coerceToFailoverError(error, { provider: "ollama" })).toMatchObject({
+      reason: "model_not_found",
+      status: 410,
+      rawError: error.message,
+    });
+  });
+
+  it("does not promote a direct preflight into a provider failure", () => {
+    const message = "handoff refused: 529 OVERLOADED";
+    const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };
+    const error = new AgentHarnessPreflightError(message, { cause });
+    expectReason(error, null);
+    expect(coerceToFailoverError(error)).toBeNull();
+    expect(describeFailoverError(error)).toEqual({ message });
+    expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+    expect(error.cause).toBe(cause);
+  });
+
+  it("finds structured CLI timeout context through aggregate wrappers", () => {
+    const timeout = new FailoverError("CLI exceeded timeout", {
+      reason: "timeout",
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
+    });
+    expect(findCliTimeoutError(new AggregateError([{ cause: timeout }], "CLI turn failed"))).toBe(
+      timeout,
+    );
+  });
+
+  it("infers failover reason from HTTP status", () => {
+    const noBody = { message: "HTTP 422: No response body" };
+    const parameterError = { status: 422, message: "check open ai req parameter error" };
+    const unprocessable = { message: "Unprocessable Entity" };
+    const missingProperty = { message: "missing required property" };
+    expectReasons("billing", [
+      { status: 402 },
+      { status: 402, message: "insufficient credits — please top up your account" },
+    ]);
+    expectReason(
+      {
+        status: 402,
+        message: "HTTP 402: request reached organization usage limit, try again later",
+      },
+      "rate_limit",
+    );
+    expectReason({ statusCode: "+429" }, "rate_limit");
+    expectReason({ status: 403 }, "auth");
+    expectReasons(null, [
+      { statusCode: "0x1ad" },
+      { status: 400 },
+      { status: 422 },
+      { status: 400, message: "400 status code (no body)" },
+      { status: 422, message: "Error: HTTP 422: No response body" },
+      { message: "400 status code (no body)" },
+      { message: "HTTP 422: No body" },
+      { message: "outer wrapper", cause: { status: 422, ...noBody } },
+      { ...parameterError, cause: { status: 422, ...noBody } },
+      { ...parameterError, cause: new Error("No response body") },
+      { status: 422, ...unprocessable, error: noBody },
+      { status: 422, ...unprocessable, cause: { ...unprocessable, error: noBody } },
+    ]);
+    expectReasons("format", [
+      { status: 422, error: missingProperty, cause: {} },
+      { status: 422, error: missingProperty, cause: noBody },
+    ]);
+    expectReasons(
+      "timeout",
+      [408, 410, 499, 504, 522, 524].map((status) => ({ status })),
+    );
+    expectReason({ status: 500 }, "server_error");
+    expectReason({ status: 529 }, "overloaded");
+  });
+
+  it("classifies certificate failures separately from timeouts", () => {
+    expectReasons("tls_certificate", [
+      {
+        code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        message: "Hostname/IP does not match certificate's altnames",
+      },
+      new TypeError("fetch failed", {
+        cause: { code: "CERT_HAS_EXPIRED", message: "certificate has expired" },
+      }),
+    ]);
+    expectReason(
+      { status: 400, code: "CERT_HAS_EXPIRED", message: "certificate field rejected" },
+      "format",
+    );
+  });
+
+  it("infers timeout from node network codes and failover-specific codes", () => {
+    expectReasons("timeout", [{ code: "ETIMEDOUT" }, { code: "EHOSTDOWN" }]);
+  });
+
+  it("infers rate-limit and overload from symbolic error codes", () => {
+    expectReason({ code: "RESOURCE_EXHAUSTED" }, "rate_limit");
+    expectReason({ code: "OVERLOADED_ERROR" }, "overloaded");
+  });
+
+  it.each([
+    [
+      "context overflow",
+      { status: 400, message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens" },
+      "context_overflow",
+    ],
+    [
+      "invalid model",
+      { status: 422, message: "invalid model: openrouter/__invalid_test_model__" },
+      "model_not_found",
+    ],
+    ["revoked key", { status: 403, message: "api key revoked" }, "auth_permanent"],
+  ] as const)("classifies %s", (_name, error, reason) => expectReason(error, reason));
+
+  it("stops on cyclic cause chains", () => {
+    const first: { cause?: unknown } = {};
+    first.cause = { cause: first };
+    expectReason(first, null);
+  });
+
+  it("lets provider-attributed billing evidence refine ambiguous HTTP 429", () => {
+    const message =
+      '{"error":{"type":"rate_limit_reached","message":"Insufficient account balance. Please recharge your Moonshot account."}}';
+    expectReason({ provider: "moonshot", status: 429, message }, "billing");
+    expect(resolveFailoverReasonFromError({ status: 429, message }, "kimi-claw")).toBe("billing");
+    expectReason(
+      { provider: "moonshot", status: 429, message: "Rate limit reached for requests per min." },
+      "rate_limit",
+    );
+    expectReason({ provider: "openai", status: 429, message }, "rate_limit");
+  });
+
+  it("treats structured quota failures as billing instead of generic HTTP policy", () => {
+    const message =
+      '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+    expectReasons("billing", [
+      { status: 400, message },
+      { provider: "openai", status: 429, message },
+      {
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Insufficient account balance"}',
+      },
+      {
+        provider: "openai",
+        status: 429,
+        message:
+          'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+      },
+      { provider: "openai", status: 429, message: "This model requires more credits to use" },
+    ]);
+  });
+
+  it("uses structured OpenAI-compatible param detail for model-not-found 400s", () => {
+    const err = Object.assign(new Error("400 Param Incorrect"), {
+      status: 400,
+      code: "400",
+      param: "Not supported model some-model-id",
+      error: {
+        code: "400",
+        message: "Param Incorrect",
+        param: "Not supported model some-model-id",
+      },
+    });
+    expectReason(err, "model_not_found");
+    expect(describeFailoverError(err)).toMatchObject({
+      message: "400 Param Incorrect",
+      reason: "model_not_found",
+      status: 400,
+      code: "400",
+    });
+  });
+
+  it.each([
+    ["402", "Monthly spend limit reached. Please visit your billing settings.", "rate_limit"],
+    ["HTTP 402", "Your usage limit has been reached. Please upgrade your plan.", "billing"],
+  ] as const)(
+    "keeps %s wrappers aligned with status-split payloads: %s",
+    (prefix, message, reason) => {
+      expectReason({ message: `${prefix} Payment Required: ${message}` }, reason);
+      expectReason({ status: 402, message }, reason);
+    },
+  );
+
+  it("treats AbortError reason=abort as timeout", () => {
+    const err = Object.assign(new Error("aborted"), {
+      name: "AbortError",
+      reason: "reason: abort",
+    });
+    expect(isTimeoutError(err)).toBe(true);
+  });
+
+  it("classifies abort-wrapped RESOURCE_EXHAUSTED as rate_limit", () => {
+    const err = Object.assign(new Error("request aborted"), {
+      name: "AbortError",
+      cause: {
+        error: {
+          code: 429,
+          message: "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).",
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    });
+    expectReason(err, "rate_limit");
+    expect(coerceToFailoverError(err)).toMatchObject({ reason: "rate_limit", status: 429 });
+  });
+
+  it("lets wrapped causes override parent context-overflow classifications", () => {
+    const err = new Error("INVALID_ARGUMENT: input exceeds the maximum number of tokens", {
+      cause: { code: "RESOURCE_EXHAUSTED" },
+    });
+    expectReason(err, "rate_limit");
+    expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
+  });
+
+  it.each([undefined, "429 raw provider detail. Retry in 221ms."])(
+    "preserves provider text when enriching exhaustion (rawError=%s)",
+    (rawError) => {
+      const message = "429 rate limit exceeded. Retry in 221ms.";
+      const cause = new Error("provider request failed");
+      const original = new FailoverError(message, {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        rawError,
+        cause,
+      });
+      const enriched = coerceToFailoverError(original, { rateLimitRetriesExhausted: 9 });
+      expect(enriched?.message).toContain("9 automatic retries");
+      expect(describeFailoverError(enriched)).toMatchObject({
+        rawError: rawError ?? message,
+        status: 429,
+        code: "rate_limit_exceeded",
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      });
+      expect(enriched?.cause).toBe(cause);
+      expect(original.message).toBe(message);
+      expect(original.rawError).toBe(rawError);
+      expect(original.rateLimitRetriesExhausted).toBeUndefined();
+    },
+  );
+
+  it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
+    const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+    const facts = {
+      reason: "timeout",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      profileId: "anthropic:default",
+      status: 408,
+      rawError: "408 upstream deadline exceeded",
+      authProfileFailure: { allInCooldown: false },
+      sessionId: "diagnostic-session",
+      lane: "answer",
+      cause,
+      suspend: false,
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 30,
+        observedActivity: true,
+        activeToolCount: 1,
+        backgroundTaskCount: 0,
+      },
+      timeout: { timeoutPhase: "provider" },
+      attempts: [{ provider: "anthropic", model: "sonnet-4.6", reason: "timeout" }],
+      soonestCooldownExpiry: null,
+    } satisfies ConstructorParameters<typeof FailoverError>[1];
+    const original = new FailoverError("request timed out", facts);
+    attachErrorDiagnostic(original, "stderr: Rate limit exceeded during an earlier request");
+    const err = coerceToFailoverError(original, { authMode: "token" });
+    expect(err).not.toBe(original);
+    expect(err).toMatchObject({ ...facts, authMode: "token" });
+    expect(err?.cause).toBe(cause);
+    expect(err?.message).toBe("request timed out");
+    expect(describeFailoverError(err).rawError).toBe(facts.rawError);
+    expect(getFailoverErrorCode(err)).toBeUndefined();
+    expect(findCliTimeoutError(err)).toBe(err);
+    expect(err?.requestSizeCeiling).toBe(false);
+    expect(formatErrorMessageForDisplay(err)).toContain(
+      "Rate limit exceeded during an earlier request",
+    );
+    expect(original.authMode).toBeUndefined();
+  });
+
+  it("adds a recorded timeout without replacing attribution", () => {
+    const original = new FailoverError("provider failed", { reason: "timeout", authMode: "oauth" });
+    const timeout = {};
+    const error = coerceToFailoverError(original, { timeout, authMode: "token" });
+    expect(error).toMatchObject({ timeout, authMode: "oauth" });
+    expect(error?.timeout).toBe(timeout);
+    expect(original.timeout).toBeUndefined();
+    expect(coerceToFailoverError(error, { timeout: { timeoutPhase: "preflight" } })).toBe(error);
+    expect(
+      coerceToFailoverError({ status: 500, message: "upstream failed" }, { timeout })?.timeout,
+    ).toBe(timeout);
+  });
+
+  it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
+    const err = coerceToFailoverError(
+      '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"synthetic"}',
+      {
+        provider: "openrouter",
+        model: "openrouter/healer-alpha",
+      },
+    );
+    expect(err).toMatchObject({ reason: "model_not_found", status: 404 });
+  });
+
+  it("Codex deactivated workspace marker returns auth_permanent", () => {
+    const detail = { code: "deactivated_workspace" };
+    expectReasons("auth_permanent", [
+      detail,
+      { detail },
+      { status: 403, message: "Forbidden", detail: { code: "deactivated_workspace" } },
+      { status: 400, message: "Bad request", detail: { code: "deactivated_workspace" } },
+    ]);
+  });
+
+  it("classifies OpenAI-compatible server_error payloads at the error boundary", () => {
+    const err = coerceToFailoverError(
+      {
+        status: 500,
+        message:
+          'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+      },
+      { provider: "openai", model: "gpt-5.4" },
+    );
+    expect(err).toMatchObject({ reason: "server_error", status: 500 });
+  });
+
+  it("describes non-Error values consistently", () => {
+    expect(describeFailoverError(123)).toMatchObject({ message: "123", reason: undefined });
+  });
+});
+
+describe("failover diagnostic isolation", () => {
+  it.each(["raw", "serialized"] as const)(
+    "normalizes local-profile HTTP status from a %s error without changing its owner",
+    (shape) => {
+      const message =
+        'Codex app-server auth profile "openai:default" was not found. Select an existing OpenAI profile or sign in again with OpenClaw, then retry.';
+      const cause = new Error("profile store lookup missed");
+      const context = {
+        provider: "openai",
+        model: "gpt-5.5",
+        profileId: "openai:default",
+        authMode: "oauth",
+        sessionId: "session:local-profile",
+        lane: "main",
+      };
+      const facts = {
+        ...context,
+        reason: "auth" as const,
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+        rawError: message,
+        cause,
+      };
+      const original = Object.freeze(
+        shape === "serialized"
+          ? { ...facts, name: "FailoverError", message }
+          : Object.assign(new Error(message, { cause }), facts),
+      );
+      expect(describeFailoverError(original)).toMatchObject({
+        message,
+        code: facts.code,
+        status: undefined,
+      });
+      const normalized = coerceToFailoverError(original, shape === "raw" ? context : undefined);
+      expect(normalized).toMatchObject({
+        ...facts,
+        status: undefined,
+        cause: shape === "raw" ? original : cause,
+      });
+      expect(normalized?.message).toBe(message);
+      expect(buildFailoverRemediationHint(normalized)).toBeUndefined();
+      expect(original).toMatchObject({ status: 401, message });
+    },
+  );
+
+  it("retains a genuine provider HTTP 401 and its recovery hint", () => {
+    const original = Object.freeze(Object.assign(new Error("invalid_api_key"), { status: 401 }));
+    const normalized = coerceToFailoverError(original, { provider: "openai" });
+    expect(describeFailoverError(original).status).toBe(401);
+    expect(normalized).toMatchObject({ reason: "auth", status: 401, cause: original });
+    expect(buildFailoverRemediationHint(normalized)).toBe(
+      "Re-authenticate with: openclaw models auth login --provider 'openai' --force",
+    );
+  });
+
+  it("keeps supplemental process diagnostics out of failure policy", () => {
+    const diagnostic =
+      "413 Request too large on tokens per minute (TPM): Limit 8000, Requested 8098";
+    const native = Object.freeze(new Error("Claude Code process exited with code 1"));
+    const error = attachErrorDiagnostic(native, diagnostic);
+    expect(error).toBe(native);
+    expect(formatErrorMessageForDisplay(error)).toContain(diagnostic);
+    for (const candidate of [error, new Error("Plugin execution failed", { cause: error })]) {
+      expect(coerceToFailoverError(candidate)).toBeNull();
+      expect(isTimeoutError(candidate)).toBe(false);
+      expect(diagnosticErrorFailureKind(candidate)).toBeUndefined();
+      expect(isLikelyContextOverflowError(formatErrorMessage(candidate))).toBe(false);
+      expect(formatErrorMessage(candidate)).not.toContain(diagnostic);
+    }
+  });
+
+  describe("findLocalWorkerTaskFailure", () => {
+    it.each([
+      ["failed", new WorkerTaskError("worker task timed out", "failed")],
+      ["unavailable", new WorkerTaskError("worker task closed", "unavailable")],
+    ])("ignores local worker code %s", (_code, error) => {
+      expect(findLocalWorkerTaskFailure(error)).toBeUndefined();
+    });
+
+    it("defers to an HTTP fact anywhere in the graph", () => {
+      expect(findLocalWorkerTaskFailure(providerTimeout())).toBeUndefined();
+      expect(
+        findLocalWorkerTaskFailure(
+          Object.assign(new WorkerTaskError("timed out", "timeout"), { status: 504 }),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("ignores provider timeouts and untyped values", () => {
+      for (const error of [
+        Object.assign(new Error("operation timed out"), { name: "TimeoutError" }),
+        new Error("worker task timed out"),
+        { name: "WorkerTaskError", code: "timeout" },
+        null,
+        undefined,
+      ]) {
+        expect(findLocalWorkerTaskFailure(error)).toBeUndefined();
+      }
+    });
+  });
+
+  it("does not suppress provider failover for non-timeout worker failures", () => {
+    const failure = new WorkerTaskError("worker task timed out", "failed");
+    expect(isNonProviderRuntimeCoordinationError(failure)).toBe(false);
+    expect(resolveModelFallbackError(failure).kind).not.toBe("coordination");
+  });
+
+  describe.each(["timeout", "overloaded"] as const)("local worker task %s attribution", (code) => {
+    it("keeps local deadlines out of provider classification through wrappers", () => {
+      const timeout = new WorkerTaskError(
+        code === "timeout" ? "worker task timed out" : "worker task capacity reached",
+        code,
+      );
+      for (const error of [
+        timeout,
+        new Error("preparation failed", { cause: timeout }),
+        new AggregateError([timeout], "run failed"),
+        new FailoverError("previously classified timeout", {
+          reason: "timeout",
+          status: 408,
+          provider: "openai",
+          cause: timeout,
+        }),
+      ]) {
+        expect(findLocalWorkerTaskFailure(error)).toBe(timeout);
+        expectCoordination(error);
+        expect(resolveFailoverReasonFromError(error)).toBeNull();
+        expect(describeFailoverError(error)).toEqual({ message: timeout.message });
+      }
+    });
+
+    it("keeps provider attribution when an HTTP timeout fact is present", () => {
+      const providerTimeoutWithLocalCause = Object.assign(
+        new Error("worker task timed out", {
+          cause: new WorkerTaskError("worker task failed locally", code),
+        }),
+        { status: 408 },
+      );
+      expect(isNonProviderRuntimeCoordinationError(providerTimeoutWithLocalCause)).toBe(false);
+      const resolution = resolveModelFallbackError(providerTimeoutWithLocalCause);
+      expect(resolution.kind).toBe("failover");
+      expect(resolution.kind === "failover" ? resolution.error.reason : undefined).toBe("timeout");
+    });
+  });
+});
+
+describe("buildFailoverRemediationHint", () => {
+  it("routes Gemini CLI auth failures to supported recovery paths", () => {
+    const err = new FailoverError("revoked", {
+      reason: "auth_permanent",
+      provider: "google-gemini-cli",
+    });
+    expect(buildFailoverRemediationHint(err)).toBe(
+      "Authenticate in Gemini CLI directly, or configure a supported Google API key with: openclaw configure",
+    );
+  });
+
+  it("quotes provider ids that contain shell metacharacters", () => {
+    expect(buildProviderReauthCommand("custom;touch /tmp/pwned")).toBe(
+      "openclaw models auth login --provider 'custom;touch /tmp/pwned' --force",
+    );
+    expect(buildProviderReauthCommand("custom'provider")).toBe(
+      "openclaw models auth login --provider 'custom'\\''provider' --force",
+    );
+  });
+
+  it("refuses control characters in rendered provider commands", () => {
+    expect(buildProviderReauthCommand("custom\nprovider")).toBeUndefined();
+  });
+
+  it("returns undefined for non-auth reasons", () => {
+    expect(
+      buildFailoverRemediationHint(
+        new FailoverError("429", { reason: "rate_limit", provider: "openai" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when provider is not attributed", () => {
+    expect(
+      buildFailoverRemediationHint(new FailoverError("no token", { reason: "auth" })),
+    ).toBeUndefined();
+  });
+});
+
+describe("isNonProviderRuntimeCoordinationError", () => {
+  it("keeps native PostgreSQL cancellation out of provider fallback after actor projection", () => {
+    const native = decodePostgresError({
+      name: "error",
+      code: "57014",
+      message: "Synthetic statement timeout",
+    });
+    const projected = Object.assign(new Error(native.message), { name: native.name });
+    for (const error of [native, projected, new Error("Synthetic wrapper", { cause: projected })]) {
+      expectCoordination(error);
+    }
+    const provider = new FailoverError("Synthetic rate limit", {
+      reason: "rate_limit",
+      code: "57014",
+    });
+    expect(isNonProviderRuntimeCoordinationError(provider)).toBe(false);
+    expect(coerceToFailoverError(provider)).toBe(provider);
+  });
+
+  it("returns true for stale gateway lifecycle ownership loss", () => {
+    const staleLifecycle = createAgentRunStaleLifecycleError();
+    expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
+    expect(
+      isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
+    ).toBe(true);
+  });
+
+  it("does not read a SQLite worker code as a provider overload", () => {
+    const error = new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
+    for (const candidate of [error, new Error("lane task error", { cause: error })]) {
+      expectCoordination(candidate);
+      expect(describeFailoverError(candidate).reason).toBeUndefined();
+    }
+  });
+
+  it("treats superseded prepared runtime publication as coordination (#156975)", () => {
+    const error = new PreparedModelRuntimePublicationSupersededError(
+      "prepared model runtime publication was superseded for /tmp/agent",
+    );
+    for (const candidate of [error, new Error("lane task error", { cause: error })]) {
+      expect(isNonProviderRuntimeCoordinationError(candidate)).toBe(true);
+      expectCoordination(candidate);
+      expectReason(candidate, null);
+      expect(describeFailoverError(candidate).reason).toBeUndefined();
+    }
+  });
+
+  it("returns true for Codex missing tool-result local execution failures", () => {
+    expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
+    expect(
+      isNonProviderRuntimeCoordinationError({
+        message: "codex app-server turn failed",
+        cause: { result: { reason: "missing_tool_result" } },
+      }),
+    ).toBe(true);
+    expectReason(
+      new Error(
+        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.",
+      ),
+      null,
+    );
+  });
+
+  it("returns false for plain timeouts and provider errors", () => {
+    expect(
+      isNonProviderRuntimeCoordinationError(
+        Object.assign(new Error("operation timed out"), { name: "TimeoutError" }),
+      ),
+    ).toBe(false);
+    expect(
+      isNonProviderRuntimeCoordinationError({
+        status: 503,
+        message: "upstream overloaded",
+        cause: { result: { reason: "missing_tool_result" } },
+      }),
+    ).toBe(false);
+    expect(
+      isNonProviderRuntimeCoordinationError({
+        status: 503,
+        message: "upstream overloaded",
+        cause: createAgentRunStaleLifecycleError(),
+      }),
+    ).toBe(false);
+    expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
+  });
+});
+
+it("does not treat an AbortError matching transport timeout wording as a signal timeout", () => {
+  const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
+  expect(isSignalTimeoutReason(err)).toBe(false);
+});

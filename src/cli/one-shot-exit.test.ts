@@ -1,0 +1,379 @@
+import { spawnSync } from "node:child_process";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { doctorConfigRuntimeEntrypoints } from "../commands/doctor-config-runtime.test-support.js";
+import { dashboardTitleRuntimeEntrypoints } from "../gateway/dashboard-session-title-runtime.test-support.js";
+import { nativeBoundaryTestEntrypoints } from "../infra/native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
+import {
+  cliMessageExitEntrypoints,
+  oneShotExitProbeEntrypoints,
+} from "./cli-entrypoint.test-support.js";
+import {
+  exitCliAfterOutput,
+  requestExitAfterOneShotOutput,
+  runCliWithExitFinalization,
+} from "./one-shot-exit.js";
+import {
+  exitAfterSignalExitBarriers,
+  registerSignalExitGate,
+  waitForSignalExitBarriers,
+} from "./signal-exit-barrier.js";
+
+const oneShotExitUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit);
+const sourceImportArgs = resolveRuntimeWorkerArgv(oneShotExitUrl).slice(0, -1);
+const successfulRun = async () => {};
+const ignoreError = () => {};
+const proxyChildTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-proxy-child-tmp-");
+
+function runCliChild(script: string, envOverrides: NodeJS.ProcessEnv = {}, maxBuffer?: number) {
+  const env = { ...process.env, ...envOverrides };
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
+  const args = [...sourceImportArgs, "--input-type=module", "--eval", script];
+  return spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    env,
+    timeout: 30_000,
+    ...(maxBuffer ? { maxBuffer } : {}),
+  });
+}
+
+describe("one-shot CLI completion", () => {
+  let previousExitCode: typeof process.exitCode;
+  beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+  });
+  afterEach(() => {
+    process.exitCode = previousExitCode;
+    vi.restoreAllMocks();
+  });
+
+  it("unwinds the injected runtime with its requested code", () => {
+    const exit = vi.fn();
+    const runtime = { ...defaultRuntime, exit };
+    const defaultExit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+    let thrown: unknown;
+    try {
+      exitCliAfterOutput(runtime, 7);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ExitError);
+    expect(thrown).toMatchObject({ code: 7 });
+    expect(defaultExit).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it.each([
+    { outcome: "cleanup failure after success", commandExit: undefined },
+    {
+      outcome: "deferred exit with failed reporter",
+      commandExit: 7,
+      reporterRethrows: true,
+    },
+  ])("leaves $outcome owned by the injected runtime", async ({ commandExit, reporterRethrows }) => {
+    const commandFailure = commandExit === undefined ? undefined : new ExitError(commandExit);
+    const cleanupFailure = new Error("state cleanup failed");
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const onError = vi.fn((error: unknown) => {
+      if (reporterRethrows) {
+        throw error;
+      }
+    });
+    await expect(
+      runCliWithExitFinalization({
+        run: async () => {
+          if (commandFailure) {
+            throw commandFailure;
+          }
+        },
+        finalize: async () => {
+          throw cleanupFailure;
+        },
+        onError,
+        runtime,
+      }),
+    ).rejects.toBe(commandFailure ?? cleanupFailure);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(cleanupFailure);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("does not finalize a long-lived command until its run settles", async () => {
+    const finish = createDeferred();
+    const finalize = vi.fn(async () => {});
+    const running = runCliWithExitFinalization({
+      run: () => finish.promise,
+      finalize,
+      onError: ignoreError,
+    });
+    requestExitAfterOneShotOutput(defaultRuntime, 7);
+    await Promise.resolve();
+    expect(finalize).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+    finish.resolve();
+    await running;
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(7);
+  });
+
+  it.each([
+    { requested: 0, signal: "SIGTERM" as const, expected: 143 },
+    { requested: "0", signal: "SIGINT" as const, expected: 130 },
+    { requested: 0, signal: "SIGHUP" as const, expected: 129 },
+    { requested: 7, signal: "SIGTERM" as const, expected: 7 },
+  ])(
+    "retains an accepted signal over pending success ($requested, $signal)",
+    async ({ requested, signal, expected }) => {
+      const cleanup = createDeferred();
+      const unregister = registerSignalExitGate(cleanup.promise);
+      const finalize = vi.fn(async () => {});
+      exitAfterSignalExitBarriers(requested);
+      const signalDrain = waitForSignalExitBarriers(signal);
+      const completing = runCliWithExitFinalization({
+        run: successfulRun,
+        onError: ignoreError,
+        finalize,
+      });
+      try {
+        await Promise.resolve();
+        expect(finalize).not.toHaveBeenCalled();
+        cleanup.resolve();
+        await Promise.all([signalDrain, completing]);
+        expect(process.exitCode).toBe(expected);
+        expect(finalize).toHaveBeenCalledOnce();
+      } finally {
+        cleanup.resolve();
+        await Promise.all([signalDrain, completing]);
+        unregister();
+      }
+    },
+  );
+
+  it("joins caller-owned cleanup before publishing completion", async () => {
+    const closed = createDeferred();
+    const entered = createDeferred();
+    const running = runCliWithExitFinalization({
+      run: async () => {
+        throw new ExitError(7);
+      },
+      finalize: async () => {
+        entered.resolve();
+        await closed.promise;
+      },
+      onError: ignoreError,
+    });
+    try {
+      await entered.promise;
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      closed.resolve();
+      await running;
+    }
+    expect(process.exitCode).toBe(7);
+  });
+
+  it("reports failure before replacing a queued successful outcome", async () => {
+    const order: string[] = [];
+    requestExitAfterOneShotOutput(defaultRuntime, 0);
+    await runCliWithExitFinalization({
+      run: async () => {
+        throw new Error("command failed");
+      },
+      onError: async () => {
+        await Promise.resolve();
+        order.push("reported");
+        process.exitCode = 6;
+      },
+      finalize: async () => {
+        order.push("closed");
+      },
+    });
+    expect(order).toEqual(["reported", "closed"]);
+    expect(process.exitCode).toBe(6);
+  });
+
+  it("preserves the default successful outcome", async () => {
+    await runCliWithExitFinalization({
+      run: async () => {
+        requestExitAfterOneShotOutput();
+      },
+      onError: ignoreError,
+    });
+    expect(process.exitCode).toBe(0);
+  });
+
+  it.each(["before cleanup", "during cleanup"])(
+    "retains terminal signal outcome %s",
+    async (phase) => {
+      await runCliWithExitFinalization({
+        run: async () => {
+          requestExitAfterOneShotOutput(defaultRuntime, 0);
+          if (phase === "before cleanup") {
+            exitAfterSignalExitBarriers(143);
+          }
+        },
+        finalize: async () => {
+          if (phase === "during cleanup") {
+            exitAfterSignalExitBarriers(143);
+          }
+        },
+        onError: ignoreError,
+      });
+      expect(process.exitCode).toBe(143);
+    },
+  );
+
+  it("drains large piped JSON before a deferred ExitError without reporting another error", () => {
+    const payloadBytes = 1024 * 1024;
+    const script = `
+      import { runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
+      import { defaultRuntime, ExitError } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
+      await runCliWithExitFinalization({
+        run: async () => {
+          defaultRuntime.writeJson({ ok: false, payload: "x".repeat(${payloadBytes}) });
+          throw new ExitError(7);
+        },
+        onError: (error) => {
+          process.stderr.write("unexpected error: " + String(error));
+          process.exitCode = 1;
+        },
+      });
+    `;
+
+    const result = runCliChild(script, {}, 2 * payloadBytes);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(7);
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      `${JSON.stringify({ ok: false, payload: "x".repeat(payloadBytes) }, null, 2)}\n`,
+    );
+  });
+
+  it("keeps the real proxy command exit truthful when --help is consumed as a proxy URL", () => {
+    const script = `
+      import { Command, CommanderError } from "commander";
+      import { setRuntimeConfigSnapshot } from ${JSON.stringify(resolveRuntimeWorkerUrl(dashboardTitleRuntimeEntrypoints.config).href)};
+      import { resolveCliArgvInvocation } from ${JSON.stringify(resolveRuntimeWorkerUrl(oneShotExitProbeEntrypoints.argv).href)};
+      import { registerProxyCli } from ${JSON.stringify(resolveRuntimeWorkerUrl(oneShotExitProbeEntrypoints.proxy).href)};
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
+
+      setRuntimeConfigSnapshot({});
+      const argv = ["node", "openclaw", "proxy", "validate", ...${JSON.stringify(["--proxy-url", "--help", "--json"])}];
+      await runCliWithExitFinalization({
+        run: async () => {
+          const program = new Command().enablePositionalOptions().exitOverride();
+          registerProxyCli(program);
+          try {
+            await program.parseAsync(argv);
+          } catch (error) {
+            if (!(error instanceof CommanderError) || error.exitCode !== 0) {
+              throw error;
+            }
+            process.exitCode = error.exitCode;
+          }
+          if (resolveCliArgvInvocation(argv).hasHelpOrVersion) {
+            requestExitAfterOneShotOutput();
+          }
+        },
+        onError: (error) => { throw error; },
+      });
+    `;
+
+    const result = runCliChild(script, {
+      OPENCLAW_STATE_DIR: "/dev/null",
+      OPENCLAW_CONFIG_PATH: "/dev/null",
+      TMPDIR: proxyChildTempDir,
+      TEMP: proxyChildTempDir,
+      TMP: proxyChildTempDir,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        config: expect.objectContaining({
+          errors: ["proxyUrl must use http:// or https://"],
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
+    {
+      name: "natural successful completion",
+      exitCode: 0,
+      explicitRequest: false,
+    },
+  ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
+    const script = `
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl.href)};
+      import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
+      import { loggingState } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.loggingState).href)};
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+      loggingState.forceConsoleToStderr = true;
+      await runCliWithExitFinalization({
+        run: async () => {
+          defaultRuntime.writeStdout(JSON.stringify({ ok: ${exitCode === 0} }));
+          ${explicitRequest ? `requestExitAfterOneShotOutput(defaultRuntime, ${exitCode});` : ""}
+        },
+        finalize: async () => {
+          await Promise.resolve();
+          process.stderr.write("finalized\\n");
+        },
+        onError: (error) => { throw error; },
+      });
+    `;
+
+    const result = runCliChild(script);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(exitCode);
+    expect(result.signal).toBeNull();
+    expect(JSON.parse(result.stdout)).toEqual({ ok: exitCode === 0 });
+    expect(result.stderr.startsWith("finalized\n")).toBe(true);
+    if (explicitRequest) {
+      expect(result.stderr).toContain("\x1b[?25h");
+    } else {
+      expect(result.stderr).toBe("finalized\n");
+    }
+  });
+
+  it("keeps real dual-TTY JSON clean after a fatal unhandled rejection", () => {
+    const script = `
+      import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
+      import { loggingState } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.loggingState).href)};
+      import { installUnhandledRejectionHandler } from ${JSON.stringify(resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhandledRejections).href)};
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+      loggingState.forceConsoleToStderr = true;
+      installUnhandledRejectionHandler();
+      defaultRuntime.writeJson({ ok: false });
+      const error = Object.assign(new Error("expected fatal test"), {
+        code: "ERR_OUT_OF_MEMORY",
+      });
+      process.emit("unhandledRejection", error, Promise.resolve());
+    `;
+
+    const result = runCliChild(script);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(JSON.parse(result.stdout)).toEqual({ ok: false });
+    expect(result.stderr).toContain("\x1b[?25h");
+  });
+});

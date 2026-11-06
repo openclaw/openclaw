@@ -1,0 +1,80 @@
+// Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type {
+  GatewayDeferredChannelReload,
+  GatewayHotReloadStatus,
+} from "./config-reload-status.types.js";
+import type { GatewayDiscovery } from "./server-discovery-runtime.js";
+import type { GatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
+import {
+  MEDIA_CLEANUP_STOP_TIMEOUT_MS,
+  type MediaCleanupStopResult,
+  waitForMediaCleanupDrains,
+} from "./server-media-cleanup-lifecycle.js";
+import {
+  createGatewaySidecarStopOwner,
+  type GatewaySidecarStopOwner,
+} from "./server-sidecar-owners.js";
+
+// Mutable server handles track timers, sidecars, subscriptions, and service
+// cleanup hooks that shutdown/reload code must stop exactly once.
+// `hotReloadStatus` is omitted (not defaulted to "active") when no real
+// watcher is running, so health can distinguish "no reloader" from "reloader
+// active" instead of guessing.
+export type GatewayConfigReloaderHandle = {
+  stop: () => Promise<void>;
+  hotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
+  getCommittedRuntimeConfig?: () => import("../config/types.openclaw.js").OpenClawConfig;
+  applyPluginLifecycleChange: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
+  isConfigReloadSettled: () => boolean;
+};
+
+/** Mutable handles owned by a running gateway server process. */
+export type GatewayServerMutableState = {
+  discovery: GatewayDiscovery | null;
+  maintenance: GatewayMaintenanceHandles | null;
+  stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
+  stopScheduledServices: () => Promise<void>;
+  stopDeliveryRecovery: () => Promise<void>;
+  stopGatewayUpdateCheck: () => Promise<void>;
+  tailscaleCleanup: (() => Promise<void>) | null;
+  readonly postReadySidecars: GatewaySidecarStopOwner;
+  readonly gatewayLifetimeSidecars: GatewaySidecarStopOwner;
+  skillsChangeUnsub: (options?: { exitAfterClose?: boolean }) => Promise<void>;
+  channelHealthMonitor: ChannelHealthMonitor | null;
+  configReloader: GatewayConfigReloaderHandle;
+  reconcileAuditPolicy: ((config: OpenClawConfig) => void) | null;
+  agentUnsub: (() => Promise<void> | void) | null;
+  transcriptUnsub: (() => void) | null;
+  lifecycleUnsub: (() => void) | null;
+};
+
+/** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
+export function createGatewayServerMutableState(): GatewayServerMutableState {
+  return {
+    discovery: null,
+    maintenance: null,
+    stopMediaCleanup: () => waitForMediaCleanupDrains({ timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS }),
+    stopScheduledServices: async () => {},
+    stopDeliveryRecovery: async () => {},
+    stopGatewayUpdateCheck: async () => {},
+    tailscaleCleanup: null,
+    postReadySidecars: createGatewaySidecarStopOwner(),
+    gatewayLifetimeSidecars: createGatewaySidecarStopOwner(),
+    skillsChangeUnsub: async () => {},
+    channelHealthMonitor: null,
+    configReloader: {
+      stop: async () => {},
+      applyPluginLifecycleChange: async () => {
+        throw new Error("Plugin lifecycle is unavailable before Gateway startup completes.");
+      },
+      isConfigReloadSettled: () => false,
+    },
+    reconcileAuditPolicy: null,
+    agentUnsub: null,
+    transcriptUnsub: null,
+    lifecycleUnsub: null,
+  };
+}

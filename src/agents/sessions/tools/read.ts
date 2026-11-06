@@ -1,0 +1,703 @@
+import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
+import * as os from "node:os";
+import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import type { Component, Keybinding, Text } from "@earendil-works/pi-tui";
+import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
+import { shortenPathWithHome } from "../../../infra/home-display.js";
+import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+  resolveMediaReferenceLocalPath,
+} from "../../../media/media-reference.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
+import {
+  getLanguageFromPath,
+  highlightCode,
+  interactiveAgentTheme,
+  type Theme,
+} from "../../modes/interactive/theme/theme.js";
+import { loadTuiRuntime } from "../../modes/interactive/tui-runtime.js";
+import { getReadmePath } from "../../package-metadata.js";
+import type { AgentTool } from "../../runtime/index.js";
+import { sanitizeBinaryOutput } from "../../shell-utils.js";
+import { bindAgentToolReplaySafety } from "../../tool-replay-safety.js";
+import type { ToolResultBudget } from "../../tool-result-limits.js";
+import { processImage } from "../../utils/image-resize.js";
+import { detectSupportedImageMimeType } from "../../utils/mime.js";
+import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
+import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeysResolution,
+} from "./file-mutation-queue.js";
+import { assertFileToolNotAborted } from "./file-tool-abort.js";
+import { normalizePositiveLimit } from "./limits.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
+import { captureLocalReadFile, readLocalFile } from "./read-file.js";
+import { createBoundedReadTextPage } from "./read-page.js";
+import { createReadTextCapture, type ReadTextCapture } from "./read-text-capture.js";
+import type { ReadToolDetails } from "./tool-contracts.js";
+import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
+
+/** Returns a display string for string/nullish values, or null for unsupported values. */
+function str(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  return null;
+}
+
+/** Replaces tabs with stable spaces so terminal layout does not shift by tab stop. */
+function replaceTabs(text: string): string {
+  return text.replace(/\t/g, "   ");
+}
+
+function trimTrailingEmptyLines(lines: readonly string[]): string[] {
+  return lines.slice(0, lines.findLastIndex((line) => line !== "") + 1);
+}
+
+function reuseTextComponent(lastComponent: Component | undefined, content: string): Text {
+  const { Text } = loadTuiRuntime();
+  const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0); // SAFETY: Render slots only reuse the component returned by this renderer.
+  text.setText(content);
+  return text;
+}
+
+function keyText(keybinding: Keybinding): string {
+  const { getKeybindings } = loadTuiRuntime();
+  return getKeybindings()
+    .getKeys(keybinding)
+    .join("/")
+    .replace(/[^+/]+/g, (part) =>
+      process.platform === "darwin" && part.toLowerCase() === "alt" ? "option" : part,
+    );
+}
+
+function keyHint(keybinding: Keybinding, description: string): string {
+  return (
+    interactiveAgentTheme.fg("dim", keyText(keybinding)) +
+    interactiveAgentTheme.fg("muted", ` ${description}`)
+  );
+}
+
+function normalizeReadError(error: unknown, filePath: string): Error {
+  if (hasErrnoCode(error, "EISDIR")) {
+    return new Error(
+      `Read requires a file path, but ${filePath} is a directory. List the directory, then read a specific file.`,
+    );
+  }
+  return toErrorObject(error, "Non-Error rejection");
+}
+
+async function assertLocalReadableFile(filePath: string): Promise<void> {
+  const stat = await fsStat(filePath);
+  if (stat.isDirectory()) {
+    throw Object.assign(new Error(`Read requires a file: ${filePath}`), { code: "EISDIR" });
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Read only supports regular files; no read was attempted: ${filePath}`);
+  }
+}
+
+async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await fsReaddir(dirname(filePath));
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return [];
+    }
+    throw error;
+  }
+  const filename = basename(filePath);
+  const requested = filename.toLowerCase();
+  const maxDistance = Math.max(1, Math.floor(requested.length * 0.4));
+  const matches: { entry: string; distance: number }[] = [];
+  for (const entry of entries) {
+    const distance = levenshteinDistance(requested, entry.toLowerCase(), maxDistance);
+    if (entry !== filename && distance !== null) {
+      matches.push({ entry, distance });
+    }
+  }
+  return matches
+    .toSorted(
+      (left, right) => left.distance - right.distance || left.entry.localeCompare(right.entry),
+    )
+    .slice(0, 3)
+    .map(({ entry }) => entry);
+}
+
+interface CompactReadClassification {
+  kind: "docs" | "resource" | "skill";
+  label: string;
+}
+
+const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
+
+/**
+ * Pluggable operations for the read tool.
+ * Override these to delegate file reading to remote systems (for example SSH).
+ */
+interface ReadOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
+  /** Resolve a user-supplied path for this read backend. */
+  resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
+  /** Decode text bytes for this backend. Custom backends default to UTF-8. */
+  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
+  /** Check if file is readable (throw if not) */
+  access: (absolutePath: string) => Promise<void>;
+  /** Detect image MIME type, return null or undefined for non-images */
+  detectImageMimeType?: (
+    absolutePath: string,
+    buffer: Buffer,
+  ) => Promise<string | null | undefined>;
+}
+
+const defaultReadOperations: ReadOperations = {
+  resolvePath: resolveLocalReadPath,
+  decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
+  readFile: readLocalFile,
+  access: assertLocalReadableFile,
+};
+
+export interface ReadToolOptions {
+  /** Whether to auto-resize images to 2000x2000 max. Default: true */
+  autoResizeImages?: boolean;
+  /** Custom operations for file reading. Default: local filesystem */
+  operations?: ReadOperations;
+  /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
+  maxBytes?: number;
+  /** Prepared text budget; standalone readers retain their byte-only allowance. */
+  modelBudget?: ToolResultBudget;
+  /** Prepared capability for embedded calls, which carry no extension model context. */
+  modelHasVision?: boolean;
+}
+
+type ReadRenderArgs = {
+  path?: string;
+  file_path?: string;
+  offset?: number;
+  limit?: number;
+  cursor?: number;
+};
+
+function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
+  if (args?.offset === undefined && args?.limit === undefined) {
+    return "";
+  }
+  const startLine = args.offset ?? 1;
+  const normalizedLimit =
+    args.limit !== undefined ? normalizePositiveLimit(args.limit, DEFAULT_MAX_LINES) : undefined;
+  const endLine = normalizedLimit !== undefined ? startLine + normalizedLimit - 1 : "";
+  return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
+}
+
+function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string {
+  const rawPath = str(args?.file_path ?? args?.path);
+  const path =
+    rawPath !== null ? shortenPathWithHome(rawPath, { home: os.homedir(), prefix: "~" }) : null;
+  const invalidArg = theme.fg("error", "[invalid arg]");
+  const pathDisplay =
+    path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
+  return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
+}
+
+function getOpenClawDocsClassification(
+  absolutePath: string,
+): CompactReadClassification | undefined {
+  const packageRoot = dirname(getReadmePath());
+  const relativePath = relative(resolvePath(packageRoot), resolvePath(absolutePath));
+  if (
+    relativePath === "" ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    return undefined;
+  }
+
+  const label = normalizeNativePathSeparators(relativePath);
+  if (label === "README.md" || label.startsWith("docs/") || label.startsWith("examples/")) {
+    return { kind: "docs", label };
+  }
+  return undefined;
+}
+
+function getCompactReadClassification(
+  args: ReadRenderArgs | undefined,
+  cwd: string,
+): CompactReadClassification | undefined {
+  const rawPath = str(args?.file_path ?? args?.path);
+  if (!rawPath) {
+    return undefined;
+  }
+
+  const absolutePath = resolveToCwd(rawPath, cwd);
+  const fileName = basename(absolutePath);
+  if (fileName === "SKILL.md") {
+    return { kind: "skill", label: basename(dirname(absolutePath)) || fileName };
+  }
+
+  const docsClassification = getOpenClawDocsClassification(absolutePath);
+  if (docsClassification) {
+    return docsClassification;
+  }
+
+  if (COMPACT_RESOURCE_FILE_NAMES.has(fileName)) {
+    return { kind: "resource", label: formatPathRelativeToCwdOrAbsolute(absolutePath, cwd) };
+  }
+
+  return undefined;
+}
+
+async function resolveLocalReadPath(filePath: string, cwd: string): Promise<string> {
+  const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
+  if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
+    return await resolveMediaReferenceLocalPath(normalizedMediaSource);
+  }
+  return resolveLocalPathToCwd(filePath, cwd);
+}
+
+async function resolveReadToolInputPath(
+  ops: ReadOperations,
+  filePath: string,
+  cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
+
+async function resolveReadToolPathFromAbsolute(
+  ops: ReadOperations,
+  absolutePath: string,
+): Promise<{ absolutePath: string; note?: string }> {
+  try {
+    await ops.access(absolutePath);
+    return { absolutePath };
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+      throw error;
+    }
+
+    const matches: string[] = [];
+    for (const candidate of getReadPathVariants(absolutePath)) {
+      try {
+        await ops.access(candidate);
+        matches.push(candidate);
+      } catch (candidateError) {
+        if (!hasErrnoCode(candidateError, "ENOENT") && !hasErrnoCode(candidateError, "ENOTDIR")) {
+          throw candidateError;
+        }
+      }
+    }
+
+    if (matches.length > 1) {
+      throw new Error(
+        `Read path is ambiguous: ${basename(absolutePath)} matches ${matches.map((match) => basename(match)).join(", ")}.`,
+        { cause: error },
+      );
+    }
+    const match = matches[0];
+    if (match !== undefined) {
+      return {
+        absolutePath: match,
+        note: `[Resolved filename: ${basename(absolutePath)} -> ${basename(match)}.]`,
+      };
+    }
+
+    const suggestions =
+      ops === defaultReadOperations ? await suggestLocalReadPaths(absolutePath) : [];
+    const suggestion = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
+    throw Object.assign(
+      new Error(`File not found: ${absolutePath}.${suggestion}`, { cause: error }),
+      {
+        code: "ENOENT",
+      },
+    );
+  }
+}
+
+function formatCompactReadCall(
+  classification: CompactReadClassification,
+  args: ReadRenderArgs | undefined,
+  theme: Theme,
+): string {
+  const expandHint = theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
+  if (classification.kind === "skill") {
+    return (
+      theme.fg("customMessageLabel", `\u001b[1m[skill]\u001b[22m `) +
+      theme.fg("customMessageText", classification.label) +
+      formatReadLineRange(args, theme) +
+      expandHint
+    );
+  }
+
+  return (
+    theme.fg("toolTitle", theme.bold(`read ${classification.kind}`)) +
+    " " +
+    theme.fg("accent", classification.label) +
+    formatReadLineRange(args, theme) +
+    expandHint
+  );
+}
+
+function formatReadResult(
+  args: ReadRenderArgs | undefined,
+  result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
+  options: ToolRenderResultOptions,
+  theme: Theme,
+  showImages: boolean,
+  cwd: string,
+  isError: boolean,
+): string {
+  if (!options.expanded && !isError && getCompactReadClassification(args, cwd)) {
+    return "";
+  }
+
+  const rawPath = str(args?.file_path ?? args?.path);
+  const textBlocks = result.content.filter((c) => c.type === "text");
+  const imageBlocks = result.content.filter((c) => c.type === "image");
+
+  let output = textBlocks
+    .map((c) => sanitizeBinaryOutput(c.text || "", { ansiMode: "compat" }).replace(/\r/g, ""))
+    .join("\n");
+
+  const { getCapabilities, getImageDimensions, imageFallback } = loadTuiRuntime();
+  const caps = getCapabilities();
+  if (imageBlocks.length > 0 && (!caps.images || !showImages)) {
+    // When inline images are unavailable, preserve visible evidence that media was returned.
+    const imageIndicators = imageBlocks
+      .map((img) => {
+        const mimeType = img.mimeType ?? "image/unknown";
+        const dims =
+          img.data && img.mimeType
+            ? (getImageDimensions(img.data, img.mimeType) ?? undefined)
+            : undefined;
+        return imageFallback(mimeType, dims);
+      })
+      .join("\n");
+    output = output ? `${output}\n${imageIndicators}` : imageIndicators;
+  }
+  const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+  const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
+  const lines = trimTrailingEmptyLines(renderedLines);
+  const maxLines = options.expanded ? lines.length : 10;
+  const displayLines = lines.slice(0, maxLines);
+  const remaining = lines.length - maxLines;
+  let text = `\n${displayLines.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
+  if (remaining > 0) {
+    text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
+  }
+
+  const truncation = result.details?.kind === "truncated" ? result.details.truncation : undefined;
+  if (truncation?.truncated) {
+    if (truncation.firstLineExceedsLimit) {
+      text += `\n${theme.fg("warning", `[First line exceeds ${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit]`)}`;
+    } else if (truncation.truncatedBy === "lines") {
+      text += `\n${theme.fg("warning", `[Truncated: showing ${truncation.outputLines}${truncation.totalLines === undefined ? "" : ` of ${truncation.totalLines}`} lines (${truncation.maxLines ?? DEFAULT_MAX_LINES} line limit)]`)}`;
+    } else {
+      text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)]`)}`;
+    }
+  }
+  return text;
+}
+
+export function createReadToolDefinition(
+  cwd: string,
+  options?: ReadToolOptions,
+): ToolDefinition<typeof readToolInputSchema, ReadToolDetails> {
+  const autoResizeImages = options?.autoResizeImages ?? true;
+  const ops = options?.operations ?? defaultReadOperations;
+  const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
+  const definition: ToolDefinition<typeof readToolInputSchema, ReadToolDetails> = {
+    name: "read",
+    label: "read",
+    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line. Totals are absent until EOF is reached.`,
+    promptSnippet: "Read file contents",
+    promptGuidelines: ["Use read to examine files and its offset, limit, or cursor to continue."],
+    parameters: readToolInputSchema,
+    outputSchema: readToolOutputSchema,
+    async execute(
+      _toolCallId,
+      { path, offset, limit, cursor = 0, optional },
+      signal,
+      _onUpdate,
+      ctx,
+    ) {
+      if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
+        throw new Error("Offset must be an integer at least 1");
+      }
+      if (!Number.isSafeInteger(cursor) || cursor < 0) {
+        throw new Error("Cursor must be an integer at least 0");
+      }
+      return await racePromiseWithAbortSignal(
+        async (): Promise<{
+          content: (TextContent | ImageContent)[];
+          details: ReadToolDetails;
+        }> => {
+          try {
+            let absolutePath: string;
+            let note: string | undefined;
+            let buffer: Buffer;
+            let capturedText: ReadTextCapture | undefined;
+            try {
+              // Share write/edit ordering through capture, retaining only a bounded
+              // text snapshot before releasing the path queue for rendering.
+              const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
+              const queueKeysResolution = inputPathResolution.then(
+                async (absoluteInputPath) =>
+                  await Promise.all(
+                    getReadQueuePaths(absoluteInputPath).map(
+                      async (candidate) =>
+                        await resolveFileMutationQueueKey(candidate, ops.resolveQueueKey, signal),
+                    ),
+                  ),
+              );
+              const snapshot = await withFileMutationQueueKeysResolution(
+                queueKeysResolution,
+                async () => {
+                  const absoluteInputPath = await inputPathResolution;
+                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  assertFileToolNotAborted(signal);
+                  return {
+                    ...resolved,
+                    ...(ops === defaultReadOperations
+                      ? await captureLocalReadFile(
+                          resolved.absolutePath,
+                          {
+                            offset: offset ?? 1,
+                            cursor,
+                            limit:
+                              limit === undefined
+                                ? undefined
+                                : normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
+                            maxChars: Math.min(DEFAULT_MAX_BYTES, maxBytes) + 2,
+                          },
+                          signal,
+                        )
+                      : {
+                          buffer: await ops.readFile(resolved.absolutePath, signal),
+                          text: undefined,
+                        }),
+                  };
+                },
+              );
+              ({ absolutePath, note, buffer, text: capturedText } = snapshot);
+            } catch (error) {
+              if (
+                signal?.aborted ||
+                optional !== true ||
+                (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
+              ) {
+                throw error;
+              }
+              return {
+                content: [{ type: "text", text: `Optional file not found: ${path}.` }],
+                details: {
+                  kind: "not_found",
+                  status: "not_found",
+                  path,
+                  optional: true,
+                },
+              };
+            }
+            const mimeType = capturedText
+              ? null
+              : await (ops.detectImageMimeType
+                  ? ops.detectImageMimeType(absolutePath, buffer)
+                  : detectSupportedImageMimeType(buffer));
+            const attachment =
+              mimeType || capturedText ? undefined : await classifyAttachmentBytes({ buffer });
+            let content: (TextContent | ImageContent)[];
+            let textDetails: Extract<ReadToolDetails, { kind: "text" | "truncated" }> | undefined;
+            const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
+            const nonVisionImageNote =
+              modelHasVision === false
+                ? "[Current model does not support images. The image will be omitted from this request.]"
+                : undefined;
+            if (attachment?.class === "document") {
+              content = [
+                {
+                  type: "text",
+                  text: `Read did not return file contents because it detected a binary document [${attachment.mime ?? "unknown"}]. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file.`,
+                },
+              ];
+            } else if (mimeType) {
+              // Backends may reuse their Buffer while image preparation awaits processing.
+              const imageBytes = Buffer.from(buffer);
+              const processed = await processImage(
+                { data: imageBytes, mimeType },
+                { autoResizeImages },
+              );
+              const notes = processed.ok
+                ? [`Read image file [${processed.image.mimeType}]`, ...processed.hints]
+                : [`Read image file [${mimeType}]`, processed.message];
+              if (nonVisionImageNote) {
+                notes.push(nonVisionImageNote);
+              }
+              content = [{ type: "text", text: notes.join("\n") }];
+              if (processed.ok && !nonVisionImageNote) {
+                content.push(processed.image);
+              }
+            } else {
+              const startLine = offset === undefined ? 0 : offset - 1;
+              const startLineDisplay = startLine + 1;
+              const requestedLines =
+                limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
+              if (!capturedText) {
+                const decodedText =
+                  ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
+                const selected = createReadTextCapture({
+                  offset: startLineDisplay,
+                  cursor,
+                  limit: requestedLines,
+                  maxChars: Math.min(DEFAULT_MAX_BYTES, maxBytes) + 2,
+                });
+                selected.write(
+                  decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText,
+                );
+                capturedText = selected.finish();
+              }
+              const {
+                totalLines: totalFileLines,
+                selectedLineCount,
+                firstLineLength,
+                selectedHasText,
+              } = capturedText;
+              let outputText: string;
+              if (totalFileLines === 0) {
+                outputText =
+                  buffer.length === 0
+                    ? "File is empty (0 bytes)."
+                    : `File contains no readable text (${buffer.length} bytes).`;
+              } else if (totalFileLines !== undefined && startLine >= totalFileLines) {
+                outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
+              } else if (cursor > 0 && cursor >= firstLineLength) {
+                const nextLine =
+                  totalFileLines === undefined || startLine + 1 < totalFileLines
+                    ? ` Use offset=${startLineDisplay + 1} to continue.`
+                    : "";
+                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${firstLineLength} characters).${nextLine}`;
+              } else {
+                if (cursor > 0 && capturedText.cursorSplitsSurrogatePair) {
+                  throw new Error(
+                    `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
+                  );
+                }
+                const endLine = startLine + selectedLineCount;
+                const userLimitedLines =
+                  totalFileLines === undefined
+                    ? requestedLines
+                    : limit === undefined
+                      ? undefined
+                      : endLine - startLine;
+                const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
+                const page = createBoundedReadTextPage({
+                  content: capturedText.content,
+                  totalBytes: capturedText.totalBytes,
+                  startLine: startLineDisplay,
+                  endLine,
+                  totalLines: totalFileLines,
+                  cursor,
+                  limit: userLimitedLines,
+                  maxBytes,
+                  modelBudget: options?.modelBudget,
+                  prefix: note ? `${note}\n` : undefined,
+                  pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
+                  adaptive: options?.maxBytes !== undefined,
+                });
+                outputText = page.text;
+                textDetails = page.details;
+                if (!selectedHasText) {
+                  const subject =
+                    startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
+                  outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
+                  if (textDetails.kind === "truncated") {
+                    outputText += page.text.slice(textDetails.content.length);
+                  }
+                }
+              }
+              if (textDetails) {
+                // A full-fit selection can still have a continuation and borrow the decoded file.
+                // Detach both bounded channels regardless of EOF, preserving exact UTF-16 units.
+                const sameContent = outputText === textDetails.content;
+                outputText = Buffer.from(outputText, "utf16le").toString("utf16le");
+                textDetails.content = sameContent
+                  ? outputText
+                  : Buffer.from(textDetails.content, "utf16le").toString("utf16le");
+              }
+              content = [{ type: "text", text: outputText }];
+            }
+
+            if (note && content[0]?.type === "text") {
+              content = [
+                { ...content[0], text: `${note}\n${content[0].text}` },
+                ...content.slice(1),
+              ];
+            }
+
+            assertFileToolNotAborted(signal);
+            const text =
+              content.find((part): part is TextContent => part.type === "text")?.text ?? "";
+            const image = content.find((part): part is ImageContent => part.type === "image");
+            return {
+              content,
+              details: image
+                ? { kind: "image", content: text, mimeType: image.mimeType }
+                : (textDetails ?? { kind: "text", content: text }),
+            };
+          } catch (error: unknown) {
+            throw normalizeReadError(error, path);
+          }
+        },
+        signal,
+        () => new Error("Operation aborted"),
+      );
+    },
+    renderCall(args, theme, context) {
+      const classification = !context.expanded
+        ? getCompactReadClassification(args, context.cwd)
+        : undefined;
+      const content = classification
+        ? formatCompactReadCall(classification, args, theme)
+        : formatReadCall(args, theme);
+      return reuseTextComponent(context.lastComponent, content);
+    },
+    renderResult(result, optionsLocal, theme, context) {
+      const content = formatReadResult(
+        context.args,
+        result,
+        optionsLocal,
+        theme,
+        context.showImages,
+        context.cwd,
+        context.isError,
+      );
+      return reuseTextComponent(context.lastComponent, content);
+    },
+  };
+  return options?.operations ? definition : bindAgentToolReplaySafety(definition, "bounded-read");
+}
+
+export function createReadTool(
+  cwd: string,
+  options?: ReadToolOptions,
+): AgentTool<typeof readToolInputSchema, ReadToolDetails> {
+  return wrapToolDefinition(createReadToolDefinition(cwd, options));
+}

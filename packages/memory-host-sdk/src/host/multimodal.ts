@@ -1,0 +1,94 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+// Multimodal memory settings and file classification helpers.
+
+const MEMORY_MULTIMODAL_SPECS = {
+  image: {
+    labelPrefix: "Image file",
+    extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"],
+  },
+  audio: {
+    labelPrefix: "Audio file",
+    extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".m2a", ".aac", ".flac"],
+  },
+} as const;
+
+/** Supported multimodal memory modality. */
+export type MemoryMultimodalModality = keyof typeof MEMORY_MULTIMODAL_SPECS;
+/** All supported multimodal memory modalities in stable config order. */
+const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
+  MEMORY_MULTIMODAL_SPECS,
+) as MemoryMultimodalModality[];
+/** User selection for one modality or all modalities. */
+type MemoryMultimodalSelection = MemoryMultimodalModality | "all";
+
+/** Normalized multimodal memory ingestion settings. */
+export type MemoryMultimodalSettings = {
+  enabled: boolean;
+  modalities: MemoryMultimodalModality[];
+  maxFileBytes: number;
+};
+
+/** Default max bytes for one multimodal memory file. */
+const DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Normalize user modality selections to supported modalities. */
+function normalizeMemoryMultimodalModalities(
+  raw: MemoryMultimodalSelection[] | undefined,
+): MemoryMultimodalModality[] {
+  if (raw === undefined || raw.includes("all")) {
+    return [...MEMORY_MULTIMODAL_MODALITIES];
+  }
+  return [...new Set(raw.filter((value) => value === "image" || value === "audio"))];
+}
+
+/** Normalize user multimodal settings, including disabled-state empty modality list. */
+export function normalizeMemoryMultimodalSettings(raw: {
+  enabled?: boolean;
+  modalities?: MemoryMultimodalSelection[];
+  maxFileBytes?: number;
+}): MemoryMultimodalSettings {
+  const enabled = raw.enabled === true;
+  const maxFileBytes = resolveIntegerOption(
+    raw.maxFileBytes,
+    DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
+    {
+      min: 1,
+    },
+  );
+  return {
+    enabled,
+    modalities: enabled ? normalizeMemoryMultimodalModalities(raw.modalities) : [],
+    maxFileBytes,
+  };
+}
+
+/** Return true when multimodal memory ingestion has at least one enabled modality. */
+export function isMemoryMultimodalEnabled(settings: MemoryMultimodalSettings): boolean {
+  return settings.enabled && settings.modalities.length > 0;
+}
+
+/** Build the text label that accompanies embedded multimodal file content. */
+export function buildMemoryMultimodalLabel(
+  modality: MemoryMultimodalModality,
+  normalizedPath: string,
+): string {
+  return `${MEMORY_MULTIMODAL_SPECS[modality].labelPrefix}: ${normalizedPath}`;
+}
+
+/** Classify a file path into a supported multimodal modality under current settings. */
+export function classifyMemoryMultimodalPath(
+  filePath: string,
+  settings: MemoryMultimodalSettings,
+): MemoryMultimodalModality | null {
+  if (!isMemoryMultimodalEnabled(settings)) {
+    return null;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(filePath);
+  return (
+    settings.modalities.find((modality) =>
+      MEMORY_MULTIMODAL_SPECS[modality].extensions.some((extension) => lower.endsWith(extension)),
+    ) ?? null
+  );
+}

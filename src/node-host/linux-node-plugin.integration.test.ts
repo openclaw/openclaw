@@ -1,0 +1,73 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expect, it, onTestFinished, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+import { resetNodeHostPluginRegistry } from "./plugin-node-host.test-support.js";
+import { prepareNodeHostRuntime } from "./runtime.js";
+
+const LINUX_NODE_COMMANDS = [
+  "camera.clip",
+  "camera.list",
+  "camera.snap",
+  "location.get",
+  "system.notify",
+] as const;
+
+it("loads and advertises enabled linux-node commands through the node-host runtime", async () => {
+  resetPluginLoaderTestStateForTest();
+  resetNodeHostPluginRegistry();
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  if (!platformDescriptor) {
+    throw new Error("process.platform descriptor unavailable");
+  }
+  // Keep workspace dependencies resolvable from the copied integration package.
+  const bundledRoot = fs.mkdtempSync(path.resolve(".linux-node-plugin-test-"));
+  onTestFinished(() => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    resetPluginLoaderTestStateForTest();
+    resetNodeHostPluginRegistry();
+    fs.rmSync(bundledRoot, { force: true, recursive: true });
+  });
+  fs.cpSync(path.resolve("extensions/linux-node"), path.join(bundledRoot, "linux-node"), {
+    recursive: true,
+  });
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+
+  const fakeBinDir = path.resolve(".artifacts", "linux-node-test-bin");
+  const originalAccessSync = fs.accessSync.bind(fs);
+  vi.spyOn(fs, "accessSync").mockImplementation((candidate, mode) => {
+    if (path.dirname(path.resolve(String(candidate))) === fakeBinDir) {
+      return;
+    }
+    return originalAccessSync(candidate, mode);
+  });
+  vi.stubEnv("PATH", `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledRoot);
+  vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+
+  const enabled = { enabled: true };
+  const config: OpenClawConfig = {
+    gateway: { nodes: { commands: { allow: ["camera.snap", "camera.clip"] } } },
+    nodeHost: { skills: { enabled: false } },
+    plugins: {
+      allow: ["linux-node"],
+      entries: {
+        "linux-node": {
+          enabled: true,
+          config: { notify: enabled, camera: enabled, location: enabled },
+        },
+      },
+    },
+  };
+
+  const prepared = await prepareNodeHostRuntime({ config, env: process.env });
+  const registered = listRegisteredNodeHostCapsAndCommands({ config, env: process.env });
+
+  expect(registered.caps).toEqual(["camera", "location"]);
+  expect(prepared.manifest.commands).toEqual(expect.arrayContaining([...LINUX_NODE_COMMANDS]));
+});

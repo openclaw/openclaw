@@ -1,0 +1,81 @@
+// Memory core host embedding exports expose host embedding primitives to the memory plugin.
+
+/**
+ * @deprecated Load-only bridge for published llama.cpp provider releases from before the
+ * managed llama-server cutover. Remove after managed releases have replaced the old npm
+ * latest and extended-stable packages and their upgrade window has closed.
+ */
+export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never> {
+  return Promise.reject(
+    new Error(
+      "The legacy in-process llama.cpp embedding runtime is retired. Run `openclaw update repair` to install the managed llama-server provider, then restart OpenClaw.",
+    ),
+  );
+}
+
+export {
+  buildBatchHeaders,
+  buildEmbeddingBatchGroupOptions,
+  buildRemoteBaseUrlPolicy,
+  classifyMemoryMultimodalPath,
+  createRemoteEmbeddingProvider,
+  debugEmbeddingsLog,
+  embeddingProviderOwnsDestination,
+  EmbeddingBatchUnavailableError,
+  EMBEDDING_BATCH_ENDPOINT,
+  estimateStructuredEmbeddingInputBytes,
+  estimateUtf8Bytes,
+  extractBatchErrorMessage,
+  extractEmbeddingUsage,
+  formatBatchErrorDetail,
+  formatEmbeddingModelInput,
+  formatEmbeddingTaskText,
+  formatUnavailableBatchError,
+  hasNonTextEmbeddingParts,
+  isEmbeddingBatchUnavailableError,
+  isMissingEmbeddingApiKeyError,
+  mapBatchEmbeddingsByIndex,
+  normalizeEmbeddingModelWithPrefixes,
+  postJsonWithRetry,
+  readEmbeddingBatchJsonl,
+  resolveEmbeddingEndpointUrl,
+  resolveEmbeddingProviderSsrFPolicy,
+  resolveEmbeddingInputFormatVersion,
+  resolveRemoteEmbeddingBearerClient,
+  resolveRemoteEmbeddingClient,
+  runEmbeddingBatchGroups,
+  runEmbeddingBatches,
+  sanitizeAndNormalizeEmbedding,
+  sanitizeEmbeddingCacheHeaders,
+  waitForEmbeddingBatch,
+  uploadBatchJsonlFile,
+  withRemoteHttpResponse,
+} from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+
+export type {
+  EmbeddingBatchExecutionParams,
+  EmbeddingBatchStatus,
+  EmbeddingInput,
+  ProviderBatchOutputLine,
+  RemoteEmbeddingClient,
+  RemoteEmbeddingRequestAuth,
+} from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { listMemoryEmbeddingProviders } from "../plugins/memory-embedding-provider-runtime.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { fetchRemoteEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
+export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
+export type {
+  MemoryEmbeddingBatchChunk,
+  MemoryEmbeddingBatchOptions,
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderCallOptions,
+  MemoryEmbeddingProviderIndexIdentity,
+  MemoryEmbeddingProviderRuntime,
+} from "../plugins/memory-embedding-providers.js";
+export type {
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCreateOptions,
+  MemoryEmbeddingProviderCreateResult,
+} from "../plugins/registry-contribution-types.js";

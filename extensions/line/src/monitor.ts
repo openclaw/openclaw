@@ -1,0 +1,333 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  danger,
+  logVerbose,
+  waitForAbortSignal,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
+import {
+  canonicalizeWebhookRouteKey,
+  registerWebhookTargetWithPluginRoute,
+  resolveWebhookPath,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
+} from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
+import { deliverLineAutoReply } from "./auto-reply-delivery.js";
+import { createLineBot } from "./bot.js";
+import { prepareLineReplyPayload } from "./rich-messages.js";
+import { getLineRuntime } from "./runtime.js";
+import { showLoadingAnimation } from "./send.js";
+import type { LineChannelData } from "./types.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
+import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
+
+interface MonitorLineProviderOptions {
+  channelAccessToken: string;
+  channelSecret: string;
+  accountId?: string;
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  abortSignal?: AbortSignal;
+  webhookPath?: string;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+}
+
+const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
+
+type LineWebhookTarget = {
+  accountId: string;
+  bot: ReturnType<typeof createLineBot>;
+  channelSecret: string;
+  path: string;
+  runtime: RuntimeEnv;
+};
+
+const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
+
+export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
+  const {
+    channelAccessToken,
+    channelSecret,
+    accountId,
+    config,
+    runtime,
+    buildContext,
+    abortSignal,
+    webhookPath,
+    statusSink,
+  } = opts;
+  const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
+  const token = channelAccessToken.trim();
+  const secret = channelSecret.trim();
+
+  if (!token) {
+    throw new Error("LINE webhook mode requires a non-empty channel access token.");
+  }
+  if (!secret) {
+    throw new Error("LINE webhook mode requires a non-empty channel secret.");
+  }
+
+  const bot = createLineBot({
+    accountId,
+    runtime,
+    buildContext,
+    config,
+    onMessage: async (ctx, deliveryControl) => {
+      const { ctxPayload, replyToken, route } = ctx;
+      // Admission already resolved the config live for this event; the turn and
+      // its delivery run on that same one so the two can never disagree.
+      const turnConfig = deliveryControl.cfg;
+      // LINE shows a loading animation only in one-to-one chats. Core starts it once
+      // the reply is admitted, so send policy and typing suppression keep it silent.
+      const userId = ctx.isGroup ? undefined : ctx.userId;
+      const replyPipeline = userId
+        ? {
+            typing: {
+              start: () =>
+                showLoadingAnimation(userId, { cfg: turnConfig, accountId: ctx.accountId }),
+              keepaliveIntervalMs: 18_000,
+              // The reply lifecycle stops it when the turn settles; keep it for long runs.
+              maxDurationMs: 0,
+              // showLoadingAnimation logs and swallows its own failures.
+              onStartError: () => {},
+            },
+          }
+        : {};
+
+      let replyTokenUsed = false;
+      let turnAdopted = false;
+      const ingressLifecycle = deliveryControl.turnAdoptionLifecycle;
+      const turnAbortSignal = ingressLifecycle?.abortSignal;
+      // A group's configured skill scope only applies if the turn answering it carries it.
+      // An empty filter is a real scope ("no skills"), so presence decides, not length.
+      const skillFilter = ctx.skillFilter;
+      // Read this turn's own config: LINE resolves it per event so a hot-applied
+      // change reaches the next turn, and the streaming choice must too.
+      // Ask each scope separately. Core reads coalescing that way and lets an account
+      // override only the fields it names; an account config is merged shallowly, so
+      // reading the merged view alone would let an account that tunes nothing but
+      // coalescing erase the channel's explicit enable or disable.
+      const blockStreaming =
+        resolveChannelStreamingBlockEnabled(
+          resolveLineAccount({ cfg: turnConfig, accountId: route.accountId }).config,
+        ) ?? resolveChannelStreamingBlockEnabled(turnConfig.channels?.line);
+      // Only an explicit channel choice may speak here. Left unset the field stays
+      // undefined, which is how core reads "no opinion" and keeps the agent default.
+      const disableBlockStreaming =
+        typeof blockStreaming === "boolean" ? !blockStreaming : undefined;
+      const replyOptions =
+        turnAbortSignal || skillFilter || disableBlockStreaming !== undefined
+          ? {
+              ...(turnAbortSignal ? { abortSignal: turnAbortSignal } : {}),
+              ...(skillFilter ? { skillFilter } : {}),
+              ...(disableBlockStreaming !== undefined ? { disableBlockStreaming } : {}),
+            }
+          : undefined;
+
+      try {
+        const textLimit = 5000;
+        const core = getLineRuntime();
+        const turnResult = await core.channel.inbound.run({
+          channel: "line",
+          accountId: route.accountId,
+          raw: ctx,
+          turnAdoptionLifecycle: {
+            ...ingressLifecycle,
+            admission: "exclusive",
+            onAdopted: async () => {
+              await ingressLifecycle?.onAdopted();
+              turnAdopted = true;
+            },
+          },
+          adapter: {
+            ingest: () => ({
+              id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
+              rawText: ctxPayload.RawBody ?? ctxPayload.BodyForAgent ?? "",
+            }),
+            resolveTurn: () => ({
+              cfg: turnConfig,
+              channel: "line",
+              accountId: route.accountId,
+              route: { agentId: route.agentId, sessionKey: route.sessionKey },
+              ctxPayload,
+              record: ctx.turn.record,
+              replyPipeline,
+              // Block replies are paced by the agent's own humanDelay; nothing else
+              // reads it, so a turn that never forwards it silently paces at zero.
+              dispatcherOptions: {
+                humanDelay: resolveHumanDelayConfig(turnConfig, route.agentId),
+              },
+              ...(replyOptions ? { replyOptions } : {}),
+              delivery: {
+                // Core renders presentations inside the outbound send pipeline only,
+                // so this path resolves them before either branch reads channelData.
+                preparePayload: (payload) => prepareLineReplyPayload(payload, ctxPayload.From),
+                durable: (payload, info) => {
+                  if (info.kind !== "final") {
+                    return false;
+                  }
+                  if (replyToken && !replyTokenUsed) {
+                    return false;
+                  }
+                  const lineData = payload.channelData?.line;
+                  if (lineData && Object.keys(lineData).length > 0) {
+                    return false;
+                  }
+                  const reply = resolveSendableOutboundReplyParts(payload);
+                  if (reply.hasMedia || !reply.hasText) {
+                    return false;
+                  }
+                  return { to: ctxPayload.From };
+                },
+                deliver: async (payload) => {
+                  const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+
+                  const deliveryResult = await deliverLineAutoReply({
+                    payload,
+                    lineData,
+                    to: ctxPayload.From,
+                    replyToken,
+                    replyTokenUsed,
+                    accountId: ctx.accountId,
+                    cfg: turnConfig,
+                    textLimit,
+                    onReplyError: (replyErr) => {
+                      logVerbose(
+                        `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                      );
+                    },
+                  });
+                  replyTokenUsed = deliveryResult.replyTokenUsed;
+
+                  if (deliveryResult.status === "partial") {
+                    // Text reached the user but a rich/media bubble did not.
+                    // Surface the tagged partial failure after adopting the
+                    // consumed reply-token state so later blocks in this turn
+                    // route correctly without retrying text the user already saw.
+                    throw deliveryResult.error;
+                  }
+
+                  return { visibleReplySent: deliveryResult.visibleReplySent };
+                },
+                onError: (err, info) => {
+                  runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
+                },
+              },
+            }),
+          },
+        });
+        const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
+        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
+          logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
+        }
+      } catch (err) {
+        runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
+        if (turnAdopted || replyTokenUsed) {
+          throw new LineWebhookTerminalDeliveryError(
+            "LINE delivery failed after consuming the event reply token.",
+            { cause: err },
+          );
+        }
+        throw err;
+      }
+    },
+  });
+
+  const defaultPath = "/line/webhook";
+  const normalizedPath = resolveWebhookPath({ webhookPath, defaultPath }) ?? defaultPath;
+  const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
+  const handleWebhook = createLineNodeWebhookHandler({
+    getTargets: () => lineWebhookTargets.get(webhookRouteKey) ?? [],
+    runtime,
+  });
+  let unregisterHttp: () => void;
+  try {
+    ({ unregister: unregisterHttp } = registerWebhookTargetWithPluginRoute({
+      targetsByPath: lineWebhookTargets,
+      target: {
+        accountId: resolvedAccountId,
+        bot,
+        channelSecret: secret,
+        path: normalizedPath,
+        runtime,
+      },
+      route: {
+        auth: "plugin",
+        pluginId: "line",
+        source: "line-webhook",
+        accountId: resolvedAccountId,
+        log: (msg) => logVerbose(msg),
+        throwOnFailure: true,
+        handler: async (req, res) => {
+          if (req.method !== "POST") {
+            await handleWebhook(req, res);
+            return;
+          }
+
+          const requestLifecycle = beginWebhookRequestPipelineOrReject({
+            req,
+            res,
+            inFlightLimiter: lineWebhookInFlightLimiter,
+            inFlightKey: `line:${webhookRouteKey}`,
+          });
+          if (!requestLifecycle.ok) {
+            return;
+          }
+
+          try {
+            await handleWebhook(req, res);
+          } finally {
+            requestLifecycle.release();
+          }
+        },
+      },
+    }));
+  } catch (error) {
+    await Promise.allSettled([bot.stop()]);
+    throw error;
+  }
+
+  logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+  statusSink?.(channelReadyPatch());
+
+  let stopPromise: Promise<void> | undefined;
+  const stopHandler = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise;
+    }
+    logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
+    unregisterHttp();
+    stopPromise = bot.stop().finally(() => {
+      statusSink?.(channelStoppedPatch());
+    });
+    return stopPromise;
+  };
+  const stopOnAbort = () => void stopHandler();
+
+  if (abortSignal?.aborted) {
+    await stopHandler();
+  } else if (abortSignal) {
+    abortSignal.addEventListener("abort", stopOnAbort, { once: true });
+    await waitForAbortSignal(abortSignal);
+    await stopHandler();
+  }
+
+  return {
+    account: bot.account,
+    handleWebhook: bot.handleWebhook,
+    stop: async () => {
+      await stopHandler();
+      abortSignal?.removeEventListener("abort", stopOnAbort);
+    },
+  };
+}

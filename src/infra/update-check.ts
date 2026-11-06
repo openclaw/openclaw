@@ -1,0 +1,726 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { detectPackageManager } from "./detect-package-manager.js";
+import { isMissingPathError } from "./errno.js";
+import { createGitCommandError, executeGitCommand } from "./git-exec.js";
+import { readInstallOwner, type InstallOwner } from "./install-owner.js";
+import { readPackageName } from "./package-json.js";
+import { canAccess } from "./path-existence.js";
+import {
+  channelToNpmTag,
+  DEV_BRANCH,
+  selectNpmChannelVersion,
+  type UpdateChannel,
+} from "./update-channels.js";
+import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
+import {
+  readGitUpdateFetchTarget,
+  resolveGitUpdateTrackingRef,
+  resolveGitRepositoryMetadata,
+  type GitUpdateSourceHint,
+} from "./update-git-metadata.js";
+import { readBuiltRuntimeCommit, readGitRuntimeArtifactStatus } from "./update-git-runtime.js";
+import { detectGlobalInstallManagerForRoot } from "./update-global.js";
+import type { UpdateInstallKind } from "./update-install-kind.js";
+import { updateInstallRootsMatch } from "./update-install-root.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
+import { createUpdatePreflightFailure } from "./update-preflight-details.js";
+import type { UpdateFetchFailure } from "./update-run-record.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+import { describeUpdateInstallRoot } from "./update-runner-install-surface.js";
+
+type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
+type GitUpdateOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Reports settled local probes without changing updater failure or process-join semantics. */
+  onGitProbeTimeout?: (timeoutMs: number) => void;
+};
+
+type GitUpdateStatus = {
+  root: string;
+  sha: string | null;
+  tag: string | null;
+  branch: string | null;
+  upstream: string | null;
+  upstreamSource?: "tracking" | "receipt";
+  upstreamSha?: string | null;
+  repositoryUrl?: string;
+  commitAtMs?: number | null;
+  dirty: boolean | null;
+  ahead: number | null;
+  behind: number | null;
+  fetchOk: boolean | null;
+  builtSha?: string | null;
+  artifacts?: Awaited<ReturnType<typeof readGitRuntimeArtifactStatus>>;
+  countsCached?: true;
+  stale?: UpdateFetchFailure;
+  error?: string;
+};
+
+export type UpdateInstallIdentity = {
+  installKind: UpdateInstallKind;
+  immutable?: UpdateImmutableInstall;
+  installOwner?: InstallOwner;
+  git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
+};
+
+type DepsStatus = {
+  manager: PackageManager;
+  status: "ok" | "missing" | "unknown";
+  lockfilePath: string | null;
+  markerPath: string | null;
+  reason?: string;
+};
+
+type RegistryStatus = {
+  latestVersion: string | null;
+  tag?: string;
+  error?: string;
+  reason?: ExtendedStableFailureReason;
+};
+
+export type ExtendedStableFailureReason =
+  | "selector_missing"
+  | "selector_query_failed"
+  | "exact_package_mismatch"
+  | "unsupported_git_channel";
+
+type ExtendedStableResolutionResult =
+  | {
+      status: "resolved";
+      selector: "extended-stable";
+      version: string;
+      packageSpec: string;
+    }
+  | {
+      status: "failed";
+      reason: ExtendedStableFailureReason;
+    };
+
+type NpmTagStatus = {
+  tag: string;
+  version: string | null;
+  error?: string;
+  metadata?: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>>;
+};
+
+export type UpdateCheckResult = {
+  root: string | null;
+  installKind: UpdateInstallKind;
+  immutable?: UpdateImmutableInstall;
+  installOwner?: InstallOwner;
+  packageManager: PackageManager;
+  git?: GitUpdateStatus;
+  deps?: DepsStatus;
+  registry?: RegistryStatus;
+  error?: {
+    status: "unknown" | "failed";
+    message: string;
+    timeoutMs?: number;
+    code?: "installation-unclassified";
+  };
+};
+
+const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
+const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
+
+function isLoopbackNpmRegistry(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function resolveUpdateRegistryTarget(
+  params: {
+    packageName?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): { registryUrl: string; packageName: string } {
+  const env = params.env ?? process.env;
+  const packageName = params.packageName?.trim() || PUBLIC_NPM_PACKAGE_NAME;
+  const packageSpecOverride = env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
+  const registryOverride = env.NPM_CONFIG_REGISTRY?.trim() || env.npm_config_registry?.trim() || "";
+
+  // A matching package override plus a loopback registry is the explicit local
+  // integration-test seam. Production resolution remains pinned to public npm.
+  if (packageSpecOverride === packageName && isLoopbackNpmRegistry(registryOverride)) {
+    return { registryUrl: registryOverride, packageName };
+  }
+  return {
+    registryUrl: PUBLIC_NPM_REGISTRY_URL,
+    packageName: PUBLIC_NPM_PACKAGE_NAME,
+  };
+}
+
+/** Resolves the extended-stable selector and verifies its exact package manifest. */
+export async function resolveExtendedStablePackage(params: {
+  installKind: "git" | "package" | "unknown";
+  timeoutMs?: number;
+  packageName?: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+}): Promise<ExtendedStableResolutionResult> {
+  params.signal?.throwIfAborted();
+  if (params.installKind === "git") {
+    return { status: "failed", reason: "unsupported_git_channel" };
+  }
+
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
+  const registryTarget = resolveUpdateRegistryTarget(params);
+  const selector = await fetchNpmPackageTargetStatus({
+    target: "extended-stable",
+    timeoutMs,
+    signal: params.signal,
+    ...registryTarget,
+  });
+  params.signal?.throwIfAborted();
+  if (!selector.version) {
+    return {
+      status: "failed",
+      reason: selector.error === "HTTP 404" ? "selector_missing" : "selector_query_failed",
+    };
+  }
+
+  const exact = await fetchNpmPackageTargetStatus({
+    target: selector.version,
+    timeoutMs,
+    signal: params.signal,
+    ...registryTarget,
+  });
+  params.signal?.throwIfAborted();
+  if (exact.version !== selector.version) {
+    return { status: "failed", reason: "exact_package_mismatch" };
+  }
+
+  return {
+    status: "resolved",
+    selector: "extended-stable",
+    version: selector.version,
+    packageSpec: `${registryTarget.packageName}@${selector.version}`,
+  };
+}
+
+export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
+  if (update.installKind !== "git") {
+    return null;
+  }
+  const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
+  const branch = update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
+  const tag = update.git?.tag ?? null;
+  const parts = [
+    branch ?? (tag ? "detached" : "git"),
+    tag ? `tag ${tag}` : null,
+    shortSha ? `@ ${shortSha}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+/** Classify installation ownership without reading Git history or dependency state. */
+export async function resolveUpdateInstallKind(
+  root: string | null,
+  options: GitUpdateOptions = {},
+): Promise<UpdateInstallKind> {
+  return (await resolveUpdateInstallOwnership(root, options)).installKind;
+}
+
+async function resolveUpdateInstallOwnership(
+  root: string | null,
+  options: GitUpdateOptions,
+): Promise<UpdateInstallIdentity> {
+  options.signal?.throwIfAborted();
+  if (!root) {
+    return { installKind: "unknown" };
+  }
+  // On macOS even probing Git can launch the Command Line Tools installer.
+  const installOwner = await readInstallOwner(root);
+  options.signal?.throwIfAborted();
+  if (installOwner) {
+    return { installKind: "host", installOwner };
+  }
+  const { inspectImmutableInstall } = await import("./update-immutable-install.js");
+  const immutable = await inspectImmutableInstall(root, { allowExternalOwner: true });
+  if (immutable) {
+    if (immutable.installOwner) {
+      return { installKind: "host", installOwner: immutable.installOwner };
+    }
+    return { installKind: "immutable", immutable };
+  }
+  // An exact checkout root needs a marker unless Git ownership is supplied
+  // explicitly. Avoid spawning Git for packages nested inside another checkout.
+  const probeGit =
+    process.env.GIT_DIR ||
+    process.env.GIT_WORK_TREE ||
+    (await fs.lstat(path.join(root, ".git")).then(
+      () => true,
+      (error: unknown) => !isMissingPathError(error),
+    ));
+  const result = probeGit
+    ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
+        ...options,
+        timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+      })
+    : null;
+  options.signal?.throwIfAborted();
+  if (result?.termination === "timeout") {
+    // An expired probe does not establish that this root is a package installation.
+    throw createGitCommandError("git rev-parse --show-toplevel", result);
+  }
+  const gitRoot = result?.code === 0 ? result.stdout.trim() : "";
+  if (gitRoot && updateInstallRootsMatch(gitRoot, root)) {
+    return { installKind: "git" };
+  }
+  const packageName = await readPackageName(root);
+  options.signal?.throwIfAborted();
+  return { installKind: packageName === PUBLIC_NPM_PACKAGE_NAME ? "package" : "unknown" };
+}
+
+/** Read the install and local Git identity needed to select an update channel. */
+export async function resolveUpdateInstallIdentity(params: {
+  root: string | null;
+  timeoutMs?: number;
+}): Promise<UpdateInstallIdentity> {
+  const { root, ...options } = params;
+  const identity = await resolveUpdateInstallOwnership(root, options);
+  const { installKind } = identity;
+  const git =
+    installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
+  return { ...identity, git };
+}
+
+async function runUpdateGitCommand(root: string, args: string[], options: GitUpdateOptions) {
+  // Keep cancellation non-throwing until parallel probes join. Public discovery
+  // boundaries then raise the owner signal without leaving sibling Git processes behind.
+  if (options.signal?.aborted) {
+    return null;
+  }
+  const { onGitProbeTimeout, ...commandOptions } = options;
+  const result = await executeGitCommand(root, args, {
+    ...commandOptions,
+    operation: "update.inspect",
+    killProcessTree: true,
+  }).catch(() => null);
+  if (result?.termination === "timeout" && args[0] !== "fetch") {
+    onGitProbeTimeout?.(result.timeoutMs);
+  }
+  return result;
+}
+
+async function readGitUpdateIdentity(
+  root: string,
+  options: GitUpdateOptions = {},
+): Promise<NonNullable<UpdateInstallIdentity["git"]>> {
+  const [branch, tag] = await Promise.all(
+    [
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      ["describe", "--tags", "--exact-match"],
+    ].map((args) =>
+      runUpdateGitCommand(root, args, { ...options, timeoutMs: options.timeoutMs ?? 6000 }),
+    ),
+  );
+  return branch?.code === 0
+    ? {
+        branch: branch.stdout.trim() || null,
+        tag: tag?.code === 0 ? tag.stdout.trim() || null : null,
+      }
+    : { branch: null, tag: null, error: branch?.stderr?.trim() || "git unavailable" };
+}
+
+async function checkGitUpdateStatus(params: {
+  root: string;
+  identity: Promise<NonNullable<UpdateInstallIdentity["git"]>>;
+  timeoutMs: number | undefined;
+  signal?: AbortSignal;
+  onGitProbeTimeout?: GitUpdateOptions["onGitProbeTimeout"];
+  fetch?: boolean;
+  useDetachedDevUpstream?: boolean;
+  gitSourceHint?: GitUpdateSourceHint | null;
+}): Promise<GitUpdateStatus> {
+  const timeoutMs = params.timeoutMs ?? (params.fetch ? UPDATE_NETWORK_TIMEOUT_MS : 6000);
+  const root = path.resolve(params.root);
+  const runGit = (...args: string[]) =>
+    runUpdateGitCommand(root, args, {
+      timeoutMs,
+      signal: params.signal,
+      onGitProbeTimeout: params.onGitProbeTimeout,
+    });
+  const readGit = async (...args: string[]) => {
+    const result = await runGit(...args);
+    return result?.code === 0 ? result.stdout.trim() : null;
+  };
+
+  const base: GitUpdateStatus = {
+    root,
+    sha: null,
+    tag: null,
+    branch: null,
+    upstream: null,
+    upstreamSha: null,
+    commitAtMs: null,
+    dirty: null,
+    ahead: null,
+    behind: null,
+    fetchOk: null,
+  };
+  const [{ branch, tag, error }, sha, commitAtRaw, dirtyRes] = await Promise.all([
+    params.identity,
+    readGit("rev-parse", "HEAD"),
+    readGit("show", "-s", "--format=%ct", "HEAD"),
+    runGit("status", "--porcelain", "--", ":!dist/control-ui/"),
+  ]);
+  if (error) {
+    return { ...base, error };
+  }
+  const trackingBranch =
+    branch === "HEAD"
+      ? params.useDetachedDevUpstream || params.gitSourceHint?.upstreamRef
+        ? DEV_BRANCH
+        : null
+      : branch;
+  const fetchTarget = trackingBranch
+    ? await readGitUpdateFetchTarget(
+        readGit,
+        trackingBranch,
+        branch === "HEAD" && Boolean(params.useDetachedDevUpstream),
+        {
+          root,
+          sha,
+          receipt: params.gitSourceHint ?? null,
+          fetchRemote: Boolean(params.fetch),
+        },
+      )
+    : null;
+
+  const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
+  const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
+
+  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
+  let fetchOk: boolean | null = null;
+  let fetchedCommit: string | null = null;
+  if (params.fetch && fetchTarget) {
+    if (fetchTarget.remote === ".") {
+      fetchOk = true;
+    } else {
+      const exclusions =
+        (await readGit("config", "--get-all", `remote.${fetchTarget.remote}.fetch`))
+          ?.split("\n")
+          .filter((refspec) => refspec.startsWith("^")) ?? [];
+      // Select one source; Git retains configured destination/force policy. Explicit
+      // exclusions and FETCH_HEAD prevent an unfetched old ref from looking fresh.
+      const fetched = await runGit(
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-prune",
+        "--no-prune-tags",
+        "--no-recurse-submodules",
+        "--",
+        fetchTarget.remote,
+        fetchTarget.mergeRef,
+        ...exclusions,
+      );
+      fetchedCommit =
+        fetched?.code === 0 ? await readGit("rev-parse", "--verify", "FETCH_HEAD^{commit}") : null;
+      fetchOk = fetched?.code === 0 && fetchedCommit !== null;
+    }
+  }
+  const trackingRevision =
+    fetchTarget && trackingBranch
+      ? await resolveGitUpdateTrackingRef(readGit, trackingBranch, fetchTarget)
+      : null;
+  const upstream =
+    fetchTarget?.upstreamSource === "receipt"
+      ? params.gitSourceHint?.upstreamRef?.trim() || null
+      : trackingRevision
+        ? await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision)
+        : null;
+  const upstreamRevision = `${trackingRevision}^{commit}`;
+  let upstreamCommit =
+    (!params.fetch || fetchOk === true) && upstream && sha
+      ? await readGit("rev-parse", "--verify", upstreamRevision)
+      : null;
+  if (params.fetch && fetchTarget?.remote !== "." && upstreamCommit !== fetchedCommit) {
+    upstreamCommit = null;
+  }
+
+  const mergeBases =
+    sha && upstreamCommit ? await readGit("merge-base", "--all", sha, upstreamCommit) : null;
+  let counts =
+    sha && upstreamCommit && mergeBases
+      ? await readGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
+      : null;
+  if (counts && mergeBases && (await readGit("rev-parse", "--is-shallow-repository")) !== "false") {
+    // A shallow common ancestor can hide commits exposed by another merge parent.
+    // Exact counts require every exclusive commit to descend from every visible
+    // merge base. Hidden ancestry is then common and cannot change the difference.
+    for (const mergeBase of mergeBases.split("\n")) {
+      // Use the argument-free form for compatibility with Git before 2.38.
+      const ancestryCounts = await Promise.all(
+        [
+          [sha, upstreamCommit],
+          [upstreamCommit, sha],
+        ].map(([tip, opposite]) =>
+          readGit("rev-list", "--count", "--ancestry-path", `${mergeBase}..${tip}`, `^${opposite}`),
+        ),
+      );
+      if (ancestryCounts.join("\t") !== counts) {
+        counts = null;
+        break;
+      }
+    }
+  }
+
+  const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
+
+  return {
+    root,
+    sha,
+    tag,
+    branch,
+    upstream,
+    ...(fetchTarget ? { upstreamSource: fetchTarget.upstreamSource } : {}),
+    upstreamSha: upstreamCommit,
+    ...(await resolveGitRepositoryMetadata(readGit, fetchTarget)),
+    commitAtMs,
+    dirty,
+    ahead: parsed ? Number(parsed[1]) : null,
+    behind: parsed ? Number(parsed[2]) : null,
+    fetchOk,
+    builtSha: await readBuiltRuntimeCommit(root),
+    artifacts: await readGitRuntimeArtifactStatus({ root, sha }),
+  };
+}
+
+async function checkDepsStatus(params: {
+  root: string;
+  manager: PackageManager;
+}): Promise<DepsStatus> {
+  const root = path.resolve(params.root);
+  const manager = params.manager;
+  if (manager === "unknown") {
+    return {
+      manager,
+      lockfilePath: null,
+      markerPath: null,
+      status: "unknown",
+      reason: "unknown package manager",
+    };
+  }
+  const lockfile =
+    manager === "pnpm"
+      ? "pnpm-lock.yaml"
+      : manager === "npm"
+        ? "package-lock.json"
+        : (await canAccess(path.join(root, "bun.lock")))
+          ? "bun.lock"
+          : "bun.lockb";
+  const lockfilePath = path.join(root, lockfile);
+  const markerPath = path.join(
+    root,
+    "node_modules",
+    ...(manager === "pnpm" ? [".modules.yaml"] : []),
+  );
+  const lockExists = await canAccess(lockfilePath);
+  const markerExists = await canAccess(markerPath);
+  return {
+    manager,
+    lockfilePath,
+    markerPath,
+    ...(!lockExists
+      ? { status: "unknown" as const, reason: "lockfile missing" }
+      : !markerExists
+        ? { status: "missing" as const, reason: "node_modules marker missing" }
+        : { status: "ok" as const }),
+  };
+}
+
+export async function fetchNpmTagVersion(
+  params: Omit<Parameters<typeof fetchNpmPackageTargetStatus>[0], "target"> & { tag: string },
+): Promise<NpmTagStatus> {
+  const { tag, ...options } = params;
+  const res = await fetchNpmPackageTargetStatus({
+    ...options,
+    target: tag,
+  });
+  return {
+    tag,
+    version: res.version,
+    error: res.error,
+    metadata: res,
+  };
+}
+
+export async function resolveNpmChannelTag(
+  params: Omit<Parameters<typeof fetchNpmTagVersion>[0], "tag" | "spec"> & {
+    channel: UpdateChannel;
+  },
+): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
+  const { channel, ...options } = params;
+  const channelTag = channelToNpmTag(channel);
+  if (channel === "extended-stable") {
+    const resolved = await resolveExtendedStablePackage({
+      installKind: "package",
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    });
+    return resolved.status === "resolved"
+      ? { tag: resolved.selector, version: resolved.version }
+      : { tag: channelTag, version: null, reason: resolved.reason };
+  }
+  const fetchTag = (tag: string) =>
+    fetchNpmTagVersion({
+      ...options,
+      tag,
+    });
+  if (channel !== "beta") {
+    return await fetchTag(channelTag);
+  }
+
+  const [channelStatus, latestStatus] = await Promise.all([
+    fetchTag(channelTag),
+    fetchTag("latest"),
+  ]);
+  return selectNpmChannelVersion(channelStatus, latestStatus);
+}
+
+export async function checkUpdateStatus(params: {
+  root: string | null;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onGitProbeTimeout?: GitUpdateOptions["onGitProbeTimeout"];
+  fetchGit?: boolean;
+  useDetachedDevUpstream?: boolean;
+  gitSourceHint?: GitUpdateSourceHint | null;
+  includeRegistry?: boolean;
+  resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
+}): Promise<UpdateCheckResult> {
+  params.signal?.throwIfAborted();
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
+  const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
+    const result = await resolveNpmChannelTag({
+      channel: channel ?? "stable",
+      timeoutMs,
+      signal: params.signal,
+    });
+    return {
+      latestVersion: result.version,
+      ...(channel ? { tag: result.tag } : {}),
+      error: result.error,
+      ...(result.reason ? { error: result.reason, reason: result.reason } : {}),
+    };
+  };
+  const root = params.root ? path.resolve(params.root) : null;
+  if (!root) {
+    const registryChannel = params.resolveRegistryChannel?.({ installKind: "unknown" });
+    const registry = params.includeRegistry ? await fetchRegistry(registryChannel) : undefined;
+    params.signal?.throwIfAborted();
+    return {
+      root: null,
+      installKind: "unknown",
+      packageManager: "unknown",
+      registry,
+    };
+  }
+
+  const { installKind, installOwner, immutable } = await resolveUpdateInstallOwnership(root, {
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
+    onGitProbeTimeout: params.onGitProbeTimeout,
+  });
+  if (installKind === "host") {
+    return { root, installKind, installOwner, packageManager: "unknown" };
+  }
+  if (installKind === "immutable") {
+    return { root, installKind, immutable, packageManager: "unknown" };
+  }
+  const isGit = installKind === "git";
+  if (installKind === "unknown") {
+    const failure = createUpdatePreflightFailure(
+      "installation-unclassified",
+      `${await describeUpdateInstallRoot(root)} Service unit target: not inspected by update status installation checks; run openclaw gateway status --deep.`,
+    );
+    params.signal?.throwIfAborted();
+    return {
+      root,
+      installKind,
+      packageManager: "unknown",
+      error: { status: "unknown", code: "installation-unclassified", message: failure.message },
+    };
+  }
+  const packageManager = isGit
+    ? ((await detectPackageManager(root)) ?? "unknown")
+    : ((await detectGlobalInstallManagerForRoot(
+        async (argv, options) => {
+          params.signal?.throwIfAborted();
+          return runCommandWithTimeout(argv, {
+            ...options,
+            signal: params.signal,
+            killProcessTree: true,
+          });
+        },
+        root,
+        timeoutMs,
+      )) ?? "unknown");
+  params.signal?.throwIfAborted();
+
+  // Start all local Git reads together; only registry selection needs to wait
+  // for branch/tag identity, independently of worktree and remote freshness.
+  const identity = isGit
+    ? readGitUpdateIdentity(root, {
+        timeoutMs: params.timeoutMs ?? (params.fetchGit ? UPDATE_NETWORK_TIMEOUT_MS : 6000),
+        signal: params.signal,
+        onGitProbeTimeout: params.onGitProbeTimeout,
+      })
+    : undefined;
+  const registryPromise = Promise.resolve(identity).then((git) => {
+    if (params.signal?.aborted) {
+      return undefined;
+    }
+    const registryChannel = params.resolveRegistryChannel?.({ installKind, git });
+    return params.includeRegistry
+      ? registryChannel === "extended-stable" && isGit
+        ? {
+            latestVersion: null,
+            tag: "extended-stable",
+            error: "unsupported_git_channel",
+            reason: "unsupported_git_channel" as const,
+          }
+        : fetchRegistry(registryChannel)
+      : undefined;
+  });
+  const [git, deps, registry] = await Promise.all([
+    identity
+      ? checkGitUpdateStatus({
+          root,
+          identity,
+          timeoutMs: params.timeoutMs,
+          signal: params.signal,
+          onGitProbeTimeout: params.onGitProbeTimeout,
+          fetch: Boolean(params.fetchGit),
+          useDetachedDevUpstream: params.useDetachedDevUpstream,
+          gitSourceHint: params.gitSourceHint,
+        })
+      : Promise.resolve(undefined),
+    checkDepsStatus({ root, manager: packageManager }),
+    registryPromise,
+  ]);
+
+  params.signal?.throwIfAborted();
+
+  return {
+    root,
+    installKind,
+    packageManager,
+    git,
+    deps,
+    registry,
+  };
+}

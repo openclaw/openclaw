@@ -1,0 +1,172 @@
+/** Loads bundled channel config schema metadata from source or public surface modules. */
+import path from "node:path";
+import {
+  buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import {
+  normalizeBundledPluginStringList,
+  trimBundledPluginString,
+} from "./bundled-plugin-scan.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
+import type {
+  OpenClawPackageManifest,
+  PluginManifest,
+  PluginManifestChannelConfig,
+} from "./manifest.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+
+const log = createSubsystemLogger("plugins");
+
+const CONFIG_SCHEMA_CANDIDATES = [
+  ...[".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"].map((extension) =>
+    path.join("src", `config-schema${extension}`),
+  ),
+  ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((extension) => `channel-config-api${extension}`),
+];
+
+type ChannelConfigSurface = {
+  schema: JsonSchemaObject;
+  uiHints?: Record<string, PluginConfigUiHint>;
+  runtime?: ChannelConfigRuntimeSchema;
+};
+
+function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as { schema?: unknown };
+  return Boolean(candidate.schema && typeof candidate.schema === "object");
+}
+
+function isJsonSchemaConfigSurface(value: unknown): value is JsonSchemaObject {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.safeParse === "function" || typeof candidate.toJSONSchema === "function") {
+    return false;
+  }
+  return (
+    typeof candidate.type === "string" ||
+    Array.isArray(candidate.anyOf) ||
+    Array.isArray(candidate.oneOf) ||
+    Array.isArray(candidate.allOf) ||
+    Array.isArray(candidate.enum) ||
+    Object.hasOwn(candidate, "const")
+  );
+}
+
+function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelConfigSurface | null {
+  for (const [name, value] of Object.entries(imported)) {
+    if (name.endsWith("ChannelConfigSchema") && isBuiltChannelConfigSchema(value)) {
+      return value;
+    }
+  }
+
+  for (const [name, value] of Object.entries(imported)) {
+    if (!name.endsWith("ConfigSchema") || name.endsWith("AccountConfigSchema")) {
+      continue;
+    }
+    if (isBuiltChannelConfigSchema(value)) {
+      return value;
+    }
+    if (isJsonSchemaConfigSurface(value)) {
+      return buildJsonChannelConfigSchema(value);
+    }
+    if (value && typeof value === "object") {
+      return buildChannelConfigSchema(value as never);
+    }
+  }
+
+  return Object.values(imported).find(isBuiltChannelConfigSchema) ?? null;
+}
+
+function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
+  return CONFIG_SCHEMA_CANDIDATES.map((relativePath) => path.join(pluginDir, relativePath)).find(
+    pluginCacheExistsSync,
+  );
+}
+
+function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
+  try {
+    const load = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      preferBuiltDist: true,
+      loaderFilename: import.meta.url,
+    });
+    const imported = load(modulePath) as Record<string, unknown>;
+    return resolveConfigSchemaExport(imported);
+  } catch (error) {
+    log.warn(
+      `Unable to load bundled channel config metadata from ${modulePath}; using manifest metadata`,
+      { error },
+    );
+    return null;
+  }
+}
+
+function resolvePackageChannelMeta(
+  packageManifest: OpenClawPackageManifest | undefined,
+  channelId: string,
+): OpenClawPackageManifest["channel"] | undefined {
+  const channelMeta = packageManifest?.channel;
+  return channelMeta?.id?.trim() === channelId ? channelMeta : undefined;
+}
+
+export function collectBundledChannelConfigsCore(params: {
+  pluginDir: string;
+  manifest: PluginManifest;
+  packageManifest?: OpenClawPackageManifest;
+}): Record<string, PluginManifestChannelConfig> | undefined {
+  const channelIds = normalizeBundledPluginStringList(params.manifest.channels);
+  const existingChannelConfigs: Record<string, PluginManifestChannelConfig> =
+    params.manifest.channelConfigs && Object.keys(params.manifest.channelConfigs).length > 0
+      ? { ...params.manifest.channelConfigs }
+      : {};
+  if (channelIds.length === 0) {
+    return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
+  }
+
+  const surfaceModulePath = resolveChannelConfigSchemaModulePath(params.pluginDir);
+  const surface = surfaceModulePath ? loadChannelConfigSurfaceModuleSync(surfaceModulePath) : null;
+
+  for (const channelId of channelIds) {
+    const existing = existingChannelConfigs[channelId];
+    const channelMeta = resolvePackageChannelMeta(params.packageManifest, channelId);
+    const preferOver = normalizeBundledPluginStringList(channelMeta?.preferOver);
+    const uiHints = { ...surface?.uiHints, ...existing?.uiHints };
+
+    if (!surface?.schema && !existing?.schema) {
+      continue;
+    }
+    const runtime = surface?.runtime ?? existing?.runtime;
+    const label =
+      trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label);
+    const description =
+      trimBundledPluginString(existing?.description) ?? trimBundledPluginString(channelMeta?.blurb);
+    const commands = existing?.commands ?? channelMeta?.commands;
+
+    existingChannelConfigs[channelId] = {
+      schema: surface?.schema ?? existing?.schema ?? {},
+      ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
+      ...(existing?.preferOver?.length
+        ? { preferOver: existing.preferOver }
+        : preferOver.length > 0
+          ? { preferOver }
+          : {}),
+      ...(commands ? { commands } : {}),
+    };
+  }
+
+  return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
+}

@@ -1,0 +1,331 @@
+import { randomUUID } from "node:crypto";
+import { Type } from "typebox";
+import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import type { TerminalAgentActionOutcome } from "../../gateway/terminal/session-manager.types.js";
+import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import type { ExecMode } from "../../infra/exec-approvals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+} from "../bash-tools.exec-approval-request.js";
+import {
+  resolveExecDefaultsAsync,
+  prepareExecDefaults,
+  resolvePreparedExecDefaultsAsync,
+  type ExecPolicyOverrides,
+  type ExecSessionDefaults,
+} from "../exec-defaults.js";
+import type { AnyAgentTool } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
+
+const ACTIONS = ["read", "list", "resize", "close", "input"] as const;
+const MAX_DIMENSION = 2000;
+
+const TerminalToolSchema = Type.Object(
+  {
+    action: Type.String({ enum: [...ACTIONS], description: "Action" }),
+    sessionId: Type.Optional(Type.String({ description: "Shared terminal session" })),
+    data: Type.Optional(Type.String({ description: "Exact terminal input" })),
+    cols: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIMENSION })),
+    rows: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIMENSION })),
+  },
+  { additionalProperties: false },
+);
+
+const TerminalListSessionSchema = Type.Object(
+  {
+    sessionId: Type.String(),
+    agentId: Type.String(),
+    shell: Type.String(),
+    cwd: Type.String(),
+    attached: Type.Boolean(),
+    owner: Type.String({ pattern: "^agent:.+" }),
+    createdAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+const TerminalToolOutputSchema = Type.Union([
+  Type.Object({ sessions: Type.Array(TerminalListSessionSchema) }, { additionalProperties: false }),
+  Type.Object({ sessionId: Type.String(), text: Type.String() }, { additionalProperties: false }),
+  Type.Object({ ok: Type.Literal(true) }, { additionalProperties: false }),
+]);
+
+const TERMINAL_RECOVERY_GUIDANCE =
+  "Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.";
+const TERMINAL_UNAVAILABLE_MESSAGE = `Terminal session unavailable. ${TERMINAL_RECOVERY_GUIDANCE}`;
+
+type TerminalToolGatewayContext = Pick<GatewayRequestContext, "terminalSessions">;
+
+type TerminalToolOptions = {
+  agentId?: string;
+  agentSessionKey?: string;
+  sessionId?: string;
+  config?: OpenClawConfig;
+  execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  approvalReviewerDeviceIds?: string[];
+  getGatewayContext?: () => TerminalToolGatewayContext | undefined;
+};
+
+function terminalActionResult(
+  action: "input" | "resize" | "close",
+  outcome: TerminalAgentActionOutcome,
+): ReturnType<typeof jsonResult> {
+  if (!outcome.ok) {
+    throw new ToolInputError(
+      outcome.code === "session_unavailable"
+        ? TERMINAL_UNAVAILABLE_MESSAGE
+        : `Terminal ${action} failed. ${TERMINAL_RECOVERY_GUIDANCE}`,
+    );
+  }
+  return jsonResult({ ok: true });
+}
+
+function readDimension(params: Record<string, unknown>, key: "cols" | "rows"): number {
+  const value = readPositiveIntegerParam(params, key, {
+    max: MAX_DIMENSION,
+    message: `${key} must be an integer from 1 to ${MAX_DIMENSION}`,
+  });
+  if (value === undefined) {
+    throw new ToolInputError(`${key} required`);
+  }
+  return value;
+}
+
+// Preserve tabs and line breaks; handle carriage-return overwrites below.
+const C0_EXCEPT_TAB_CR_LF = `${String.fromCharCode(0x00)}-${String.fromCharCode(0x08)}${String.fromCharCode(0x0b)}${String.fromCharCode(0x0c)}${String.fromCharCode(0x0e)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}`;
+// C1 control characters (0x80-0x9f) include the CSI introducer (0x9b),
+// which is an alternative ANSI escape prefix equivalent to ESC [.
+const C1 = `${String.fromCharCode(0x80)}-${String.fromCharCode(0x9f)}`;
+const CONTROL_BYTES_REGEX = new RegExp(`[${C0_EXCEPT_TAB_CR_LF}${C1}]`, "g");
+
+/**
+ * Approximates what a terminal would show without running a VT emulator:
+ * strips ANSI sequences, collapses carriage-return overwrites (progress bars
+ * emit "10%\r20%\r30%" — keep the last write per line), and drops remaining
+ * C0/C1 control bytes. Cursor-movement layouts (vim, htop) will not reconstruct faithfully.
+ */
+function renderTerminalBufferText(raw: string): string {
+  const stripped = stripAnsiSequences(raw);
+  // A final CR has not overwritten anything; earlier CRs select the last write on each line.
+  const text = stripped.includes("\r")
+    ? stripped.replace(/\r(?=\n|$)/g, "").replace(/(^|\n)[^\n]*\r/g, "$1")
+    : stripped;
+  return text.replace(CONTROL_BYTES_REGEX, "");
+}
+
+export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
+  return {
+    label: "Terminal",
+    name: "terminal",
+    description:
+      "Manage terminals the operator opened from this chat's Control UI panel. list discovers shared terminals; read returns a buffer snapshot; resize and close manage an existing terminal; input requires one-time operator approval unless the execution policy permits unrestricted access.",
+    parameters: TerminalToolSchema,
+    outputSchema: TerminalToolOutputSchema,
+    execute: async (toolCallId, rawArgs, signal) => {
+      const params = rawArgs as Record<string, unknown>;
+      const action = readToolStringParam(params, "action", { required: true });
+      if (!ACTIONS.some((candidate) => candidate === action)) {
+        throw new ToolInputError(
+          "terminal action unavailable; use list, read, resize, close, or input",
+        );
+      }
+      const agentSessionKey = opts.agentSessionKey?.trim();
+      if (!agentSessionKey) {
+        throw new ToolInputError("agent session required");
+      }
+      const agentSessionId = opts.sessionId?.trim();
+      if (!agentSessionId) {
+        throw new ToolInputError("agent session id required");
+      }
+      const agentId = opts.agentId?.trim() || resolveAgentIdFromSessionKey(agentSessionKey);
+      const owner = { kind: "agent", agentSessionKey, agentSessionId, agentId } as const;
+      const callerIdentity = getGatewayToolCallerIdentity();
+      const admittedResolver = opts.getGatewayContext
+        ? undefined
+        : callerIdentity?.gatewayContextResolver;
+      const getContext =
+        opts.getGatewayContext ?? admittedResolver ?? getInProcessGatewayToolContext;
+      const context = getContext();
+      const manager = context?.terminalSessions;
+      if (!context || !manager) {
+        throw new ToolInputError("terminal unavailable");
+      }
+
+      if (action === "list") {
+        return jsonResult({ sessions: manager.listAgent(owner) });
+      }
+
+      const sessionId = readToolStringParam(params, "sessionId", { required: true });
+      if (action === "read") {
+        const raw = manager.snapshotAgent(owner, sessionId);
+        if (raw === undefined) {
+          throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
+        }
+        return jsonResult({ sessionId, text: renderTerminalBufferText(raw) });
+      }
+      if (action === "resize") {
+        return terminalActionResult(
+          "resize",
+          manager.resizeAgent(
+            owner,
+            sessionId,
+            readDimension(params, "cols"),
+            readDimension(params, "rows"),
+          ),
+        );
+      }
+      if (action === "close") {
+        return terminalActionResult("close", manager.closeAgent(owner, sessionId));
+      }
+
+      const data = readToolStringParam(params, "data", {
+        required: true,
+        trim: false,
+        allowEmpty: true,
+      });
+      let execSession = opts.execSession;
+      let assertSessionCurrent = () => {};
+      let actorPolicy = false;
+      if (!execSession) {
+        const source = captureSessionActorStorageOwner(
+          { agentId, sessionKey: agentSessionKey },
+          {
+            assertCurrent() {
+              signal?.throwIfAborted();
+            },
+            authorize() {},
+          },
+        );
+        const entry = source
+          ? readCapturedSessionActorEntry(source, agentSessionKey)
+          : (
+              await (
+                await import("../../gateway/session-utils-store-worker.js")
+              ).loadGatewaySessionEntryReadOnlyInWorker({
+                cfg: opts.config ?? (await import("../../config/io.js")).getRuntimeConfig(),
+                key: agentSessionKey,
+                agentId,
+              })
+            ).entry;
+        if (!entry || entry.sessionId?.trim() !== agentSessionId) {
+          throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
+        }
+        if (source) {
+          actorPolicy = true;
+          assertSessionCurrent = () => {
+            const current = readCapturedSessionActorEntry(source, agentSessionKey);
+            if (
+              current?.sessionId !== entry.sessionId ||
+              current?.permissionMode !== entry.permissionMode ||
+              current?.sandbox !== entry.sandbox ||
+              current?.execHost !== entry.execHost ||
+              current?.execNode !== entry.execNode
+            ) {
+              throw new ToolInputError("Terminal execution policy changed; try again");
+            }
+          };
+        }
+        execSession = entry;
+        // A lazy policy read may cross Gateway retirement; the replacement
+        // manager cannot inherit authority over this already-captured PTY.
+        if (getContext()?.terminalSessions !== manager) {
+          throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
+        }
+      }
+      const policyInput = {
+        cfg: opts.config,
+        sessionEntry: execSession,
+        execOverrides: opts.execOverrides,
+        agentId,
+        sessionKey: agentSessionKey,
+        // Required isolation cannot be supplied by an existing unconfined terminal.
+        sandboxAvailable: execSession.sandbox === "required" ? false : undefined,
+      };
+      const policy = actorPolicy
+        ? await resolvePreparedExecDefaultsAsync(prepareExecDefaults(policyInput), async () => {
+            const { loadExecApprovalsReadOnlyAsync } =
+              await import("../../infra/exec-approvals-store.js");
+            return loadExecApprovalsReadOnlyAsync();
+          })
+        : await resolveExecDefaultsAsync(policyInput);
+      assertSessionCurrent();
+      if (policy.mode === "deny") {
+        throw new ToolInputError("Terminal input denied by execution policy");
+      }
+      const operationalRunInstance = callerIdentity?.operationalRunInstance;
+      const delegatedAuthority = operationalRunInstance
+        ? getActiveAgentRunDelegatedAuthority(operationalRunInstance)
+        : undefined;
+      if (
+        !operationalRunInstance ||
+        !delegatedAuthority ||
+        callerIdentity?.receiptAuthority?.() === false
+      ) {
+        throw new ToolInputError("Terminal input denied: agent run is no longer active");
+      }
+      if (manager.snapshotAgent(owner, sessionId) === undefined) {
+        throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
+      }
+
+      if (policy.mode !== "full") {
+        const registration = await registerExecApprovalRequestForHostOrThrow({
+          approvalId: randomUUID(),
+          command: `Terminal input: ${JSON.stringify(data)}`,
+          workdir: undefined,
+          host: "gateway",
+          security: policy.security,
+          ask: "always",
+          unavailableDecisions: ["allow-always"],
+          warningText: "Allow the agent to send this exact input to an existing shared terminal.",
+          agentId,
+          sessionKey: agentSessionKey,
+          sessionId: agentSessionId,
+          runId: operationalRunInstance.runId,
+          toolCallId,
+          ...(opts.approvalReviewerDeviceIds?.length
+            ? { approvalReviewerDeviceIds: opts.approvalReviewerDeviceIds }
+            : {}),
+          requireDeliveryRoute: true,
+        });
+        const decision = await resolveRegisteredExecApprovalDecision({
+          approvalId: registration.id,
+          expiresAtMs: registration.expiresAtMs,
+          preResolvedDecision: registration.finalDecision,
+        });
+        if (decision !== "allow-once") {
+          throw new ToolInputError("Terminal input denied: operator approval required");
+        }
+      }
+      signal?.throwIfAborted();
+      assertSessionCurrent();
+      // Every write, including unprompted Full access, is bound to its exact live
+      // run and Gateway immediately before synchronous PTY I/O.
+      if (
+        getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== delegatedAuthority ||
+        callerIdentity.receiptAuthority?.() === false
+      ) {
+        throw new ToolInputError("Terminal input denied: agent run is no longer active");
+      }
+      if (getContext()?.terminalSessions !== manager) {
+        throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
+      }
+      return terminalActionResult("input", manager.writeAgent(owner, sessionId, data));
+    },
+  };
+}

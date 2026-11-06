@@ -1,0 +1,21 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  resolveReactionLevel,
+  type ResolvedReactionLevel,
+} from "openclaw/plugin-sdk/status-helpers";
+import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
+
+export function resolveWhatsAppReactionLevel(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): ResolvedReactionLevel {
+  const account = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return resolveReactionLevel({
+    value: account.reactionLevel,
+    defaultLevel: "minimal",
+    invalidFallback: "minimal",
+  });
+}

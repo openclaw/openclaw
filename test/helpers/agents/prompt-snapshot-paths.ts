@@ -1,0 +1,19 @@
+// Shared prompt snapshot fixture directories.
+
+/** Codex runtime happy-path prompt snapshot fixture directory. */
+export const CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR =
+  "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path";
+export const CODEX_PROMPT_SNAPSHOT_FILES = {
+  "telegram-direct": "telegram-direct-codex-message-tool.md",
+  "discord-group": "discord-group-codex-message-tool.md",
+} as const;
+export type CodexPromptSnapshotScenario = keyof typeof CODEX_PROMPT_SNAPSHOT_FILES;
+export const CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO: CodexPromptSnapshotScenario = "telegram-direct";
+
+export const LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR =
+  "test/fixtures/agents/prompt-snapshots/local-ollama";
+
+export const GENERATED_PROMPT_SNAPSHOT_DIRS = [
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+  LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR,
+] as const;

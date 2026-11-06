@@ -1,0 +1,101 @@
+import type {
+  ChannelRuntimeContextKey,
+  ChannelRuntimeSurface,
+} from "../channels/plugins/channel-runtime-surface.types.js";
+
+const NOOP_DISPOSE = () => {};
+
+/** Registers a channel-scoped runtime context, returning null when no runtime registry exists. */
+export function registerChannelRuntimeContext(
+  params: ChannelRuntimeContextKey & {
+    channelRuntime?: ChannelRuntimeSurface;
+    context: unknown;
+    abortSignal?: AbortSignal;
+  },
+): { dispose: () => void } | null {
+  return (
+    params.channelRuntime?.runtimeContexts?.register({
+      channelId: params.channelId,
+      accountId: params.accountId,
+      capability: params.capability,
+      context: params.context,
+      abortSignal: params.abortSignal,
+    }) ?? null
+  );
+}
+
+/** Reads a channel-scoped runtime context from the current runtime registry. */
+export function getChannelRuntimeContext(
+  params: ChannelRuntimeContextKey & {
+    channelRuntime?: ChannelRuntimeSurface;
+  },
+): unknown {
+  return params.channelRuntime?.runtimeContexts?.get({
+    channelId: params.channelId,
+    accountId: params.accountId,
+    capability: params.capability,
+  });
+}
+
+/** Watches context registration changes for one channel/account/capability key. */
+export function watchChannelRuntimeContexts(
+  params: ChannelRuntimeContextKey & {
+    channelRuntime?: ChannelRuntimeSurface;
+    onEvent: Parameters<ChannelRuntimeSurface["runtimeContexts"]["watch"]>[0]["onEvent"];
+  },
+): (() => void) | null {
+  return (
+    params.channelRuntime?.runtimeContexts?.watch({
+      channelId: params.channelId,
+      accountId: params.accountId,
+      capability: params.capability,
+      onEvent: params.onEvent,
+    }) ?? null
+  );
+}
+
+/** Wraps a channel runtime so contexts registered during a task are disposed together. */
+export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(params: {
+  channelRuntime?: T;
+}): {
+  channelRuntime?: T;
+  dispose: () => void;
+} {
+  const baseRuntime = params.channelRuntime;
+  if (!baseRuntime) {
+    return {
+      channelRuntime: undefined,
+      dispose: NOOP_DISPOSE,
+    };
+  }
+  const runtimeContexts = baseRuntime.runtimeContexts;
+
+  const trackedLeases = new Set<{ dispose: () => void }>();
+  const scopedRuntime = {
+    ...baseRuntime,
+    runtimeContexts: {
+      ...runtimeContexts,
+      register: (registerParams) => {
+        const lease = runtimeContexts.register(registerParams);
+        const trackedLease = {
+          dispose: () => {
+            if (trackedLeases.delete(trackedLease)) {
+              lease.dispose();
+            }
+          },
+        };
+        trackedLeases.add(trackedLease);
+        return trackedLease;
+      },
+    },
+  } as T;
+
+  return {
+    channelRuntime: scopedRuntime,
+    dispose: () => {
+      for (const lease of Array.from(trackedLeases)) {
+        lease.dispose();
+      }
+    },
+  };
+}

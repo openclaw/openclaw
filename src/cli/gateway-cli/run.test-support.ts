@@ -1,0 +1,50 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
+import "./run.js";
+
+type GatewayRunTestLogger = {
+  info(message: string): void;
+  warn(message: string): void;
+};
+
+type GatewayRunTestApi = {
+  createConfiguredGatewayHealthProbe(
+    cfg: OpenClawConfig,
+  ): (params: { host: string; port: number }) => Promise<boolean>;
+  isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
+  resolveGatewayLockErrorExitCode(err: unknown): number;
+  runGatewayLoopWithSupervisedLockRecovery(params: {
+    startLoop: (lifecycleDeadlineMs?: number) => Promise<void>;
+    supervisor: RespawnSupervisor | null;
+    port: number;
+    healthHost: string;
+    log: GatewayRunTestLogger;
+    probeHealth?: (params: { host: string; port: number }) => Promise<boolean>;
+  }): Promise<void>;
+};
+
+function getTestApi(): GatewayRunTestApi {
+  return (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.gatewayRunTestApi")
+  ] as GatewayRunTestApi;
+}
+
+export const testing: GatewayRunTestApi = {
+  createConfiguredGatewayHealthProbe(cfg) {
+    return getTestApi().createConfiguredGatewayHealthProbe(cfg);
+  },
+  isGatewayHealthzResponse(statusCode, body) {
+    return getTestApi().isGatewayHealthzResponse(statusCode, body);
+  },
+  resolveGatewayLockErrorExitCode(err) {
+    return getTestApi().resolveGatewayLockErrorExitCode(err);
+  },
+  async runGatewayLoopWithSupervisedLockRecovery(params) {
+    await getTestApi().runGatewayLoopWithSupervisedLockRecovery({
+      probeHealth: async () => {
+        throw new Error("Unexpected health probe");
+      },
+      ...params,
+    });
+  },
+};

@@ -1,0 +1,313 @@
+import {
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileEligibility,
+  resolveProfileUnusableUntilForDisplay,
+  type AuthProfileCredential,
+  type AuthProfileFailureReason,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  findNormalizedProviderValue,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
+import type { JsonValue } from "./app-server/protocol.js";
+import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
+import {
+  summarizeCodexAccountUsage,
+  type CodexAccountUsageSummary,
+} from "./app-server/rate-limits.js";
+import { isLikelyEmailAddress } from "./command-account-email.js";
+import { safeCodexControlRequest, type SafeValue } from "./command-rpc.js";
+
+const OPENAI_PROVIDER_ID = "openai";
+
+type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+
+type CodexAccountAuthRow = {
+  profileId: string;
+  label: string;
+  kind: string;
+  status: string;
+  active: boolean;
+  billingNote?: string;
+};
+
+export type CodexAccountAuthOverview = {
+  currentLine?: string;
+  subscriptionLabel?: string;
+  subscriptionUsage?: string;
+  rows: CodexAccountAuthRow[];
+};
+
+export async function readCodexAccountAuthOverview(params: {
+  ctx: PluginCommandContext;
+  agentDir: string;
+  authProfileId: string | null | undefined;
+  pluginConfig: CodexPluginConfig | undefined;
+  account: SafeValue<JsonValue | undefined>;
+  limits: SafeValue<JsonValue | undefined>;
+}): Promise<CodexAccountAuthOverview | undefined> {
+  if (!params.account.ok && !params.limits.ok) {
+    return undefined;
+  }
+  const config = params.ctx.config;
+  const agentDir = params.agentDir;
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
+    allowKeychainPrompt: false,
+    config,
+  });
+  const order = resolveDisplayAuthOrder({ config, store });
+  const activeProfileId = params.authProfileId ?? undefined;
+  if (activeProfileId && !order.includes(activeProfileId)) {
+    order.unshift(activeProfileId);
+  }
+  if (order.length === 0) {
+    return undefined;
+  }
+
+  const now = Date.now();
+  const activeIsSubscription =
+    activeProfileId !== undefined && isChatGptSubscriptionProfile(store.profiles[activeProfileId]);
+  const subscriptionProfileId = activeIsSubscription
+    ? activeProfileId
+    : activeProfileId
+      ? order.find((profileId) => isChatGptSubscriptionProfile(store.profiles[profileId]))
+      : undefined;
+  let subscriptionUsage =
+    activeIsSubscription && params.limits.ok
+      ? summarizeCodexAccountUsage(params.limits.value, now)
+      : undefined;
+  if (subscriptionProfileId && !activeIsSubscription) {
+    const limits = await safeCodexControlRequest(
+      params.pluginConfig,
+      CODEX_CONTROL_METHODS.rateLimits,
+      undefined,
+      { config, agentDir, authProfileId: subscriptionProfileId, isolated: true },
+    );
+    subscriptionUsage = limits.ok ? summarizeCodexAccountUsage(limits.value, now) : undefined;
+  }
+  const rows = order.map((profileId) => {
+    const credential = store.profiles[profileId];
+    const label = formatProfileLabel(profileId, credential);
+    const kind = formatProfileKind(credential);
+    const active = profileId === activeProfileId;
+    const usage = profileId === subscriptionProfileId ? subscriptionUsage : undefined;
+    const status = active
+      ? "active now"
+      : usage?.blocked
+        ? "rate-limited"
+        : describeInactiveProfileStatus({ store, config, profileId, credential, now });
+    const row: CodexAccountAuthRow = {
+      profileId,
+      label,
+      kind,
+      status,
+      active,
+    };
+    if (credential?.type === "api_key" && active) {
+      row.billingNote = "billed per token";
+    }
+    return row;
+  });
+  const activeRow = rows.find((row) => row.active);
+  if (!activeRow) {
+    return {
+      rows,
+    };
+  }
+  const activeCredential = store.profiles[activeRow.profileId];
+  const activeIsApiKey = activeCredential?.type === "api_key";
+  const subscriptionLabel = subscriptionProfileId
+    ? formatProfileLabel(subscriptionProfileId, store.profiles[subscriptionProfileId])
+    : undefined;
+  const subscriptionUsageLine = formatSubscriptionUsageLine(subscriptionUsage);
+  return {
+    ...(activeIsApiKey ? { currentLine: buildApiKeyActiveLine(activeRow, subscriptionUsage) } : {}),
+    ...(subscriptionLabel ? { subscriptionLabel } : {}),
+    ...(subscriptionUsageLine ? { subscriptionUsage: subscriptionUsageLine } : {}),
+    rows,
+  };
+}
+
+function resolveDisplayAuthOrder(params: {
+  config: AuthProfileOrderConfig;
+  store: AuthProfileStore;
+}): string[] {
+  const explicitOrder =
+    findNormalizedProviderValue(params.store.order, OPENAI_PROVIDER_ID) ??
+    findNormalizedProviderValue(params.config?.auth?.order, OPENAI_PROVIDER_ID);
+  if (explicitOrder && explicitOrder.length > 0) {
+    return normalizeUniqueStringEntries(explicitOrder);
+  }
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    store: params.store,
+    provider: OPENAI_PROVIDER_ID,
+  });
+}
+
+function describeInactiveProfileStatus(params: {
+  store: AuthProfileStore;
+  config: AuthProfileOrderConfig;
+  profileId: string;
+  credential?: AuthProfileCredential;
+  now: number;
+}): string {
+  const stats = params.store.usageStats?.[params.profileId];
+  const blockedUntil = stats?.blockedUntil;
+  if (isActiveUntil(blockedUntil, params.now)) {
+    return `rate-limited - resets in ${formatRelativeDuration(Math.max(60_000, blockedUntil - params.now))}`;
+  }
+  const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
+  if (isActiveUntil(unusableUntil, params.now)) {
+    return describeFailureStatus(stats?.disabledReason ?? stats?.cooldownReason, params.credential);
+  }
+  const eligibility = resolveAuthProfileEligibility({
+    cfg: params.config,
+    store: params.store,
+    provider: OPENAI_PROVIDER_ID,
+    profileId: params.profileId,
+    now: params.now,
+  });
+  if (!eligibility.eligible) {
+    return describeEligibilityStatus(eligibility.reasonCode, params.credential);
+  }
+  return "available if needed";
+}
+
+function buildApiKeyActiveLine(
+  activeRow: CodexAccountAuthRow,
+  subscriptionUsage: CodexAccountUsageSummary | undefined,
+): string {
+  if (subscriptionUsage?.blocked) {
+    const switchBack = subscriptionUsage.blockedResetRelative
+      ? ` · switches back ${subscriptionUsage.blockedResetRelative}`
+      : " · switches back automatically";
+    return `Now using: ${activeRow.label} - subscription rate-limited${switchBack}`;
+  }
+  return `Now using: ${activeRow.label} - subscription unavailable · switches back automatically`;
+}
+
+function formatSubscriptionUsageLine(
+  usage: CodexAccountUsageSummary | undefined,
+): string | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const parts = usage.usageLine ? [formatUsageLineForDisplay(usage.usageLine)] : [];
+  if (usage.blockedResetRelative) {
+    parts.push(`Resets ${usage.blockedResetRelative}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function formatUsageLineForDisplay(value: string): string {
+  return value.replace(/^weekly\b/u, "Weekly").replace(/\bshort-term\b/u, "Short-term");
+}
+
+function isChatGptSubscriptionProfile(credential: AuthProfileCredential | undefined): boolean {
+  return credential?.type === "oauth" || credential?.type === "token";
+}
+
+function formatProfileKind(credential: AuthProfileCredential | undefined): string {
+  if (!credential) {
+    return "credential";
+  }
+  return credential.type === "api_key" ? "API key" : "ChatGPT subscription";
+}
+
+function formatProfileLabel(
+  profileId: string,
+  credential: AuthProfileCredential | undefined,
+): string {
+  const tail = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
+  const displayName = credential?.displayName?.trim();
+  if (displayName) {
+    return credential?.type === "api_key"
+      ? simplifyApiKeyDisplayName(displayName, tail)
+      : displayName;
+  }
+  const email = credential?.email?.trim() ?? (isLikelyEmailAddress(tail) ? tail : undefined);
+  if (email) {
+    return email;
+  }
+  if (credential?.type === "api_key") {
+    return tail || "API key";
+  }
+  return humanizeProfileTail(tail);
+}
+
+function simplifyApiKeyDisplayName(value: string, tail: string): string {
+  const stripped = value.replace(/^OpenAI\s+/iu, "").trim();
+  if (tail && stripped.toLowerCase() === humanizeApiKeyProfileTail(tail).toLowerCase()) {
+    return tail;
+  }
+  return stripped || value;
+}
+
+function humanizeApiKeyProfileTail(tail: string): string {
+  const words = splitProfileTail(tail);
+  const hasBackup = words.includes("backup");
+  const customWords = words.filter((word) => word !== "api" && word !== "key" && word !== "backup");
+  const prefix = customWords.map(titleCase).join(" ");
+  return [prefix, "API key", hasBackup ? "backup" : ""].filter(Boolean).join(" ");
+}
+
+function humanizeProfileTail(tail: string): string {
+  const words = splitProfileTail(tail);
+  return words.length > 0 ? words.map(titleCase).join(" ") : tail;
+}
+
+function splitProfileTail(tail: string): string[] {
+  return tail
+    .replace(/[_\s]+/gu, "-")
+    .split("-")
+    .map((word) => word.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function titleCase(value: string): string {
+  return value ? `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}` : value;
+}
+
+function describeFailureStatus(
+  reason: AuthProfileFailureReason | undefined,
+  credential: AuthProfileCredential | undefined,
+): string {
+  if (reason === "auth" || reason === "auth_permanent" || reason === "session_expired") {
+    return credential?.type === "api_key" ? "auth failed - check key" : "sign-in expired";
+  }
+  if (reason === "billing") {
+    return "billing unavailable";
+  }
+  if (reason === "rate_limit") {
+    return "rate-limited";
+  }
+  return "temporarily unavailable";
+}
+
+const ELIGIBILITY_STATUS = new Map([
+  ["expired", "sign-in expired"],
+  ["invalid_expires", "sign-in expired"],
+  ["unresolved_ref", "credential unavailable"],
+  ["provider_mismatch", "wrong provider"],
+  ["mode_mismatch", "wrong credential type"],
+]);
+
+function describeEligibilityStatus(
+  reason: string,
+  credential: AuthProfileCredential | undefined,
+): string {
+  if (reason === "profile_missing" || reason === "missing_credential") {
+    return credential?.type === "api_key" ? "not configured" : "sign-in required";
+  }
+  return ELIGIBILITY_STATUS.get(reason) ?? "unavailable";
+}
+
+function isActiveUntil(value: number | null | undefined, now: number): value is number {
+  return value != null && value > now;
+}

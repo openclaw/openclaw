@@ -1,0 +1,355 @@
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
+  shouldKeepSubagentRunChildLink,
+} from "../agents/subagents/registry/subagent-run-liveness.js";
+import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  estimateAggregateUsageCost,
+  type ModelCostConfig,
+  resolveModelCostConfig,
+} from "../utils/usage-format.js";
+import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
+import {
+  createSessionRowModelCacheKey,
+  type SessionListRowContext,
+} from "./session-utils-contracts.js";
+
+export function prepareGatewaySessionBackgroundProcessScope(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId: string;
+  entry?: Pick<SessionEntry, "sessionId">;
+}) {
+  return {
+    scopeKeys: [
+      resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: params.key,
+        storeAgentId: params.agentId,
+      }),
+      params.key,
+      params.entry?.sessionId ?? "",
+    ],
+    agentId: params.agentId,
+  };
+}
+
+export function matchesSessionArchiveFilter(
+  entry: Pick<SessionEntry, "archivedAt">,
+  archived: SessionsListParams["archived"],
+) {
+  return archived === "all" || (entry.archivedAt !== undefined) === (archived === true);
+}
+
+export function deriveSessionTitle(
+  entry: SessionEntry | undefined,
+  firstUserMessage?: string | null,
+  externalDisplayName?: string | null,
+): string | undefined {
+  if (!entry) {
+    return undefined;
+  }
+
+  // When no model label was persisted, prefer a task-bearing sentence over a
+  // raw first-bubble truncation so Control UI and gateway clients stay readable.
+  // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
+  // which an id prefix here would mask.
+  return (
+    normalizeOptionalString(entry.label) ??
+    normalizeOptionalString(externalDisplayName) ??
+    normalizeOptionalString(entry.displayName) ??
+    normalizeOptionalString(entry.subject) ??
+    (deriveGoalSessionTitle(firstUserMessage) || undefined)
+  );
+}
+
+export function prepareSessionTitleRead(
+  entry: SessionEntry | undefined,
+  displayName: string | undefined,
+  opts: { includeDerivedTitles?: boolean; includeLastMessage?: boolean },
+) {
+  if (!entry?.sessionId || !(opts.includeDerivedTitles || opts.includeLastMessage)) {
+    return undefined;
+  }
+  // Metadata wins over transcript text in both scalar and tool rows. Carry
+  // that result forward so title-only reads do not hydrate discarded payloads.
+  const derivedTitle = opts.includeDerivedTitles
+    ? deriveSessionTitle(entry, undefined, displayName)
+    : undefined;
+  return {
+    derivedTitle,
+    needsTranscript: opts.includeLastMessage || !derivedTitle,
+  };
+}
+
+function resolveModelCostConfigCached(
+  provider: string | undefined,
+  model: string | undefined,
+  cfg: OpenClawConfig,
+  rowContext?: SessionListRowContext,
+): ModelCostConfig | undefined {
+  if (!rowContext) {
+    return resolveModelCostConfig({ provider, model, config: cfg });
+  }
+  const key = createSessionRowModelCacheKey(provider, model);
+  if (rowContext.modelCostConfigByModelRef.has(key)) {
+    return rowContext.modelCostConfigByModelRef.get(key);
+  }
+  const value = resolveModelCostConfig({ provider, model, config: cfg });
+  rowContext.modelCostConfigByModelRef.set(key, value);
+  return value;
+}
+
+export function resolveEstimatedSessionCostUsd(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  entry?: Pick<
+    SessionEntry,
+    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "usageReport"
+  >;
+  explicitCostUsd?: number;
+  rowContext?: SessionListRowContext;
+}): number | undefined {
+  if (params.entry?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
+  const explicitCostUsd = asNonNegativeFiniteNumber(
+    params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
+  );
+  if (explicitCostUsd !== undefined) {
+    return explicitCostUsd;
+  }
+  const input = asPositiveFiniteNumber(params.entry?.inputTokens);
+  const output = asPositiveFiniteNumber(params.entry?.outputTokens);
+  const cacheRead = asPositiveFiniteNumber(params.entry?.cacheRead);
+  const cacheWrite = asPositiveFiniteNumber(params.entry?.cacheWrite);
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  const cost = resolveModelCostConfigCached(
+    params.provider,
+    params.model,
+    params.cfg,
+    params.rowContext,
+  );
+  if (!cost) {
+    return undefined;
+  }
+  const estimated = estimateAggregateUsageCost({
+    usage: {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    },
+    cost,
+  });
+  return asNonNegativeFiniteNumber(estimated);
+}
+
+const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
+
+export function isFinitePositiveTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function storeOnlyChildLinkExpiresAt(entry: SessionEntry): number {
+  if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
+    const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
+    return isFinitePositiveTimestamp(endedAt)
+      ? endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : -Infinity;
+  }
+  return isFinitePositiveTimestamp(entry.startedAt)
+    ? Infinity
+    : isFinitePositiveTimestamp(entry.updatedAt)
+      ? entry.updatedAt + STALE_STORE_ONLY_CHILD_LINK_MS
+      : -Infinity;
+}
+
+function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+  return now <= storeOnlyChildLinkExpiresAt(entry);
+}
+
+/** The next clock-only navigation change; execution/reservation changes invalidate separately. */
+export function sessionChildLinkExpiresAt(
+  key: string,
+  entry: SessionEntry,
+  subagentRuns: SessionListRowContext["subagentRuns"],
+  now: number,
+): number {
+  const parsed = parseAgentSessionKey(key);
+  if (
+    (!entry.acp &&
+      !parsed?.rest.startsWith("acp:") &&
+      (parsed?.rest.startsWith("subagent:") ||
+        (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0))) ||
+    (entry.parentSessionKey && parsed?.rest.startsWith("dashboard:")) ||
+    (!entry.parentSessionKey && !entry.spawnedBy)
+  ) {
+    return Infinity;
+  }
+  const run = subagentRuns.getDisplaySubagentRun(key);
+  const expires = run
+    ? typeof run.execution.endedAt === "number" && Number.isFinite(run.execution.endedAt)
+      ? run.execution.endedAt + RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+      : Infinity
+    : storeOnlyChildLinkExpiresAt(entry);
+  return expires >= now ? expires : Infinity;
+}
+
+const emptyChildOwners: readonly string[] = Object.freeze([]);
+
+/** Only the current executor/reservation can confer control; display snapshots cannot. */
+export function resolveSessionChildController(
+  key: string,
+  entry: SessionEntry,
+  parentSessionKey?: string,
+): string | undefined {
+  if (
+    parentSessionKey &&
+    parentSessionKey !== entry.parentSessionKey &&
+    parentSessionKey !== entry.spawnedBy
+  ) {
+    return undefined;
+  }
+  return getSubagentChildControllerSessionKey(key, entry);
+}
+
+/** Promotion cuts navigation activity, not a live controller's ownership. */
+export function shouldPropagateChildActivity(
+  key: string,
+  entry: SessionEntry,
+  ownerSessionKey: string,
+): boolean {
+  return (
+    entry.sidebarRoot !== true ||
+    parseAgentSessionKey(key)?.rest.startsWith("subagent:") === true ||
+    resolveSessionChildController(key, entry) === ownerSessionKey
+  );
+}
+
+const sessionChildOwners = new WeakMap<
+  SessionEntry,
+  {
+    key: string;
+    controller?: string;
+    parent?: string;
+    owners: readonly string[];
+  }
+>();
+
+/** Reuse owner identities, but recheck time and live authority on every read. */
+export function resolveSessionChildOwners(params: {
+  key: string;
+  parsedKey?: ReturnType<typeof parseAgentSessionKey>;
+  entry: SessionEntry;
+  now: number;
+  subagentRuns: SessionListRowContext["subagentRuns"];
+  hasActiveRun?: boolean;
+}): readonly string[] {
+  const { key, entry, now, subagentRuns } = params;
+  const controller = resolveSessionChildController(key, entry);
+  let parent: string | undefined;
+  if (entry.parentSessionKey || entry.spawnedBy) {
+    const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
+    const native =
+      !entry.acp &&
+      !parsed?.rest.startsWith("acp:") &&
+      (parsed?.rest.startsWith("subagent:") ||
+        (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
+    // Native lineage is a durable relationship, not a retained-run lease. Saved
+    // dashboard navigation keeps its existing lifetime. Other store-only rows
+    // retain the bounded fallback rather than acquiring permanent authority.
+    let keep = native || params.hasActiveRun;
+    if (!keep) {
+      const latest = subagentRuns.getDisplaySubagentRun(key);
+      keep = latest
+        ? shouldKeepSubagentRunChildLink(latest, {
+            activeDescendants: subagentRuns.countActiveDescendantRuns(key),
+            now,
+          })
+        : shouldKeepStoreOnlyChildLink(entry, now);
+    }
+    const explicitParent =
+      keep || parsed?.rest.startsWith("dashboard:")
+        ? normalizeOptionalString(entry.parentSessionKey)
+        : undefined;
+    const spawner = keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
+    // Modern explicit lineage remains readable during foreign control. Legacy
+    // spawnedBy-only facts yield to a verified active controller. Neither grants
+    // permission to take over that execution (delivery checks the current owner).
+    parent = explicitParent ?? (!controller || controller === spawner ? spawner : undefined);
+  }
+  const cached = sessionChildOwners.get(entry);
+  if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
+    return cached.owners;
+  }
+  const owners: string[] = [];
+  if (controller && controller !== key) {
+    owners.push(controller);
+  }
+  if (parent && parent !== key && parent !== controller) {
+    owners.push(parent);
+  }
+  const result = owners.length ? Object.freeze(owners) : emptyChildOwners;
+  sessionChildOwners.set(entry, {
+    key,
+    controller,
+    parent,
+    owners: result,
+  });
+  return result;
+}
+
+export type SessionChildLink = {
+  key: string;
+  entry: SessionEntry;
+  agentId?: string;
+  storePath?: string;
+};
+
+/** Select canonical children; retained run results cannot create session links. */
+export function readStoreChildSessionLinks(params: {
+  store: Record<string, SessionEntry>;
+  key: string;
+  subagentRunsByChildSessionKey: SessionListRowContext["subagentRunsByChildSessionKey"];
+}): SessionChildLink[] | undefined {
+  const children: SessionChildLink[] = [];
+  // One store pass discovers both persisted navigation and runtime-only controller links.
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (key === params.key || !params.key) {
+      continue;
+    }
+    const runs = params.subagentRunsByChildSessionKey.get(key.trim()) ?? [];
+    const owners = [
+      ...runs.map(
+        (run) =>
+          normalizeOptionalString(run.controllerSessionKey) ||
+          normalizeOptionalString(run.requesterSessionKey),
+      ),
+      normalizeOptionalString(entry.spawnedBy),
+      normalizeOptionalString(entry.parentSessionKey),
+    ];
+    if (owners.includes(params.key)) {
+      children.push({ key, entry });
+    }
+  }
+  return children.length ? children : undefined;
+}

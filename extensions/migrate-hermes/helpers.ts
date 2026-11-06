@@ -1,0 +1,115 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { parse as parseDotenv } from "dotenv";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  markMigrationItemError,
+  markMigrationItemSkipped,
+  MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
+} from "openclaw/plugin-sdk/migration";
+import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { appendRegularFile, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parse as parseYaml } from "yaml";
+
+const HOME_SHORTHAND_RE = /^~(?=$|[\\/])/u;
+const UNSAFE_NAME_CHARS_RE = /[^a-z0-9._-]+/g;
+const EDGE_DASHES_RE = /^-+|-+$/g;
+
+export function resolveHomePath(input: string): string {
+  const value = input.trim();
+  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, () => os.homedir())) : value;
+}
+
+export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
+
+export async function isDirectory(dirPath: string): Promise<boolean> {
+  const stat = await fs.stat(dirPath).catch((error: unknown) => {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  });
+  return stat?.isDirectory() === true;
+}
+
+export function sanitizeName(name: string): string {
+  const normalized = name.trim().toLowerCase().replaceAll(UNSAFE_NAME_CHARS_RE, "-");
+  return normalized.replaceAll(EDGE_DASHES_RE, "");
+}
+
+export async function readText(filePath: string | undefined): Promise<string | undefined> {
+  return filePath
+    ? await fs
+        .realpath(filePath)
+        .then((resolvedPath) => readRegularFile({ filePath: resolvedPath }))
+        .then(({ buffer }) => buffer.toString("utf8"))
+        .catch(() => undefined)
+    : undefined;
+}
+
+// Config and credentials must retain their exact text when imported.
+export async function readUtf8Text(filePath: string | undefined): Promise<string | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath) });
+    return decodeUtf8Input(buffer, "Source file");
+  } catch (error) {
+    throw new Error(
+      `Failed reading text file ${filePath}: ${formatErrorMessage(error)}. Use an ordinary readable UTF-8 file and retry migration.`,
+      { cause: error },
+    );
+  }
+}
+
+export async function readJsonObject(
+  filePath: string | undefined,
+): Promise<Record<string, unknown>> {
+  const raw = await readUtf8Text(filePath);
+  try {
+    return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function parseEnv(content: string | undefined): Record<string, string> {
+  return content ? parseDotenv(content) : {};
+}
+
+export function parseHermesConfig(content: string | undefined): Record<string, unknown> {
+  return content ? asNonArrayRecord(parseYaml(content)) : {};
+}
+
+export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
+  if (!item.source || !item.target) {
+    return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
+  }
+  try {
+    const content = await readUtf8Text(item.source);
+    const header = `\n\n<!-- Imported from Hermes: ${path.basename(item.source)} -->\n\n`;
+    const body = content?.trimEnd();
+    if (!body) {
+      return markMigrationItemSkipped(item, "source file is empty");
+    }
+    const importBlock = `${header}${body}\n`;
+    const existing = (await readText(item.target)) ?? "";
+    if (existing.includes(importBlock)) {
+      return markMigrationItemSkipped(item, "already imported from Hermes");
+    }
+    await fs.mkdir(path.dirname(item.target), { recursive: true });
+    await appendRegularFile({
+      filePath: item.target,
+      content: importBlock,
+      rejectSymlinkParents: true,
+    });
+    return { ...item, status: "migrated" };
+  } catch (err) {
+    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+  }
+}

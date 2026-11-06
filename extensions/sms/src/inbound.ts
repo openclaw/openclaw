@@ -1,0 +1,289 @@
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { normalizeSmsPhoneNumber } from "./phone.js";
+import { sendSmsTextChunks } from "./send.js";
+import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
+
+const CHANNEL_ID = "sms";
+
+type SmsLog = {
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+};
+
+export type SmsChannelRuntime = Pick<
+  PluginRuntime["channel"],
+  "commands" | "inbound" | "media" | "pairing" | "reply" | "routing" | "session"
+>;
+
+export async function dispatchSmsInboundEvent(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedSmsAccount;
+  msg: SmsInboundMessage;
+  channelRuntime: SmsChannelRuntime;
+  receivedAt: number;
+  turnAdoptionLifecycle?: NonNullable<
+    Parameters<SmsChannelRuntime["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+  >;
+  log?: SmsLog;
+}): Promise<void> {
+  const from = normalizeSmsPhoneNumber(params.msg.from);
+  async function authorizeSmsSender(contextBinding?: ChannelIngressContextBinding) {
+    const { cfg, account, channelRuntime } = params;
+    const rawBody = params.msg.body;
+    const commandRequested = channelRuntime.commands.shouldComputeCommandAuthorized(rawBody, cfg);
+    return await channelRuntime.inbound.ingress.resolveStable({
+      channelId: CHANNEL_ID,
+      accountId: account.accountId,
+      cfg,
+      identity: {
+        key: "phone",
+        entryIdPrefix: "sms-entry",
+      },
+      readStoreAllowFrom: async () =>
+        await channelRuntime.pairing.readAllowFromStore({
+          channel: CHANNEL_ID,
+          accountId: account.accountId,
+        }),
+      subject: { stableId: from },
+      conversation: {
+        kind: "direct",
+        id: from,
+      },
+      contextBinding,
+      event: { mayPair: true },
+      dmPolicy: account.dmPolicy,
+      allowFrom: account.allowFrom,
+      command: commandRequested
+        ? {
+            cfg,
+            modeWhenAccessGroupsOff: "configured",
+          }
+        : undefined,
+    });
+  }
+  let auth = await authorizeSmsSender();
+  if (!auth.senderAccess.allowed) {
+    if (auth.senderAccess.decision === "pairing") {
+      const { account, channelRuntime, log } = params;
+      const issueChallenge = createChannelPairingChallengeIssuer({
+        channel: CHANNEL_ID,
+        accountId: account.accountId,
+        upsertPairingRequest: async (input) =>
+          await channelRuntime.pairing.upsertPairingRequest({
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            ...input,
+          }),
+      });
+      await issueChallenge({
+        senderId: from,
+        senderIdLine: `Your SMS phone number: ${from}`,
+        sendPairingReply: async (text) => {
+          await sendSmsTextChunks({
+            account,
+            to: from,
+            text,
+          });
+        },
+        onCreated: () => {
+          log?.info?.(`SMS pairing request created for ${from}`);
+        },
+        onReplyError: (err) => {
+          log?.warn?.(`SMS pairing reply failed for ${from}: ${String(err)}`);
+        },
+      });
+      return;
+    }
+    params.log?.warn?.(`SMS sender ${from} is not authorized`);
+    return;
+  }
+
+  const materialized =
+    params.msg.media.length > 0 || (params.msg.unavailableMediaCount ?? 0) > 0
+      ? await (
+          await import("./media.js")
+        ).materializeSmsInboundMedia({
+          account: params.account,
+          msg: params.msg,
+          mediaRuntime: params.channelRuntime,
+          abortSignal: params.turnAdoptionLifecycle?.abortSignal,
+          log: params.log,
+        })
+      : { body: params.msg.body, media: [], cleanup: async () => undefined };
+  let adoptionState: "pending" | "deferred" | "adopted" | "abandoned" = "pending";
+  const releaseMedia = async (settle: () => void | Promise<void>) => {
+    adoptionState = "abandoned";
+    await materialized.cleanup();
+    await settle();
+  };
+  try {
+    const turnAdoptionLifecycle: typeof params.turnAdoptionLifecycle =
+      materialized.media.length > 0 && params.turnAdoptionLifecycle
+        ? {
+            ...params.turnAdoptionLifecycle,
+            onAdopted: async () => {
+              try {
+                await params.turnAdoptionLifecycle?.onAdopted();
+                adoptionState = "adopted";
+              } catch (error) {
+                await materialized.cleanup();
+                throw error;
+              }
+            },
+            onDeferred: () => {
+              const deferred = params.turnAdoptionLifecycle?.onDeferred?.();
+              if (deferred !== false) {
+                adoptionState = "deferred";
+              }
+              return deferred;
+            },
+            onAbandoned: () => {
+              // Queue abandonment can be fire-and-forget. Start cleanup before
+              // releasing the durable claim and contain asynchronous failures.
+              void releaseMedia(() => params.turnAdoptionLifecycle?.onAbandoned?.()).catch(
+                (error: unknown) => {
+                  params.log?.warn?.(
+                    `Failed to abandon Twilio MMS ingress ${params.msg.messageSid}: ${String(error)}`,
+                  );
+                },
+              );
+            },
+            onDropped: params.turnAdoptionLifecycle?.onDropped
+              ? (reason) => releaseMedia(() => params.turnAdoptionLifecycle?.onDropped?.(reason))
+              : undefined,
+          }
+        : params.turnAdoptionLifecycle;
+    const route = params.channelRuntime.routing.resolveAgentRoute({
+      cfg: params.cfg,
+      channel: CHANNEL_ID,
+      accountId: params.account.accountId,
+      peer: {
+        kind: "direct",
+        id: from,
+      },
+    });
+    const sessionKey = route.sessionKey;
+    auth = await authorizeSmsSender({
+      agentId: route.agentId,
+      sessionKey,
+      messageId: params.msg.messageSid,
+      inboundEventKind: "user_request",
+    });
+    if (!auth.senderAccess.allowed) {
+      params.log?.warn?.(`SMS sender ${from} authorization changed before dispatch`);
+      return;
+    }
+    const commandRequested = auth.commandAccess.requested;
+    const commandAuthorized = auth.commandAccess.authorized;
+    const isTextCommand = params.channelRuntime.commands.isControlCommandMessage(
+      params.msg.body,
+      params.cfg,
+    );
+
+    await params.channelRuntime.inbound.run({
+      channel: CHANNEL_ID,
+      accountId: params.account.accountId,
+      raw: params.msg,
+      ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+      adapter: {
+        ingest: (msg) => ({
+          id: msg.messageSid,
+          timestamp: params.receivedAt,
+          rawText: msg.body,
+          textForAgent: materialized.body,
+          textForCommands: msg.body,
+          raw: msg,
+        }),
+        resolveTurn: async (input) => {
+          const ctxPayload = params.channelRuntime.inbound.buildContext({
+            channelIngress: auth,
+            channel: CHANNEL_ID,
+            accountId: params.account.accountId,
+            messageId: input.id,
+            timestamp: input.timestamp,
+            from: `sms:${from}`,
+            sender: {
+              id: from,
+              name: from,
+            },
+            conversation: {
+              kind: "direct",
+              id: from,
+              label: from,
+            },
+            route: {
+              agentId: route.agentId,
+              accountId: params.account.accountId,
+              routeSessionKey: sessionKey,
+              dispatchSessionKey: sessionKey,
+            },
+            reply: {
+              to: `sms:${from}`,
+            },
+            message: {
+              rawBody: input.rawText,
+              commandBody: input.textForCommands,
+              bodyForAgent: input.textForAgent,
+            },
+            media: materialized.media,
+            access: commandRequested
+              ? {
+                  commands: {
+                    authorized: commandAuthorized,
+                  },
+                }
+              : undefined,
+            command: isTextCommand
+              ? {
+                  kind: "text-slash",
+                  body: input.textForCommands,
+                  authorized: commandAuthorized,
+                }
+              : undefined,
+            extra: {
+              MessageSid: params.msg.messageSid,
+              SenderE164: from,
+              To: params.msg.to,
+            },
+          });
+          return {
+            cfg: params.cfg,
+            channel: CHANNEL_ID,
+            accountId: params.account.accountId,
+            route: { agentId: route.agentId, sessionKey },
+            ctxPayload,
+            delivery: {
+              durable: () => ({
+                to: from,
+              }),
+              deliver: async (payload) => {
+                const text = payload.text;
+                if (!text) {
+                  return { visibleReplySent: false };
+                }
+                await sendSmsTextChunks({
+                  account: params.account,
+                  to: from,
+                  text,
+                });
+                return { visibleReplySent: true };
+              },
+            },
+            dispatcherOptions: {
+              onReplyStart: () => {
+                params.log?.info?.(`SMS reply started for ${from}`);
+              },
+            },
+          };
+        },
+      },
+    });
+  } finally {
+    if (adoptionState === "pending" || adoptionState === "abandoned") {
+      await materialized.cleanup();
+    }
+  }
+}

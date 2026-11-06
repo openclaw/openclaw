@@ -1,0 +1,633 @@
+import type { IncomingMessage } from "node:http";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isRedactedSecretValue } from "../config/redact-sentinel.js";
+import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
+import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { getHeader } from "./http-header-value.js";
+import {
+  prepareGatewayIngressAttribution,
+  readGatewayIngressTransport,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type GatewayIngressAttribution,
+  type VerifiedTailscaleIngressIdentity,
+} from "./ingress-attribution.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  isInvalidGatewaySecret,
+} from "./known-weak-gateway-secrets.js";
+import {
+  isLocalDirectRequest,
+  isLoopbackAddress,
+  resolveLocalInterfaceAddressMatch,
+  resolveRequestClientIpFromHeaders,
+  isTrustedProxyAddress,
+} from "./net.js";
+import {
+  openclawIdTunnelUser,
+  resolveOpenClawIdTunnelPrincipal,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import { checkBrowserOrigin, type BrowserOriginPolicy } from "./origin-check.js";
+import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
+export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
+const LEGACY_OPENCLAW_ENV_NOTE =
+  " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
+
+export type GatewayAuthResult = {
+  ok: boolean;
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "device-token"
+    | "bootstrap-token"
+    | "trusted-proxy"
+    | "remote-ingress";
+  user?: string;
+  /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
+  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
+  /** Admitted OpenClaw ID tunnel device behind a `trusted-proxy` result; never from headers. */
+  openclawId?: OpenClawIdTunnelPrincipal;
+  reason?: string;
+  rateLimited?: boolean;
+  /** Milliseconds the client should wait before retrying (when rate-limited). */
+  retryAfterMs?: number;
+};
+
+type ConnectAuth = {
+  token?: string;
+  password?: string;
+};
+
+type GatewayAuthSurface = "http" | "http-control-ui-read" | "ws-control-ui";
+
+type AuthorizeGatewayConnectParams = {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  tailscaleWhois?: Parameters<typeof prepareGatewayIngressAttribution>[0]["tailscaleWhois"];
+  ingressAttribution?: GatewayIngressAttribution;
+  /**
+   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
+   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   */
+  authSurface?: GatewayAuthSurface;
+  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  rateLimiter?: AuthRateLimiter;
+  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  clientIp?: string;
+  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
+  /** Let an owner with credential fallbacks record the shared-secret failure after all fallbacks fail. */
+  deferRateLimitFailure?: boolean;
+  /** Trust X-Real-IP only when explicitly enabled. */
+  allowRealIpFallback?: boolean;
+  /** Optional browser-origin policy for HTTP requests that require Origin checks. */
+  browserOriginPolicy?: BrowserOriginPolicy;
+};
+
+function resolveGatewayAuthRequestContext(params: AuthorizeGatewayConnectParams) {
+  const { req, trustedProxies } = params;
+  const authSurface = params.authSurface ?? "http";
+  const attributed =
+    params.ingressAttribution?.kind === "unattributable-proxy"
+      ? undefined
+      : params.ingressAttribution;
+  const fallbackIp =
+    attributed?.clientIp ??
+    resolveRequestClientIpFromHeaders(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
+  const localDirect = attributed ? attributed.kind === "direct-local" : isLocalDirectRequest(req);
+
+  return {
+    authSurface,
+    limiter: params.rateLimiter,
+    subject:
+      attributed && !localDirect
+        ? attributed.rateLimit.subject.key
+        : (params.clientIp ?? attributed?.rateLimit.subject.key ?? fallbackIp),
+    rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    localDirect,
+    resetOnSuccess: attributed?.rateLimit.resetOnSuccess ?? true,
+    ingressAttribution: params.ingressAttribution,
+  };
+}
+
+function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean {
+  return Boolean(
+    normalizeOptionalString(connectAuth?.token) || normalizeOptionalString(connectAuth?.password),
+  );
+}
+
+function resolveConnectSecret(
+  mode: "token" | "password",
+  connectAuth?: ConnectAuth | null,
+): string | undefined {
+  // Either client field may carry the secret; the mode alone selects the configured value.
+  return connectAuth?.[mode] ?? connectAuth?.[mode === "token" ? "password" : "token"];
+}
+
+export function assertGatewayAuthConfigured(
+  auth: ResolvedGatewayAuth,
+  rawAuthConfig?: GatewayAuthConfig | null,
+): void {
+  if (
+    (auth.mode === "token" || auth.mode === "password") &&
+    isRedactedSecretValue(auth[auth.mode])
+  ) {
+    assertGatewayAuthNotKnownWeak(auth);
+  }
+  if (auth.mode === "token" && isInvalidGatewaySecret(auth.token)) {
+    throw new Error(
+      "Gateway token must not be blank or the literal string undefined/null. Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source.",
+    );
+  }
+  if (auth.mode === "token" && !auth.token) {
+    if (auth.allowTailscale) {
+      return;
+    }
+    throw new Error(
+      `gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN).${LEGACY_OPENCLAW_ENV_NOTE}`,
+    );
+  }
+  if (auth.mode === "password" && !auth.password) {
+    if (
+      rawAuthConfig?.password != null && // pragma: allowlist secret
+      typeof rawAuthConfig.password !== "string" // pragma: allowlist secret
+    ) {
+      throw new Error(
+        "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup", // pragma: allowlist secret
+      );
+    }
+    throw new Error(
+      `gateway auth mode is password, but no password was configured.${LEGACY_OPENCLAW_ENV_NOTE}`,
+    );
+  }
+  if (auth.mode === "trusted-proxy") {
+    if (!auth.trustedProxy) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but no trustedProxy config was provided (set gateway.auth.trustedProxy)",
+      );
+    }
+    if (!auth.trustedProxy.userHeader || auth.trustedProxy.userHeader.trim() === "") {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
+      );
+    }
+    if (auth.token) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but a shared token is also configured; remove gateway.auth.token / OPENCLAW_GATEWAY_TOKEN because trusted-proxy and token auth are mutually exclusive",
+      );
+    }
+  }
+}
+
+/** Shared person-ingress policy; canonical emails are supplied after identity preparation. */
+export function gatewayPersonPrincipalAuthError(
+  auth: ResolvedGatewayAuth,
+  cfg: OpenClawConfig,
+  emails?: readonly string[],
+): string | undefined {
+  const proxy = auth.trustedProxy;
+  if (
+    auth.mode !== "trusted-proxy" ||
+    !cfg.gateway?.roles ||
+    proxy?.userHeader.trim().toLowerCase() !== "cf-access-authenticated-user-email" ||
+    !proxy.requiredHeaders?.some(
+      (header) => header.trim().toLowerCase() === "cf-access-jwt-assertion",
+    )
+  ) {
+    return "Person ingress requires trusted-proxy authentication with verified Cloudflare Access profiles and gateway.roles. Approve the grant from the person's authenticated Gateway Control UI.";
+  }
+  if (emails && !isTrustedProxyUserAllowed(proxy, emails)) {
+    return "Person principal is no longer permitted by gateway.auth.trustedProxy.allowUsers.";
+  }
+  return undefined;
+}
+
+/** Match the current trusted-proxy allowlist against an identity's canonical names. */
+function isTrustedProxyUserAllowed(
+  trustedProxy: Pick<GatewayTrustedProxyConfig, "allowUsers"> | undefined,
+  users: readonly string[],
+): boolean {
+  const allowUsers = trustedProxy?.allowUsers;
+  return !allowUsers?.length || users.some((user) => allowUsers.includes(user));
+}
+
+function authorizeTrustedProxy(params: {
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  trustedProxyConfig: GatewayTrustedProxyConfig;
+}): { user: string } | { reason: string } {
+  const { req, trustedProxies, trustedProxyConfig } = params;
+
+  if (!req) {
+    return { reason: "trusted_proxy_no_request" };
+  }
+
+  const remoteAddr = req.socket?.remoteAddress;
+  if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
+    return { reason: "trusted_proxy_untrusted_source" };
+  }
+  const remoteIsLoopback = isLoopbackAddress(remoteAddr);
+  if (remoteIsLoopback && trustedProxyConfig.allowLoopback !== true) {
+    return { reason: "trusted_proxy_loopback_source" };
+  }
+  if (!remoteIsLoopback) {
+    const localInterfaceMatch = resolveLocalInterfaceAddressMatch(remoteAddr);
+    if (localInterfaceMatch === undefined) {
+      return { reason: "trusted_proxy_local_interface_check_failed" };
+    }
+    if (localInterfaceMatch) {
+      return { reason: "trusted_proxy_local_interface_source" };
+    }
+  }
+
+  const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
+  for (const header of requiredHeaders) {
+    const value = getHeader(req, header);
+    if (!value || value.trim() === "") {
+      return { reason: `trusted_proxy_missing_header_${header}` };
+    }
+  }
+
+  const userHeaderValue = getHeader(req, trustedProxyConfig.userHeader);
+  if (!userHeaderValue || userHeaderValue.trim() === "") {
+    return { reason: "trusted_proxy_user_missing" };
+  }
+
+  const user = userHeaderValue.trim();
+
+  if (!isTrustedProxyUserAllowed(trustedProxyConfig, [user])) {
+    return { reason: "trusted_proxy_user_not_allowed" };
+  }
+
+  return { user };
+}
+
+function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
+  return authSurface === "ws-control-ui" || authSurface === "http-control-ui-read";
+}
+
+function authorizeHttpBrowserOrigin(params: {
+  authSurface: GatewayAuthSurface;
+  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+  isLocalClient: boolean;
+  reason: string;
+  requireSameOriginFetchWithoutOrigin?: boolean;
+  allowWildcardOrigin?: boolean;
+}): { ok: false; reason: string } | null {
+  if (params.authSurface === "ws-control-ui") {
+    return null;
+  }
+
+  const origin = params.browserOriginPolicy?.origin?.trim();
+  if (!origin) {
+    return params.requireSameOriginFetchWithoutOrigin &&
+      normalizeLowercaseStringOrEmpty(params.browserOriginPolicy?.fetchSite) !== "same-origin"
+      ? { ok: false, reason: params.reason }
+      : null;
+  }
+
+  const originCheck = checkBrowserOrigin({
+    requestHost: params.browserOriginPolicy?.requestHost,
+    origin,
+    allowedOrigins:
+      params.allowWildcardOrigin === false
+        ? params.browserOriginPolicy?.allowedOrigins?.filter(
+            (candidate) => normalizeLowercaseStringOrEmpty(candidate) !== "*",
+          )
+        : params.browserOriginPolicy?.allowedOrigins,
+    allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
+    isLocalClient: params.isLocalClient,
+  });
+  return originCheck.ok ? null : { ok: false, reason: params.reason };
+}
+
+function authorizeTrustedProxyBrowserOrigin(params: {
+  authSurface: GatewayAuthSurface;
+  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+}): { ok: false; reason: string } | null {
+  return authorizeHttpBrowserOrigin({
+    ...params,
+    isLocalClient: false,
+    reason: "trusted_proxy_origin_not_allowed",
+  });
+}
+
+async function authorizeSharedSecretAuth(params: {
+  method: "token" | "password";
+  configuredSecret?: string;
+  providedSecret?: string;
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+  deferRateLimitFailure?: boolean;
+  resetOnSuccess?: boolean;
+}): Promise<GatewayAuthResult> {
+  if (params.method === "password" && isRedactedSecretValue(params.configuredSecret)) {
+    return { ok: false, reason: "password_redacted_config" };
+  }
+  if (
+    !params.configuredSecret ||
+    (params.method === "token" && isInvalidGatewaySecret(params.configuredSecret))
+  ) {
+    return { ok: false, reason: `${params.method}_missing_config` };
+  }
+  if (!params.providedSecret) {
+    // Missing credentials do not consume the wrong-credential rate limit.
+    return { ok: false, reason: `${params.method}_missing` };
+  }
+  if (!safeEqualSecret(params.providedSecret, params.configuredSecret)) {
+    if (!params.deferRateLimitFailure) {
+      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    }
+    return { ok: false, reason: `${params.method}_mismatch` };
+  }
+  if (params.resetOnSuccess !== false) {
+    params.limiter?.reset(params.ip, params.rateLimitScope);
+  }
+  return { ok: true, method: params.method };
+}
+
+function rejectIfRateLimited(params: {
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+}): GatewayAuthResult | undefined {
+  if (!params.limiter) {
+    return undefined;
+  }
+  const rlCheck = params.limiter.check(params.ip, params.rateLimitScope);
+  if (rlCheck.allowed) {
+    return undefined;
+  }
+  return {
+    ok: false,
+    reason: "rate_limited",
+    rateLimited: true,
+    retryAfterMs: rlCheck.retryAfterMs,
+  };
+}
+
+async function authorizeGatewayConnect(
+  params: AuthorizeGatewayConnectParams,
+): Promise<GatewayAuthResult> {
+  const { auth } = params;
+  if (
+    (auth.mode === "token" || auth.mode === "password") &&
+    isRedactedSecretValue(auth[auth.mode])
+  ) {
+    return { ok: false, reason: `${auth.mode}_redacted_config` };
+  }
+  const remoteForwarded =
+    params.ingressAttribution?.kind === "remote-forwarded" ||
+    (params.req && readGatewayIngressTransport(params.req)?.kind === "remote-forwarded");
+  if (remoteForwarded) {
+    // Device credentials are verified by the HTTP/WS device owner, never as shared auth.
+    return { ok: false, reason: "remote_control_ui_device_auth_required" };
+  }
+  if (auth.mode === "trusted-proxy") {
+    if (!auth.trustedProxy) {
+      return { ok: false, reason: "trusted_proxy_config_missing" };
+    }
+    if (!params.trustedProxies || params.trustedProxies.length === 0) {
+      return { ok: false, reason: "trusted_proxy_no_proxies_configured" };
+    }
+  }
+  const ingressAttribution =
+    params.ingressAttribution ??
+    (params.req
+      ? prepareGatewayIngressAttribution({
+          req: params.req,
+          trustedProxies: params.trustedProxies,
+          trustedProxy: auth.trustedProxy,
+          allowRealIpFallback: params.allowRealIpFallback,
+          tailscaleWhois: params.tailscaleWhois,
+        })
+      : undefined);
+  if (ingressAttribution?.kind === "unattributable-proxy") {
+    return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+  }
+  const preparedParams = ingressAttribution ? { ...params, ingressAttribution } : params;
+  const { authSurface, limiter, subject, rateLimitScope } =
+    resolveGatewayAuthRequestContext(preparedParams);
+
+  // Keep the limiter strict on the async Serve WhoIs branch by serializing
+  // attempts for the same {scope, ip} key across the pre-check and failure write.
+  if (
+    limiter &&
+    shouldAllowTailscaleHeaderAuth(authSurface) &&
+    auth.allowTailscale &&
+    ingressAttribution?.kind === "tailscale-serve"
+  ) {
+    return await withSerializedRateLimitAttempt({
+      ip: subject,
+      scope: rateLimitScope,
+      run: async () => await authorizeGatewayConnectCore(preparedParams),
+    });
+  }
+
+  return await authorizeGatewayConnectCore(preparedParams);
+}
+
+async function authorizeGatewayConnectCore(
+  params: AuthorizeGatewayConnectParams,
+): Promise<GatewayAuthResult> {
+  const { auth, connectAuth, req, trustedProxies } = params;
+  const {
+    authSurface,
+    limiter,
+    subject,
+    rateLimitScope,
+    localDirect,
+    resetOnSuccess,
+    ingressAttribution,
+  } = resolveGatewayAuthRequestContext(params);
+  const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
+
+  // Explicit tunnel attribution uses its own peer admission, never ambient Serve auth.
+  if (ingressAttribution?.kind === "openclaw-id-tunnel") {
+    return await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
+  }
+
+  if (
+    authSurface === "http-control-ui-read" &&
+    auth.allowTailscale &&
+    !localDirect &&
+    !explicitSharedSecretAuth
+  ) {
+    // Reject cross-origin ambient Control UI requests before the Tailscale WhoIs
+    // lookup. Explicit shared-secret auth is not subject to this browser gate.
+    const originResult = authorizeHttpBrowserOrigin({
+      authSurface,
+      browserOriginPolicy: params.browserOriginPolicy,
+      isLocalClient: localDirect,
+      reason: "origin_not_allowed",
+      requireSameOriginFetchWithoutOrigin: true,
+      allowWildcardOrigin: false,
+    });
+    if (originResult) {
+      return originResult;
+    }
+  }
+
+  if (auth.mode === "trusted-proxy") {
+    if (!auth.trustedProxy) {
+      return { ok: false, reason: "trusted_proxy_config_missing" };
+    }
+    const result = authorizeTrustedProxy({
+      req,
+      trustedProxies,
+      trustedProxyConfig: auth.trustedProxy,
+    });
+
+    if ("user" in result) {
+      if (ingressAttribution?.kind !== "trusted-proxy") {
+        return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+      }
+      const originResult = authorizeTrustedProxyBrowserOrigin({
+        authSurface,
+        browserOriginPolicy: params.browserOriginPolicy,
+      });
+      if (originResult) {
+        return originResult;
+      }
+      return { ok: true, method: "trusted-proxy", user: result.user };
+    }
+    if (localDirect && auth.password && connectAuth?.password) {
+      const rateLimitResult = rejectIfRateLimited({ limiter, ip: subject, rateLimitScope });
+      if (rateLimitResult) {
+        return rateLimitResult;
+      }
+      return await authorizeSharedSecretAuth({
+        method: "password",
+        configuredSecret: auth.password,
+        providedSecret: connectAuth.password,
+        limiter,
+        ip: subject,
+        rateLimitScope,
+        deferRateLimitFailure: params.deferRateLimitFailure,
+        resetOnSuccess,
+      });
+    }
+    return { ok: false, reason: result.reason };
+  }
+
+  if (auth.mode === "none") {
+    if (
+      ingressAttribution?.kind === "trusted-proxy" &&
+      ingressAttribution.externalTailscaleExposure === "funnel"
+    ) {
+      return { ok: false, reason: "gateway_auth_required" };
+    }
+    const originResult = authorizeHttpBrowserOrigin({
+      authSurface,
+      browserOriginPolicy: params.browserOriginPolicy,
+      isLocalClient: localDirect,
+      reason: "origin_not_allowed",
+    });
+    if (originResult) {
+      return originResult;
+    }
+    return { ok: true, method: "none" };
+  }
+
+  const canAttemptTailscaleHeaderAuth =
+    allowTailscaleHeaderAuth &&
+    auth.allowTailscale &&
+    !localDirect &&
+    ingressAttribution?.kind === "tailscale-serve" &&
+    !explicitSharedSecretAuth;
+
+  if (canAttemptTailscaleHeaderAuth) {
+    const verifiedTailscaleUser = await ingressAttribution.verifyIdentity();
+    if (verifiedTailscaleUser) {
+      limiter?.reset(subject, rateLimitScope);
+      return {
+        ok: true,
+        method: "tailscale",
+        user: verifiedTailscaleUser.login,
+        tailscaleIdentity: verifiedTailscaleUser,
+      };
+    }
+  }
+
+  const rateLimitResult = rejectIfRateLimited({ limiter, ip: subject, rateLimitScope });
+  if (rateLimitResult) {
+    return rateLimitResult;
+  }
+
+  if (auth.mode === "token" || auth.mode === "password") {
+    return await authorizeSharedSecretAuth({
+      method: auth.mode,
+      configuredSecret: auth[auth.mode],
+      providedSecret: resolveConnectSecret(auth.mode, connectAuth),
+      limiter,
+      ip: subject,
+      rateLimitScope,
+      deferRateLimitFailure: params.deferRateLimitFailure,
+      resetOnSuccess,
+    });
+  }
+
+  await limiter?.recordFailureAndDelay(subject, rateLimitScope);
+  return { ok: false, reason: "unauthorized" };
+}
+
+/**
+ * Authenticates a request relayed by the OpenClaw ID tunnel from its
+ * handshake-authenticated device key. The tunnel is the ingress that vouches
+ * for the device, so an admitted key is a `trusted-proxy` principal in every
+ * auth mode: owner devices act as the Gateway owner and members carry their
+ * account as the user. A key the membership authority no longer admits is
+ * refused outright, including while the service publishes no resolver. A tunnel
+ * request never falls back to the Gateway's other authentication methods.
+ */
+async function authorizeOpenClawIdTunnel(peerKey: string): Promise<GatewayAuthResult> {
+  const principal = await resolveOpenClawIdTunnelPrincipal(peerKey);
+  if (!principal) {
+    return { ok: false, reason: "openclaw_id_not_admitted" };
+  }
+  const user = openclawIdTunnelUser(principal);
+  return { ok: true, method: "trusted-proxy", ...(user ? { user } : {}), openclawId: principal };
+}
+
+/** Authorize an HTTP gateway request with Tailscale forwarded-header auth disabled. */
+export async function authorizeHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http",
+  });
+}
+
+/** Authorize a read-only Control UI HTTP request, including verified Tailscale identity. */
+export async function authorizeControlUiReadHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http-control-ui-read",
+  });
+}
+
+/** Authorize a Control UI websocket request with the WS-specific auth surface. */
+export async function authorizeWsControlUiGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "ws-control-ui",
+  });
+}

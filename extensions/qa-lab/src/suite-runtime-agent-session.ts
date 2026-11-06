@@ -1,0 +1,510 @@
+import path from "node:path";
+import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  listSessionEntriesAsync,
+  loadTranscriptEvents,
+  resolveStorePath,
+  type SessionEntry,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  isRecord,
+  normalizeOptionalString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createDirectReplyTranscriptSentinelScanner,
+  extractGatewayMessageText,
+} from "./gateway-log-sentinel.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaAssistantToolCalls } from "./runtime-transcript.js";
+import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
+import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
+
+type QaGatewayCallEnv = Pick<
+  QaSuiteRuntimeEnv,
+  "gateway" | "primaryModel" | "alternateModel" | "providerMode"
+>;
+
+type QaSessionTranscriptSeedParams = {
+  label?: string;
+  messages: readonly {
+    role: "assistant" | "user";
+    text: string;
+    timestamp: number;
+  }[];
+  sessionId: string;
+  sessionKey: string;
+  updatedAt: number;
+};
+
+type QaSessionEntrySeed = {
+  agentId: string;
+  entry: SessionEntry;
+  sessionKey: string;
+};
+
+const MAX_COMPACTION_SUMMARIES = 16;
+const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
+const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+
+type QaSessionTranscriptSummary = ReturnType<typeof summarizeSessionTranscriptEvents> & {
+  resetRecallCutoffLine?: number;
+  probeTextEndLine?: number;
+};
+
+type QaSessionTranscriptSummaryOptions = {
+  afterEventCursor?: number;
+  allowEmpty?: boolean;
+  includeCodeModeControl?: boolean;
+  pendingCodeModeExecNeedle?: string;
+  probeText?: string;
+};
+
+function readSessionTranscriptEventMessage(event: unknown) {
+  return isRecord(event) && isRecord(event.message) ? event.message : undefined;
+}
+
+function readWaitingCodeModeRunId(message: Record<string, unknown>) {
+  const details = isRecord(message.details) ? message.details : undefined;
+  return details?.status === "waiting" ? readNonEmptyString(details.runId) : undefined;
+}
+
+function summarizeSessionTranscriptEvents(
+  events: unknown[],
+  eventCursor = events.length,
+  pendingCodeModeExecNeedle?: string,
+  includeCodeModeControl = false,
+) {
+  const scanner = createDirectReplyTranscriptSentinelScanner();
+  const assistantMirrors: Array<{ identity: string; text: string }> = [];
+  const assistantToolCallCounts: Record<string, number> = {};
+  const completedToolCallCounts: Record<string, number> = {};
+  const compactionSummaries: string[] = [];
+  const currentSourceToolDeliveries: Array<{ toolName: string; threadId?: string }> = [];
+  const successfulToolCallCounts: Record<string, number> = {};
+  const successfulToolCallEvents: Array<{ name: string; timestamp: number; toolCallId: string }> =
+    [];
+  const codeModeExecCallIds = new Set<string>();
+  const codeModeRunIds = new Set<string>();
+  const completedToolCallIds = new Set<string>();
+  const waitRunIdsByCallId = new Map<string, string>();
+  let finalText = "";
+  let lastAssistantContentTypes: string[] = [];
+  let lastAssistantErrorMessage: string | undefined;
+  let lastAssistantStopReason: string | undefined;
+  let userMessageCount = 0;
+
+  for (const event of events) {
+    if (isRecord(event) && event.type === "compaction") {
+      const summary = readNonEmptyString(event.summary);
+      if (summary) {
+        if (compactionSummaries.length === MAX_COMPACTION_SUMMARIES) {
+          compactionSummaries.shift();
+        }
+        compactionSummaries.push(summary);
+      }
+      continue;
+    }
+    const message = readSessionTranscriptEventMessage(event);
+    if (!message) {
+      continue;
+    }
+    if (message.role === "user") {
+      userMessageCount += 1;
+      continue;
+    }
+    const nestedToolResult = readQaNestedToolActivity(message);
+    if (message.role === "toolResult" || nestedToolResult) {
+      const toolCallId = nestedToolResult?.toolCallId ?? readNonEmptyString(message.toolCallId);
+      const toolName = nestedToolResult?.toolName ?? readNonEmptyString(message.toolName);
+      const details = isRecord(message.details) ? message.details : undefined;
+      if (toolName && details?.sourceReplyRoute === "current-source") {
+        const receipt = isRecord(details.receipt) ? details.receipt : undefined;
+        const threadId = readNonEmptyString(receipt?.threadId);
+        currentSourceToolDeliveries.push({
+          toolName,
+          ...(threadId ? { threadId } : {}),
+        });
+      }
+      if (
+        pendingCodeModeExecNeedle &&
+        toolCallId &&
+        toolName === "exec" &&
+        codeModeExecCallIds.has(toolCallId)
+      ) {
+        const runId = readWaitingCodeModeRunId(message);
+        if (runId) {
+          codeModeRunIds.add(runId);
+        }
+      }
+      continue;
+    }
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const text = extractGatewayMessageText(message);
+    if (text) {
+      finalText = text;
+    }
+    const openClawMeta = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
+    const mirrorIdentity = readNonEmptyString(openClawMeta?.mirrorIdentity);
+    if (mirrorIdentity && text) {
+      assistantMirrors.push({ identity: mirrorIdentity, text });
+    }
+    lastAssistantContentTypes = Array.isArray(message.content)
+      ? message.content.flatMap((block) => {
+          const type = isRecord(block) ? readNonEmptyString(block.type) : undefined;
+          return type ? [type] : [];
+        })
+      : [];
+    lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
+    lastAssistantStopReason = readNonEmptyString(message.stopReason);
+    for (const toolCall of readQaAssistantToolCalls(message, readNonEmptyString)) {
+      if (toolCall.id) {
+        if (
+          pendingCodeModeExecNeedle &&
+          toolCall.name === "exec" &&
+          isRecord(toolCall.arguments) &&
+          readNonEmptyString(toolCall.arguments.code)?.includes(pendingCodeModeExecNeedle)
+        ) {
+          codeModeExecCallIds.add(toolCall.id);
+        }
+        if (toolCall.name === "wait" && isRecord(toolCall.arguments)) {
+          const runId = readNonEmptyString(toolCall.arguments.runId);
+          if (runId) {
+            waitRunIdsByCallId.set(toolCall.id, runId);
+          }
+        }
+      }
+    }
+    scanner.recordMessage(message);
+  }
+
+  const activity = projectQaToolActivity(events);
+  for (const operation of activity) {
+    if (operation.completed && operation.toolCallId) {
+      completedToolCallIds.add(operation.toolCallId);
+    }
+  }
+  const operations = activity.filter(
+    (operation) => includeCodeModeControl || operation.kind === "tool",
+  );
+  for (const operation of operations) {
+    const name = operation.toolName;
+    assistantToolCallCounts[name] = (assistantToolCallCounts[name] ?? 0) + 1;
+    if (operation.completed) {
+      completedToolCallCounts[name] = (completedToolCallCounts[name] ?? 0) + 1;
+    }
+    if (operation.successful) {
+      successfulToolCallCounts[name] = (successfulToolCallCounts[name] ?? 0) + 1;
+    }
+  }
+  for (const operation of operations.toSorted(
+    (left, right) => (left.resultIndex ?? Infinity) - (right.resultIndex ?? Infinity),
+  )) {
+    if (!operation.successful || !operation.toolCallId || operation.timestamp === undefined) {
+      continue;
+    }
+    if (successfulToolCallEvents.length === MAX_SUCCESSFUL_TOOL_CALL_EVENTS) {
+      successfulToolCallEvents.shift();
+    }
+    successfulToolCallEvents.push({
+      name: operation.toolName,
+      timestamp: operation.timestamp,
+      toolCallId: operation.toolCallId,
+    });
+  }
+
+  return {
+    ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
+    assistantToolCallCounts,
+    compactionSummaries,
+    completedToolCallCounts,
+    ...(currentSourceToolDeliveries.length > 0 ? { currentSourceToolDeliveries } : {}),
+    eventCursor,
+    ...(pendingCodeModeExecNeedle
+      ? {
+          hasPendingCodeModeWait: Array.from(waitRunIdsByCallId).some(
+            ([toolCallId, runId]) =>
+              codeModeRunIds.has(runId) && !completedToolCallIds.has(toolCallId),
+          ),
+        }
+      : {}),
+    userMessageCount,
+    successfulToolCallCounts,
+    ...(successfulToolCallEvents.length > 0 ? { successfulToolCallEvents } : {}),
+    finalText,
+    hasDirectReplySelfMessage: scanner.findings().length > 0,
+    ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
+    ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
+    ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
+  };
+}
+
+async function createSession(env: QaGatewayCallEnv, label: string, key?: string) {
+  const created = (await env.gateway.call(
+    "sessions.create",
+    {
+      label,
+      ...(key ? { key } : {}),
+    },
+    {
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 60_000),
+    },
+  )) as { key?: string };
+  const sessionKey = created.key?.trim();
+  if (!sessionKey) {
+    throw new Error("sessions.create returned no key");
+  }
+  return sessionKey;
+}
+
+async function readEffectiveTools(env: QaGatewayCallEnv, sessionKey: string) {
+  const payload = (await env.gateway.call(
+    "tools.effective",
+    {
+      sessionKey,
+    },
+    {
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 90_000),
+    },
+  )) as { groups?: Array<{ tools?: Array<{ id?: string }> }> };
+  const ids = new Set<string>();
+  for (const group of payload.groups ?? []) {
+    for (const tool of group.tools ?? []) {
+      if (tool.id?.trim()) {
+        ids.add(tool.id.trim());
+      }
+    }
+  }
+  return ids;
+}
+
+async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
+  const payload = (await env.gateway.call(
+    "skills.status",
+    {
+      agentId,
+    },
+    {
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 45_000),
+    },
+  )) as { skills?: QaSkillStatusEntry[] };
+  return payload.skills ?? [];
+}
+
+function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  };
+}
+
+async function seedQaSessionEntries(
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
+  entries: readonly QaSessionEntrySeed[],
+): Promise<void> {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  for (const seed of entries) {
+    const agentId = seed.agentId.trim();
+    const sessionKey = seed.sessionKey.trim();
+    if (!agentId || !sessionKey) {
+      throw new Error("seedQaSessionEntries requires agentId and sessionKey");
+    }
+    await upsertSessionEntry({
+      agentId,
+      env: runtimeEnv,
+      sessionKey,
+      storePath: resolveStorePath(undefined, { agentId, env: runtimeEnv }),
+      entry: seed.entry,
+    });
+  }
+}
+
+async function seedQaSessionTranscript(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: QaSessionTranscriptSeedParams,
+): Promise<void> {
+  const sessionId = params.sessionId.trim();
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionId || !sessionKey) {
+    throw new Error("seedQaSessionTranscript requires sessionId and sessionKey");
+  }
+  if (params.messages.length === 0) {
+    throw new Error("seedQaSessionTranscript requires at least one message");
+  }
+
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "qa",
+    env: runtimeEnv,
+  });
+  const label = params.label?.trim();
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: runtimeEnv,
+    sessionKey,
+    storePath,
+    entry: {
+      sessionId,
+      updatedAt: params.updatedAt,
+      ...(label ? { origin: { label } } : {}),
+    },
+  });
+
+  for (const seed of params.messages) {
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: runtimeEnv,
+      sessionId,
+      sessionKey,
+      storePath,
+      now: seed.timestamp,
+      message: {
+        role: seed.role,
+        timestamp: seed.timestamp,
+        content: [{ type: "text", text: seed.text }],
+      },
+    });
+    if (!appended?.appended) {
+      throw new Error(`failed to seed QA session transcript for ${sessionKey}`);
+    }
+  }
+}
+
+async function readRawQaSessionStore(
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
+  options: {
+    agentId?: string;
+  } = {},
+): Promise<Record<string, SessionEntry>> {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const agentId = readNonEmptyString(options.agentId) ?? "qa";
+  // The harness reads a separate Gateway process and does not receive its write receipts.
+  const entries = await listSessionEntriesAsync({
+    agentId,
+    env: runtimeEnv,
+    readConsistency: "latest",
+  });
+  return Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+}
+
+async function readQaSessionTranscriptEvents(
+  env: Parameters<typeof readRawQaSessionStore>[0],
+  sessionKey: string,
+  options: Pick<QaSessionTranscriptSummaryOptions, "afterEventCursor" | "allowEmpty"> = {},
+) {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    throw new Error("QA transcript reader requires a session key");
+  }
+  const store = await readRawQaSessionStore(env);
+  const entry = store[normalizedSessionKey];
+  const sessionId = readNonEmptyString(entry?.sessionId);
+  if (!sessionId) {
+    if (options.allowEmpty === true) {
+      return { normalizedSessionKey, events: [], selectedEvents: [], sessionId: undefined };
+    }
+    throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
+  }
+  const events = await loadTranscriptEvents({
+    agentId: "qa",
+    env: qaSessionRuntimeEnv(env.gateway.tempRoot),
+    sessionId,
+    sessionKey: normalizedSessionKey,
+  });
+  const afterEventCursor = options.afterEventCursor ?? 0;
+  if (
+    !Number.isSafeInteger(afterEventCursor) ||
+    afterEventCursor < 0 ||
+    afterEventCursor > events.length
+  ) {
+    throw new Error(
+      `invalid session transcript event cursor ${afterEventCursor} for ${normalizedSessionKey} with ${events.length} event(s)`,
+    );
+  }
+  const selectedEvents = events.slice(afterEventCursor);
+  return { normalizedSessionKey, events, selectedEvents, sessionId };
+}
+
+async function readSessionToolActivity(
+  env: Parameters<typeof readRawQaSessionStore>[0],
+  sessionKey: string,
+  options: Pick<QaSessionTranscriptSummaryOptions, "afterEventCursor" | "allowEmpty"> = {},
+) {
+  const { selectedEvents } = await readQaSessionTranscriptEvents(env, sessionKey, options);
+  return projectQaToolActivity(selectedEvents);
+}
+
+async function readSubagentHandoffReply(
+  env: Parameters<typeof readQaSessionTranscriptEvents>[0],
+  requesterSessionKey: string,
+  childSessionKey: string,
+  childReply: string,
+  visibleMessages: readonly unknown[],
+) {
+  return findSubagentHandoffReply(visibleMessages, childSessionKey, childReply, async () => {
+    const { events } = await readQaSessionTranscriptEvents(env, requesterSessionKey);
+    return events;
+  });
+}
+
+async function readSessionTranscriptSummary(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+  options: QaSessionTranscriptSummaryOptions = {},
+): Promise<QaSessionTranscriptSummary> {
+  const { normalizedSessionKey, events, selectedEvents, sessionId } =
+    await readQaSessionTranscriptEvents(env, sessionKey, options);
+  const pendingCodeModeExecNeedle = options.pendingCodeModeExecNeedle?.trim();
+  if (selectedEvents.length === 0 && options.allowEmpty !== true) {
+    throw new Error(`session transcript is empty for ${normalizedSessionKey}`);
+  }
+  const summary = summarizeSessionTranscriptEvents(
+    selectedEvents,
+    events.length,
+    pendingCodeModeExecNeedle,
+    options.includeCodeModeControl,
+  );
+  if (selectedEvents.length === 0) {
+    return summary;
+  }
+  const probeText = options.probeText?.trim();
+  let cutoff: unknown;
+  if (probeText && sessionId) {
+    const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+    const storePath = resolveStorePath(undefined, { agentId: "qa", env: runtimeEnv });
+    const transcriptEntry = await buildSessionEntry(
+      path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions", `${sessionId}.jsonl`),
+      { agentId: "qa", sessionId, sessionKey: normalizedSessionKey, storePath },
+    );
+    cutoff = transcriptEntry
+      ? (transcriptEntry as unknown as Record<PropertyKey, unknown>)[SESSION_RESET_RECALL_CUTOFF]
+      : undefined;
+  }
+  const probeTextEndLine = probeText
+    ? events.findLastIndex((event) => JSON.stringify(event).includes(probeText)) + 1
+    : 0;
+  return {
+    ...summary,
+    ...(isRecord(cutoff) && cutoff.state === "valid" && typeof cutoff.cutoffLine === "number"
+      ? { resetRecallCutoffLine: cutoff.cutoffLine }
+      : {}),
+    ...(probeTextEndLine > 0 ? { probeTextEndLine } : {}),
+  };
+}
+
+export {
+  createSession,
+  readEffectiveTools,
+  readQaSessionTranscriptEvents,
+  readRawQaSessionStore,
+  readSessionTranscriptSummary,
+  readSessionToolActivity,
+  readSubagentHandoffReply,
+  readSkillStatus,
+  seedQaSessionEntries,
+  seedQaSessionTranscript,
+};

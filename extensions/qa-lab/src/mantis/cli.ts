@@ -1,0 +1,279 @@
+import type { Command } from "commander";
+import { qaCliAction } from "../cli-options.js";
+import { runWithMantisCliInterrupts } from "./cli-interrupts.js";
+import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
+import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
+import type { MantisBeforeAfterOptions } from "./run.runtime.js";
+import type { MantisSlackDesktopSmokeOptions } from "./slack-desktop-smoke.runtime.js";
+import type { MantisVisualDriverOptions, MantisVisualTaskOptions } from "./visual-task.runtime.js";
+
+type MantisDiscordSmokeCommanderOptions = Omit<
+  MantisDiscordSmokeOptions,
+  "env" | "redactPublicMetadata" | "token"
+>;
+
+type MantisBeforeAfterCommanderOptions = Omit<
+  MantisBeforeAfterOptions,
+  "commandRunner" | "fastMode" | "now"
+> & { fast?: boolean };
+
+type MantisDesktopBrowserSmokeCommanderOptions = Omit<
+  MantisDesktopBrowserSmokeOptions,
+  "commandRunner" | "env" | "now" | "videoDurationSeconds"
+> & {
+  class?: string;
+  videoDuration?: string;
+};
+
+type MantisSlackDesktopSmokeCommanderOptions = Omit<
+  MantisSlackDesktopSmokeOptions,
+  "alternateModel" | "commandRunner" | "env" | "fastMode" | "now" | "primaryModel" | "scenarioIds"
+> & {
+  altModel?: string;
+  class?: string;
+  fast?: boolean;
+  model?: string;
+  scenario?: string[];
+};
+
+type MantisVisualTaskCommanderOptions = Omit<
+  MantisVisualTaskOptions,
+  "commandRunner" | "env" | "settleMs" | "visionTimeoutMs"
+> & {
+  class?: string;
+  settleMs?: string;
+  visionTimeoutMs?: string;
+};
+
+type MantisVisualDriverCommanderOptions = Omit<
+  MantisVisualDriverOptions,
+  "commandRunner" | "env" | "settleMs" | "visionTimeoutMs"
+> & {
+  settleMs?: string;
+  visionTimeoutMs?: string;
+};
+
+function collectString(value: string, previous: string[] = []) {
+  return [...previous, value];
+}
+
+function parseOptionalInteger(value: string | undefined, label: string) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || String(parsed) !== value || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+export function registerMantisCli(qa: Command) {
+  const mantis = qa
+    .command("mantis")
+    .description("Run Mantis before/after and live-smoke verification flows");
+
+  mantis
+    .command("run")
+    .description("Run a Mantis before/after scenario against baseline and candidate refs")
+    .requiredOption("--transport <transport>", "Transport to verify; currently only discord")
+    .requiredOption("--scenario <id>", "Mantis scenario id to run")
+    .requiredOption("--baseline <ref>", "Ref expected to reproduce the bug")
+    .requiredOption("--candidate <ref>", "Ref expected to contain the fix")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis before/after artifact directory")
+    .option("--provider-mode <mode>", "QA provider mode", "live-frontier")
+    .option("--credential-source <source>", "QA credential source", "convex")
+    .option("--credential-role <role>", "QA credential role", "ci")
+    .option("--fast", "Enable fast provider mode where supported", true)
+    .option("--skip-install", "Skip pnpm install in baseline/candidate worktrees", false)
+    .option("--skip-build", "Skip pnpm build in baseline/candidate worktrees", false)
+    .action(
+      qaCliAction(async (opts: MantisBeforeAfterCommanderOptions) => {
+        const { fast, ...options } = opts;
+        await runWithMantisCliInterrupts(async (signal) => {
+          const runtime = await import("./cli.runtime.js");
+          await runtime.runMantisBeforeAfterCommand({ ...options, fastMode: fast, signal });
+        });
+      }),
+    );
+
+  mantis
+    .command("discord-smoke")
+    .description("Verify the Mantis Discord bot can see the guild/channel, post, and react")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis Discord smoke artifact directory")
+    .option("--guild-id <id>", "Override OPENCLAW_QA_DISCORD_GUILD_ID")
+    .option("--channel-id <id>", "Override OPENCLAW_QA_DISCORD_CHANNEL_ID")
+    .option("--token-env <name>", "Env var containing the Mantis Discord bot token")
+    .option("--token-file <path>", "File containing the Mantis Discord bot token")
+    .option("--token-file-env <name>", "Env var containing the Mantis Discord bot token file path")
+    .option("--message <text>", "Smoke message to post")
+    .option("--skip-post", "Only check Discord API visibility; do not post or react", false)
+    .action(
+      qaCliAction(async (opts: MantisDiscordSmokeCommanderOptions) => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisDiscordSmokeCommand(opts);
+      }),
+    );
+
+  mantis
+    .command("desktop-browser-smoke")
+    .description(
+      "Lease or reuse a Crabbox desktop, open a visible browser, and capture VNC desktop screenshot/video artifacts",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis desktop browser artifact directory")
+    .option("--browser-url <url>", "URL to open in the visible browser")
+    .option(
+      "--browser-profile-archive-env <name>",
+      "Env var containing a base64 .tgz Chrome profile archive to restore before launch",
+    )
+    .option(
+      "--browser-profile-dir <remote-path>",
+      "Remote Chrome user-data-dir path to reuse for browser login state",
+    )
+    .option("--html-file <path>", "Repo-local HTML file to render in the visible browser")
+    .option("--crabbox-bin <path>", "Crabbox binary path")
+    .option("--provider <provider>", "Crabbox provider")
+    .option("--machine-class <class>", "Crabbox machine class")
+    .option("--class <class>", "Alias for --machine-class")
+    .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--idle-timeout <duration>", "Crabbox idle timeout")
+    .option("--ttl <duration>", "Crabbox maximum lease lifetime")
+    .option("--video-duration <seconds>", "Visible desktop recording duration in seconds")
+    .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
+    .action(
+      qaCliAction(async (opts: MantisDesktopBrowserSmokeCommanderOptions) => {
+        const { class: machineClassAlias, videoDuration, ...options } = opts;
+        const videoDurationSeconds = parseOptionalInteger(videoDuration, "--video-duration");
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisDesktopBrowserSmokeCommand({
+          ...options,
+          machineClass: options.machineClass ?? machineClassAlias,
+          videoDurationSeconds,
+        });
+      }),
+    );
+
+  mantis
+    .command("slack-desktop-smoke")
+    .description(
+      "Lease or reuse a Crabbox VNC desktop, run Slack QA inside it, open Slack in the browser, and capture screenshot/video artifacts",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis Slack desktop artifact directory")
+    .option("--crabbox-bin <path>", "Crabbox binary path")
+    .option("--provider <provider>", "Crabbox provider")
+    .option("--machine-class <class>", "Crabbox machine class")
+    .option("--class <class>", "Alias for --machine-class")
+    .option("--market <market>", "Crabbox capacity market: spot or on-demand")
+    .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--fresh-pr <spec>", "Use Crabbox fresh PR checkout instead of syncing the local tree")
+    .option("--idle-timeout <duration>", "Crabbox idle timeout")
+    .option("--ttl <duration>", "Crabbox maximum lease lifetime")
+    .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
+    .option("--no-keep-lease", "Stop a lease created by this run after a passing smoke")
+    .option("--gateway-setup", "Start a persistent OpenClaw Slack gateway inside the VNC VM")
+    .option(
+      "--approval-checkpoints",
+      "Run Slack approval scenarios with visual checkpoint screenshot acknowledgements",
+    )
+    .option("--slack-url <url>", "Slack web URL to open in the visible browser")
+    .option("--slack-channel-id <id>", "Slack channel id for gateway setup allowlist")
+    .option("--provider-mode <mode>", "QA provider mode")
+    .option("--hydrate-mode <mode>", "Remote hydrate mode: source or prehydrated")
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--scenario <id>",
+      "Run only the named Slack QA scenario (repeatable)",
+      collectString,
+      [],
+    )
+    .option("--credential-source <source>", "Credential source for Slack QA: env or convex")
+    .option("--credential-role <role>", "Credential role for convex auth")
+    .option("--fast", "Enable provider fast mode where supported")
+    .action(
+      qaCliAction(async (opts: MantisSlackDesktopSmokeCommanderOptions) => {
+        if (opts.approvalCheckpoints && opts.gatewaySetup) {
+          throw new Error("--approval-checkpoints cannot be used with --gateway-setup.");
+        }
+        const { altModel, class: machineClassAlias, fast, model, scenario, ...options } = opts;
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisSlackDesktopSmokeCommand({
+          ...options,
+          alternateModel: altModel,
+          fastMode: fast,
+          gatewaySetup: opts.gatewaySetup,
+          machineClass: options.machineClass ?? machineClassAlias,
+          primaryModel: model,
+          scenarioIds: scenario,
+        });
+      }),
+    );
+
+  mantis
+    .command("visual-task")
+    .description(
+      "Lease or reuse a Crabbox desktop, drive visible browser UI, record MP4, screenshot it, and optionally run image-understanding assertions",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis visual-task artifact directory")
+    .option("--crabbox-bin <path>", "Crabbox binary path")
+    .option("--provider <provider>", "Crabbox provider")
+    .option("--machine-class <class>", "Crabbox machine class")
+    .option("--class <class>", "Alias for --machine-class")
+    .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--idle-timeout <duration>", "Crabbox idle timeout")
+    .option("--ttl <duration>", "Crabbox maximum lease lifetime")
+    .option("--keep-lease", "Keep a lease created by this run after a passing task")
+    .option("--browser-url <url>", "URL to open in the visible browser")
+    .option("--duration <duration>", "Desktop recording duration")
+    .option("--settle-ms <ms>", "Milliseconds to wait after launch before screenshot")
+    .option("--vision-mode <mode>", "Vision mode: image-describe or metadata")
+    .option("--vision-prompt <text>", "Prompt for image understanding")
+    .option("--vision-model <provider/model>", "Image-capable provider/model ref")
+    .option("--vision-timeout-ms <ms>", "Image understanding timeout in milliseconds")
+    .option("--expect-text <text>", "Case-insensitive text expected in the vision output")
+    .action(
+      qaCliAction(async (opts: MantisVisualTaskCommanderOptions) => {
+        const { class: machineClassAlias, ...options } = opts;
+        const settleMs = parseOptionalInteger(opts.settleMs, "--settle-ms");
+        const visionTimeoutMs = parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms");
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisVisualTaskCommand({
+          ...options,
+          machineClass: options.machineClass ?? machineClassAlias,
+          settleMs,
+          visionTimeoutMs,
+        });
+      }),
+    );
+
+  mantis
+    .command("visual-driver")
+    .description(
+      "Driver half for Mantis visual-task; launched by Crabbox record --while, then opens browser, screenshots, and runs vision",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Mantis visual-task artifact directory")
+    .option("--crabbox-bin <path>", "Crabbox binary path")
+    .option("--provider <provider>", "Crabbox provider")
+    .option("--lease-id <id>", "Crabbox lease id")
+    .option("--browser-url <url>", "URL to open in the visible browser")
+    .option("--settle-ms <ms>", "Milliseconds to wait after launch before screenshot")
+    .option("--vision-mode <mode>", "Vision mode: image-describe or metadata")
+    .option("--vision-prompt <text>", "Prompt for image understanding")
+    .option("--vision-model <provider/model>", "Image-capable provider/model ref")
+    .option("--vision-timeout-ms <ms>", "Image understanding timeout in milliseconds")
+    .option("--expect-text <text>", "Case-insensitive text expected in the vision output")
+    .action(
+      qaCliAction(async (opts: MantisVisualDriverCommanderOptions) => {
+        const settleMs = parseOptionalInteger(opts.settleMs, "--settle-ms");
+        const visionTimeoutMs = parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms");
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisVisualDriverCommand({ ...opts, settleMs, visionTimeoutMs });
+      }),
+    );
+}

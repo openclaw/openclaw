@@ -1,0 +1,267 @@
+import { GrammyError, type Bot, type Transformer } from "grammy";
+import {
+  computeBackoff,
+  sleepWithAbort,
+  type BackoffPolicy,
+} from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
+
+type ChatAction = Parameters<Bot["api"]["sendChatAction"]>[1];
+
+type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
+
+export type TelegramSendChatActionHandler = {
+  /**
+   * Send a chat action with automatic 401 backoff and transient cooldown.
+   * Safe to call from multiple concurrent message contexts.
+   */
+  sendChatAction: (
+    chatId: number | string,
+    action: ChatAction,
+    threadParams?: TelegramSendChatActionParams,
+  ) => Promise<void>;
+  isSuspended: () => boolean;
+  reset: () => void;
+};
+
+type CreateTelegramSendChatActionHandlerParams = {
+  logger: (message: string) => void;
+  /**
+   * When the owning account is retired, an authorization backoff still
+   * sleeping before transport I/O aborts immediately instead of keeping the
+   * shared limiter's shutdown waiting out the remaining backoff.
+   */
+  retirementSignal?: AbortSignal;
+  /** The rejection surfaced to the caller when retirement ends its backoff. */
+  retiredError?: Error;
+};
+
+const BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 1000,
+  maxMs: 300_000, // 5 minutes
+  factor: 2,
+  jitter: 0.1,
+};
+
+function is401Error(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+  // When a structured Telegram error_code is present, trust it exclusively.
+  // A 429 with retry_after=401 renders as "(429: Too Many Requests: retry after 401)"
+  // whose message contains the substring "401" — that must NOT trigger the 401
+  // suspension path. The sibling classifiers in network-errors.ts also use
+  // error_code before message heuristics; see hasTelegramErrorCode.
+  if (typeof error === "object" && "error_code" in error && typeof error.error_code === "number") {
+    return error.error_code === 401;
+  }
+  // Fallback for non-Telegram errors without a structured error_code:
+  // match "unauthorized" case-insensitively, but do NOT use bare "401"
+  // substring matching — that was the root cause of #94787.
+  const message = error instanceof Error ? error.message : JSON.stringify(error);
+  return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
+}
+
+/**
+ * Creates a GLOBAL (per-account) handler for sendChatAction that tracks 401 and
+ * transient errors across all message contexts. This prevents the infinite loop
+ * that caused Telegram to delete bots (issue #27092).
+ *
+ * When a 401 occurs, exponential backoff is applied (1s → 2s → 4s → ... → 5min).
+ * After ten consecutive 401 failures, all sendChatAction calls are
+ * suspended until reset() is called.
+ */
+export function createTelegramSendChatActionHandler({
+  logger,
+  retirementSignal,
+  retiredError,
+}: CreateTelegramSendChatActionHandlerParams) {
+  let consecutive401Failures = 0;
+  let consecutiveTransientFailures = 0;
+  let transientCooldownUntilMs = 0;
+  const blockedUntilByScope = new Map<string, Map<ChatAction, number>>();
+  const isSuspended = () => consecutive401Failures >= 10;
+
+  const resolveScopeKey = (chatId: number | string, threadId?: number) =>
+    JSON.stringify([String(chatId), threadId ?? null]);
+
+  const clearTransientCooldown = () => {
+    consecutiveTransientFailures = 0;
+    transientCooldownUntilMs = 0;
+  };
+
+  const assertNotCoolingDown = () => {
+    const remainingMs = transientCooldownUntilMs - Date.now();
+    if (remainingMs > 0) {
+      throw new Error(`sendChatAction transient cooldown active for ${Math.ceil(remainingMs)}ms`);
+    }
+  };
+  const assertCanSend = () => {
+    if (isSuspended()) {
+      throw new Error("sendChatAction suspended");
+    }
+    assertNotCoolingDown();
+  };
+
+  const sendChatAction = async (
+    chatId: number | string,
+    action: ChatAction,
+    threadParams: TelegramSendChatActionParams | undefined,
+    send: () => Promise<true>,
+  ): Promise<void> => {
+    if (isSuspended()) {
+      return;
+    }
+
+    const attemptedAt = Date.now();
+    // Reject cooldown starts so channel typing guards can stop their keepalive loops.
+    assertNotCoolingDown();
+
+    const threadId = threadParams?.message_thread_id;
+    const scopeKey = resolveScopeKey(chatId, threadId);
+    let blockedActions = blockedUntilByScope.get(scopeKey);
+    const blockedUntil = blockedActions?.get(action);
+    if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
+      return;
+    }
+    if (!blockedActions) {
+      blockedActions = new Map();
+      blockedUntilByScope.set(scopeKey, blockedActions);
+    }
+    blockedActions.set(action, Number.POSITIVE_INFINITY);
+
+    try {
+      await send();
+    } finally {
+      if (blockedUntilByScope.get(scopeKey) === blockedActions) {
+        blockedActions.set(action, attemptedAt + TELEGRAM_CHAT_ACTION_INTERVAL_MS);
+      }
+    }
+  };
+
+  const sendWithBackoff = async <T>(send: () => Promise<T>, signal: AbortSignal): Promise<T> => {
+    signal.throwIfAborted();
+    assertCanSend();
+    try {
+      if (consecutive401Failures > 0) {
+        const backoffMs = computeBackoff(BACKOFF_POLICY, consecutive401Failures);
+        logger(
+          `sendChatAction backoff: waiting ${backoffMs}ms before retry ` +
+            `(failure ${consecutive401Failures}/10)`,
+        );
+        await sleepWithAbort(backoffMs, signal);
+      }
+      assertCanSend();
+      const result = await send();
+      // Typing is best effort: any successful action clears the failure streak.
+      if (consecutive401Failures > 0) {
+        logger(`sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`);
+        consecutive401Failures = 0;
+      }
+      clearTransientCooldown();
+      return result;
+    } catch (error) {
+      // A retirement-terminated pre-I/O backoff surfaces the released error to
+      // the caller; only the sleep aborts, never transport I/O that began.
+      if (retirementSignal?.aborted && error instanceof Error && error.name === "AbortError") {
+        throw retiredError instanceof Error ? retiredError : error;
+      }
+      if (signal.aborted && error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
+      if (is401Error(error)) {
+        clearTransientCooldown();
+        consecutive401Failures++;
+
+        if (consecutive401Failures >= 10) {
+          logger(
+            `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
+              `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
+              `Replace the Telegram token in config/env, then restart the Gateway.`,
+          );
+        } else {
+          logger(
+            `sendChatAction 401 error (${consecutive401Failures}/10). ` +
+              `Retrying with exponential backoff.`,
+          );
+        }
+      } else if (isRetryableTelegramApiError(error)) {
+        consecutiveTransientFailures++;
+        const retryAfterMs = readTelegramRetryAfterMs(error);
+        const cooldownMs =
+          retryAfterMs !== undefined && retryAfterMs > 0
+            ? retryAfterMs
+            : computeBackoff(BACKOFF_POLICY, consecutiveTransientFailures);
+        const cooldownStartedAt = Date.now();
+        // Keep transient failures rejected through the same-chat coalesce window;
+        // otherwise the next typing keepalive can look successful and reset its guard.
+        const coalescingUntilMs = cooldownStartedAt + TELEGRAM_CHAT_ACTION_INTERVAL_MS;
+        transientCooldownUntilMs = Math.max(
+          transientCooldownUntilMs,
+          cooldownStartedAt + cooldownMs,
+          coalescingUntilMs,
+        );
+        const effectiveCooldownMs = Math.max(0, transientCooldownUntilMs - cooldownStartedAt);
+        logger(
+          `sendChatAction transient error (${consecutiveTransientFailures}). ` +
+            `Cooling down ${effectiveCooldownMs}ms before retry.`,
+        );
+      } else {
+        clearTransientCooldown();
+      }
+      throw error;
+    }
+  };
+
+  // Install before the scheduler so admission runs after its final queue wait.
+  const apiTransformer: Transformer = async (prev, method, payload, signal) => {
+    if (method !== "sendChatAction") {
+      return prev(method, payload, signal);
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) {
+      abort();
+    } else {
+      signal?.addEventListener("abort", abort, { once: true });
+    }
+    const onRetired = () => controller.abort();
+    if (retirementSignal?.aborted) {
+      onRetired();
+    } else {
+      retirementSignal?.addEventListener("abort", onRetired, { once: true });
+    }
+    try {
+      return await sendWithBackoff(async () => {
+        const result = await prev(method, payload, signal);
+        if (!result.ok) {
+          throw new GrammyError(`Call to '${method}' failed!`, result, method, payload);
+        }
+        return result;
+      }, controller.signal);
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      retirementSignal?.removeEventListener("abort", onRetired);
+      controller.abort();
+    }
+  };
+
+  return {
+    apiTransformer,
+    sendChatAction,
+    // Telegram clients clear chat actions when a bot message arrives. Mirror
+    // that provider state so the next turn's first cue is not mistaken for a
+    // same-task keepalive.
+    noteMessageDelivered: (chatId: number | string, threadId?: number) => {
+      blockedUntilByScope.delete(resolveScopeKey(chatId, threadId));
+    },
+    isSuspended,
+    reset: () => {
+      consecutive401Failures = 0;
+      clearTransientCooldown();
+      blockedUntilByScope.clear();
+    },
+  };
+}

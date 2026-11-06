@@ -1,0 +1,101 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  fetchWithSsrFGuard,
+  type GuardedFetchOptions,
+  type GuardedFetchResult,
+  withStrictGuardedFetchMode,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../../infra/net/fetch-guard.js";
+import {
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
+import { readPositiveIntegerParam } from "./common.js";
+
+const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
+  dangerouslyAllowPrivateNetwork: true,
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+};
+
+type WebToolGuardedFetchOptions = Omit<
+  GuardedFetchOptions,
+  "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
+> & {
+  timeoutSeconds?: number;
+  useEnvProxy?: boolean;
+};
+type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy" | "useEnvProxy">;
+
+function resolveTimeoutMs(params: {
+  timeoutMs?: number;
+  timeoutSeconds?: number;
+}): number | undefined {
+  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs");
+  if (timeoutMs !== undefined) {
+    return timeoutMs;
+  }
+  const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds");
+  return timeoutSeconds === undefined
+    ? undefined
+    : finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
+}
+
+/** Runs a guarded fetch with strict or trusted-env-proxy web tool policy. */
+export async function fetchWithWebToolsNetworkGuard(
+  params: WebToolGuardedFetchOptions,
+): Promise<GuardedFetchResult> {
+  const { timeoutSeconds, useEnvProxy, ...rest } = params;
+  const resolved = {
+    ...rest,
+    timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
+  };
+  return fetchWithSsrFGuard(
+    useEnvProxy
+      ? withTrustedEnvProxyGuardedFetchMode(resolved)
+      : withStrictGuardedFetchMode(resolved),
+  );
+}
+
+async function withWebToolsNetworkGuard<T>(
+  params: WebToolGuardedFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+  trustedPolicy?: SsrFPolicy,
+): Promise<T> {
+  const { response, finalUrl, release } = await fetchWithWebToolsNetworkGuard(
+    trustedPolicy ? { ...params, policy: trustedPolicy, useEnvProxy: true } : params,
+  );
+  try {
+    return await run({ response, finalUrl });
+  } finally {
+    await release();
+  }
+}
+
+/** Runs a fetch for trusted endpoints, allowing env proxy with pinned-host policy. */
+export async function withTrustedWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return await withWebToolsNetworkGuard(
+    params,
+    run,
+    ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url) ?? {},
+  );
+}
+
+/** Runs a fetch for configured self-hosted endpoints with private-network access allowed. */
+export async function withSelfHostedWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return await withWebToolsNetworkGuard(params, run, WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY);
+}
+
+/** Runs a fetch under strict SSRF protection without env proxy trust. */
+export async function withStrictWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return await withWebToolsNetworkGuard(params, run);
+}

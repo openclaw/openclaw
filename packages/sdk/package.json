@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts sdk"
+  },
+  "dependencies": {
+    "@openclaw/gateway-client": "workspace:*",
+    "@openclaw/gateway-protocol": "workspace:*",
+    "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/retry": "workspace:*"
+  },
+  "devDependencies": {
+    "@openclaw/session-url-contract": "workspace:*"
+  }
+}

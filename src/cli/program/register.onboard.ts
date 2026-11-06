@@ -1,0 +1,399 @@
+// Commander registration for onboard setup flags and lazy onboard runtime execution.
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { Option, type Command } from "commander";
+import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import type { OnboardOptions } from "../../commands/onboard-types.js";
+import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatCliCommand } from "../command-format.js";
+import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../command-options.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { formatDocsHelp } from "../help-format.js";
+
+const MODERN_ONBOARD_OPTION_KEYS = new Set([
+  "modern",
+  "workspace",
+  "agentName",
+  "acceptRisk",
+  "nonInteractive",
+  "json",
+]);
+
+async function validateRecommendationParentOptions(
+  command: Command,
+  runtime: RuntimeEnv,
+  json = false,
+): Promise<boolean> {
+  const unsupported = listExplicitOptionFlagsExcept(
+    command,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : RECOMMENDATION_MUTATION_PARENT_OPTIONS,
+  );
+  if (unsupported.length === 0) {
+    return true;
+  }
+  const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+  return rejectOnboardingOption(
+    { json },
+    runtime,
+    `This recommendations command does not support parent option(s): ${unsupported.join(", ")}.`,
+  );
+}
+
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli();
+const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
+const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
+
+function resolveRecommendationAgentOption(command: Command): string | undefined {
+  const source = command.getOptionValueSource("agent");
+  return readStringValue(
+    source && source !== "default"
+      ? command.getOptionValue("agent")
+      : inheritOptionFromParent(command, "agent"),
+  );
+}
+
+// Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
+const seenCliFlags = new Set<string>();
+const ONBOARD_AUTH_FLAGS: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
+for (const flag of resolveProviderOnboardAuthFlags()) {
+  const cliFlags = flag.cliOption
+    .split(/[ ,|]+/)
+    .filter((part) => part.startsWith("-"))
+    .map((part) => {
+      const equalsIndex = part.indexOf("=");
+      return equalsIndex === -1 ? part : part.slice(0, equalsIndex);
+    });
+  if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
+    continue;
+  }
+  for (const cliFlag of cliFlags) {
+    seenCliFlags.add(cliFlag);
+  }
+  ONBOARD_AUTH_FLAGS.push(flag);
+}
+
+export function registerOnboardAuthOptions(command: Command): Command {
+  command
+    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
+    .option(
+      "--token-provider <id>",
+      "Token provider id (non-interactive; used with --auth-choice token)",
+    )
+    .option("--token <token>", "Token value (non-interactive; used with --auth-choice token)")
+    .option(
+      "--token-profile-id <id>",
+      "Auth profile id (non-interactive; default: <provider>:manual)",
+    )
+    .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
+    .option(
+      "--secret-input-mode <mode>",
+      "Credential persistence mode: plaintext|ref (default: plaintext)",
+    )
+    .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
+    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
+
+  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
+    command.option(providerFlag.cliOption, providerFlag.description);
+  }
+
+  return command
+    .option("--custom-base-url <url>", "Custom provider base URL")
+    .option("--custom-api-key <key>", "Custom provider API key (optional)")
+    .option(
+      "--custom-no-auth",
+      "Use no auth for a custom OpenAI Chat Completions endpoint (sends no Authorization header)",
+    )
+    .option(
+      "--custom-model-id <id>",
+      "Custom provider model ID (omit to discover OpenAI-compatible endpoint models)",
+    )
+    .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
+    .option(
+      "--custom-compatibility <mode>",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
+    )
+    .option("--custom-image-input", "Mark the custom provider model as image-capable")
+    .option("--custom-text-input", "Mark the custom provider model as text-only");
+}
+
+export function registerOnboardGatewayOptions(command: Command): Command {
+  return command
+    .option("--gateway-port <port>", "Gateway port")
+    .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
+    .option("--gateway-auth <mode>", "Gateway auth: token|password")
+    .option("--gateway-token <token>", "Gateway token (token auth)")
+    .option(
+      "--gateway-token-ref-env <name>",
+      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
+    )
+    .option("--gateway-password <password>", "Gateway password (password auth)");
+}
+
+export function registerOnboardRemoteOptions(command: Command): Command {
+  return command
+    .option("--remote-url <url>", "Remote Gateway WebSocket URL")
+    .option("--remote-token <token>", "Remote Gateway token (optional)")
+    .option("--remote-password <password>", "Remote Gateway password (optional)");
+}
+
+export function registerOnboardRuntimeOptions(
+  command: Command,
+  variant: "onboard" | "setup",
+): Command {
+  return command
+    .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
+    .option("--install-daemon", "Install gateway service")
+    .option("--no-install-daemon", "Skip gateway service install")
+    .option("--skip-daemon", "Skip gateway service install")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun|standalone (default: node)")
+    .option("--skip-channels", "Skip channel setup")
+    .option("--skip-skills", "Skip skills setup")
+    .option("--skip-bootstrap", "Skip creating default agent workspace files")
+    .option("--skip-search", "Skip search provider setup")
+    .option("--skip-health", "Skip health check")
+    .option(
+      "--skip-ui",
+      variant === "setup" ? "Skip Control UI/TUI launch" : "Skip Control UI/TUI prompts",
+    )
+    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
+    .option(
+      "--skip-hooks",
+      variant === "setup"
+        ? "Accepted for onboard compatibility; hooks setup is skipped"
+        : "Skip hook setup",
+    )
+    .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
+    .option("--import-from <provider>", "Migration provider to run during onboarding")
+    .option("--import-source <path>", "Source agent home for --import-from")
+    .option("--import-secrets", "Import supported secrets during onboarding migration", false);
+}
+
+export async function runOnboardCommand(
+  opts: Record<string, unknown>,
+  command: Command,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  if (opts.customImageInput === true && opts.customTextInput === true) {
+    const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+    const message = "Use either --custom-image-input or --custom-text-input, not both.";
+    rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    return;
+  }
+  const onboardingOptions: OnboardOptions = {
+    workspace: readStringValue(opts.workspace),
+    agentName: readStringValue(opts.agentName),
+    team: opts.team === true ? true : undefined,
+    nonInteractive: Boolean(opts.nonInteractive),
+    acceptRisk: Boolean(opts.acceptRisk),
+    classic: Boolean(opts.classic),
+    tui: Boolean(opts.tui),
+    flow: opts.flow as OnboardOptions["flow"],
+    mode: opts.mode as OnboardOptions["mode"],
+    authChoice: opts.authChoice as OnboardOptions["authChoice"],
+    tokenProvider: opts.tokenProvider as string | undefined,
+    token: opts.token as string | undefined,
+    tokenProfileId: opts.tokenProfileId as string | undefined,
+    tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+    secretInputMode: opts.secretInputMode as OnboardOptions["secretInputMode"],
+    ...Object.fromEntries(ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey]])),
+    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+    customBaseUrl: opts.customBaseUrl as string | undefined,
+    customApiKey: opts.customApiKey as string | undefined,
+    customNoAuth: opts.customNoAuth as boolean | undefined, // SAFETY: Commander parses valueless flags as boolean | undefined.
+    customModelId: opts.customModelId as string | undefined,
+    customProviderId: opts.customProviderId as string | undefined,
+    customCompatibility: opts.customCompatibility as OnboardOptions["customCompatibility"],
+    customImageInput:
+      opts.customTextInput === true ? false : opts.customImageInput === true ? true : undefined,
+    gatewayPort: parseGatewayPortOption(opts.gatewayPort, "--gateway-port"),
+    gatewayBind: opts.gatewayBind as OnboardOptions["gatewayBind"],
+    gatewayAuth: opts.gatewayAuth as OnboardOptions["gatewayAuth"],
+    gatewayToken: readStringValue(opts.gatewayToken),
+    gatewayTokenRefEnv: readStringValue(opts.gatewayTokenRefEnv),
+    gatewayPassword: readStringValue(opts.gatewayPassword),
+    remoteUrl: readStringValue(opts.remoteUrl),
+    remoteToken: readStringValue(opts.remoteToken),
+    remotePassword: readStringValue(opts.remotePassword),
+    tailscale: opts.tailscale as OnboardOptions["tailscale"],
+    reset: Boolean(opts.reset),
+    resetScope: opts.resetScope as OnboardOptions["resetScope"],
+    // Explicit --skip-daemon wins over either install-daemon flag.
+    installDaemon:
+      command.getOptionValueSource("skipDaemon") === "cli"
+        ? false
+        : command.getOptionValueSource("installDaemon") === "cli"
+          ? Boolean(command.getOptionValue("installDaemon"))
+          : undefined,
+    daemonRuntime: opts.daemonRuntime as OnboardOptions["daemonRuntime"],
+    skipChannels: Boolean(opts.skipChannels),
+    skipSkills: Boolean(opts.skipSkills),
+    skipBootstrap: Boolean(opts.skipBootstrap),
+    skipSearch: Boolean(opts.skipSearch),
+    skipHealth: Boolean(opts.skipHealth),
+    skipUi: Boolean(opts.skipUi),
+    suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
+    skipHooks: Boolean(opts.skipHooks),
+    nodeManager: opts.nodeManager as OnboardOptions["nodeManager"],
+    importFrom: readStringValue(opts.importFrom),
+    importSource: readStringValue(opts.importSource),
+    importSecrets: Boolean(opts.importSecrets),
+    json: Boolean(opts.json),
+  };
+  const { setupWizardCommand } = await import("../../commands/onboard.js");
+  await setupWizardCommand(onboardingOptions, runtime);
+}
+
+export function registerOnboardFlowOptions(command: Command): Command {
+  return command
+    .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
+    .option(
+      "--accept-risk",
+      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
+    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
+    .option("--mode <mode>", "Onboard mode: local|remote");
+}
+
+export function registerOnboardCommand(program: Command): void {
+  const command = program
+    .command("onboard")
+    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
+    .addHelpText("after", () => formatDocsHelp("/cli/onboard"))
+    .option(
+      "--workspace <dir>",
+      "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
+    )
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
+    )
+    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
+    .option("--non-interactive", "Run without prompts", false)
+    .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false);
+  registerOnboardFlowOptions(command);
+
+  registerOnboardAuthOptions(command);
+  registerOnboardGatewayOptions(command);
+  registerOnboardRemoteOptions(command);
+  registerOnboardRuntimeOptions(command, "onboard");
+  command.option("--json", "Output JSON summary", false);
+
+  const recommendations = command
+    .command("recommendations")
+    .description("Read the app recommendations stored during onboarding")
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
+    .option("--json", "Output stored recommendation matches as JSON", false)
+    .action(async (opts, recommendationsCommand: Command) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const json = Boolean(opts.json || recommendationsCommand.parent?.opts().json);
+        if (!(await validateRecommendationParentOptions(command, defaultRuntime, json))) {
+          return;
+        }
+        const { onboardRecommendationsCommand } =
+          await import("../../commands/onboard-recommendations.js");
+        const agent = resolveRecommendationAgentOption(recommendationsCommand);
+        await onboardRecommendationsCommand(
+          { json, ...(agent !== undefined ? { agent } : {}) },
+          defaultRuntime,
+        );
+      });
+    });
+
+  for (const [name, description] of [
+    ["acknowledge", "Mark the stored onboarding recommendation offer as answered"],
+    ["refresh", "Clear stored app recommendations so the next onboarding run rescans"],
+  ] as const) {
+    const mutation = recommendations
+      .command(name)
+      .description(description)
+      .option("--agent <id>", "Agent whose onboarding recommendations should be used");
+    if (name === "acknowledge") {
+      mutation.option("--retry <id...>", "Leave failed recommendation IDs pending for a later run");
+    }
+    mutation.action(async (opts: { retry?: string[] }, actionCommand: Command) => {
+      const { defaultRuntime } = await import("../../runtime.js");
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        if (
+          !(await validateRecommendationParentOptions(command, defaultRuntime)) ||
+          !(await validateRecommendationParentOptions(recommendations, defaultRuntime))
+        ) {
+          return;
+        }
+        const commands = await import("../../commands/onboard-recommendations.js");
+        const agent = resolveRecommendationAgentOption(actionCommand);
+        const agentOptions = agent !== undefined ? { agent } : {};
+        if (name === "acknowledge") {
+          await commands.acknowledgeOnboardRecommendationsCommand(
+            { retry: opts.retry, ...agentOptions },
+            defaultRuntime,
+          );
+        } else {
+          await commands.refreshOnboardRecommendationsCommand(agentOptions, defaultRuntime);
+        }
+      });
+    });
+  }
+
+  command.action(async (opts, commandRuntime: Command) => {
+    const { defaultRuntime } = await import("../../runtime.js");
+    await runCommandWithRuntime(defaultRuntime, async () => {
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+      const rejectOption = (message: string) =>
+        rejectOnboardingOption({ json: Boolean(opts.json) }, defaultRuntime, message);
+      if (opts.modern) {
+        const unsupportedOptions = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          MODERN_ONBOARD_OPTION_KEYS,
+        );
+        if (unsupportedOptions.length > 0) {
+          rejectOption(
+            [
+              `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
+              "Run those setup options without --modern, or remove them to open OpenClaw.",
+            ].join("\n"),
+          );
+          return;
+        }
+        if (opts.nonInteractive && opts.acceptRisk !== true) {
+          rejectOption(
+            [
+              "Non-interactive setup requires explicit risk acknowledgement.",
+              "Read: https://docs.openclaw.ai/security",
+              `Re-run with: ${formatCliCommand("openclaw onboard --modern --non-interactive --accept-risk ...")}`,
+            ].join("\n"),
+          );
+          return;
+        }
+        const { runSystemAgentWithInference } =
+          await import("../../commands/system-agent-with-inference.js");
+        await runSystemAgentWithInference(
+          {
+            yes: false,
+            json: Boolean(opts.json),
+            interactive: !opts.nonInteractive,
+            welcomeVariant: "onboarding",
+            ...(opts.workspace ? { setupWorkspace: opts.workspace as string } : {}),
+            ...(opts.agentName ? { setupAgentName: opts.agentName as string } : {}),
+          },
+          defaultRuntime,
+          {
+            ...(opts.workspace ? { workspace: opts.workspace as string } : {}),
+            ...(opts.agentName ? { agentName: opts.agentName as string } : {}),
+            ...(opts.acceptRisk ? { acceptRisk: true } : {}),
+          },
+        );
+        return;
+      }
+      await runOnboardCommand(opts as Record<string, unknown>, commandRuntime, defaultRuntime);
+    });
+  });
+}

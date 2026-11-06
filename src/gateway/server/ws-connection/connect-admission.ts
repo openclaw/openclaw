@@ -1,0 +1,397 @@
+// Gateway WebSocket connect admission validates protocol, role, and browser origin.
+import type { IncomingMessage } from "node:http";
+import { isDeepStrictEqual } from "node:util";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
+  isNativeAppUiClient,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  ErrorCodes,
+  errorShape,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+  type ConnectParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { getRuntimeConfig } from "../../../config/io.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import {
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
+  isOperatorUiClient,
+} from "../../../utils/message-channel.js";
+import { resolveRuntimeServiceBuildId } from "../../../version.js";
+import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
+import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
+import type { OperatorScope } from "../../operator-scopes.js";
+import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { parseGatewayRole } from "../../role-policy.js";
+import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
+import { truncateCloseReason } from "../close-reason.js";
+import type {
+  AuthenticatedGatewayConnect,
+  GatewayConnectPhaseContext,
+} from "./message-handler-types.js";
+
+export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
+  return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
+export function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  const connect = asOptionalObjectRecord(value);
+  if (connect?.role === "worker") {
+    return true;
+  }
+  const client = asOptionalObjectRecord(connect?.client);
+  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
+}
+
+/** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
+export function isStartupNodeBootstrapConnect(connectParams: ConnectParams): boolean {
+  const auth = connectParams.auth;
+  const device = connectParams.device;
+  return (
+    isStartupNodeConnect(connectParams) &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    Array.isArray(connectParams.scopes) &&
+    connectParams.scopes.length === 0 &&
+    Boolean(device?.id.trim() && device.publicKey.trim()) &&
+    hasNonEmptyString(auth?.bootstrapToken) &&
+    !hasNonEmptyString(auth?.token) &&
+    !hasNonEmptyString(auth?.deviceToken) &&
+    !hasNonEmptyString(auth?.password) &&
+    !hasNonEmptyString(auth?.approvalRuntimeToken) &&
+    !hasNonEmptyString(auth?.agentRuntimeIdentityToken)
+  );
+}
+
+export async function rejectGatewayStartupConnect(
+  context: GatewayConnectPhaseContext,
+): Promise<void> {
+  const { close } = context.handler;
+  const { frame, markHandshakeFailure, sendFrame } = context;
+  markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
+  await sendFrame({
+    type: "res",
+    id: frame.id,
+    ok: false,
+    error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
+      retryable: true,
+      retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+      details: gatewayStartupUnavailableDetails(),
+    }),
+  }).catch(() => {});
+  queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
+}
+
+export async function rejectUnavailableProfileConnect(
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "markHandshakeFailure" | "sendHandshakeErrorResponse" | "releasePendingNodePairingCleanup"
+  > & { handler: Pick<GatewayConnectPhaseContext["handler"], "close"> },
+  error: unknown,
+): Promise<void> {
+  // Role admission needs a verified profile; an empty-scope hello hides the
+  // verification outage behind unrelated permission errors on every request.
+  const failure = authenticatedProfileUnavailableError(error);
+  context.markHandshakeFailure("authenticated-profile-unavailable");
+  context.sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, failure.message, failure);
+  await context.releasePendingNodePairingCleanup();
+  context.handler.close(1013, truncateCloseReason(failure.message));
+}
+
+export function applyConnectionScopeCap(params: {
+  role: string;
+  scopes: string[];
+  upgradeReq: IncomingMessage;
+}): string[] {
+  const header = params.upgradeReq.headers["x-openclaw-scopes"];
+  const rawHeader = Array.isArray(header) ? header[0] : header;
+  if (rawHeader === undefined) {
+    return params.scopes;
+  }
+  const declaredScopes = rawHeader
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+  return params.role === "operator"
+    ? intersectOperatorScopes(params.scopes, declaredScopes)
+    : params.scopes.filter((scope) => declaredScopes.includes(scope));
+}
+
+export function resolveEffectiveConnectionScopes(params: {
+  role: string;
+  deviceScopes: string[];
+  verifiedIdentity?: string;
+  identityScopes?: Record<string, OperatorScope[]>;
+  upgradeReq: IncomingMessage;
+}): string[] {
+  const verifiedIdentity = params.verifiedIdentity;
+  let identityScopes: OperatorScope[] = [];
+  if (params.role === "operator" && verifiedIdentity) {
+    identityScopes = resolveIdentityOperatorScopes(verifiedIdentity, params.identityScopes);
+  }
+  return applyConnectionScopeCap({
+    role: params.role,
+    scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
+    upgradeReq: params.upgradeReq,
+  });
+}
+
+export function rejectGatewayConnectOrigin(
+  context: GatewayConnectPhaseContext,
+  reason: string,
+): void {
+  const message =
+    "origin not allowed (use gateway.publicOrigin with allowedOrigins omitted, or allow this origin in gateway.controlUi.allowedOrigins)";
+  context.markHandshakeFailure("origin-mismatch", {
+    origin: context.handler.requestOrigin ?? "n/a",
+    host: context.handler.requestHost ?? "n/a",
+    reason,
+  });
+  context.sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+    details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED, reason },
+  });
+  context.handler.close(1008, truncateCloseReason(message));
+}
+
+/** Recheck live authority after awaited work, before granting credentials or registering a client. */
+export function resolveGatewayConnectPolicyFailure(
+  context: GatewayConnectPhaseContext,
+  state: AuthenticatedGatewayConnect,
+): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  const principal = state.authResult.openclawId;
+  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    return { kind: "auth" };
+  }
+  if (context.browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
+    if (!originCheck.ok) {
+      return { kind: "origin", reason: originCheck.reason };
+    }
+  }
+  // Pending handshakes must not issue credentials under a superseded role policy.
+  if (
+    !isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles) ||
+    !isGatewayAuthPolicyCurrent(state.authPolicy)
+  ) {
+    return { kind: "auth" };
+  }
+  if (
+    state.sessionUsesSharedGatewayAuth &&
+    context.handler.getRequiredSharedGatewaySessionGeneration &&
+    state.sessionSharedGatewaySessionGeneration !==
+      context.handler.getRequiredSharedGatewaySessionGeneration()
+  ) {
+    return { kind: "auth" };
+  }
+  return undefined;
+}
+
+export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
+  const {
+    connId,
+    remoteAddr,
+    remotePort,
+    requestHost,
+    requestOrigin,
+    close,
+    isStartupPending,
+    logGateway,
+    logWsControl,
+    originCheckMetrics,
+  } = context.handler;
+  const {
+    connectParams,
+    configSnapshot,
+    peerLabel,
+    browserOrigin,
+    clientLabel,
+    markHandshakeFailure,
+    sendHandshakeErrorResponse,
+    isWebchatConnect,
+  } = context;
+
+  const isNodeClient = isStartupNodeConnect(connectParams);
+  const startupPending = isNodeClient && isStartupPending?.() === true;
+  // Operator hello needs prepared auth and request snapshots, not autonomous recovery.
+  // Nodes retain their stricter startup enrollment policy until sidecars are ready.
+  if (context.handler.isConnectPending?.() && !isNodeClient) {
+    await rejectGatewayStartupConnect(context);
+    return undefined;
+  }
+
+  const { minProtocol, maxProtocol } = connectParams;
+  const supportsCurrentProtocol =
+    maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
+  const supportsProbeRestartProtocol =
+    connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
+    maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
+    minProtocol <= PROTOCOL_VERSION;
+  // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
+  // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
+  const supportsPreviousNodeProtocol =
+    isNodeClient &&
+    maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
+    minProtocol <= MIN_NODE_PROTOCOL_VERSION;
+  const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;
+  if (!supportsCurrentProtocol && !supportsProbeRestartProtocol && !supportsPreviousNodeProtocol) {
+    markHandshakeFailure("protocol-mismatch", {
+      minProtocol,
+      maxProtocol,
+      expectedProtocol: PROTOCOL_VERSION,
+      minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+    });
+    logWsControl.warn(
+      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatPeerTextForLog(clientLabel)} ${connectParams.client.mode} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatPeerTextForLog(connectParams.client.instanceId ?? "n/a")}`,
+    );
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
+      retryable: false,
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        clientMinProtocol: minProtocol,
+        clientMaxProtocol: maxProtocol,
+        expectedProtocol: PROTOCOL_VERSION,
+        minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        minProtocol: isNodeClient
+          ? MIN_NODE_PROTOCOL_VERSION
+          : connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE
+            ? MIN_PROBE_PROTOCOL_VERSION
+            : PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        gatewayBuildId: resolveRuntimeServiceBuildId(),
+        ...(connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+          ? { reloadRequired: true }
+          : {}),
+      },
+    });
+    close(1002, "protocol mismatch");
+    return undefined;
+  }
+
+  const roleRaw = connectParams.role ?? "operator";
+  const role = parseGatewayRole(roleRaw);
+  if (!role) {
+    markHandshakeFailure("invalid-role", { role: roleRaw });
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "invalid role");
+    close(1008, "invalid role");
+    return undefined;
+  }
+  // Default-deny, except signed ingress requests may select their live grant ceiling.
+  // Note: If the client does not present a device identity, we can't bind scopes to a paired
+  // device/token, so we will clear scopes after auth to avoid self-declared permissions.
+  const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+  const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  if (remoteIngress) {
+    const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
+      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      : role !== "operator"
+        ? "Remote Control UI ingress only admits the operator role."
+        : !connectParams.device
+          ? "Remote Control UI ingress requires a signed device identity."
+          : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
+            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            : !roleScopesAllow({
+                  role,
+                  requestedScopes: scopes,
+                  allowedScopes: remoteIngress.operatorScopeCeiling,
+                })
+              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              : undefined;
+    if (denied) {
+      markHandshakeFailure("remote-control-ui-admission-denied");
+      sendHandshakeErrorResponse(ErrorCodes.FORBIDDEN, denied);
+      close(1008, truncateCloseReason(denied));
+      return undefined;
+    }
+  }
+  connectParams.role = role;
+  connectParams.scopes = scopes;
+
+  const isBrowserCopilot = isBrowserCopilotClient(connectParams.client);
+  const browserCopilotOrigin = isBrowserCopilot
+    ? normalizeChromeExtensionOrigin(requestOrigin ?? undefined)
+    : undefined;
+  if (
+    isBrowserCopilot &&
+    (connectParams.client.mode !== GATEWAY_CLIENT_MODES.UI ||
+      !hasGatewayClientCap(connectParams.caps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS) ||
+      !hasGatewayClientCap(connectParams.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS))
+  ) {
+    const message =
+      "browser copilot requires ui mode with run-tool-bindings and session-scoped-events capabilities";
+    markHandshakeFailure("invalid-client", {
+      client: connectParams.client.id,
+      mode: connectParams.client.mode,
+    });
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+    close(1008, truncateCloseReason(message));
+    return undefined;
+  }
+  if (isBrowserCopilot && !browserCopilotOrigin) {
+    const message = "browser copilot requires a canonical Chrome extension origin";
+    markHandshakeFailure("origin-mismatch", {
+      origin: requestOrigin ?? "n/a",
+      client: connectParams.client.id,
+    });
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+      details: {
+        code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        reason: "invalid browser copilot origin",
+      },
+    });
+    close(1008, truncateCloseReason(message));
+    return undefined;
+  }
+  const isControlUi = isOperatorUiClient(connectParams.client) && !isBrowserCopilot;
+  const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
+  const isWebchat = isWebchatConnect(connectParams);
+  const isNativeAppUi = isNativeAppUiClient(connectParams.client);
+  if (browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(browserOrigin, configSnapshot);
+    if (!originCheck.ok) {
+      rejectGatewayConnectOrigin(context, originCheck.reason);
+      return undefined;
+    }
+    if (originCheck.matchedBy === "host-header-fallback") {
+      originCheckMetrics.hostHeaderFallbackAccepted += 1;
+      logWsControl.warn(
+        `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+      );
+      logGateway.warn(
+        "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
+      );
+    }
+  }
+  return {
+    minProtocol,
+    maxProtocol,
+    usesLegacyNodeProtocol,
+    role,
+    scopes,
+    isControlUi,
+    isBrowserOperatorUi,
+    isWebchat,
+    isNativeAppUi,
+    startupPending,
+  };
+}

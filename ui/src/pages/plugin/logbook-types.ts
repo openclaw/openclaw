@@ -1,0 +1,60 @@
+export type LogbookStatusPayload = {
+  captureEnabled: boolean;
+  capturePaused: boolean;
+  captureIntervalSeconds: number;
+  analysisIntervalMinutes: number;
+  retentionDays: number;
+  nodeId?: string;
+  nodeName?: string;
+  lastCaptureAtMs?: number;
+  lastCaptureError?: string;
+  pendingFrames: number;
+  analysisRunning: boolean;
+  lastBatch?: { id: number; day: string; status: string; endMs: number; error?: string };
+  visionModel?: string;
+  visionModelSource: "config" | "media-defaults" | "missing";
+  today: string;
+  todayCards: number;
+  timeZone: string;
+};
+
+export type LogbookCardPayload = {
+  id: number;
+  day: string;
+  startMs: number;
+  endMs: number;
+  title: string;
+  summary: string;
+  detail: string;
+  category: string;
+  appPrimary?: string;
+  appSecondary?: string;
+  distractions: { startMs: number; endMs: number; title: string }[];
+  keyframeId?: number;
+};
+
+export type LogbookTimelinePayload = {
+  day: string;
+  cards: LogbookCardPayload[];
+  stats: {
+    trackedMs: number;
+    distractionMs: number;
+    categories: Array<{ category: string; ms: number }>;
+    apps: Array<{ domain: string; ms: number }>;
+  };
+};
+
+export type LogbookUiState = {
+  day: string;
+  status: LogbookStatusPayload | null;
+  timeline: LogbookTimelinePayload | null;
+  loading: boolean;
+  error: string | null;
+  framePreviews: Map<number, string>;
+  framePreviewFailed: Set<number>;
+  standup: { day: string; text: string; updatedMs: number } | null;
+  standupLoading: boolean;
+  askAnswer: string | null;
+  askLoading: boolean;
+  actionPending: boolean;
+};

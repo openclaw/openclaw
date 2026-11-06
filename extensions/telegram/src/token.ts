@@ -1,0 +1,178 @@
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/routing";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  normalizeSecretInputString,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultTelegramAccountId } from "./account-selection.js";
+
+type CredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
+
+type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
+
+export type TelegramTokenResolution = BaseTokenResolution & {
+  source: TelegramTokenSource;
+  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
+};
+
+export function readTelegramTokenFile(
+  tokenFile: string,
+  configPath: string,
+  logMissingFile?: (message: string) => void,
+): TelegramTokenResolution & { source: "tokenFile" } {
+  const result = tryReadSecretFileSync(
+    tokenFile,
+    "Telegram bot token",
+    { rejectSymlink: true },
+    { configPath },
+  );
+  if (result.status === "available") {
+    return { token: result.value, source: "tokenFile" };
+  }
+  logMissingFile?.(`${configPath} is configured but unavailable`);
+  return {
+    token: "",
+    source: "tokenFile",
+    credentialDiagnostics: [result.diagnostic],
+  };
+}
+
+type RuntimeTokenValueResolution =
+  | { status: "available"; value: string }
+  | { status: "configured_unavailable" }
+  | { status: "missing" };
+
+function resolveEnvSecretRefValue(params: {
+  cfg?: Pick<OpenClawConfig, "secrets">;
+  provider: string;
+  id: string;
+}): string | undefined {
+  // Share admission with inspection while retaining strict diagnostics below.
+  if (canResolveEnvSecretRefInReadOnlyPath(params)) {
+    return normalizeSecretInputString(process.env[params.id]);
+  }
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    throw new Error(
+      `Secret provider "${params.provider}" is not configured (ref: env:${params.provider}:${params.id}).`,
+    );
+  }
+  if (providerConfig.source !== "env") {
+    throw new Error(
+      `Secret provider "${params.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+    );
+  }
+  throw new Error(
+    `Environment variable "${params.id}" is not allowlisted in secrets.providers.${params.provider}.allowlist.`,
+  );
+}
+
+function resolveRuntimeTokenValue(params: {
+  cfg?: Pick<OpenClawConfig, "secrets">;
+  value: unknown;
+  path: string;
+}): RuntimeTokenValueResolution {
+  const resolved = resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+    defaults: params.cfg?.secrets?.defaults,
+    mode: "inspect",
+  });
+  if (resolved.status === "available" || resolved.status === "missing") {
+    return resolved;
+  }
+  if (resolved.ref.source === "env") {
+    const envValue = resolveEnvSecretRefValue({
+      cfg: params.cfg,
+      provider: resolved.ref.provider,
+      id: resolved.ref.id,
+    });
+    return envValue
+      ? { status: "available", value: envValue }
+      : { status: "configured_unavailable" };
+  }
+  // Runtime resolution stays strict for non-env SecretRefs.
+  resolveSecretInputString({
+    value: params.value,
+    path: params.path,
+    defaults: params.cfg?.secrets?.defaults,
+    mode: "strict",
+  });
+  return { status: "configured_unavailable" };
+}
+
+type ResolveTelegramTokenOpts = {
+  envToken?: string | null;
+  accountId?: string | null;
+  logMissingFile?: (message: string) => void;
+};
+
+export function resolveTelegramToken(
+  cfg?: OpenClawConfig,
+  opts: ResolveTelegramTokenOpts = {},
+): TelegramTokenResolution {
+  const requestedAccountId = normalizeOptionalAccountId(opts.accountId);
+  const accountId =
+    requestedAccountId ?? (cfg ? resolveDefaultTelegramAccountId(cfg) : DEFAULT_ACCOUNT_ID);
+  const telegramCfg = cfg?.channels?.telegram;
+
+  // Account IDs are normalized for routing (e.g. lowercased). Config keys may not
+  // be normalized, so resolve per-account config by matching normalized IDs.
+  const accountCfg = Array.isArray(telegramCfg?.accounts)
+    ? undefined
+    : resolveNormalizedAccountEntry(telegramCfg?.accounts, accountId, normalizeAccountId);
+
+  // Unknown accounts may inherit the single-bot token, but must not select
+  // another bot's credentials in a multi-bot setup (#53876).
+  if (
+    accountId !== DEFAULT_ACCOUNT_ID &&
+    !accountCfg &&
+    Object.keys(asNonArrayRecord(telegramCfg?.accounts)).length > 0
+  ) {
+    opts.logMissingFile?.(
+      `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+    );
+    return { token: "", source: "none" };
+  }
+
+  for (const { config, path } of [
+    { config: accountCfg, path: `channels.telegram.accounts.${accountId}` },
+    { config: telegramCfg, path: "channels.telegram" },
+  ]) {
+    const tokenFile = config?.tokenFile?.trim();
+    if (tokenFile) {
+      return readTelegramTokenFile(tokenFile, `${path}.tokenFile`, opts.logMissingFile);
+    }
+    const token = resolveRuntimeTokenValue({
+      cfg,
+      value: config?.botToken,
+      path: `${path}.botToken`,
+    });
+    if (token.status === "available") {
+      return { token: token.value, source: "config" };
+    }
+    if (token.status === "configured_unavailable") {
+      return { token: "", source: "none" };
+    }
+  }
+
+  const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
+  const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
+  if (envToken) {
+    return { token: envToken, source: "env" };
+  }
+
+  return { token: "", source: "none" };
+}

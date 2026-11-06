@@ -1,0 +1,42 @@
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { UrbitAuthError } from "./errors.js";
+import { urbitFetch } from "./fetch.js";
+
+const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
+
+export async function authenticate(
+  url: string,
+  code: string,
+  options: Pick<Parameters<typeof urbitFetch>[0], "ssrfPolicy" | "beforeRequest"> = {},
+): Promise<string> {
+  const { response, release } = await urbitFetch({
+    baseUrl: url,
+    path: "/~/login",
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: code }).toString(),
+    },
+    ssrfPolicy: options.ssrfPolicy,
+    beforeRequest: options.beforeRequest,
+    timeoutMs: 15_000,
+    maxRedirects: 3,
+    auditContext: "tlon-urbit-login",
+  });
+
+  try {
+    if (!response.ok) {
+      throw new UrbitAuthError(`Login failed with status ${response.status}`);
+    }
+
+    // Finish normal login responses for connection reuse, but cancel as soon as the cap is reached.
+    await readResponseTextLimited(response, MAX_AUTH_BODY_DRAIN_BYTES).catch(() => undefined);
+    const cookie = response.headers.get("set-cookie");
+    if (!cookie) {
+      throw new UrbitAuthError("No authentication cookie received");
+    }
+    return cookie;
+  } finally {
+    await release();
+  }
+}

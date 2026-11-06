@@ -1,0 +1,128 @@
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  escapeCustomIdFieldValue,
+  needsCustomIdFieldEscaping,
+  unescapeCustomIdFieldValue,
+} from "./custom-id-codec.js";
+import { parseCustomId, type ComponentParserResult } from "./internal/components.base.js";
+
+export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
+export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
+const DISCORD_ACTIVITY_CUSTOM_ID_KEY = "ocactivity";
+const ENCODED_CUSTOM_ID_VERSION = "1";
+const DISCORD_ACTIVITY_CUSTOM_ID_PREFIX = `${DISCORD_ACTIVITY_CUSTOM_ID_KEY}${ENCODED_CUSTOM_ID_VERSION}_`;
+
+export function isValidDiscordActivityWidgetId(widgetId: string): boolean {
+  return /^[A-Za-z0-9_-]{22}$/.test(widgetId);
+}
+
+export function buildDiscordActivityCustomId(widgetId: string): string {
+  return `${DISCORD_ACTIVITY_CUSTOM_ID_PREFIX}${widgetId}`;
+}
+
+export function parseDiscordActivityCustomId(id: string): { widgetId: string } | null {
+  if (id.startsWith(DISCORD_ACTIVITY_CUSTOM_ID_PREFIX)) {
+    const widgetId = id.slice(DISCORD_ACTIVITY_CUSTOM_ID_PREFIX.length);
+    return isValidDiscordActivityWidgetId(widgetId) ? { widgetId } : null;
+  }
+  // Discord messages keep buttons indefinitely, so the shipped delimiter format stays parseable.
+  const parsed = parseCustomId(id);
+  if (
+    parsed.key !== DISCORD_ACTIVITY_CUSTOM_ID_KEY ||
+    parsed.data.v !== ENCODED_CUSTOM_ID_VERSION ||
+    typeof parsed.data.wid !== "string" ||
+    !isValidDiscordActivityWidgetId(parsed.data.wid)
+  ) {
+    return null;
+  }
+  return { widgetId: parsed.data.wid };
+}
+
+export function parseDiscordActivityCustomIdForInteraction(id: string): ComponentParserResult {
+  const parsed = parseDiscordActivityCustomId(id);
+  return parsed
+    ? { key: DISCORD_ACTIVITY_CUSTOM_ID_KEY, data: { widgetId: parsed.widgetId } }
+    : parseCustomId(id);
+}
+
+function decodeParsedCustomIdData(
+  data: ComponentParserResult["data"],
+): ComponentParserResult["data"] {
+  if (data.e !== ENCODED_CUSTOM_ID_VERSION) {
+    return data;
+  }
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      typeof value === "string" ? unescapeCustomIdFieldValue(value) : value,
+    ]),
+  ) as ComponentParserResult["data"];
+}
+
+function buildDiscordFieldCustomId(key: string, fields: Record<string, string>): string {
+  const encoded = Object.values(fields).some(needsCustomIdFieldEscaping);
+  const parts = Object.entries(fields).map(
+    ([name, value]) => `${name}=${encoded ? escapeCustomIdFieldValue(value) : value}`,
+  );
+  const prefix = encoded ? `${key}:e=${ENCODED_CUSTOM_ID_VERSION};` : `${key}:`;
+  return prefix + parts.join(";");
+}
+
+export function buildDiscordComponentCustomId(params: {
+  componentId: string;
+  modalId?: string;
+}): string {
+  return buildDiscordFieldCustomId(DISCORD_COMPONENT_CUSTOM_ID_KEY, {
+    cid: params.componentId,
+    ...(params.modalId ? { mid: params.modalId } : {}),
+  });
+}
+
+export function buildDiscordModalCustomId(modalId: string): string {
+  return buildDiscordFieldCustomId(DISCORD_MODAL_CUSTOM_ID_KEY, { mid: modalId });
+}
+
+export function parseDiscordComponentCustomId(
+  id: string,
+): { componentId: string; modalId?: string } | null {
+  const parsed = parseCustomId(id);
+  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
+    return null;
+  }
+  const data = decodeParsedCustomIdData(parsed.data);
+  const componentId = readNonBlankString(data.cid);
+  if (!componentId) {
+    return null;
+  }
+  return {
+    componentId,
+    modalId: readNonBlankString(data.mid),
+  };
+}
+
+export function parseDiscordModalCustomId(id: string): string | null {
+  const parsed = parseCustomId(id);
+  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
+    return null;
+  }
+  return readNonBlankString(decodeParsedCustomIdData(parsed.data).mid) ?? null;
+}
+
+function parseDiscordCustomIdForInteraction(id: string, key: string): ComponentParserResult {
+  if (id === "*" || /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id)) {
+    return { key: "*", data: {} };
+  }
+  const parsed = parseCustomId(id);
+  if (parsed.key !== key) {
+    return parsed;
+  }
+  return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
+}
+
+export function parseDiscordComponentCustomIdForInteraction(id: string): ComponentParserResult {
+  return parseDiscordCustomIdForInteraction(id, DISCORD_COMPONENT_CUSTOM_ID_KEY);
+}
+
+export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
+  return parseDiscordCustomIdForInteraction(id, DISCORD_MODAL_CUSTOM_ID_KEY);
+}

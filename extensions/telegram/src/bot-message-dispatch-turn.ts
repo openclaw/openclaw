@@ -1,0 +1,377 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  readAgentRunTerminalOutcome,
+  runChannelInboundEvent,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelMessageReplyPipeline,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
+import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramBotLoopProtection } from "./bot-loop-protection.js";
+import { sendPayload } from "./bot-message-dispatch-delivery.js";
+import {
+  beginDraftQueuedFollowup,
+  cleanupDrafts,
+  enqueueDraftEvent,
+  dropQueuedAnswerBlockRotation,
+  ingestDraftLaneSegments,
+  prepareQueuedAnswerBlock,
+  repositionLaneForNewMessage,
+  resetLaneState,
+  rotateLaneForNewMessage,
+} from "./bot-message-dispatch-draft.js";
+import { formatTelegramGroupThreadReply } from "./bot-message-dispatch-payload.js";
+import {
+  canPushToolProgress,
+  handleCompactionEnd,
+  handleCompactionStart,
+  handleItemEvent,
+  handlePlanUpdate,
+  handleToolStart,
+  pushThinkingTokenProgress,
+  pushToolProgress,
+} from "./bot-message-dispatch-progress.js";
+import {
+  deliverReply,
+  deliverPreparedReply,
+  handleReplyError,
+  handleReplySkip,
+  resetReasoningStepState,
+} from "./bot-message-dispatch-reply.js";
+import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
+import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
+
+const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
+
+export async function runTelegramDispatchTurn(turn: Turn) {
+  const { context } = turn;
+  const hasRepliedRef = { value: false };
+  const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
+  // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
+  const toolProgressEnabled =
+    turn.streamMode !== "off" &&
+    resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode);
+  const beginDeliveryCorrelation = () =>
+    telegramInboundEventDelivery.begin(
+      context.ctxPayload.SessionKey,
+      {
+        outboundTo: context.historyKey || String(context.chatId),
+        outboundAccountId: context.route.accountId,
+        markInboundEventDelivered: turn.deliveryState.markDelivered,
+      },
+      { inboundEventKind: context.ctxPayload.InboundEventKind },
+    );
+  const endDeliveryCorrelation = beginDeliveryCorrelation();
+  const queueDraftProgress = (task: () => Promise<void>) =>
+    enqueueDraftEvent(turn, task).then(() => false);
+
+  try {
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+      cfg: turn.cfg,
+      agentId: context.route.agentId,
+      channel: "telegram",
+      accountId: context.route.accountId,
+      typing: {
+        start: context.sendTyping,
+        keepaliveIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
+        // ReplyOperation owns terminal cleanup; a per-inbound TTL would kill
+        // feedback while the same long-running task is still active.
+        maxDurationMs: 0,
+        maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: String(context.chatId),
+            error: err,
+          });
+        },
+      },
+    });
+    const turnResult = await runChannelInboundEvent({
+      channel: "telegram",
+      accountId: context.route.accountId,
+      raw: context,
+      adapter: {
+        ingest: () => ({
+          id: context.ctxPayload.MessageSid ?? `${context.chatId}:${Date.now()}`,
+          timestamp:
+            typeof context.ctxPayload.Timestamp === "number"
+              ? context.ctxPayload.Timestamp
+              : undefined,
+          rawText: context.ctxPayload.RawBody ?? "",
+          textForAgent: context.ctxPayload.BodyForAgent,
+          textForCommands: context.ctxPayload.CommandBody,
+          raw: context,
+        }),
+        resolveTurn: (): ChannelInboundTurnPlan<"provider_message_sending"> => ({
+          cfg: turn.cfg,
+          channel: "telegram",
+          accountId: context.route.accountId,
+          route: {
+            agentId: context.route.agentId,
+            sessionKey: context.route.sessionKey,
+          },
+          ctxPayload: context.ctxPayload,
+          record: context.turn.record,
+          botLoopProtection: resolveTelegramBotLoopProtection({
+            cfg: turn.cfg,
+            accountId: context.route.accountId,
+            msg: context.msg,
+            botUserId: context.primaryCtx.me?.id,
+          }),
+          dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
+          delivery: {
+            // Delivery owns its full draft mutation, including native questions and receipts.
+            deliverWithProviderMessageSending: (payload, info) =>
+              enqueueDraftEvent(turn, () => deliverReply(turn, payload, info), "delivery"),
+            deliverPreparedWithProviderMessageSending: (plan, info) =>
+              enqueueDraftEvent(turn, () => deliverPreparedReply(turn, plan, info), "delivery"),
+            onError: (err, info) => handleReplyError(turn, err, info),
+            onDelivered: (_payload, info, result) => {
+              const reason = result?.suppression?.reason;
+              if (
+                info.kind === "final" &&
+                !turn.previewLifecycle.finalFailed &&
+                (reason === "cancelled_by_reply_payload_sending_hook" ||
+                  reason === "empty_after_reply_payload_sending_hook")
+              ) {
+                turn.previewLifecycle.observeSuppression();
+              }
+            },
+          },
+          dispatcherOptions: {
+            ...replyPipeline,
+            humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
+            beforeDeliver: async (payload) => payload,
+            onBeforeDeliverCancelled: (payload, info) =>
+              info.kind === "block"
+                ? enqueueDraftEvent(turn, async () => {
+                    dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+                  })
+                : undefined,
+            onSkip: (payload, info) => handleReplySkip(turn, payload, info),
+          },
+          replyOptions: {
+            hasRepliedRef,
+            onPreparedAgentRunStart: ({ runId }) => {
+              turn.transcriptMirrorRunId = runId;
+            },
+            ...(context.pluginCommandDispatch
+              ? { [PLUGIN_COMMAND_DISPATCH]: context.pluginCommandDispatch }
+              : context.ctxPayload.CommandSource === "native"
+                ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
+                : {}),
+            groupThreadReplyFormatter: formatTelegramGroupThreadReply,
+            skillFilter: context.skillFilter,
+            disableBlockStreaming: turn.disableBlockStreaming,
+            preserveProgressCallbackStartOrder: true,
+            abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
+            turnAdoptionLifecycle: turn.turnAdoptionLifecycle
+              ? {
+                  ...turn.turnAdoptionLifecycle,
+                  admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
+                }
+              : undefined,
+            sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
+            queuedDeliveryCorrelations: isRoomEvent
+              ? [{ begin: beginDeliveryCorrelation }]
+              : undefined,
+            suppressTyping: isRoomEvent,
+            onObservedReplyDelivery: async () => {
+              turn.previewLifecycle.beginFinalDelivery();
+              await turn.draftEventQueue;
+              turn.deliveryState.markDelivered();
+              await turn.previewLifecycle.observeDelivery({ visibleReplySent: true });
+            },
+            onPartialReply:
+              turn.answerLane.stream || turn.reasoningLane.stream
+                ? (payload) => {
+                    const queued = enqueueDraftEvent(turn, async () => {
+                      await ingestDraftLaneSegments(turn, payload);
+                    });
+                    // Queue settlement records draft intent; a numeric provider message ID
+                    // proves operator visibility for terminal recovery.
+                    return queued.then(async () => {
+                      const answerStream = turn.answerLane.stream;
+                      await answerStream?.waitForInFlight();
+                      const providerMessageId = answerStream?.messageId();
+                      return (
+                        typeof providerMessageId === "number" && Number.isFinite(providerMessageId)
+                      );
+                    });
+                  }
+                : undefined,
+            onBlockReplyQueued: turn.answerLane.stream
+              ? (payload, blockContext) =>
+                  queueDraftProgress(() => prepareQueuedAnswerBlock(turn, payload, blockContext))
+              : undefined,
+            onReasoningStream: turn.reasoningLane.stream
+              ? (payload) =>
+                  queueDraftProgress(async () => {
+                    if (turn.splitReasoningOnNextStream) {
+                      repositionLaneForNewMessage(turn, turn.reasoningLane);
+                      turn.splitReasoningOnNextStream = false;
+                    }
+                    await ingestDraftLaneSegments(turn, payload, true);
+                  })
+              : turn.streamReasoningInProgressDraft
+                ? (payload) =>
+                    queueDraftProgress(async () => {
+                      await turn.progressCompositor.pushReasoningProgress(payload.text, {
+                        snapshot: payload.isReasoningSnapshot === true,
+                      });
+                    })
+                : undefined,
+            onReasoningProgress: turn.answerLane.stream
+              ? (payload) =>
+                  enqueueDraftEvent(turn, async () => {
+                    await pushThinkingTokenProgress(turn, payload.progressTokens);
+                  })
+              : undefined,
+            onAssistantMessageStart: turn.answerLane.stream
+              ? () =>
+                  queueDraftProgress(async () => {
+                    resetReasoningStepState(turn);
+                    const previousAnswerDelivered = turn.previewLifecycle.finalDelivered;
+                    turn.previewLifecycle.reset();
+                    turn.finalDispatchClaimed = false;
+                    turn.progressCompositor.beginAssistantMessage();
+                    if (turn.answerLane.finalized) {
+                      await rotateLaneForNewMessage(turn, turn.answerLane);
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                    } else if (previousAnswerDelivered) {
+                      // A fresh final may have used the durable sender without leaving a draft ID.
+                      turn.answerLane.stream?.forceNewMessage();
+                      resetLaneState(turn, turn.answerLane);
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                    } else if (
+                      turn.answerLane.hasStreamedMessage &&
+                      !turn.activeAnswerDraftIsToolProgressOnly &&
+                      (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)
+                    ) {
+                      // Only accepted blocks need a new message. A provider retry must
+                      // keep editing its unfinished preview instead of retaining it as final.
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = true;
+                    }
+                  })
+              : undefined,
+            onReasoningEnd: turn.reasoningLane.stream
+              ? () =>
+                  queueDraftProgress(async () => {
+                    turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
+                    turn.progressCompositor.resetReasoningProgress();
+                  })
+              : () => false,
+            onQueuedFollowupAdmitted: () => {
+              hasRepliedRef.value = false;
+              beginDraftQueuedFollowup(turn);
+              turn.previewLifecycle.reset();
+              turn.finalDispatchClaimed = false;
+              turn.progressCompositor.beginNewTurn({ force: true });
+            },
+            onQueuedFollowupSettled: async () => {
+              turn.progressCompositor.cancel();
+              await turn.draftEventQueue;
+              await cleanupDrafts(turn, turn.isSuperseded());
+            },
+            suppressDefaultToolProgressMessages:
+              !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
+            progressRequiresReply: turn.streamMode === "progress" ? true : undefined,
+            suppressToolProgressMessages: !toolProgressEnabled,
+            allowProgressCallbacksWhenSourceDeliverySuppressed:
+              !isRoomEvent && Boolean(turn.answerLane.stream),
+            onVerboseProgressVisibilityAsync: (isActive) => {
+              turn.verboseProgressActive = isActive;
+            },
+            commentaryProgressEnabled:
+              turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
+            progressPreambleEnabled: turn.progressPreambleEnabled,
+            commentaryPayloadsEnabled: turn.progressPreambleEnabled,
+            // The progress draft is the only commentary owner and retires before
+            // the clean final. A durable copy would restore the queue burst this
+            // owner boundary prevents; verbose still controls durable tool output.
+            shouldDeliverCommentaryPayloads:
+              turn.progressPreambleEnabled === true ? () => false : undefined,
+            reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
+            onToolStart: (payload) => enqueueDraftEvent(turn, () => handleToolStart(turn, payload)),
+            onItemEvent: (payload) => handleItemEvent(turn, payload),
+            onPlanUpdate: (payload) =>
+              enqueueDraftEvent(turn, () => handlePlanUpdate(turn, payload)),
+            onApprovalEvent: (payload) =>
+              enqueueDraftEvent(turn, async () =>
+                (await canPushToolProgress(turn))
+                  ? await turn.progressCompositor.pushApprovalEvent(payload)
+                  : false,
+              ),
+            onToolResult: (payload) =>
+              enqueueDraftEvent(turn, async () => {
+                const text = payload.text?.trim();
+                if (!text) {
+                  return false;
+                }
+                const progressId = payload.channelData?.openclawToolProgressId;
+                const updatedDraft = await pushToolProgress(turn, text, {
+                  startImmediately: true,
+                  id: typeof progressId === "string" ? progressId : undefined,
+                });
+                if (updatedDraft) {
+                  return true;
+                }
+                if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
+                  return (await sendPayload(turn, payload)).visibleReplySent;
+                }
+                return false;
+              }),
+            // Ambient room events are intentionally invisible, including reactions.
+            // User requests in group chats are not room_event turns and retain these callbacks.
+            onCompactionStart: isRoomEvent
+              ? undefined
+              : () => enqueueDraftEvent(turn, () => handleCompactionStart(turn)),
+            onCompactionEnd: isRoomEvent
+              ? undefined
+              : (payload) => enqueueDraftEvent(turn, () => handleCompactionEnd(turn, payload)),
+            onModelSelected,
+          },
+        }),
+      },
+    });
+    if (!turnResult.dispatched) {
+      if (
+        turnResult.admission.kind === "drop" &&
+        turnResult.admission.reason === "bot-loop-protection"
+      ) {
+        // Core reports this drop only to a turn log callback, which Telegram does not pass.
+        // Without this line an over-budget bot pair reads as lost delivery.
+        turn.runtime.log?.(
+          warn(
+            `telegram: bot-loop protection dropped message ${context.msg.message_id} from bot ${context.msg.from?.id} in chat ${context.chatId} (account ${context.route.accountId})`,
+          ),
+        );
+      }
+      return false;
+    }
+    // Dispatch custody prevents replay, but only provider acceptance proves visibility.
+    turn.finalDispatchClaimed ||=
+      turnResult.dispatchResult.queuedFinal ||
+      (turnResult.dispatchResult.settledReceipt?.counts.final.failedAfterSend ?? 0) > 0;
+    turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
+    turn.sendPolicyDenied = turnResult.dispatchResult.sendPolicyDenied === true;
+    turn.noVisibleReplyFallbackEligible =
+      turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
+    turn.suppressSilentReplyFallback ||=
+      turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
+    if (turnResult.dispatchResult.deliberateSilentTerminalReply) {
+      turn.previewLifecycle.observeSuppression();
+    }
+    return true;
+  } finally {
+    endDeliveryCorrelation();
+  }
+}

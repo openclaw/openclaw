@@ -1,0 +1,713 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
+import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { loadManifestModelCatalog } from "../agents/model-catalog.js";
+import {
+  ANTHROPIC_API_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+  GEMINI_CLI_DEFAULT_MODEL_REF,
+  OPENAI_API_DEFAULT_MODEL_REF,
+} from "../commands/onboard-inference.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
+import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
+import { createPluginCache } from "../plugins/plugin-cache.js";
+import type { PluginCache } from "../plugins/plugin-cache.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { resolveUserPath } from "../utils.js";
+import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
+import { appendSystemAgentAuditEntry } from "./audit.js";
+import {
+  projectInferenceRoute,
+  resolveSystemAgentConfiguredRouteFromConfig,
+  type SystemAgentConfiguredRoute,
+} from "./inference-route.js";
+import { stageCodexCandidate } from "./setup-inference-codex.js";
+import {
+  type ActivateSetupInferenceParams,
+  type StagedCandidate,
+  type StageContext,
+  type StageFailure,
+  type ActivateSetupInferenceResult,
+  describeSetupInferenceError,
+  invalidSetupConfigError,
+  parseInferenceRef,
+  resolveSetupModel,
+  parseProviderAutoSetupChoiceId,
+  parseSavedAuthSetupProfileId,
+  redactSetupInferenceError,
+  resolveSetupInferenceWorkspace,
+  SetupInferenceActivationIndeterminateError,
+  SetupInferenceActivationUnavailableError,
+  SetupInferenceCancelledError,
+  SetupInferenceOwnerDriftError,
+  throwIfSetupInferenceCancelled,
+  validateSetupInferenceOwnerEvidence,
+  validateSetupModelTarget,
+} from "./setup-inference-core.js";
+import {
+  withPreparedSetupCredentialAccess,
+  activatePreparedSetupCredential,
+} from "./setup-inference-credential-access.js";
+import {
+  stageProviderAuthCandidate,
+  stageProviderAutoCandidate,
+  stageSavedAuthCandidate,
+} from "./setup-inference-credentials.js";
+import {
+  prepareSetupNativeRuntimeConsent,
+  prepareSetupVerificationGeneration,
+  verifySetupHarness,
+  type SetupHarnessVerification,
+} from "./setup-inference-harness.js";
+import {
+  commitSetupInferenceActivation,
+  captureSetupInferenceFileUndo,
+  setupConfigPatchConflicts,
+  type SetupInferenceConfigTarget,
+} from "./setup-inference-transition.js";
+import {
+  revalidateStableSetupInferenceOwner,
+  runSetupInferenceTurn,
+} from "./setup-inference-turn.js";
+import type { SetupInferencePluginGeneration } from "./setup-inference-turn.js";
+import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
+import {
+  applySetupNativeSessionCatalogPreference,
+  listSetupNativeSessionCatalogs,
+  requiresSetupNativeSessionCatalogConsent,
+  resolveSetupNativeSessionCatalogPreference,
+} from "./setup-native-session-catalogs.js";
+import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+
+async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
+  const { params, cfg } = ctx;
+  if (params.kind.startsWith("saved-auth:")) {
+    const profileId = parseSavedAuthSetupProfileId(params.kind);
+    if (!profileId) {
+      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
+    }
+    return await stageSavedAuthCandidate(ctx, profileId);
+  }
+  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
+  const hasProviderTarget =
+    choiceId ||
+    params.kind === "existing-model" ||
+    params.kind === "provider-auth" ||
+    params.kind === "api-key";
+  const roleError = hasProviderTarget
+    ? undefined
+    : validateSetupModelTarget(undefined, params.modelTarget);
+  if (roleError) {
+    return roleError;
+  }
+  if (choiceId) {
+    return await stageProviderAutoCandidate(ctx, choiceId);
+  }
+  switch (params.kind) {
+    case "existing-model": {
+      const route = await resolveSystemAgentConfiguredRouteFromConfig(
+        cfg,
+        params.agentId,
+        params.modelTarget ? { modelTarget: params.modelTarget } : {},
+        ctx.snapshot,
+      );
+      if (!route) {
+        return { error: "No configured default-agent inference route is available." };
+      }
+      const routeRoleError = validateSetupModelTarget(route.modelTarget, params.modelTarget);
+      if (routeRoleError) {
+        return routeRoleError;
+      }
+      const requested = params.modelRef?.trim();
+      if (requested && normalizeAgentModelRefForConfig(requested) !== route.modelLabel) {
+        return {
+          error: `The configured default model changed from ${requested} to ${route.modelLabel}. Try setup again.`,
+        };
+      }
+      return {
+        modelRef: route.modelLabel,
+        ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
+        config: cfg,
+        ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
+      };
+    }
+    case "api-key":
+      return await stageProviderAuthCandidate(ctx, false);
+    case "provider-auth":
+      return await stageProviderAuthCandidate(ctx, true);
+    case "codex-cli":
+    case "claude-cli":
+    case "gemini-cli":
+    case "openai-api-key":
+    case "anthropic-api-key": {
+      const defaults = {
+        "codex-cli": CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+        "claude-cli": CLAUDE_CLI_DEFAULT_MODEL_REF,
+        "gemini-cli": GEMINI_CLI_DEFAULT_MODEL_REF,
+        "openai-api-key": OPENAI_API_DEFAULT_MODEL_REF,
+        "anthropic-api-key": ANTHROPIC_API_DEFAULT_MODEL_REF,
+      };
+      const defaultModel = defaults[params.kind];
+      const modelRef = resolveSetupModel({
+        label: params.kind,
+        providerId: parseInferenceRef(defaultModel).provider,
+        defaultModel,
+        modelRef: params.modelRef,
+      });
+      if (typeof modelRef !== "string") {
+        return modelRef;
+      }
+      if (params.kind === "codex-cli") {
+        return await stageCodexCandidate(ctx, modelRef);
+      }
+      if (params.kind === "claude-cli") {
+        const ref = parseInferenceRef(modelRef);
+        const provider =
+          resolveCliRuntimeCanonicalProvider({
+            runtime: ref.provider,
+            config: cfg,
+            env: process.env,
+            includeSetupRegistry: true,
+          }) ?? ref.provider;
+        return { modelRef: `${provider}/${ref.model}`, agentRuntimeId: "claude-cli", config: cfg };
+      }
+      return {
+        modelRef,
+        ...(params.kind === "gemini-cli" ? {} : { agentRuntimeId: "openclaw" }),
+        config: cfg,
+      };
+    }
+    default:
+      return { error: `Unknown inference choice "${params.kind}".` };
+  }
+}
+
+async function withSetupInferenceErrorRedaction<T>(
+  operation: () => Promise<T>,
+  apiKey: string | undefined,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    const redacted = await redactSetupInferenceError(error, apiKey);
+    if (error instanceof WizardNavigationError) {
+      throw new WizardNavigationError(error.direction);
+    }
+    if (error instanceof SetupInferenceCancelledError) {
+      throw new SetupInferenceCancelledError();
+    }
+    // Original causes and stacks can contain the submitted secret.
+    const RedactedError =
+      [
+        WizardCancelledError,
+        SetupInferenceActivationUnavailableError,
+        SetupInferenceOwnerDriftError,
+        SetupInferenceActivationIndeterminateError,
+      ].find((ErrorType) => error instanceof ErrorType) ?? Error;
+    throw new RedactedError(redacted);
+  }
+}
+
+/** Save credentials once, confirm the candidate in memory, then commit its config. */
+export async function activateSetupInference(
+  params: ActivateSetupInferenceParams,
+): Promise<ActivateSetupInferenceResult> {
+  try {
+    return await withSetupInferenceErrorRedaction(async () => {
+      const onActivationCompletion = params.onActivationCompletion;
+      const result = await activateCandidate({
+        ...params,
+        onActivationCompletion: onActivationCompletion
+          ? (complete) =>
+              onActivationCompletion(() =>
+                withSetupInferenceErrorRedaction(complete, params.apiKey),
+              )
+          : undefined,
+      });
+      return result.ok
+        ? {
+            ...result,
+            lines: await Promise.all(
+              result.lines.map((line) => redactSetupInferenceError(line, params.apiKey)),
+            ),
+          }
+        : { ...result, error: await redactSetupInferenceError(result.error, params.apiKey) };
+    }, params.apiKey);
+  } catch (error) {
+    if (error instanceof WizardCancelledError || error instanceof WizardNavigationError) {
+      throw error;
+    }
+    if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
+      return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
+    }
+    if (error instanceof SetupInferenceActivationUnavailableError) {
+      return { ok: false, status: "unavailable", error: error.message };
+    }
+    if (error instanceof SetupInferenceOwnerDriftError) {
+      return { ok: false, status: "auth", error: error.message };
+    }
+    throw error;
+  }
+}
+
+async function activateCandidate(
+  callerParams: ActivateSetupInferenceParams,
+): Promise<ActivateSetupInferenceResult> {
+  const effects = { credentialsSaved: false, configPersisted: false };
+  // Like cancellation, caller authority governs activation until its config is persisted;
+  // a saved activation then completes like any other committed config write.
+  const params: ActivateSetupInferenceParams = {
+    ...callerParams,
+    assertCurrent: () => {
+      if (!effects.configPersisted) {
+        callerParams.assertCurrent?.();
+      }
+    },
+  };
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
+  const snapshot = await readSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    throw new Error(invalidSetupConfigError(snapshot));
+  }
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
+  const ctx: StageContext = {
+    params,
+    snapshot,
+    cfg,
+    routeAgentId,
+    agentDir: resolveAgentDir(cfg, routeAgentId),
+    workspace: params.workspace?.trim()
+      ? resolveUserPath(params.workspace)
+      : resolveSetupInferenceWorkspace(snapshot),
+    effects,
+    beforePersistentEffect: async () => {
+      throwIfSetupInferenceCancelled(params);
+      params.onActivationStarted?.();
+      await params.beforePersistentEffect?.();
+      throwIfSetupInferenceCancelled(params);
+    },
+  };
+  const staged = await stageCandidate(ctx);
+  const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
+    ...result,
+    ...(ctx.effects.credentialsSaved
+      ? {
+          error: `Credentials saved; default unchanged. ${result.error} Choose the saved sign-in in Model Setup to retry without signing in again.`,
+        }
+      : {}),
+    disposition: "rejected-before-promotion" as const,
+  });
+  if ("error" in staged) {
+    return failure({ ok: false, status: "unavailable", error: staged.error });
+  }
+  await using cache = createPluginCache();
+  const prepared = await prepareSetupNativeRuntimeConsent(ctx, staged, cache);
+  staged.config = prepared.config;
+  const verify = (runtimeCredential?: SetupRuntimeCredential) =>
+    verifyAndActivateCandidate(ctx, staged, failure, cache, prepared.generation, runtimeCredential);
+  if (!staged.authProfileId) {
+    return await verify();
+  }
+  return await withPreparedSetupCredentialAccess(
+    ctx,
+    staged,
+    staged.authProfileId,
+    verify,
+    failure,
+  );
+}
+
+async function verifyAndActivateCandidate(
+  ctx: StageContext,
+  staged: StagedCandidate,
+  failure: (
+    result: Extract<ActivateSetupInferenceResult, { ok: false }>,
+  ) => ActivateSetupInferenceResult,
+  cache: PluginCache,
+  preparedGeneration: SetupInferencePluginGeneration | undefined,
+  runtimeCredential?: SetupRuntimeCredential,
+): Promise<ActivateSetupInferenceResult> {
+  const { params, snapshot, cfg, routeAgentId } = ctx;
+  const source = snapshot.sourceConfig;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
+  const catalogPreference = params.automaticSetup
+    ? false
+    : resolveSetupNativeSessionCatalogPreference({
+        consentRequired: requiresSetupNativeSessionCatalogConsent({
+          configExists: snapshot.exists,
+          config: source,
+          catalogs: listSetupNativeSessionCatalogs({ config: source, workspaceDir: ctx.workspace }),
+        }),
+        ...(params.nativeSessionCatalogsEnabled !== undefined
+          ? { requested: params.nativeSessionCatalogsEnabled }
+          : {}),
+      });
+  const prepared =
+    catalogPreference === undefined
+      ? staged.config
+      : applySetupNativeSessionCatalogPreference({
+          config: staged.config,
+          enabled: catalogPreference,
+          onlyUnset: params.automaticSetup === true,
+          workspaceDir: ctx.workspace,
+        });
+  const providerPatch = createMergePatch(cfg, stripPendingPluginInstallRecords(prepared));
+  const selectModel: (config: OpenClawConfig, previousConfig: OpenClawConfig) => OpenClawConfig =
+    params.kind === "existing-model"
+      ? (config: OpenClawConfig) => config
+      : await createSystemAgentModelSelectionUpdater({
+          model: staged.modelRef,
+          ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
+          ...(params.agentId ? { targetAgentId: routeAgentId } : {}),
+          ...(staged.agentRuntimeId ? { agentRuntimeId: staged.agentRuntimeId } : {}),
+          runtimeInDefaults: !params.agentId && !hasResolvedRosterBeforeMigrations(snapshot),
+          ...(staged.authProfileId ? { authProfileId: staged.authProfileId } : {}),
+        });
+  const buildCandidate = (base: OpenClawConfig) => {
+    let patched = base;
+    if (!isRecord(providerPatch) || Object.keys(providerPatch).length > 0) {
+      // SAFETY: The patch is derived from typed configs and preserves their config shape.
+      patched = applyMergePatch(base, providerPatch) as OpenClawConfig;
+    }
+    const selected = params.selectModel === false ? patched : selectModel(patched, base);
+    return staged.pendingPluginInstalls
+      ? { ...selected, plugins: { ...selected.plugins, installs: staged.pendingPluginInstalls } }
+      : selected;
+  };
+  const candidate = buildCandidate(cfg);
+  const sourceCandidate = buildCandidate(source);
+  // Verify the candidate's route without persisting a new primary model for access-only sign-in.
+  const candidateRouteConfig = (config: OpenClawConfig) =>
+    params.selectModel === false ? selectModel(config, config) : config;
+  const { generation, metadata } = await prepareSetupVerificationGeneration(
+    ctx,
+    staged,
+    candidate,
+    cache,
+    preparedGeneration,
+  );
+  const routeDeps = {
+    ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
+    pluginMetadataPlugins: metadata.plugins,
+  };
+  const requestedAgentId = params.agentId ? routeAgentId : undefined;
+  // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
+  const project = (config: OpenClawConfig, sourceConfig: OpenClawConfig) =>
+    projectInferenceRoute(
+      materializeRuntimeConfig(config, { manifestRegistry: { plugins: [...metadata.plugins] } }),
+      requestedAgentId,
+      routeDeps,
+      sourceConfig,
+    );
+  const resolveRoute = (config: OpenClawConfig, currentSnapshot = snapshot) =>
+    resolveSystemAgentConfiguredRouteFromConfig(
+      candidateRouteConfig(config),
+      requestedAgentId,
+      routeDeps,
+      currentSnapshot,
+    );
+  const route = await resolveRoute(candidate);
+  if (
+    !route ||
+    route.modelLabel !== staged.modelRef ||
+    (staged.authProfileId && route.authProfileId !== staged.authProfileId)
+  ) {
+    return failure({
+      ok: false,
+      status: "unavailable",
+      error:
+        "The candidate route does not match the selected provider, model, and credential. Review model runtime policy and retry.",
+    });
+  }
+  const baselineRoute = await project(cfg, source);
+  const verifiedRoute = await project(
+    candidateRouteConfig(candidate),
+    candidateRouteConfig(sourceCandidate),
+  );
+  const withGeneration = <T>(run: () => T): T =>
+    generation ? withPluginRuntimeGenerationScope(generation, run) : run();
+  const artifacts = withGeneration(() =>
+    captureSystemAgentOwnerPluginArtifacts({
+      config: route.runConfig,
+      executionRoute: route,
+    }),
+  );
+  params.onPreparationComplete?.();
+  throwIfSetupInferenceCancelled(params);
+  const progress = params.prompter?.progress("Testing your AI connection…");
+  // A silent spinner reads as a hang once a provider is slow; show the wait and the way out.
+  const checkStarted = Date.now();
+  const elapsed = progress
+    ? setInterval(() => {
+        const seconds = Math.round((Date.now() - checkStarted) / 1000);
+        if (seconds >= 3) {
+          progress.update(
+            `Testing your AI connection… ${seconds}s. You can cancel; nothing changes until the check passes.`,
+          );
+        }
+      }, 1000)
+    : undefined;
+  elapsed?.unref?.();
+  const verification = await withGeneration(async () => {
+    try {
+      const native = await verifySetupHarness({
+        route,
+        cache,
+        generation,
+        signal: params.signal,
+        assertCurrent: () => throwIfSetupInferenceCancelled(params),
+      });
+      if (native) {
+        return native;
+      }
+      return await runSetupInferenceTurn({
+        route,
+        requireExecutionOwner: true,
+        signal: params.signal,
+        runtime: params.runtime,
+      });
+    } catch (error) {
+      return { ok: false as const, ...describeSetupInferenceError(error, route) };
+    }
+  }).finally(() => {
+    clearInterval(elapsed);
+    progress?.stop();
+  });
+  throwIfSetupInferenceCancelled(params);
+  if (!verification.ok) {
+    return failure(verification);
+  }
+  if ("auth" in verification) {
+    const ownerFailure = validateSetupInferenceOwnerEvidence({
+      runner: route.runner,
+      configuredHarnessId:
+        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+      auth: verification.auth,
+    });
+    if (ownerFailure) {
+      return failure(ownerFailure);
+    }
+  }
+  const savedCredential = staged.authProfileId
+    ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
+        staged.authProfileId
+      ]
+    : undefined;
+  if (savedCredential?.setup?.replacement && !params.activationConfirmed) {
+    if (
+      !params.prompter ||
+      !(await params.prompter.confirm({
+        message: "Connection verified. Activate this saved sign-in?",
+        initialValue: true,
+      }))
+    ) {
+      return failure({
+        ok: false,
+        status: "unavailable",
+        error:
+          "Activation declined. The saved sign-in is inactive and your current connection is unchanged.",
+      });
+    }
+    throwIfSetupInferenceCancelled(params);
+  }
+  params.onActivationStarted?.();
+  const revalidateOwner = async (candidateRoute: SystemAgentConfiguredRoute) => {
+    if ("binding" in verification) {
+      let current: SetupHarnessVerification | undefined;
+      try {
+        current = await withGeneration(() =>
+          verifySetupHarness({
+            route: candidateRoute,
+            cache,
+            generation,
+            signal: params.signal,
+            assertCurrent: () => throwIfSetupInferenceCancelled(params),
+          }),
+        );
+      } catch (error) {
+        throw new SetupInferenceOwnerDriftError(
+          `The native connection changed before activation. Retry setup. (${formatErrorMessage(error)})`,
+          { cause: error },
+        );
+      }
+      if (!current || !isDeepStrictEqual(current.binding, verification.binding)) {
+        throw new SetupInferenceOwnerDriftError(
+          "The native setup verification owner changed before activation. Retry setup.",
+        );
+      }
+      return;
+    }
+    await withGeneration(() =>
+      revalidateStableSetupInferenceOwner({
+        route: candidateRoute,
+        auth: verification.auth,
+        stagedOwnerPluginArtifacts: artifacts,
+      }),
+    );
+  };
+  const revalidate = async (currentSnapshot: ConfigFileSnapshot) => {
+    const config = currentSnapshot.runtimeConfig ?? currentSnapshot.config;
+    const sourceConfig = currentSnapshot.sourceConfig;
+    if (
+      !isDeepStrictEqual(await project(config, sourceConfig), baselineRoute) ||
+      setupConfigPatchConflicts(source, sourceConfig, createMergePatch(source, sourceCandidate))
+    ) {
+      throw new SetupInferenceOwnerDriftError(
+        "Connection settings changed during verification. Choose the saved sign-in to test the current connection.",
+      );
+    }
+    const next = buildCandidate(config);
+    if (
+      !isDeepStrictEqual(
+        await project(
+          candidateRouteConfig(next),
+          candidateRouteConfig(buildCandidate(sourceConfig)),
+        ),
+        verifiedRoute,
+      )
+    ) {
+      throw new SetupInferenceOwnerDriftError(
+        "The candidate route changed during verification. Retry setup before selecting it as the default.",
+      );
+    }
+    const nextRoute = await resolveRoute(next, currentSnapshot);
+    if (!nextRoute) {
+      throw new SetupInferenceOwnerDriftError(
+        "The selected inference route is no longer available.",
+      );
+    }
+    await revalidateOwner(nextRoute);
+  };
+  const activateCredential = async (assertCurrent: () => void) => {
+    if (!staged.authProfileId || !savedCredential?.setup) {
+      return undefined;
+    }
+    const profileId = staged.authProfileId;
+    return await activatePreparedSetupCredential(
+      ctx,
+      profileId,
+      savedCredential,
+      runtimeCredential,
+      async () => {
+        const latest = await readSnapshot();
+        const current = latest.runtimeConfig ?? latest.config;
+        if (!isDeepStrictEqual(await project(current, latest.sourceConfig), verifiedRoute)) {
+          throw new SetupInferenceOwnerDriftError(
+            "The connection changed before credential activation. Test the saved sign-in again.",
+          );
+        }
+        await revalidateOwner(route);
+      },
+      assertCurrent,
+    );
+  };
+  if (!isDeepStrictEqual(sourceCandidate, source) || savedCredential?.setup) {
+    const configTarget: SetupInferenceConfigTarget = {
+      read: async () => ({
+        config: (await readSnapshot()).sourceConfig,
+        write: configTarget.write,
+      }),
+      write: async (_candidate, { writeOptions, captureUndo }) => {
+        const { transformConfigWithPendingPluginInstalls: transform } =
+          await import("../plugins/install-record-commit.js");
+        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) =>
+          captureUndo(
+            captureSetupInferenceFileUndo(
+              {
+                ...base,
+                sourceConfig: stripPendingPluginInstallRecords(base.sourceConfig),
+              },
+              stripPendingPluginInstallRecords(written),
+            ),
+          );
+        const committed = await transform({
+          base: "source",
+          writeOptions,
+          transform: async (current, context) => {
+            await ctx.beforePersistentEffect();
+            await revalidate(context.snapshot);
+            throwIfSetupInferenceCancelled(params);
+            params.onCommitStarted?.(current);
+            const nextConfig = buildCandidate(current);
+            // Covers a write that fails after persisting; success replaces it below.
+            captureFileUndo(context.snapshot, nextConfig);
+            return { nextConfig };
+          },
+        });
+        // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
+        captureFileUndo(
+          committed.snapshot,
+          committed.persistedSourceConfig ?? committed.nextConfig,
+        );
+        ctx.effects.configPersisted = true;
+        return committed.nextConfig;
+      },
+    };
+    await commitSetupInferenceActivation({
+      // Access-only setup leaves the primary route intact and may reload its new runtime plugin.
+      preserveWorkingConnection: Boolean(
+        savedCredential?.setup?.replacement ||
+        (params.selectModel !== false &&
+          (baselineRoute.route || resolveAgentEffectiveModelPrimary(cfg, routeAgentId))),
+      ),
+      requireApplied: params.automaticSetup,
+      assertCurrent: () => throwIfSetupInferenceCancelled(params),
+      activate: activateCredential,
+      deferCompletion: params.onActivationCompletion,
+      configTarget,
+      config: sourceCandidate,
+    });
+  } else {
+    await revalidate(await readSnapshot());
+  }
+  const lines = [
+    `${staged.modelTarget === "utility" ? "Utility inference" : "Inference"} verified: ${staged.modelRef}`,
+  ];
+  if (params.surface === "gateway" && params.recordSetupAudit !== false) {
+    const after = await readSnapshot().catch(() => null);
+    try {
+      await appendSystemAgentAuditEntry({
+        operation: "openclaw.setup",
+        summary: "Verified an AI access candidate through OpenClaw setup",
+        configPath: after?.path ?? snapshot.path,
+        configHashBefore: hashConfigRaw(snapshot.raw),
+        configHashAfter: after ? hashConfigRaw(after.raw) : null,
+        details: {
+          modelRef: staged.modelRef,
+          inferenceKind: params.kind,
+          ...(params.automaticSetup ? { source: "automatic-setup" } : {}),
+        },
+      });
+    } catch (error) {
+      const warning = `Inference was verified, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`;
+      params.runtime.error?.(warning);
+      lines.push(warning);
+    }
+  }
+  const modelName = findModelInCatalog(
+    loadManifestModelCatalog({ config: candidate, metadataSnapshot: metadata }),
+    route.provider,
+    route.model,
+  )?.name;
+  return {
+    ok: true,
+    modelRef: staged.modelRef,
+    ...(modelName ? { modelName } : {}),
+    ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
+    latencyMs: verification.latencyMs,
+    lines,
+  };
+}

@@ -1,0 +1,210 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractMessageText } from "./utils.js";
+
+/**
+ * Format a number as @ud (with dots every 3 digits from the right)
+ * e.g., 170141184507799509469114119040828178432 -> 170.141.184.507.799.509.469.114.119.040.828.178.432
+ */
+function formatUd(id: string | number): string {
+  const str = String(id).replace(/\./g, "");
+  const chunks: string[] = [];
+  for (let end = str.length; end > 0; end -= 3) {
+    chunks.push(str.slice(Math.max(0, end - 3), end));
+  }
+  return chunks.toReversed().join(".");
+}
+
+type TlonHistoryEntry = {
+  author: string;
+  content: string;
+  timestamp: number;
+};
+
+function createHistoryEntryFromMemo(params: {
+  memo?: Record<string, unknown> | null;
+}): TlonHistoryEntry {
+  const { memo } = params;
+  return {
+    author: typeof memo?.author === "string" ? memo.author : "unknown",
+    content: extractMessageText(memo?.content || []),
+    timestamp: typeof memo?.sent === "number" ? memo.sent : Date.now(),
+  };
+}
+
+const MAX_CACHED_MESSAGES = 100;
+
+async function fetchChannelHistory(
+  api: { scry: (path: string) => Promise<unknown> },
+  channelNest: string,
+  runtime?: RuntimeEnv,
+): Promise<TlonHistoryEntry[]> {
+  try {
+    const scryPath = `/channels/v4/${channelNest}/posts/newest/50/outline.json`;
+    runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
+
+    const data: unknown = await api.scry(scryPath);
+    if (!data) {
+      return [];
+    }
+
+    const dataRecord = asRecord(data);
+    const posts = Array.isArray(data)
+      ? data
+      : Object.values(asRecord(dataRecord?.posts) ?? dataRecord ?? {});
+
+    const messages = posts
+      .map((item) => {
+        const itemRecord = asRecord(item);
+        const replyPost = asRecord(itemRecord?.["r-post"]);
+        const replyPostSet = asRecord(replyPost?.set);
+        const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
+
+        return createHistoryEntryFromMemo({ memo: essay });
+      })
+      .filter((msg) => msg.content);
+
+    runtime?.log?.(`[tlon] Extracted ${messages.length} messages from history`);
+    return messages;
+  } catch (error: unknown) {
+    runtime?.log?.(`[tlon] Error fetching channel history: ${formatErrorMessage(error)}`);
+    return [];
+  }
+}
+
+export function createChannelHistoryCache() {
+  // A monitor owns this cache so stopped accounts cannot leak stale history into
+  // a restarted or concurrently running account with the same channel nest.
+  const messageCache = new Map<string, TlonHistoryEntry[]>();
+
+  return {
+    cacheMessage(channelNest: string, message: TlonHistoryEntry) {
+      const cache = messageCache.get(channelNest) ?? [];
+      cache.unshift(message);
+      if (cache.length > MAX_CACHED_MESSAGES) {
+        cache.pop();
+      }
+      messageCache.set(channelNest, cache);
+    },
+    async getChannelHistory(
+      api: { scry: (path: string) => Promise<unknown> },
+      channelNest: string,
+      runtime?: RuntimeEnv,
+    ): Promise<TlonHistoryEntry[]> {
+      const cache = messageCache.get(channelNest) ?? [];
+      if (cache.length >= 50) {
+        runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
+        return cache.slice(0, 50);
+      }
+
+      runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need 50, fetching from scry...`);
+      return await fetchChannelHistory(api, channelNest, runtime);
+    },
+  };
+}
+
+export async function fetchThreadRootAuthor(
+  api: { scry: (path: string) => Promise<unknown> },
+  channelNest: string,
+  parentId: string,
+  runtime?: RuntimeEnv,
+): Promise<string | null> {
+  // Keep remote identifiers within the authenticated channel-post namespace.
+  if (!/^chat\/~?[a-z-]+\/[a-z0-9-]+$/i.test(channelNest) || !/^\d+(?:\.\d{3})*$/.test(parentId)) {
+    return null;
+  }
+  try {
+    const data = asRecord(
+      await api.scry(`/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`),
+    );
+    const essay = asRecord(data?.essay);
+    return typeof essay?.author === "string" ? essay.author : null;
+  } catch (error: unknown) {
+    runtime?.log?.(`[tlon] Could not identify thread root author: ${formatErrorMessage(error)}`);
+    return null;
+  }
+}
+
+export async function fetchThreadHistory(
+  api: { scry: (path: string) => Promise<unknown> },
+  channelNest: string,
+  parentId: string,
+  runtime?: RuntimeEnv,
+): Promise<TlonHistoryEntry[]> {
+  try {
+    // parentId needs @ud formatting (dots every 3 digits)
+    const formattedParentId = formatUd(parentId);
+    runtime?.log?.(
+      `[tlon] Thread history - parentId: ${parentId} -> formatted: ${formattedParentId}`,
+    );
+
+    const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/20.json`;
+    runtime?.log?.(`[tlon] Fetching thread history: ${scryPath}`);
+
+    const data: unknown = await api.scry(scryPath);
+    if (!data) {
+      runtime?.log?.(`[tlon] No thread history data returned`);
+      return [];
+    }
+
+    let replies: unknown[] = [];
+    if (Array.isArray(data)) {
+      replies = data;
+    } else {
+      const dataRecord = asRecord(data);
+      const replyValue = dataRecord?.replies;
+      if (Array.isArray(replyValue)) {
+        replies = replyValue;
+      } else if (typeof replyValue === "object" && replyValue) {
+        replies = Object.values(replyValue as Record<string, unknown>);
+      } else if (dataRecord) {
+        replies = Object.values(dataRecord);
+      }
+    }
+
+    // Thread replies use 'memo' structure
+    const messages = replies
+      .map((item) => {
+        const itemRecord = asRecord(item);
+        const replyRecord = asRecord(itemRecord?.["r-reply"]);
+        const replySet = asRecord(replyRecord?.set);
+        const memo = asRecord(itemRecord?.memo) ?? asRecord(replySet?.memo) ?? itemRecord;
+
+        return createHistoryEntryFromMemo({ memo });
+      })
+      .filter((msg) => msg.content);
+
+    runtime?.log?.(`[tlon] Extracted ${messages.length} thread replies from history`);
+    return messages;
+  } catch (error: unknown) {
+    runtime?.log?.(`[tlon] Error fetching thread history: ${formatErrorMessage(error)}`);
+    try {
+      const altPath = `/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`;
+      runtime?.log?.(`[tlon] Trying alternate path: ${altPath}`);
+      const data = asRecord(await api.scry(altPath));
+      const dataSeal = asRecord(data?.seal);
+      const dataMeta = asRecord(dataSeal?.meta);
+      const repliesValue = data?.replies;
+
+      if (typeof dataMeta?.replyCount === "number" && dataMeta.replyCount > 0 && repliesValue) {
+        const replies = Array.isArray(repliesValue)
+          ? repliesValue
+          : Object.values(repliesValue as Record<string, unknown>);
+        const messages = replies
+          .map((reply: unknown) => {
+            const replyRecord = asRecord(reply);
+            const memo = asRecord(replyRecord?.memo);
+            return createHistoryEntryFromMemo({ memo });
+          })
+          .filter((msg: TlonHistoryEntry) => msg.content);
+
+        runtime?.log?.(`[tlon] Extracted ${messages.length} replies from post data`);
+        return messages;
+      }
+    } catch (altError: unknown) {
+      runtime?.log?.(`[tlon] Alternate path also failed: ${formatErrorMessage(altError)}`);
+    }
+    return [];
+  }
+}

@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+
+FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
+RUN --mount=type=cache,id=openclaw-cleanup-smoke-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-cleanup-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
+  apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    git
+
+WORKDIR /repo
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY openclaw.mjs ./
+COPY node-version.mjs ./
+COPY node-sqlite.mjs ./
+COPY node-sqlite-capabilities.mjs runtime-process-bootstrap.generated.mjs runtime-process-scripts.generated.mjs ./
+COPY node-runtime-update.mjs ./
+COPY node-runtime-recovery.mjs ./
+COPY cli-parent-lifetime.mjs ./
+COPY node-runtime-env.mjs ./
+COPY node-compile-cache.mjs ./
+COPY cli-invocation.mjs cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./
+COPY node-host-launcher.mjs ./
+COPY ui/package.json ./ui/package.json
+COPY packages ./packages
+COPY extensions ./extensions
+COPY --parents examples/*/package.json ./
+COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/prepare-git-hooks.mjs scripts/windows-cmd-helpers.mjs scripts/check-install-dependency-ownership.mjs ./scripts/
+COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/javascript-statements.mjs ./scripts/lib/javascript-statements.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
+COPY scripts/lib/fs-safe-npm-cli-preload.generated.mjs scripts/lib/fs-safe-npm-cli-protocol.mjs ./scripts/lib/
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+  corepack enable \
+  && if ! pnpm install --frozen-lockfile >/tmp/openclaw-cleanup-pnpm-install.log 2>&1; then \
+    cat /tmp/openclaw-cleanup-pnpm-install.log; \
+    exit 1; \
+  fi
+
+COPY . .
+COPY --chmod=755 scripts/docker/cleanup-smoke/run.sh /usr/local/bin/openclaw-cleanup-smoke
+
+ENTRYPOINT ["/usr/local/bin/openclaw-cleanup-smoke"]

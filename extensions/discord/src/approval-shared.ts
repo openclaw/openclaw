@@ -1,0 +1,56 @@
+import {
+  isChannelExecApprovalClientEnabledFromConfig,
+  matchesApprovalRequestFilters,
+} from "openclaw/plugin-sdk/approval-client-runtime";
+import { doesApprovalRequestSelectChannelAccountAsync } from "openclaw/plugin-sdk/approval-native-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+  SystemAgentApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
+import type {
+  DiscordExecApprovalConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import { resolveDefaultDiscordAccountId, resolveDiscordAccount } from "./accounts.js";
+import { getDiscordExecApprovalApprovers } from "./exec-approvals.js";
+
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+
+function isDiscordApprovalAccountEligible(
+  params: Parameters<typeof shouldHandleDiscordApprovalRequest>[0],
+): boolean {
+  const account = resolveDiscordAccount(params);
+  const config = params.configOverride ?? account.config.execApprovals;
+  return (
+    account.enabled &&
+    isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: getDiscordExecApprovalApprovers(params).length,
+    }) &&
+    matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: config?.agentFilter,
+      sessionFilter: config?.sessionFilter,
+    })
+  );
+}
+
+export async function shouldHandleDiscordApprovalRequest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ApprovalRequest;
+  configOverride?: DiscordExecApprovalConfig | null;
+}): Promise<boolean> {
+  const accountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
+  return (
+    (await doesApprovalRequestSelectChannelAccountAsync({
+      ...params,
+      channel: "discord",
+      defaultAccountId: resolveDefaultDiscordAccountId(params.cfg),
+      eligibleAccountIds: isDiscordApprovalAccountEligible({ ...params, accountId })
+        ? [accountId]
+        : [],
+    })) && isDiscordApprovalAccountEligible(params)
+  );
+}

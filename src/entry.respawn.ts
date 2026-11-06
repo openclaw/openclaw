@@ -1,0 +1,168 @@
+import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
+import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
+import {
+  isTerminalInteractiveRespawnArgv,
+  shouldSkipRespawnForArgv,
+  shouldSkipStartupEnvironmentRespawnForArgv,
+} from "./cli/respawn-policy.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { isTruthyEnvValue } from "./infra/env.js";
+import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
+
+const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
+const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
+
+type CliRespawnPlan = {
+  command: string;
+  argv: string[];
+  env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
+};
+
+type CliRespawnErrorWriter = (message: string, error?: unknown) => void | Promise<void>;
+
+function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function resolveCliRespawnCommand(params: {
+  execPath: string;
+  platform?: NodeJS.Platform;
+}): string {
+  const platform = params.platform ?? process.platform;
+  const basename = pathModuleForPlatform(platform).basename(params.execPath).toLowerCase();
+  if (basename === "volta-shim" || basename === "volta-shim.exe") {
+    return "node";
+  }
+  return params.execPath;
+}
+
+export function buildCliRespawnPlan(
+  params: {
+    argv?: string[];
+    env?: NodeJS.ProcessEnv;
+    execArgv?: string[];
+    execPath?: string;
+    autoNodeExtraCaCerts?: string | undefined;
+    platform?: NodeJS.Platform;
+  } = {},
+): CliRespawnPlan | null {
+  const argv = params.argv ?? process.argv;
+  const env = params.env ?? process.env;
+  const execArgv = params.execArgv ?? process.execArgv;
+  const execPath = params.execPath ?? process.execPath;
+  const platform = params.platform ?? process.platform;
+  const normalizedArgv =
+    platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
+  const invocation = (runtimeArgs: string[]) =>
+    resolveOpenClawCliRespawn({
+      execPath: resolveCliRespawnCommand({ execPath, platform }),
+      entryPath: normalizedArgv[1],
+      args: normalizedArgv.slice(2),
+      execArgv: runtimeArgs,
+      env: childEnv,
+    });
+
+  if (
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv, platform) ||
+    isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
+  ) {
+    return null;
+  }
+
+  const childEnv: NodeJS.ProcessEnv = { ...env };
+  if (!readNonBlankString(childEnv.NODE_EXTRA_CA_CERTS)) {
+    delete childEnv.NODE_EXTRA_CA_CERTS;
+  }
+  const childExecArgv = [...execArgv];
+  let needsRespawn = false;
+
+  if (platform === "win32") {
+    if (
+      !childExecArgv.some(
+        (arg) =>
+          arg === "--stack-size" ||
+          arg.startsWith("--stack-size=") ||
+          arg === "--stack_size" ||
+          arg.startsWith("--stack_size="),
+      )
+    ) {
+      childExecArgv.unshift(WINDOWS_STACK_SIZE_FLAG);
+      needsRespawn = true;
+    }
+  } else {
+    const autoNodeExtraCaCerts =
+      params.autoNodeExtraCaCerts ??
+      resolveNodeStartupTlsEnvironment({
+        env,
+        execPath,
+        includeDarwinDefaults: false,
+      }).NODE_EXTRA_CA_CERTS;
+    if (
+      autoNodeExtraCaCerts &&
+      !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
+      !childEnv.NODE_EXTRA_CA_CERTS
+    ) {
+      childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
+      childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
+      needsRespawn = true;
+    }
+
+    if (
+      !shouldSkipRespawnForArgv(argv, platform) &&
+      !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY])
+    ) {
+      const nodeOptions = env.NODE_OPTIONS ?? "";
+      if (
+        !nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) &&
+        !nodeOptions.includes("--no-warnings") &&
+        !execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings")
+      ) {
+        childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
+        if (isStandaloneRuntimeExecutable(execPath)) {
+          // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
+          childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
+            .filter(Boolean)
+            .join(" ");
+        } else {
+          childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+        }
+        needsRespawn = true;
+      }
+    }
+  }
+
+  if (!needsRespawn) {
+    return null;
+  }
+
+  const child = invocation(childExecArgv);
+  return {
+    command: child.command,
+    argv: child.args,
+    env: child.env,
+    detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
+  };
+}
+
+export async function runCliRespawnPlan(
+  plan: CliRespawnPlan,
+  writeError: CliRespawnErrorWriter = (message, error) => console.error(message, error),
+): Promise<void> {
+  process.exitCode = await runRespawnChildWithSignalBridge({
+    command: plan.command,
+    args: plan.argv,
+    env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
+    onError: (error) =>
+      writeError(
+        "[openclaw] Failed to respawn CLI:",
+        error instanceof Error ? formatErrorStackWithMessage(error) : error,
+      ),
+  });
+}

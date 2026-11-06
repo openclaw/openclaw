@@ -1,0 +1,46 @@
+import { stdin as input, stdout as output } from "node:process";
+import readline from "node:readline/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isYes } from "../globals.js";
+import { toErrorObject } from "../infra/errors.js";
+
+/** Signals that an interactive prompt lost stdin before a complete answer arrived. */
+export class PromptInputClosedError extends Error {
+  constructor() {
+    super("Prompt input closed before an answer was received.");
+    this.name = "PromptInputClosedError";
+  }
+}
+
+/** Prompts for yes/no input, honoring global `--yes` before opening stdin. */
+export async function promptYesNo(question: string, defaultYes = false): Promise<boolean> {
+  if (isYes()) {
+    return true;
+  }
+  const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
+  const answer = normalizeLowercaseStringOrEmpty(await promptText(`${question}${suffix}`));
+  if (!answer) {
+    return defaultYes;
+  }
+  return answer.startsWith("y");
+}
+
+export function promptText(question: string): Promise<string> {
+  const rl = readline.createInterface({ input, output });
+  return new Promise<string>((resolve, reject) => {
+    const finish = (complete: () => void) => {
+      rl.off("close", onClose);
+      complete();
+    };
+    const onClose = () => finish(() => reject(new PromptInputClosedError()));
+
+    // readline.question does not reject on interface close, so race it with the close event.
+    rl.once("close", onClose);
+    void rl.question(question).then(
+      (answer) => finish(() => resolve(answer)),
+      (error: unknown) => finish(() => reject(toErrorObject(error, "Non-Error rejection"))),
+    );
+  }).finally(() => {
+    rl.close();
+  });
+}

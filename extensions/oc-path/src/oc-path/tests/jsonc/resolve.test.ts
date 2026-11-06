@@ -1,0 +1,58 @@
+// OC Path tests cover resolve plugin behavior.
+import { describe, expect, it } from "vitest";
+import { parseJsonc } from "../../jsonc/parse.js";
+import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
+import { parseOcPath } from "../../oc-path.js";
+
+function rs(raw: string, ocPath: string) {
+  const ast = parseJsonc(raw);
+  const path = parseOcPath(ocPath);
+  return resolveJsoncOcPath(ast, path);
+}
+
+describe("resolveJsoncOcPath", () => {
+  const config = `{
+  "plugins": {
+    "entries": {
+      "github": {
+        "token": "secret",
+        "enabled": true
+      }
+    }
+  },
+  "limits": [99], "limits": [10, 20, 30]
+}`;
+
+  it("resolves the root when no segments are given", () => {
+    const m = rs(config, "oc://config");
+    expect(m?.kind).toBe("root");
+  });
+
+  it("indexes into the effective array via numeric segments", () => {
+    const m = rs(config, "oc://config/limits.1");
+    expect(m?.kind).toBe("value");
+    if (m?.kind === "value") {
+      expect(m.node.kind).toBe("number");
+      if (m.node.kind === "number") {
+        expect(m.node.value).toBe(20);
+      }
+    }
+  });
+
+  it("returns null for missing keys", () => {
+    expect(rs(config, "oc://config/plugins.entries.gitlab")).toBeNull();
+  });
+
+  it("returns null for out-of-bounds array indexes", () => {
+    expect(rs(config, "oc://config/limits.99")).toBeNull();
+  });
+
+  it("returns null when descending past a primitive", () => {
+    expect(rs(config, "oc://config/plugins.entries.github.token.x")).toBeNull();
+  });
+
+  it("returns null on empty AST", () => {
+    const ast = parseJsonc("");
+    expect(resolveJsoncOcPath(ast, parseOcPath("oc://config/x"))).toBeNull();
+  });
+});

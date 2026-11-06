@@ -1,0 +1,84 @@
+import type { DevicePairingPendingRequest } from "../infra/device-pairing.types.js";
+import { isTrustedProxyAddress } from "./net.js";
+import type { NodePairingAutoApproveClientIpSource } from "./node-pairing-auto-approve.types.js";
+
+/** Remote auto-approval may grant only the fresh, capability-free node request it proved. */
+export function isScopelessNodePairingRequest(
+  request: Pick<DevicePairingPendingRequest, "role" | "roles" | "scopes" | "isRepair">,
+): boolean {
+  return (
+    request.isRepair !== true &&
+    (request.scopes ?? []).length === 0 &&
+    (request.role === undefined || request.role === "node") &&
+    (request.roles ?? []).every((role) => role === "node")
+  );
+}
+
+export function resolveNodePairingClientIpSource(params: {
+  reportedClientIp?: string;
+  hasProxyHeaders: boolean;
+  remoteIsTrustedProxy: boolean;
+  remoteIsLoopback: boolean;
+}): NodePairingAutoApproveClientIpSource {
+  if (!params.reportedClientIp) {
+    return "none";
+  }
+  if (!params.hasProxyHeaders || !params.remoteIsTrustedProxy) {
+    return "direct";
+  }
+  return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
+}
+
+export type FreshNodePairingEligibilityParams = {
+  existingPairedDevice: boolean;
+  role: string;
+  reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
+  scopes: readonly string[];
+  hasBrowserOriginHeader: boolean;
+  isControlUi: boolean;
+  isWebchat: boolean;
+  reportedClientIpSource: NodePairingAutoApproveClientIpSource;
+  reportedClientIp?: string;
+};
+
+/**
+ * Shared floor for every non-interactive node pairing approval (trusted-CIDR,
+ * SSH-verified): only a fresh, scopeless, non-browser `role: node` request
+ * with a directly attributable client IP qualifies. Upgrades and spoofable
+ * loopback trusted-proxy header paths always stay on the manual prompt.
+ */
+export function isEligibleFreshNodePairingRequest(
+  params: FreshNodePairingEligibilityParams,
+): boolean {
+  return (
+    !params.existingPairedDevice &&
+    params.role === "node" &&
+    params.reason === "not-paired" &&
+    params.scopes.length === 0 &&
+    !params.hasBrowserOriginHeader &&
+    !params.isControlUi &&
+    !params.isWebchat &&
+    params.reportedClientIpSource !== "none" &&
+    params.reportedClientIpSource !== "loopback-trusted-proxy" &&
+    Boolean(params.reportedClientIp)
+  );
+}
+
+export function shouldAutoApproveNodePairingFromTrustedCidrs(
+  params: FreshNodePairingEligibilityParams & {
+    autoApproveCidrs?: readonly string[];
+  },
+): boolean {
+  if (!isEligibleFreshNodePairingRequest(params) || !params.reportedClientIp) {
+    return false;
+  }
+
+  const autoApproveCidrs = params.autoApproveCidrs
+    ?.map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (!autoApproveCidrs || autoApproveCidrs.length === 0) {
+    return false;
+  }
+
+  return isTrustedProxyAddress(params.reportedClientIp, autoApproveCidrs);
+}

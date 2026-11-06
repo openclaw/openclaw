@@ -1,0 +1,52 @@
+// Command-explainer formatting converts parsed executable spans into approval
+// UI highlight ranges, omitting shells whose parsing semantics differ.
+import type { ExecApprovalCommandSpan } from "../exec-approvals.js";
+import { normalizeExecutableToken } from "../exec-wrapper-tokens.js";
+import {
+  isShellWrapperExecutable,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
+  resolveShellWrapperTransportArgv,
+} from "../shell-wrapper-resolution.js";
+import type { CommandExplanation } from "./types.js";
+
+// Approval spans must be strict positive source ranges to avoid broken highlighting.
+function spanToCommandSpan(span: {
+  startIndex: number;
+  endIndex: number;
+}): ExecApprovalCommandSpan | null {
+  if (!Number.isSafeInteger(span.startIndex) || !Number.isSafeInteger(span.endIndex)) {
+    return null;
+  }
+  if (span.startIndex < 0 || span.endIndex <= span.startIndex) {
+    return null;
+  }
+  return { startIndex: span.startIndex, endIndex: span.endIndex };
+}
+
+export function isUnsupportedShellWrapperArgv(argv: readonly string[]): boolean {
+  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
+  const executable = shellWrapperArgv[0];
+  if (!executable) {
+    return false;
+  }
+  const normalizedExecutable = normalizeExecutableToken(executable);
+  return (
+    isShellWrapperExecutable(normalizedExecutable) &&
+    !POSIX_PARSEABLE_SHELL_WRAPPERS.has(normalizedExecutable)
+  );
+}
+
+export function formatCommandSpans(explanation: CommandExplanation): ExecApprovalCommandSpan[] {
+  if (explanation.topLevelCommands.some((command) => isUnsupportedShellWrapperArgv(command.argv))) {
+    return [];
+  }
+  const commandSpans: ExecApprovalCommandSpan[] = [];
+
+  for (const command of [...explanation.topLevelCommands, ...explanation.nestedCommands]) {
+    const commandSpan = spanToCommandSpan(command.executableSpan);
+    if (commandSpan) {
+      commandSpans.push(commandSpan);
+    }
+  }
+  return commandSpans;
+}

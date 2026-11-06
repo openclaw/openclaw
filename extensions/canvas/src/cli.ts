@@ -1,0 +1,191 @@
+import type { Command } from "commander";
+import type { GatewayRpcOpts, NodeMatchCandidate } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  buildNodeInvokeParams,
+  getNodesTheme,
+  nodesCallOpts,
+  runNodesCommand,
+} from "openclaw/plugin-sdk/node-cli-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export type CanvasNodesRpcOpts = GatewayRpcOpts & {
+  node?: string;
+  invokeTimeout?: string;
+  target?: string;
+  x?: string;
+  y?: string;
+  width?: string;
+  height?: string;
+};
+
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
+
+function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a number.`);
+  }
+  return parsed;
+}
+
+async function callGatewayCli(
+  method: string,
+  opts: CanvasNodesRpcOpts,
+  params: unknown,
+  transportTimeoutMs?: number,
+) {
+  const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
+  const timeout = String(transportTimeoutMs ?? opts.timeout ?? 10_000);
+  return await callGatewayFromCli(method, { ...opts, timeout }, params, {
+    progress: opts.json !== true,
+  });
+}
+
+async function runCanvasCommand(
+  opts: CanvasNodesRpcOpts,
+  action: "present" | "hide" | "navigate",
+  params?: () => Record<string, unknown>,
+): Promise<void> {
+  await runNodesCommand(`canvas ${action}`, async () => {
+    const preparedParams = params?.();
+    const invokeTimeoutMs = parseStrictPositiveInteger(opts.invokeTimeout);
+    if (opts.invokeTimeout != null && invokeTimeoutMs === undefined) {
+      throw new Error("--invoke-timeout must be a positive integer.");
+    }
+    const timeoutMs =
+      clampPositiveTimerTimeoutMs(invokeTimeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS) ??
+      DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
+    const { resolveNodeFromNodeList } = await import("openclaw/plugin-sdk/gateway-runtime");
+    const raw = await callGatewayCli("node.list", opts, {});
+    const payload = raw && typeof raw === "object" ? (raw as { nodes?: unknown }) : {};
+    const list = Array.isArray(payload.nodes) ? payload.nodes : [];
+    const candidates = list
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const node = entry as {
+          nodeId?: unknown;
+          displayName?: unknown;
+          remoteIp?: unknown;
+          connected?: unknown;
+          clientId?: unknown;
+        };
+        if (typeof node.nodeId !== "string") {
+          return null;
+        }
+        const candidate: NodeMatchCandidate = { nodeId: node.nodeId };
+        if (typeof node.displayName === "string") {
+          candidate.displayName = node.displayName;
+        }
+        if (typeof node.remoteIp === "string") {
+          candidate.remoteIp = node.remoteIp;
+        }
+        if (typeof node.connected === "boolean") {
+          candidate.connected = node.connected;
+        }
+        if (typeof node.clientId === "string") {
+          candidate.clientId = node.clientId;
+        }
+        return candidate;
+      })
+      .filter((entry): entry is NodeMatchCandidate => entry !== null);
+    const nodeId = resolveNodeFromNodeList(
+      candidates,
+      normalizeOptionalString(opts.node) ?? "",
+    ).nodeId;
+    const invokeParams = buildNodeInvokeParams({
+      nodeId,
+      command: `canvas.${action}`,
+      params: preparedParams,
+      timeoutMs,
+    });
+    const configuredGatewayTimeoutMs = parseStrictPositiveInteger(opts.timeout ?? 10_000);
+    // Preserve the existing Gateway parser's actionable invalid --timeout error.
+    // Node work owns its deadline; Gateway transport needs extra time to deliver that result.
+    const transportTimeoutMs =
+      configuredGatewayTimeoutMs === undefined
+        ? undefined
+        : Math.max(
+            clampPositiveTimerTimeoutMs(configuredGatewayTimeoutMs) ??
+              DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+            addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs,
+          );
+    const result = await callGatewayCli("node.invoke", opts, invokeParams, transportTimeoutMs);
+    if (opts.json) {
+      defaultRuntime.writeJson(result);
+    } else {
+      const { ok } = getNodesTheme();
+      defaultRuntime.log(ok(`canvas ${action} ok`));
+    }
+  });
+}
+
+export function registerNodesCanvasCommands(nodes: Command) {
+  const canvas = nodes
+    .command("canvas")
+    .description("Present widget documents on a paired macOS panel");
+
+  nodesCallOpts(
+    canvas
+      .command("present")
+      .description("Show the canvas (optionally with a target URL/path)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--target <urlOrPath>", "Target URL/path (optional)")
+      .option("--x <px>", "Placement x coordinate")
+      .option("--y <px>", "Placement y coordinate")
+      .option("--width <px>", "Placement width")
+      .option("--height <px>", "Placement height")
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
+      .action((opts: CanvasNodesRpcOpts) =>
+        runCanvasCommand(opts, "present", () => {
+          const placement = {
+            x: parseCanvasFiniteNumberOption(opts.x, "--x"),
+            y: parseCanvasFiniteNumberOption(opts.y, "--y"),
+            width: parseCanvasFiniteNumberOption(opts.width, "--width"),
+            height: parseCanvasFiniteNumberOption(opts.height, "--height"),
+          };
+          const params: Record<string, unknown> = {};
+          if (opts.target) {
+            params.url = opts.target;
+          }
+          if (Object.values(placement).some(Number.isFinite)) {
+            params.placement = placement;
+          }
+          return params;
+        }),
+      ),
+  );
+
+  nodesCallOpts(
+    canvas
+      .command("hide")
+      .description("Hide the canvas")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
+      .action((opts: CanvasNodesRpcOpts) => runCanvasCommand(opts, "hide")),
+  );
+
+  nodesCallOpts(
+    canvas
+      .command("navigate")
+      .description("Navigate the canvas to a URL")
+      .argument("<url>", "Target URL/path")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
+      .action((url: string, opts: CanvasNodesRpcOpts) =>
+        runCanvasCommand(opts, "navigate", () => ({ url })),
+      ),
+  );
+}

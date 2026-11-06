@@ -1,0 +1,662 @@
+import {
+  asOptionalRecord,
+  isRecord as hasRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  listAgentEntries,
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+} from "../../../agents/agent-scope-config.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
+import {
+  normalizeToolProviderPolicyKey,
+  resolveProviderToolPolicy,
+  resolveProviderToolPolicyEntry,
+} from "../../../agents/provider-tool-policy.js";
+import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import {
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "../../../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type {
+  AgentToolsConfig,
+  ToolPolicyConfig,
+  ToolsConfig,
+} from "../../../config/types.tools.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plugins/official-runtime-plugins.js";
+import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
+import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
+
+function resolveMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+  runtimeAlsoAllow?: string[];
+}): boolean {
+  const modelRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    allowPluginNormalization: false,
+  });
+  const [providerPolicy, agentProviderPolicy] = [
+    params.globalTools?.byProvider,
+    params.agentTools?.byProvider,
+  ].map((byProvider) =>
+    resolveProviderToolPolicy({
+      byProvider,
+      modelProvider: modelRef.provider,
+      modelId: modelRef.model,
+    }),
+  );
+  const profilePolicy = (global?: ToolPolicyConfig, agent?: ToolPolicyConfig) => {
+    const alsoAllow = Array.isArray(agent?.alsoAllow)
+      ? agent.alsoAllow
+      : Array.isArray(global?.alsoAllow)
+        ? global.alsoAllow
+        : [];
+    return mergeAlsoAllowPolicy(resolveToolProfilePolicy(agent?.profile ?? global?.profile), [
+      ...alsoAllow,
+      ...(params.runtimeAlsoAllow ?? []),
+    ]);
+  };
+  return isToolAllowedByPolicies("message", [
+    profilePolicy(params.globalTools, params.agentTools),
+    profilePolicy(providerPolicy, agentProviderPolicy),
+    pickSandboxToolPolicy(providerPolicy),
+    pickSandboxToolPolicy(agentProviderPolicy),
+    pickSandboxToolPolicy(params.globalTools),
+    pickSandboxToolPolicy(params.agentTools),
+  ]);
+}
+
+const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
+
+function collectUnavailableSourceReplyTargets(cfg: OpenClawConfig): string[] {
+  const agents = listAgentEntries(cfg).filter(hasRecord);
+  if (agents.length === 0) {
+    const available = resolveMessageToolAvailability({
+      cfg,
+      globalTools: cfg.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
+    return available ? [] : ["default tool policy"];
+  }
+  return agents.flatMap((agent) => {
+    const agentId = typeof agent.id === "string" ? agent.id : "unknown";
+    const available = resolveMessageToolAvailability({
+      cfg,
+      agentId,
+      globalTools: cfg.tools,
+      agentTools: agent.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
+    return available ? [] : [`agent "${agentId}"`];
+  });
+}
+
+function listAgentRecords(cfg: OpenClawConfig) {
+  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
+}
+
+function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
+  const load = asOptionalRecord(asOptionalRecord(cfg.plugins)?.load);
+  return Array.isArray(load?.paths) && load.paths.length > 0;
+}
+
+function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
+  if (Array.isArray(cfg.agents?.defaults?.subagents?.allowAgents)) {
+    return true;
+  }
+  return listAgentRecords(cfg).some((agent) => {
+    const subagents = asOptionalRecord(agent.subagents);
+    return Array.isArray(subagents?.allowAgents);
+  });
+}
+
+function hasSafeBins(exec: unknown): boolean {
+  const safeBins = asOptionalRecord(exec)?.safeBins;
+  return Array.isArray(safeBins) && safeBins.length > 0;
+}
+
+function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
+  return (
+    hasSafeBins(cfg.tools?.exec) ||
+    listAgentRecords(cfg).some((agent) =>
+      hasSafeBins(asOptionalRecord(asOptionalRecord(agent)?.tools)?.exec),
+    )
+  );
+}
+
+function formatTargets(targets: string[]): string {
+  if (targets.length <= 2) {
+    return targets.join(" and ");
+  }
+  return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
+}
+
+function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  const groupPolicy = cfg.messages?.groupChat?.visibleReplies;
+  const globalPolicy = cfg.messages?.visibleReplies;
+  const policies: Array<{ path: string; fallback: string }> = [];
+  if ((groupPolicy || globalPolicy) === "message_tool") {
+    policies.push({
+      path: groupPolicy ? "messages.groupChat.visibleReplies" : "messages.visibleReplies",
+      fallback: "visible",
+    });
+  }
+  if (globalPolicy === "message_tool" && groupPolicy) {
+    policies.push({ path: "messages.visibleReplies", fallback: "direct-chat" });
+  }
+  const targets = policies.length > 0 ? collectUnavailableSourceReplyTargets(cfg) : [];
+  return targets.length === 0
+    ? []
+    : policies.map(
+        ({ path, fallback }) =>
+          `- ${path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+            targets,
+          )}; OpenClaw falls back to automatic ${fallback} replies, so normal replies may post to the source chat. Enable the message tool or set ${path} to "automatic".`,
+      );
+}
+
+function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  return collectChannelRouteTargets(cfg).flatMap((target) => {
+    const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
+    const runtimeMayAllowMessage =
+      cfg.messages?.groupChat?.visibleReplies === "message_tool" ||
+      cfg.messages?.visibleReplies === "message_tool";
+    const messageToolAvailable = resolveMessageToolAvailability({
+      cfg,
+      agentId: target.agentId,
+      globalTools: cfg.tools,
+      agentTools,
+      runtimeAlsoAllow: runtimeMayAllowMessage ? SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW : undefined,
+    });
+    if (messageToolAvailable) {
+      return [];
+    }
+    return [
+      `- Agent "${target.agentId}" is routed from channel ${formatTargets(
+        target.channels.map((channel) => `"${channel}"`),
+      )}, but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.`,
+    ];
+  });
+}
+
+const PROFILE_CONFIGURED_TOOL_SECTIONS = [
+  { key: "exec", grants: ["exec", "process"] },
+  { key: "fs", grants: ["read", "write", "edit"] },
+] as const;
+
+type ConfiguredToolSectionGrantEntry = {
+  label: string;
+  grants: string[];
+};
+
+function collectConfiguredToolSectionGrantEntries(params: {
+  tools?: Record<string, unknown> | null;
+  pathLabel: string;
+}): ConfiguredToolSectionGrantEntry[] {
+  return PROFILE_CONFIGURED_TOOL_SECTIONS.flatMap((section) =>
+    hasRecord(params.tools?.[section.key])
+      ? [{ label: `${params.pathLabel}.${section.key}`, grants: [...section.grants] }]
+      : [],
+  );
+}
+
+function readPreviewStringList(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
+function collectProfileConfiguredSectionWarnings(params: {
+  configuredEntries: ConfiguredToolSectionGrantEntry[];
+  policy?: Record<string, unknown> | null;
+  inheritedPolicy?: Record<string, unknown> | null;
+  profile: string;
+  profilePath: string;
+  advicePath?: string;
+  profileKind: "active" | "provider" | "inherited provider";
+}): string[] {
+  const alsoAllow =
+    readPreviewStringList(params.policy?.alsoAllow) ??
+    readPreviewStringList(params.inheritedPolicy?.alsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(params.profile), alsoAllow);
+  if (!profilePolicy) {
+    return [];
+  }
+  const uncoveredEntries = params.configuredEntries
+    .map((entry) => ({
+      ...entry,
+      grants: entry.grants.filter(
+        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+      ),
+    }))
+    .filter((entry) => entry.grants.length > 0);
+  if (uncoveredEntries.length === 0) {
+    return [];
+  }
+  const grants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
+  const advicePath = params.advicePath ?? params.profilePath;
+  const providerSuffix = params.profileKind === "active" ? "" : " for that provider";
+  const allow = params.policy?.allow;
+  const advice =
+    Array.isArray(allow) && allow.some((entry) => typeof entry === "string")
+      ? `Add these grants to ${advicePath}.allow and set ${advicePath}.profile to "full" if these tools should be available${providerSuffix}.`
+      : `Add ${advicePath}.alsoAllow: [${grants.map((value) => `"${value}"`).join(", ")}] if these tools should be available${providerSuffix}.`;
+  return [
+    `- ${params.profilePath}.profile is "${params.profile}" and ${uncoveredEntries
+      .map((entry) => entry.label)
+      .join(
+        " / ",
+      )} is configured, but configured sections no longer widen the ${params.profileKind} profile. ${advice}`,
+  ];
+}
+
+function collectProfileConfiguredToolSectionScopeWarnings(params: {
+  tools?: Record<string, unknown> | null;
+  inheritedTools?: Record<string, unknown> | null;
+  pathLabel: string;
+}): string[] {
+  const tools = params.tools;
+  const profile =
+    typeof tools?.profile === "string" ? tools.profile : params.inheritedTools?.profile;
+  if (typeof profile !== "string" || !profile) {
+    return [];
+  }
+  const configuredEntries = [
+    ...(tools !== undefined && typeof tools?.profile !== "string" && params.inheritedTools
+      ? collectConfiguredToolSectionGrantEntries({
+          tools: params.inheritedTools,
+          pathLabel: "tools",
+        })
+      : []),
+    ...collectConfiguredToolSectionGrantEntries({ tools, pathLabel: params.pathLabel }),
+  ];
+  if (configuredEntries.length === 0) {
+    return [];
+  }
+  return collectProfileConfiguredSectionWarnings({
+    configuredEntries,
+    policy: tools,
+    inheritedPolicy: params.inheritedTools,
+    profile,
+    profilePath: params.pathLabel,
+    profileKind: "active",
+  });
+}
+
+function collectByProviderConfiguredToolSectionWarnings(params: {
+  tools?: Record<string, unknown> | null;
+  inheritedTools?: Record<string, unknown> | null;
+  pathLabel: string;
+  configuredEntries: ConfiguredToolSectionGrantEntry[];
+}): string[] {
+  const byProvider = asOptionalRecord(params.tools?.byProvider);
+  if (!byProvider || params.configuredEntries.length === 0) {
+    return [];
+  }
+  const inheritedByProvider = asOptionalRecord(params.inheritedTools?.byProvider);
+  return Object.entries(byProvider).flatMap(([providerKey, policyValue]) => {
+    const policy = asOptionalRecord(policyValue);
+    const profile = policy?.profile;
+    if (typeof profile !== "string" || !profile) {
+      return [];
+    }
+    const inheritedPolicy = resolveInheritedProviderPolicyForPreview(
+      inheritedByProvider,
+      providerKey,
+    );
+    return collectProfileConfiguredSectionWarnings({
+      configuredEntries: params.configuredEntries,
+      policy,
+      inheritedPolicy,
+      profile,
+      profilePath: `${params.pathLabel}.byProvider.${providerKey}`,
+      profileKind: "provider",
+    });
+  });
+}
+
+function resolveInheritedProviderPolicyForPreview(
+  inheritedByProvider: Record<string, unknown> | undefined,
+  providerKey: string,
+): ToolPolicyConfig | undefined {
+  if (!inheritedByProvider) {
+    return undefined;
+  }
+  const normalized = normalizeToolProviderPolicyKey(providerKey);
+  const slashIndex = normalized.indexOf("/");
+  const modelProvider = slashIndex > 0 ? normalized.slice(0, slashIndex) : normalized;
+  const modelId = slashIndex > 0 ? normalized.slice(slashIndex + 1) : undefined;
+  const policy = resolveProviderToolPolicy({
+    byProvider: inheritedByProvider,
+    modelProvider,
+    modelId,
+  });
+  return policy && hasRecord(policy) ? policy : undefined;
+}
+
+type DoctorPreviewNotes = { infoNotes: string[]; warningNotes: string[] };
+
+export async function resolveDoctorChannelPreviewConfig(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+}): Promise<{ cfg: OpenClawConfig; diagnostics: string[] }> {
+  const [{ resolveCommandSecretRefsViaGateway }, { getConfiguredChannelsCommandSecretTargetIds }] =
+    await Promise.all([
+      import("../../../cli/command-secret-gateway.js"),
+      import("../../../cli/command-secret-targets.js"),
+    ]);
+  const targetIds = getConfiguredChannelsCommandSecretTargetIds(params.cfg, params.env);
+  if (targetIds.size === 0) {
+    return { cfg: params.cfg, diagnostics: [] };
+  }
+  const resolved = await resolveCommandSecretRefsViaGateway({
+    config: params.cfg,
+    commandName: "doctor preview",
+    targetIds,
+    mode: "read_only_status",
+    allowLocalExecSecretRefs: params.allowExec === true,
+    scrubUnresolvedSecretRefs: false,
+  });
+  return { cfg: resolved.resolvedConfig, diagnostics: resolved.diagnostics };
+}
+
+export async function collectDoctorPreviewNotes(params: {
+  cfg: unknown;
+  activationSourceConfig?: OpenClawConfigWithLegacyRoster;
+  doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+  blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
+}): Promise<DoctorPreviewNotes> {
+  if (!hasRecord(params.cfg)) {
+    throw new TypeError("Doctor config preview requires an object");
+  }
+  const infoNotes: string[] = [];
+  const warnings: string[] = [];
+  // Each non-empty scan contributes one note; keep its formatter's line order intact.
+  const appendScanWarnings = <THit>(
+    hits: THit[],
+    collect: (params: { hits: THit[]; doctorFixCommand: string }) => string[],
+  ): void => {
+    if (hits.length > 0) {
+      warnings.push(collect({ hits, doctorFixCommand: params.doctorFixCommand }).join("\n"));
+    }
+  };
+  const env = params.env ?? process.env;
+  const hasChannelConfig = hasRecord(params.cfg.channels);
+  const hasPluginConfig = hasRecord(params.cfg.plugins);
+
+  warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
+  warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
+  const cfg = params.cfg;
+  const globalTools = asOptionalRecord(cfg.tools);
+  const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
+    tools: globalTools,
+    pathLabel: "tools",
+  });
+
+  warnings.push(
+    ...collectProfileConfiguredToolSectionScopeWarnings({
+      tools: globalTools,
+      pathLabel: "tools",
+    }),
+    ...collectByProviderConfiguredToolSectionWarnings({
+      tools: globalTools,
+      pathLabel: "tools",
+      configuredEntries: globalConfiguredEntries,
+    }),
+  );
+
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentTools = asOptionalRecord(agent.tools);
+    const agentId = typeof agent.id === "string" ? agent.id : undefined;
+    const modelRef = resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: false });
+    const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
+    const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
+      tools: agentTools,
+      pathLabel: agentPath,
+    });
+    const agentConfiguredEntries = [...globalConfiguredEntries, ...ownAgentConfiguredEntries];
+    warnings.push(
+      ...collectProfileConfiguredToolSectionScopeWarnings({
+        tools: agentTools,
+        inheritedTools: globalTools,
+        pathLabel: agentPath,
+      }),
+      ...collectByProviderConfiguredToolSectionWarnings({
+        tools: agentTools,
+        inheritedTools: globalTools,
+        pathLabel: agentPath,
+        configuredEntries: agentConfiguredEntries,
+      }),
+    );
+    const modelProvider = modelRef.provider;
+    const modelId = modelRef.model;
+    const inheritedByProvider = asOptionalRecord(globalTools?.byProvider);
+    if (inheritedByProvider && ownAgentConfiguredEntries.length > 0) {
+      const overridingByProvider = asOptionalRecord(agentTools?.byProvider);
+      const inheritedEntryForModel = resolveProviderToolPolicyEntry({
+        byProvider: inheritedByProvider,
+        modelProvider,
+        modelId,
+      });
+      warnings.push(
+        ...Object.entries(inheritedByProvider).flatMap(([providerKey, policyValue]) => {
+          if (modelProvider && inheritedEntryForModel?.key !== providerKey) {
+            return [];
+          }
+          const inheritedPolicy = asOptionalRecord(policyValue);
+          const profile = inheritedPolicy?.profile;
+          if (typeof profile !== "string" || !profile) {
+            return [];
+          }
+          const overridingEntry =
+            resolveProviderToolPolicyEntry({
+              byProvider: overridingByProvider,
+              modelProvider,
+              modelId,
+            }) ??
+            (hasRecord(overridingByProvider?.[providerKey])
+              ? { key: providerKey, policy: overridingByProvider[providerKey] }
+              : undefined);
+          const overridingPolicy = overridingEntry?.policy;
+          if (typeof overridingPolicy?.profile === "string") {
+            return [];
+          }
+          return collectProfileConfiguredSectionWarnings({
+            configuredEntries: ownAgentConfiguredEntries,
+            policy: overridingPolicy,
+            inheritedPolicy,
+            profile,
+            profilePath: `tools.byProvider.${providerKey}`,
+            advicePath: `${agentPath}.byProvider.${overridingEntry?.key ?? providerKey}`,
+            profileKind: "inherited provider",
+          });
+        }),
+      );
+    }
+  }
+
+  const channelPluginRuntime = await import("./channel-plugin-blockers.js");
+  const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
+    params.cfg,
+    env,
+    params.activationSourceConfig,
+  );
+  if (channelPluginBlockerHits.length > 0) {
+    warnings.push(
+      channelPluginRuntime
+        .collectConfiguredChannelPluginBlockerWarnings(channelPluginBlockerHits)
+        .join("\n"),
+    );
+  }
+
+  if (hasChannelConfig) {
+    const channelPreviewConfig = await resolveDoctorChannelPreviewConfig({
+      cfg: params.cfg,
+      env,
+      allowExec: params.allowExec,
+    });
+    warnings.push(...channelPreviewConfig.diagnostics);
+    const { collectChannelDoctorPreviewWarnings } = await import("./channel-doctor.js");
+    const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
+      cfg: channelPreviewConfig.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    });
+    warnings.push(...channelDoctorWarnings);
+
+    const { collectOpenPolicyAllowFromWarnings, maybeRepairOpenPolicyAllowFrom } =
+      await import("./open-policy-allowfrom.js");
+    const allowFromScan = maybeRepairOpenPolicyAllowFrom(params.cfg);
+    if (allowFromScan.changes.length > 0) {
+      warnings.push(
+        collectOpenPolicyAllowFromWarnings({
+          changes: allowFromScan.changes,
+          doctorFixCommand: params.doctorFixCommand,
+        }).join("\n"),
+      );
+    }
+  }
+
+  if (
+    (hasPluginConfig || hasChannelConfig) &&
+    (!hasRecord(params.cfg.plugins) || params.cfg.plugins.enabled !== false)
+  ) {
+    const {
+      collectStalePluginConfigWarnings,
+      isStalePluginAutoRepairBlocked,
+      scanStalePluginConfig,
+    } = await import("./stale-plugin-config.js");
+    const stalePluginHits = scanStalePluginConfig(params.cfg, env);
+    if (stalePluginHits.length > 0) {
+      const stalePluginWarnings = collectStalePluginConfigWarnings({
+        hits: stalePluginHits,
+        doctorFixCommand: params.doctorFixCommand,
+        autoRepairBlocked: isStalePluginAutoRepairBlocked(params.cfg, env),
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
+      });
+      if (stalePluginWarnings.length > 0) {
+        warnings.push(stalePluginWarnings.join("\n"));
+      }
+    }
+    const { collectContextEnginePluginIdSelectorWarnings } =
+      await import("./context-engine-plugin-id-selector.js");
+    warnings.push(
+      ...collectContextEnginePluginIdSelectorWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      }),
+    );
+  }
+
+  const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
+  warnings.push(
+    ...collectCodexRouteWarnings({
+      cfg: params.cfg,
+      env,
+      blockedProviderPlan: params.blockedCodexProviderPlan,
+    }),
+  );
+
+  if (hasPluginConfig) {
+    const { collectContextEngineHostCompatibilityWarnings } =
+      await import("./context-engine-host-compat.js");
+    warnings.push(
+      ...(await collectContextEngineHostCompatibilityWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      })),
+    );
+  }
+  if (hasSubagentAllowlistConfig(params.cfg)) {
+    const { collectStaleSubagentAllowlistWarnings, scanStaleSubagentAllowlistReferences } =
+      await import("./stale-subagent-allowlist.js");
+    const staleSubagentAllowlistHits = scanStaleSubagentAllowlistReferences(params.cfg);
+    appendScanWarnings(staleSubagentAllowlistHits, collectStaleSubagentAllowlistWarnings);
+  }
+  const { collectCodexNativeAssetInfoNotes } = await import("./codex-native-assets.js");
+  infoNotes.push(...(await collectCodexNativeAssetInfoNotes({ cfg: params.cfg, env })));
+
+  if (hasPluginLoadPaths(params.cfg)) {
+    const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
+      await import("./bundled-plugin-load-paths.js");
+    const bundledPluginLoadPathHits = scanBundledPluginLoadPathMigrations(params.cfg, env);
+    appendScanWarnings(bundledPluginLoadPathHits, collectBundledPluginLoadPathWarnings);
+  }
+
+  if (hasChannelConfig) {
+    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await import("./channel-doctor.js");
+    const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
+    const emptyAllowlistHooks = await createChannelDoctorEmptyAllowlistPolicyHooks({
+      cfg: params.cfg,
+      env,
+    });
+    const emptyAllowlistWarnings = (
+      await scanEmptyAllowlistPolicyWarnings(params.cfg, {
+        doctorFixCommand: params.doctorFixCommand,
+        extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
+        shouldSkipDefaultEmptyGroupAllowlistWarning:
+          emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
+      })
+    ).filter(
+      (warning) =>
+        !channelPluginRuntime.isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits),
+    );
+    if (emptyAllowlistWarnings.length > 0) {
+      const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
+      warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
+    }
+  }
+
+  if (hasConfiguredSafeBins(params.cfg)) {
+    const {
+      collectExecSafeBinCoverageWarnings,
+      collectExecSafeBinTrustedDirHintWarnings,
+      scanExecSafeBinCoverage,
+      scanExecSafeBinTrustedDirHints,
+    } = await import("./exec-safe-bins.js");
+    const safeBinCoverage = scanExecSafeBinCoverage(params.cfg);
+    appendScanWarnings(safeBinCoverage, collectExecSafeBinCoverageWarnings);
+
+    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(params.cfg);
+    if (safeBinTrustedDirHints.length > 0) {
+      warnings.push(collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"));
+    }
+  }
+
+  const { collectStaleOAuthProfileShadowWarnings, scanStaleOAuthProfileShadows } =
+    await import("./stale-oauth-profile-shadows.js");
+  const { hits: staleOAuthProfileShadows, warnings: staleOAuthWarnings } =
+    await scanStaleOAuthProfileShadows({
+      cfg: params.cfg,
+      env,
+    });
+  appendScanWarnings(staleOAuthProfileShadows, collectStaleOAuthProfileShadowWarnings);
+  warnings.push(...staleOAuthWarnings);
+
+  const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
+  warnings.push(
+    ...collectStaleConfiguredAuthOrderWarnings({
+      cfg: params.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
+
+  const { repairMergedGatewayOwnerProfile } =
+    await import("../../../state/user-profiles-owner-migration.js");
+  warnings.push(...repairMergedGatewayOwnerProfile({ env, shouldRepair: false }).warnings);
+
+  return { infoNotes, warningNotes: warnings };
+}

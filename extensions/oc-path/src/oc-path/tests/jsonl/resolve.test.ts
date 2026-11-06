@@ -1,0 +1,56 @@
+// OC Path tests cover resolve plugin behavior.
+import { describe, expect, it } from "vitest";
+import { findOcPaths } from "../../find.js";
+import { parseJsonl } from "../../jsonl/parse.js";
+import { resolveJsonlOcPath } from "../../jsonl/resolve.js";
+import { parseOcPath } from "../../oc-path.js";
+
+const log = `{"event":"start","ts":1}
+{"event":"step","n":1,"result":{"ok":true,"detail":"a"}}
+
+{"event":"end","ts":99}
+`;
+
+function rs(ocPath: string) {
+  const ast = parseJsonl(log);
+  return resolveJsonlOcPath(ast, parseOcPath(ocPath));
+}
+
+describe("resolveJsonlOcPath", () => {
+  it("returns root when no segments are given", () => {
+    expect(rs("oc://session-events")?.kind).toBe("root");
+  });
+
+  it("returns null for unknown line addresses", () => {
+    expect(rs("oc://session-events/L99")).toBeNull();
+    expect(rs("oc://session-events/garbage")).toBeNull();
+  });
+
+  it("returns null when descending into a blank line", () => {
+    expect(rs("oc://session-events/L3/anything")).toBeNull();
+  });
+});
+
+describe("resolveJsonlToUniversal — file-relative line metadata (regression)", () => {
+  // Regression: surfaced via the openclaw-path CLI scenario run on
+  // a multi-line session.jsonl. Every match returned `line: 1`
+  // because the inside-line jsonc parser numbers from 1 within each
+  // line's bytes; the universal resolve was preferring that local
+  // number over the JsonlLine's file-relative line.
+
+  const logLocal = [
+    '{"event":"start"}', // line 1
+    '{"event":"step","n":1}', // line 2
+    '{"event":"step","n":2}', // line 3
+    '{"event":"end"}', // line 4
+    "", // line 5 (blank)
+  ].join("\n");
+
+  it("findOcPaths over wildcard surfaces correct file-relative lines", () => {
+    const ast = parseJsonl(logLocal);
+    const matches = findOcPaths(ast, parseOcPath("oc://session.jsonl/*/event"));
+    expect(matches).toHaveLength(4);
+    const lines = matches.map((m) => m.match.line);
+    expect(lines).toEqual([1, 2, 3, 4]);
+  });
+});

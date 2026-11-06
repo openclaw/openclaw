@@ -1,0 +1,21 @@
+{
+  "id": "migrate-hermes",
+  "categories": ["integrations"],
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Hermes Migration",
+  "description": "Imports Hermes configuration, memories, skills, and supported credentials into OpenClaw.",
+  "contracts": {
+    "migrationProviders": ["hermes"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "recommendedPrompts": [
+    "Preview a Hermes migration with a dry run and explain the proposed imports.",
+    "Help me plan a selective Hermes migration that preserves my existing OpenClaw data."
+  ]
+}

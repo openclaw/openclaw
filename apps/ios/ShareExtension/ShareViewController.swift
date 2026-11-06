@@ -1,0 +1,322 @@
+import Foundation
+import OpenClawKit
+import OpenClawProtocol
+import os
+import UIKit
+import UniformTypeIdentifiers
+
+final class ShareViewController: UIViewController {
+    private struct ShareAttachment: Codable {
+        var type: String
+        var mimeType: String
+        var fileName: String
+        var content: String
+    }
+
+    /// Keeps the encoded payload with its preview so the compose card can show
+    /// thumbnails without re-decoding base64 content.
+    private struct LoadedAttachment {
+        var payload: ShareAttachment
+        var preview: UIImage
+    }
+
+    private struct ExtractedShareContent {
+        var payload: SharedContentPayload
+        var attachments: [LoadedAttachment]
+        var attachmentSummary: ShareAttachmentSummary
+        var attachmentError: ShareImageProcessor.ProcessError?
+    }
+
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
+    private let composeView = ShareComposeView()
+    private var didPrepareDraft = false
+    private var isSending = false
+    private var pendingAttachments: [ShareAttachment] = []
+    /// Keep omission state controller-owned so send cannot bypass the disabled UI.
+    private var attachmentBlockReason: ShareAttachmentBlockReason?
+
+    override func loadView() {
+        self.view = self.composeView
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.composeView.onSend = { [weak self] in self?.handleSendTap() }
+        self.composeView.onCancel = { [weak self] in
+            self?.extensionContext?.completeRequest(returningItems: nil)
+        }
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if let screen = self.view.window?.windowScene?.screen {
+            self.preferredContentSize = CGSize(width: screen.bounds.width, height: 420)
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !self.didPrepareDraft else { return }
+        self.didPrepareDraft = true
+        Task { await self.prepareDraft() }
+    }
+
+    private func prepareDraft() async {
+        ShareGatewayRelaySettings.saveLastEvent("Share opened.")
+        self.composeView.apply(.preparing)
+        let extracted = await self.extractSharedContent()
+        let payload = extracted.payload
+        self.pendingAttachments = extracted.attachments.map(\.payload)
+        self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
+            hasImageProcessingError: extracted.attachmentError != nil,
+            summary: extracted.attachmentSummary)
+        let message = ShareDraftComposer.compose(from: payload)
+        self.composeView.setDraft(message)
+        self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
+        self.composeView.focusDraft()
+        if let blockReason = self.attachmentBlockReason {
+            self.applyAttachmentBlockReason(blockReason)
+        } else if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.composeView.apply(.ready)
+            ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
+        } else {
+            self.composeView.apply(.ready)
+            ShareGatewayRelaySettings.saveLastEvent("Share ready: draft prepared.")
+        }
+    }
+
+    private func handleSendTap() {
+        guard !self.isSending else { return }
+        Task { await self.sendCurrentDraft() }
+    }
+
+    private func sendCurrentDraft() async {
+        if let blockReason = self.attachmentBlockReason {
+            self.applyAttachmentBlockReason(blockReason)
+            return
+        }
+        let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: message is empty.")
+            self.composeView.apply(.failed(NSLocalizedString(
+                "Message is empty.",
+                comment: "Share extension empty message status")))
+            return
+        }
+
+        self.isSending = true
+        self.composeView.apply(.sending)
+        ShareGatewayRelaySettings.saveLastEvent("Sending to gateway…")
+        do {
+            try await self.sendMessageToGateway(trimmed, attachments: self.pendingAttachments)
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Sent to gateway (\(trimmed.count) chars, \(self.pendingAttachments.count) attachment(s)).")
+            self.composeView.apply(.sent)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            // Give the success state a visible beat before the sheet dismisses.
+            try? await Task.sleep(for: .milliseconds(600))
+            self.extensionContext?.completeRequest(returningItems: nil)
+        } catch {
+            self.logger.error("share send failed reason=\(error.localizedDescription, privacy: .public)")
+            ShareGatewayRelaySettings.saveLastEvent("Send failed: \(error.localizedDescription)")
+            self.isSending = false
+            self.composeView.apply(.failed(String(
+                format: NSLocalizedString("Send failed: %@", comment: "Share extension failure status"),
+                error.localizedDescription)))
+        }
+    }
+
+    private func sendMessageToGateway(_ message: String, attachments: [ShareAttachment]) async throws {
+        guard let config = ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth() else {
+            throw Self.gatewayError(10, message: NSLocalizedString(
+                "OpenClaw is not connected to a gateway yet.",
+                comment: "Share extension missing gateway error"))
+        }
+        guard config.requiresForegroundSignIn != true else {
+            throw NSError(
+                domain: "OpenClawShare",
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(
+                    "This gateway uses Cloudflare Access. Open OpenClaw and send from the app; your share stays here.",
+                    comment: "Share extension foreground browser sign-in requirement")])
+        }
+        guard let url = URL(string: config.gatewayURLString) else {
+            throw Self.gatewayError(11, message: NSLocalizedString(
+                "Invalid saved gateway URL.",
+                comment: "Share extension invalid gateway error"))
+        }
+
+        let gateway = GatewayNodeSession()
+        defer {
+            Task { await gateway.disconnect() }
+        }
+        try await gateway.connect(
+            url: url,
+            credentials: GatewayNodeSessionCredentials(
+                token: config.token,
+                password: config.password),
+            connectOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: "OpenClaw Share",
+                deviceIdentityProfile: .shareExtension,
+                includeDeviceIdentity: true,
+                allowStoredDeviceAuth: config.gatewayStableID != nil,
+                deviceAuthGatewayID: config.gatewayStableID),
+            sessionBox: nil,
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .invalidRequest,
+                        message: "share extension does not support node invoke"))
+            })
+
+        struct AgentRequestPayload: Codable {
+            var message: String
+            var sessionKey: String?
+            var thinking: String
+            var deliver: Bool
+            var attachments: [ShareAttachment]?
+            var receipt: Bool
+            var receiptText: String?
+            var to: String?
+            var channel: String?
+            var timeoutSeconds: Int?
+            var key: String?
+        }
+
+        let deliveryChannel = config.deliveryChannel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let deliveryTo = config.deliveryTo?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canDeliverToRoute = (deliveryChannel?.isEmpty == false) && (deliveryTo?.isEmpty == false)
+
+        let params = AgentRequestPayload(
+            message: message,
+            sessionKey: config.sessionKey,
+            thinking: "low",
+            deliver: canDeliverToRoute,
+            attachments: attachments.isEmpty ? nil : attachments,
+            receipt: canDeliverToRoute,
+            receiptText: canDeliverToRoute ? "Just received your iOS share + request, working on it." : nil,
+            to: canDeliverToRoute ? deliveryTo : nil,
+            channel: canDeliverToRoute ? deliveryChannel : nil,
+            timeoutSeconds: nil,
+            key: UUID().uuidString)
+        let data = try JSONEncoder().encode(params)
+        let json = String(bytes: data, encoding: .utf8)!
+        let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
+        let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
+        _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+    }
+
+    private static func gatewayError(_ code: Int, message: String) -> NSError {
+        NSError(domain: "OpenClawShare", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private func extractSharedContent() async -> ExtractedShareContent {
+        guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
+            return ExtractedShareContent(
+                payload: SharedContentPayload(title: nil, url: nil, text: nil),
+                attachments: [],
+                attachmentSummary: ShareAttachmentSummary(),
+                attachmentError: nil)
+        }
+
+        let providerContent = await ShareContentExtractor.extract(from: items)
+        var attachments: [LoadedAttachment] = []
+        var attachmentSummary = providerContent.attachmentSummary
+        var attachmentError: ShareImageProcessor.ProcessError?
+        let maxImageAttachments = 3
+
+        for provider in providerContent.imageProviders.prefix(maxImageAttachments) {
+            guard attachmentError == nil else { break }
+            do {
+                let attachment = try await self.loadImageAttachment(
+                    from: provider,
+                    index: attachments.count)
+                attachments.append(attachment)
+            } catch {
+                attachmentError = error as? ShareImageProcessor.ProcessError ?? .encodeFailed
+            }
+        }
+        attachmentSummary.acceptedImageCount = attachments.count
+        return ExtractedShareContent(
+            payload: providerContent.payload,
+            attachments: attachments,
+            attachmentSummary: attachmentSummary,
+            attachmentError: attachmentError)
+    }
+
+    private func loadImageAttachment(from provider: NSItemProvider, index: Int) async throws -> LoadedAttachment {
+        let imageUTI = provider.registeredTypeIdentifiers.first {
+            UTType($0)?.conforms(to: .image) == true
+        } ?? UTType.image.identifier
+        guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: imageUTI) else {
+            throw ShareImageProcessor.ProcessError.invalidImage
+        }
+
+        let data = try await Task.detached(priority: .userInitiated) {
+            try ShareImageProcessor.processForUpload(data: rawData)
+        }.value
+        guard let image = UIImage(data: data) else {
+            throw ShareImageProcessor.ProcessError.invalidImage
+        }
+
+        return await LoadedAttachment(
+            payload: ShareAttachment(
+                type: "image",
+                mimeType: "image/jpeg",
+                fileName: "shared-image-\(index + 1).jpg",
+                content: data.base64EncodedString()),
+            preview: self.boundedPreview(from: image))
+    }
+
+    private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {
+        switch blockReason {
+        case .imageProcessingFailed:
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
+            self.composeView.apply(.blocked(NSLocalizedString(
+                "The shared image could not be prepared.",
+                comment: "Share extension image processing failure")))
+        case let .omitted(message):
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
+            self.composeView.apply(.blocked(message))
+        }
+    }
+
+    /// Previews are retained for the sheet's lifetime; keep them bounded so
+    /// three full-resolution photos cannot blow the extension memory cap.
+    /// Never falls back to the full-size image.
+    private func boundedPreview(from image: UIImage) async -> UIImage {
+        let maxPixels: CGFloat = 336
+        if let thumbnail = await image.byPreparingThumbnail(ofSize: CGSize(width: maxPixels, height: maxPixels)) {
+            return thumbnail
+        }
+        let longestSide = max(image.size.width * image.scale, image.size.height * image.scale, 1)
+        let scale = min(maxPixels / longestSide, 1)
+        let target = CGSize(
+            width: max(image.size.width * image.scale * scale, 1),
+            height: max(image.size.height * image.scale * scale, 1))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+
+    private func loadDataValue(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {
+        await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+}

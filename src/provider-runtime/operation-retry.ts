@@ -1,0 +1,218 @@
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "../infra/backoff.js";
+import { formatErrorMessage, readErrorCause, readErrorName } from "../infra/errors.js";
+import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
+
+export type ProviderOperationRetryStage = "read" | "poll" | "download" | "create";
+
+export type TransientProviderRetryParams = {
+  error: unknown;
+  message: string;
+  provider: string;
+  apiKeyIndex: number;
+  attemptNumber: number;
+  stage?: ProviderOperationRetryStage;
+};
+
+export type TransientProviderRetryOptions = {
+  /**
+   * Total executions, including the first call.
+   * attempts: 2 means one initial call plus one retry.
+   */
+  attempts: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  signal?: AbortSignal;
+  shouldRetry?: (params: TransientProviderRetryParams) => boolean;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+};
+
+export type TransientProviderRetryConfig = boolean | TransientProviderRetryOptions;
+
+const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
+  attempts: 2,
+  baseDelayMs: 250,
+  maxDelayMs: 1_000,
+} as const satisfies TransientProviderRetryOptions;
+
+export function resolveTransientProviderRetryOptions(
+  options?: TransientProviderRetryConfig,
+): TransientProviderRetryOptions | undefined {
+  return options === true ? DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS : options || undefined;
+}
+
+export function providerOperationRetryConfig(
+  stage: ProviderOperationRetryStage,
+  options?: TransientProviderRetryConfig,
+): TransientProviderRetryConfig | undefined {
+  return options ?? (stage === "create" ? undefined : true);
+}
+
+function readErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const record = error as { status?: unknown; statusCode?: unknown; code?: unknown };
+  for (const value of [record.status, record.statusCode, record.code]) {
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+    if (typeof value === "string" && /^\d{3}$/.test(value.trim())) {
+      return Number(value.trim());
+    }
+  }
+  return undefined;
+}
+
+// Provider reads get one bounded retry for negative DNS responses. Gateway
+// waits exclude ENOTFOUND because their configured gateway address needs repair.
+const PROVIDER_RETRYABLE_DNS_ERROR_CODE_RE = /\bENOTFOUND\b/i;
+
+function hasProviderRetryableNetworkCode(value: string): boolean {
+  return hasRetryableConnectionErrorCode(value) || PROVIDER_RETRYABLE_DNS_ERROR_CODE_RE.test(value);
+}
+
+function hasTransientNetworkOrTimeoutSignal(error: unknown, message: string): boolean {
+  if (hasProviderRetryableNetworkCode(message)) {
+    return true;
+  }
+  const code = readStringField(asOptionalObjectRecord(error), "code");
+  if (code && hasProviderRetryableNetworkCode(code)) {
+    return true;
+  }
+  const name = readErrorName(error);
+  return (
+    name === "TimeoutError" ||
+    name === "RequestTimeoutError" ||
+    /\b(?:request timeout|provider timeout|timed out|timeout)\b/i.test(message)
+  );
+}
+
+/**
+ * Canonical transient HTTP status predicate for provider operations.
+ * Shared by structured-error classification and the guarded POST gate so
+ * these paths cannot drift.
+ */
+export function isTransientProviderHttpStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isTransientProviderOperationError(error: unknown, message: string): boolean {
+  const status = readErrorStatus(error);
+  if (status !== undefined) {
+    return isTransientProviderHttpStatus(status);
+  }
+  if (
+    /\b(?:HTTP\s*)?(?:400|401|403|404)\b/i.test(message) ||
+    /\b(?:invalid api key|permission denied|model not found|validation|unsupported model)\b/i.test(
+      message,
+    )
+  ) {
+    return false;
+  }
+  if (/\b(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(message)) {
+    return true;
+  }
+  if (hasTransientNetworkOrTimeoutSignal(error, message)) {
+    return true;
+  }
+  const cause = readErrorCause(error);
+  return Boolean(
+    cause &&
+    cause !== error &&
+    hasTransientNetworkOrTimeoutSignal(cause, formatErrorMessage(cause)),
+  );
+}
+
+export function resolveTransientProviderAttempts(options?: TransientProviderRetryOptions): number {
+  return options && Number.isSafeInteger(options.attempts) ? Math.max(1, options.attempts) : 1;
+}
+
+export function resolveTransientProviderDelayMs(
+  options: TransientProviderRetryOptions,
+  attemptNumber: number,
+): number {
+  const rawBaseDelayMs = options.baseDelayMs ?? 250;
+  const baseDelayMs = Math.max(
+    0,
+    Math.round(Number.isFinite(rawBaseDelayMs) ? rawBaseDelayMs : 250),
+  );
+  const rawMaxDelayMs = options.maxDelayMs ?? 1_000;
+  const maxDelayMs = Math.max(
+    baseDelayMs,
+    Math.round(Number.isFinite(rawMaxDelayMs) ? rawMaxDelayMs : 1_000),
+  );
+  return Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(attemptNumber - 1, 0));
+}
+
+export function shouldRetrySameKeyProviderOperation(
+  params: TransientProviderRetryParams & {
+    options: TransientProviderRetryOptions;
+    maxAttempts: number;
+  },
+): boolean {
+  if (params.attemptNumber >= params.maxAttempts || params.options.signal?.aborted) {
+    return false;
+  }
+  const retryParams: TransientProviderRetryParams = {
+    error: params.error,
+    message: params.message,
+    provider: params.provider,
+    apiKeyIndex: params.apiKeyIndex,
+    attemptNumber: params.attemptNumber,
+    ...(params.stage ? { stage: params.stage } : {}),
+  };
+  return params.options.shouldRetry
+    ? params.options.shouldRetry(retryParams)
+    : isTransientProviderOperationError(params.error, params.message);
+}
+
+export async function executeProviderOperationWithRetry<T>(params: {
+  provider: string;
+  stage: ProviderOperationRetryStage;
+  operation: () => Promise<T>;
+  retry?: TransientProviderRetryConfig;
+  signal?: AbortSignal;
+}): Promise<T> {
+  const retryConfig = providerOperationRetryConfig(params.stage, params.retry);
+  const resolvedRetryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const retrySignal =
+    params.signal && resolvedRetryOptions?.signal
+      ? AbortSignal.any([params.signal, resolvedRetryOptions.signal])
+      : (params.signal ?? resolvedRetryOptions?.signal);
+  const retryOptions = resolvedRetryOptions
+    ? { ...resolvedRetryOptions, ...(retrySignal ? { signal: retrySignal } : {}) }
+    : undefined;
+  const maxAttempts = resolveTransientProviderAttempts(retryOptions);
+  for (let attemptNumber = 1; ; attemptNumber += 1) {
+    retrySignal?.throwIfAborted();
+    try {
+      return await params.operation();
+    } catch (error) {
+      retrySignal?.throwIfAborted();
+      const message = formatErrorMessage(error);
+      if (
+        !retryOptions ||
+        !shouldRetrySameKeyProviderOperation({
+          options: retryOptions,
+          error,
+          message,
+          provider: params.provider,
+          apiKeyIndex: 0,
+          attemptNumber,
+          maxAttempts,
+          stage: params.stage,
+        })
+      ) {
+        throw error;
+      }
+
+      const delayMs = resolveTransientProviderDelayMs(retryOptions, attemptNumber);
+      const sleep = retryOptions.sleep ?? sleepWithAbort;
+      await sleep(delayMs, retryOptions.signal);
+    }
+  }
+}

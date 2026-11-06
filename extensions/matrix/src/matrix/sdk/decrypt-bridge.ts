@@ -1,0 +1,420 @@
+import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import { DecryptionFailureCode } from "matrix-js-sdk/lib/crypto-api/index.js";
+import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { LogService, noop } from "./logger.js";
+
+type MatrixDecryptIfNeededClient = {
+  decryptEventIfNeeded: (
+    event: MatrixEvent,
+    opts?: {
+      isRetry?: boolean;
+    },
+  ) => Promise<void>;
+  getCrypto: () => unknown;
+};
+
+type MatrixDecryptRetryEvent = MatrixEvent & {
+  attemptDecryption: (
+    crypto: unknown,
+    opts?: {
+      isRetry?: boolean;
+    },
+  ) => Promise<void>;
+};
+
+type MatrixDecryptRetryState = {
+  event: MatrixEvent;
+  roomId: string;
+  eventId: string;
+  attempts: number;
+  inFlight: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
+type MatrixExhaustedDecryptRetryState = MatrixDecryptRetryState & {
+  exhaustedAt: number;
+};
+
+type DecryptBridgeRawEvent = {
+  event_id: string;
+};
+
+type MatrixCryptoRetrySignalSource = {
+  on: (eventName: string, listener: (...args: unknown[]) => void) => void;
+};
+
+const MATRIX_DECRYPT_RETRY_BASE_DELAY_MS = 1_500;
+const MATRIX_DECRYPT_RETRY_MAX_DELAY_MS = 30_000;
+const MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS = 8;
+const MATRIX_DECRYPT_DRAIN_TIMEOUT_MS = 5_000;
+const MATRIX_DECRYPT_EXHAUSTED_RETRY_TTL_MS = 60 * 60_000;
+const MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES = 512;
+
+function resolveDecryptRetryKey(roomId: string, eventId: string): string | null {
+  if (!roomId || !eventId) {
+    return null;
+  }
+  return `${roomId}|${eventId}`;
+}
+
+function shouldRetryDecryptionFailure(event: MatrixEvent): boolean {
+  if (!event.isDecryptionFailure()) {
+    return false;
+  }
+  const reason = event.decryptionFailureReason;
+  return (
+    reason === DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID ||
+    reason === DecryptionFailureCode.OLM_UNKNOWN_MESSAGE_INDEX ||
+    reason === DecryptionFailureCode.UNKNOWN_ERROR
+  );
+}
+
+export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
+  private readonly trackedEncryptedEvents = new WeakSet<object>();
+  private readonly pendingDecryptions = new Set<Promise<void>>();
+  private readonly decryptedMessageDedupe = new Map<string, number>();
+  private readonly decryptRetries = new Map<string, MatrixDecryptRetryState>();
+  private readonly failedDecryptionsNotified = new Set<string>();
+  private readonly exhaustedDecryptRetries = new Map<string, MatrixExhaustedDecryptRetryState>();
+  private cryptoRetrySignalsBound = false;
+  private quiescing = false;
+  private stopped = false;
+
+  constructor(
+    private readonly deps: {
+      client: MatrixDecryptIfNeededClient;
+      toRaw: (event: MatrixEvent) => TRawEvent;
+      emitDecryptedEvent: (roomId: string, event: TRawEvent) => void;
+      emitMessage: (roomId: string, event: TRawEvent) => void;
+      emitFailedDecryption: (roomId: string, event: TRawEvent, error: Error) => void;
+    },
+  ) {}
+
+  shouldEmitUnencryptedMessage(roomId: string, eventId: string): boolean {
+    if (!eventId) {
+      return true;
+    }
+    const key = `${roomId}|${eventId}`;
+    const createdAt = this.decryptedMessageDedupe.get(key);
+    if (createdAt === undefined) {
+      return true;
+    }
+    this.decryptedMessageDedupe.delete(key);
+    return false;
+  }
+
+  attachEncryptedEvent(event: MatrixEvent, roomId: string): void {
+    if (this.quiescing || this.stopped) {
+      return;
+    }
+    if (this.trackedEncryptedEvents.has(event)) {
+      return;
+    }
+    this.trackedEncryptedEvents.add(event);
+    const sdkDecryption = event.getDecryptionPromise();
+    if (sdkDecryption) {
+      this.trackDecryption(sdkDecryption);
+    }
+    event.on(MatrixEventEvent.Decrypted, (decryptedEvent: MatrixEvent, err?: Error) => {
+      if (this.stopped) {
+        return;
+      }
+      const decryptedRoomId = decryptedEvent.getRoomId() || roomId;
+      const decryptedRaw = this.deps.toRaw(decryptedEvent);
+      const retryEventId = decryptedRaw.event_id || event.getId() || "";
+      const retryKey = resolveDecryptRetryKey(decryptedRoomId, retryEventId);
+
+      if (err || decryptedEvent.isDecryptionFailure()) {
+        this.emitFailedDecryptionOnce(
+          retryKey,
+          decryptedRoomId,
+          decryptedRaw,
+          err ?? new Error("Matrix event failed to decrypt"),
+        );
+        if (shouldRetryDecryptionFailure(decryptedEvent)) {
+          this.scheduleDecryptRetry({
+            event,
+            roomId: decryptedRoomId,
+            eventId: retryEventId,
+          });
+        } else if (retryKey) {
+          this.clearDecryptRetry(retryKey);
+        }
+        return;
+      }
+
+      if (retryKey) {
+        this.clearDecryptRetry(retryKey);
+      }
+      this.rememberDecryptedMessage(decryptedRoomId, decryptedRaw.event_id);
+      this.deps.emitDecryptedEvent(decryptedRoomId, decryptedRaw);
+      this.deps.emitMessage(decryptedRoomId, decryptedRaw);
+    });
+    if (shouldRetryDecryptionFailure(event)) {
+      const raw = this.deps.toRaw(event);
+      const eventId = raw.event_id || event.getId() || "";
+      this.scheduleDecryptRetry({ event, roomId, eventId });
+    }
+  }
+
+  retryPendingNow(options?: { includeExhausted?: boolean }): void {
+    if (this.quiescing || this.stopped) {
+      return;
+    }
+    if (options?.includeExhausted) {
+      this.pruneExhaustedDecryptRetries(Date.now());
+      for (const [retryKey, state] of this.exhaustedDecryptRetries) {
+        if (this.decryptRetries.has(retryKey)) {
+          continue;
+        }
+        this.exhaustedDecryptRetries.delete(retryKey);
+        this.decryptRetries.set(retryKey, {
+          ...state,
+          attempts: 0,
+          inFlight: false,
+          timer: null,
+        });
+      }
+    }
+
+    const pending = Array.from(this.decryptRetries.entries());
+    if (pending.length === 0) {
+      return;
+    }
+    this.startPendingRetries(pending);
+  }
+
+  bindCryptoRetrySignals(crypto: MatrixCryptoRetrySignalSource | undefined): void {
+    if (!crypto || this.cryptoRetrySignalsBound) {
+      return;
+    }
+    this.cryptoRetrySignalsBound = true;
+
+    for (const [eventName, includeExhausted] of [
+      [CryptoEvent.KeyBackupDecryptionKeyCached, true],
+      [CryptoEvent.RehydrationCompleted, true],
+      [CryptoEvent.DevicesUpdated, false],
+      [CryptoEvent.KeysChanged, false],
+    ] as const) {
+      crypto.on(eventName, () => this.retryPendingNow({ includeExhausted }));
+    }
+  }
+
+  stop(): void {
+    this.quiescing = true;
+    this.stopped = true;
+    for (const retryKey of this.decryptRetries.keys()) {
+      this.clearDecryptRetry(retryKey);
+    }
+    this.pendingDecryptions.clear();
+    this.exhaustedDecryptRetries.clear();
+    this.failedDecryptionsNotified.clear();
+  }
+
+  async drainPendingDecryptions(_reason: string): Promise<void> {
+    this.quiescing = true;
+    this.startPendingRetries(Array.from(this.decryptRetries.entries()));
+    await raceWithTimeout(
+      Promise.allSettled(this.pendingDecryptions),
+      MATRIX_DECRYPT_DRAIN_TIMEOUT_MS,
+      () => {
+        throw new Error(
+          `Matrix decryption drain did not finish within ${MATRIX_DECRYPT_DRAIN_TIMEOUT_MS}ms`,
+        );
+      },
+      { ref: false },
+    );
+  }
+
+  private startPendingRetries(pending: Iterable<[string, MatrixDecryptRetryState]>): void {
+    for (const [retryKey, state] of pending) {
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      if (!state.inFlight) {
+        this.runDecryptRetry(retryKey).catch(noop);
+      }
+    }
+  }
+
+  private emitFailedDecryptionOnce(
+    retryKey: string | null,
+    roomId: string,
+    event: TRawEvent,
+    error: Error,
+  ): void {
+    if (retryKey) {
+      if (this.failedDecryptionsNotified.has(retryKey)) {
+        return;
+      }
+      this.failedDecryptionsNotified.add(retryKey);
+    }
+    this.deps.emitFailedDecryption(roomId, event, error);
+  }
+
+  private scheduleDecryptRetry(params: {
+    event: MatrixEvent;
+    roomId: string;
+    eventId: string;
+  }): void {
+    if (this.quiescing || this.stopped) {
+      return;
+    }
+    const retryKey = resolveDecryptRetryKey(params.roomId, params.eventId);
+    if (!retryKey) {
+      return;
+    }
+    const existing = this.decryptRetries.get(retryKey);
+    if (this.exhaustedDecryptRetries.has(retryKey)) {
+      return;
+    }
+    if (existing?.timer || existing?.inFlight) {
+      return;
+    }
+    const attempts = (existing?.attempts ?? 0) + 1;
+    if (attempts > MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS) {
+      const retry = this.decryptRetries.get(retryKey);
+      if (retry?.timer) {
+        clearTimeout(retry.timer);
+      }
+      this.decryptRetries.delete(retryKey);
+      const exhaustedAt = Date.now();
+      this.exhaustedDecryptRetries.set(retryKey, {
+        event: params.event,
+        roomId: params.roomId,
+        eventId: params.eventId,
+        attempts: attempts - 1,
+        inFlight: false,
+        timer: null,
+        exhaustedAt,
+      });
+      this.pruneExhaustedDecryptRetries(exhaustedAt);
+      LogService.debug(
+        "MatrixClientLite",
+        `Giving up decryption retry for ${params.eventId} in ${params.roomId} after ${attempts - 1} attempts`,
+      );
+      return;
+    }
+    const delayMs = Math.min(
+      MATRIX_DECRYPT_RETRY_BASE_DELAY_MS * 2 ** (attempts - 1),
+      MATRIX_DECRYPT_RETRY_MAX_DELAY_MS,
+    );
+    const next: MatrixDecryptRetryState = {
+      event: params.event,
+      roomId: params.roomId,
+      eventId: params.eventId,
+      attempts,
+      inFlight: false,
+      timer: null,
+    };
+    next.timer = setTimeout(() => {
+      this.runDecryptRetry(retryKey).catch(noop);
+    }, delayMs);
+    this.decryptRetries.set(retryKey, next);
+  }
+
+  private trackDecryption(pending: Promise<void>): void {
+    this.pendingDecryptions.add(pending);
+    const forget = () => this.pendingDecryptions.delete(pending);
+    void pending.then(forget, forget);
+  }
+
+  private runDecryptRetry(retryKey: string): Promise<void> {
+    const pending = this.attemptDecryptRetry(retryKey);
+    this.trackDecryption(pending);
+    return pending;
+  }
+
+  private async attemptDecryptRetry(retryKey: string): Promise<void> {
+    const state = this.decryptRetries.get(retryKey);
+    if (!state || state.inFlight) {
+      return;
+    }
+
+    state.inFlight = true;
+    state.timer = null;
+    const retryEvent = state.event as MatrixDecryptRetryEvent;
+    const retryCrypto = this.deps.client.getCrypto();
+    const canAttemptDecryption = retryCrypto !== undefined && retryCrypto !== null;
+
+    try {
+      if (canAttemptDecryption) {
+        await retryEvent.attemptDecryption(retryCrypto, {
+          isRetry: true,
+        });
+      } else {
+        await this.deps.client.decryptEventIfNeeded(state.event, {
+          isRetry: true,
+        });
+      }
+    } catch {
+      // Retry with backoff until we hit the configured retry cap.
+    } finally {
+      state.inFlight = false;
+    }
+
+    if (this.decryptRetries.get(retryKey) !== state) {
+      return;
+    }
+    if (this.stopped || (this.quiescing && state.event.isDecryptionFailure())) {
+      this.clearDecryptRetry(retryKey);
+      return;
+    }
+    if (state.event.isDecryptionFailure()) {
+      if (!shouldRetryDecryptionFailure(state.event)) {
+        this.clearDecryptRetry(retryKey);
+        return;
+      }
+      this.scheduleDecryptRetry(state);
+      return;
+    }
+
+    this.clearDecryptRetry(retryKey);
+    const raw = this.deps.toRaw(state.event);
+    this.rememberDecryptedMessage(state.roomId, raw.event_id);
+    this.deps.emitDecryptedEvent(state.roomId, raw);
+    this.deps.emitMessage(state.roomId, raw);
+  }
+
+  private clearDecryptRetry(retryKey: string): void {
+    const state = this.decryptRetries.get(retryKey);
+    if (state?.timer) {
+      clearTimeout(state.timer);
+    }
+    this.decryptRetries.delete(retryKey);
+    this.exhaustedDecryptRetries.delete(retryKey);
+    this.failedDecryptionsNotified.delete(retryKey);
+  }
+
+  private pruneExhaustedDecryptRetries(now: number): void {
+    for (const [retryKey, state] of this.exhaustedDecryptRetries) {
+      if (now - state.exhaustedAt > MATRIX_DECRYPT_EXHAUSTED_RETRY_TTL_MS) {
+        this.clearDecryptRetry(retryKey);
+      }
+    }
+    for (const retryKey of this.exhaustedDecryptRetries.keys()) {
+      if (this.exhaustedDecryptRetries.size <= MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES) {
+        break;
+      }
+      this.clearDecryptRetry(retryKey);
+    }
+  }
+
+  private rememberDecryptedMessage(roomId: string, eventId: string): void {
+    if (!eventId) {
+      return;
+    }
+    const now = Date.now();
+    const ttlMs = 30_000;
+    for (const [key, createdAt] of this.decryptedMessageDedupe) {
+      if (now - createdAt > ttlMs) {
+        this.decryptedMessageDedupe.delete(key);
+      }
+    }
+    pruneMapToMaxSize(this.decryptedMessageDedupe, 2048);
+    this.decryptedMessageDedupe.set(`${roomId}|${eventId}`, now);
+  }
+}

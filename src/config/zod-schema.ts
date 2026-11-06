@@ -1,0 +1,74 @@
+import { z } from "zod";
+import { listAgentEntries } from "../agents/agent-roster.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
+
+export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
+  const agents = listAgentEntries(cfg as OpenClawConfig);
+  const agentIds = new Set(agents.map((agent) => agent.id));
+  const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+  if (agents.length === 0) {
+    effectiveAgentIds.add("main");
+  }
+
+  const explicitTargets = [
+    {
+      path: ["agents", "defaults", "systemAgent", "agentId"],
+      agentId: cfg.agents?.defaults?.systemAgent?.agentId,
+    },
+    { path: ["talk", "agentId"], agentId: cfg.talk?.agentId },
+  ] as const;
+  for (const target of explicitTargets) {
+    if (
+      typeof target.agentId === "string" &&
+      !effectiveAgentIds.has(normalizeAgentId(target.agentId))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...target.path],
+        message: `Unknown agent id "${target.agentId}" (not in agents.entries).`,
+      });
+    }
+  }
+
+  // Bindings referencing a missing agent id silently misroute at gateway
+  // load time. Match routing's normalized id semantics; otherwise valid
+  // configured routes like "Team Ops" -> "team-ops" would fail at load.
+  if (agents.length > 0) {
+    for (const [idx, { agentId }] of (cfg.bindings ?? []).entries()) {
+      if (agentId !== DEFAULT_AGENT_ID && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["bindings", idx, "agentId"],
+          message: `Unknown agent id "${agentId}" (not in agents.entries).`,
+        });
+      }
+    }
+  }
+
+  const broadcast = cfg.broadcast;
+  if (!broadcast) {
+    return;
+  }
+
+  for (const [peerId, entry] of Object.entries(broadcast)) {
+    if (
+      peerId === "strategy" ||
+      typeof entry !== "object" ||
+      (agents.length === 0 && !/^[a-z][a-z0-9_-]*:.+$/i.test(peerId))
+    ) {
+      continue;
+    }
+    const ids = Array.isArray(entry) ? entry : entry.agents;
+    for (const [idx, agentId] of ids.entries()) {
+      if (!agentIds.has(agentId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["broadcast", peerId, ...(Array.isArray(entry) ? [] : ["agents"]), idx],
+          message: `Unknown agent id "${agentId}" (not in agents.entries).`,
+        });
+      }
+    }
+  }
+});

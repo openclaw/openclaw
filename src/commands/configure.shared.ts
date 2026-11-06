@@ -1,0 +1,73 @@
+import {
+  confirm as clackConfirm,
+  intro as clackIntro,
+  outro as clackOutro,
+  password as clackPassword,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
+import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
+import {
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
+
+export function parseConfigureWizardSections(raw: unknown): {
+  sections: WizardSection[];
+  invalid: string[];
+} {
+  const sections: WizardSection[] = [];
+  const invalid: string[] = [];
+  for (const value of Array.isArray(raw) ? raw : []) {
+    const section = String(value).trim();
+    const known = CONFIGURE_WIZARD_SECTIONS.find((candidate) => candidate === section);
+    if (known) {
+      sections.push(known);
+    } else {
+      invalid.push(section);
+    }
+  }
+  return { sections, invalid };
+}
+
+export const CONFIGURE_SECTION_OPTIONS = [
+  { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
+  { value: "model", label: "Model", hint: "Pick provider + credentials" },
+  { value: "memory", label: "Memory search", hint: "Choose and verify embeddings" },
+  { value: "web", label: "Web tools", hint: "Configure web search (Perplexity/Brave) + fetch" },
+  { value: "gateway", label: "Gateway", hint: "Port, bind, auth, tailscale" },
+  {
+    value: "daemon",
+    label: "Daemon",
+    hint: "Install/manage the background service",
+  },
+  {
+    value: "channels",
+    label: "Channels",
+    hint: "Link WhatsApp/Telegram/etc and defaults",
+  },
+  { value: "plugins", label: "Plugins", hint: "Configure plugin settings (sandbox, tools, etc.)" },
+  { value: "skills", label: "Skills", hint: "Install/enable workspace skills" },
+  {
+    value: "health",
+    label: "Health check",
+    hint: "Run gateway + channel checks",
+  },
+] as const;
+
+export type WizardSection = (typeof CONFIGURE_SECTION_OPTIONS)[number]["value"];
+export const CONFIGURE_WIZARD_SECTIONS = CONFIGURE_SECTION_OPTIONS.map((option) => option.value);
+
+export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
+export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+function stylePromptParams<Params extends { message: string }>(params: Params): Params {
+  return { ...params, message: stylePromptMessage(params.message) };
+}
+
+export const text: typeof clackText = (params) => clackText(stylePromptParams(params));
+/** Styled password prompt wrapper. Echoes bullets so secrets never appear in cleartext. */
+export const password: typeof clackPassword = (params) => clackPassword(stylePromptParams(params));
+export const confirm: typeof clackConfirm = (params) => clackConfirm(stylePromptParams(params));
+export const select = <T>(
+  params: Parameters<typeof clackSelect<T>>[0],
+): ReturnType<typeof clackSelect<T>> => clackSelect(styleSelectParams(params));

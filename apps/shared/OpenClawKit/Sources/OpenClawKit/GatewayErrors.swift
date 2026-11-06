@@ -1,0 +1,289 @@
+import Foundation
+import OpenClawProtocol
+
+func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
+    var details = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] ?? [:]
+    if let error {
+        details[details["code"] == nil ? "code" : "errorCode"] = OpenClawProtocol.AnyCodable(error.code)
+        details["message"] = OpenClawProtocol.AnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = OpenClawProtocol.AnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = OpenClawProtocol.AnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
+
+/// A route lease became stale before its request touched the channel. Unlike
+/// a socket cancellation, this proves the payload was never dispatched.
+public enum GatewayNodeSessionRequestError: Error, Sendable {
+    case routeChangedBeforeDispatch
+}
+
+public enum GatewayConnectAuthDetailCode: String, Sendable {
+    case authRequired = "AUTH_REQUIRED"
+    case authUnauthorized = "AUTH_UNAUTHORIZED"
+    case authTokenMismatch = "AUTH_TOKEN_MISMATCH"
+    case authBootstrapTokenInvalid = "AUTH_BOOTSTRAP_TOKEN_INVALID"
+    case authDeviceTokenMismatch = "AUTH_DEVICE_TOKEN_MISMATCH"
+    case authScopeMismatch = "AUTH_SCOPE_MISMATCH"
+    case authTokenMissing = "AUTH_TOKEN_MISSING"
+    case authTokenNotConfigured = "AUTH_TOKEN_NOT_CONFIGURED"
+    case authPasswordMissing = "AUTH_PASSWORD_MISSING"
+    case authPasswordMismatch = "AUTH_PASSWORD_MISMATCH"
+    case authPasswordNotConfigured = "AUTH_PASSWORD_NOT_CONFIGURED"
+    case authRateLimited = "AUTH_RATE_LIMITED"
+    case authTailscaleIdentityMissing = "AUTH_TAILSCALE_IDENTITY_MISSING"
+    case authTailscaleProxyMissing = "AUTH_TAILSCALE_PROXY_MISSING"
+    case authTailscaleWhoisFailed = "AUTH_TAILSCALE_WHOIS_FAILED"
+    case authTailscaleIdentityMismatch = "AUTH_TAILSCALE_IDENTITY_MISMATCH"
+    case authVerifiedUserRequired = "AUTH_VERIFIED_USER_REQUIRED"
+    case pairingRequired = "PAIRING_REQUIRED"
+    case protocolMismatch = "PROTOCOL_MISMATCH"
+    case controlUiDeviceIdentityRequired = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
+    case deviceIdentityRequired = "DEVICE_IDENTITY_REQUIRED"
+    case deviceAuthInvalid = "DEVICE_AUTH_INVALID"
+    case deviceAuthDeviceIdMismatch = "DEVICE_AUTH_DEVICE_ID_MISMATCH"
+    case deviceAuthSignatureExpired = "DEVICE_AUTH_SIGNATURE_EXPIRED"
+    case deviceAuthNonceRequired = "DEVICE_AUTH_NONCE_REQUIRED"
+    case deviceAuthNonceMismatch = "DEVICE_AUTH_NONCE_MISMATCH"
+    case deviceAuthSignatureInvalid = "DEVICE_AUTH_SIGNATURE_INVALID"
+    case deviceAuthPublicKeyInvalid = "DEVICE_AUTH_PUBLIC_KEY_INVALID"
+}
+
+public enum GatewayConnectRecoveryNextStep: String, Sendable {
+    case retryWithDeviceToken = "retry_with_device_token"
+    case updateAuthConfiguration = "update_auth_configuration"
+    case updateAuthCredentials = "update_auth_credentials"
+    case waitThenRetry = "wait_then_retry"
+    case reviewAuthConfiguration = "review_auth_configuration"
+}
+
+/// Structured websocket connect-auth rejection surfaced before the channel is usable.
+public struct GatewayConnectAuthError: LocalizedError, Sendable {
+    public let message: String
+    public let detailCodeRaw: String?
+    public let recommendedNextStepRaw: String?
+    public let canRetryWithDeviceToken: Bool
+    public let requestId: String?
+    public let detailsReason: String?
+    public let ownerRaw: String?
+    public let titleOverride: String?
+    public let userMessageOverride: String?
+    public let actionLabel: String?
+    public let actionCommand: String?
+    public let docsURLString: String?
+    public let retryableOverride: Bool?
+    public let pauseReconnectOverride: Bool?
+    public let clientMinProtocol: Int?
+    public let clientMaxProtocol: Int?
+    public let expectedProtocol: Int?
+    public let minimumProbeProtocol: Int?
+
+    public init(
+        message: String,
+        detailCode: String?,
+        canRetryWithDeviceToken: Bool,
+        recommendedNextStep: String? = nil,
+        requestId: String? = nil,
+        detailsReason: String? = nil,
+        ownerRaw: String? = nil,
+        titleOverride: String? = nil,
+        userMessageOverride: String? = nil,
+        actionLabel: String? = nil,
+        actionCommand: String? = nil,
+        docsURLString: String? = nil,
+        retryableOverride: Bool? = nil,
+        pauseReconnectOverride: Bool? = nil,
+        clientMinProtocol: Int? = nil,
+        clientMaxProtocol: Int? = nil,
+        expectedProtocol: Int? = nil,
+        minimumProbeProtocol: Int? = nil)
+    {
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
+        self.detailCodeRaw = detailCode?.trimmedNonEmpty
+        self.canRetryWithDeviceToken = canRetryWithDeviceToken
+        self.recommendedNextStepRaw = recommendedNextStep?.trimmedNonEmpty
+        self.requestId = requestId?.trimmedNonEmpty
+        self.detailsReason = detailsReason?.trimmedNonEmpty
+        self.ownerRaw = ownerRaw?.trimmedNonEmpty
+        self.titleOverride = titleOverride?.trimmedNonEmpty
+        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
+        self.actionLabel = actionLabel?.trimmedNonEmpty
+        self.actionCommand = actionCommand?.trimmedNonEmpty
+        self.docsURLString = docsURLString?.trimmedNonEmpty
+        self.retryableOverride = retryableOverride
+        self.pauseReconnectOverride = pauseReconnectOverride
+        self.clientMinProtocol = clientMinProtocol
+        self.clientMaxProtocol = clientMaxProtocol
+        self.expectedProtocol = expectedProtocol
+        self.minimumProbeProtocol = minimumProbeProtocol
+    }
+
+    public var detailCode: String? {
+        self.detailCodeRaw
+    }
+
+    public var recommendedNextStepCode: String? {
+        self.recommendedNextStepRaw
+    }
+
+    public var detail: GatewayConnectAuthDetailCode? {
+        self.detailCodeRaw.flatMap(GatewayConnectAuthDetailCode.init(rawValue:))
+    }
+
+    public var recommendedNextStep: GatewayConnectRecoveryNextStep? {
+        self.recommendedNextStepRaw.flatMap(GatewayConnectRecoveryNextStep.init(rawValue:))
+    }
+
+    public var errorDescription: String? {
+        self.message
+    }
+
+    public func isProtocolMismatch(supportedProtocols: ClosedRange<Int>) -> Bool {
+        // Published protocol-3 gateways only send INVALID_REQUEST + expectedProtocol.
+        // Compare the advertised role range: node clients still accept protocol 3.
+        self.detail == .protocolMismatch ||
+            (self.detailCode == "INVALID_REQUEST" &&
+                self.expectedProtocol.map { !supportedProtocols.contains($0) } == true)
+    }
+
+    public var isNonRecoverable: Bool {
+        switch self.detail {
+        case .authTokenMismatch:
+            !self.canRetryWithDeviceToken
+        case .authTokenMissing,
+             .authBootstrapTokenInvalid,
+             .authTokenNotConfigured,
+             .authPasswordMissing,
+             .authPasswordMismatch,
+             .authPasswordNotConfigured,
+             .authRateLimited,
+             .authScopeMismatch,
+             .authVerifiedUserRequired,
+             .pairingRequired,
+             .protocolMismatch,
+             .controlUiDeviceIdentityRequired,
+             .deviceIdentityRequired:
+            true
+        default:
+            false
+        }
+    }
+}
+
+/// Structured error surfaced when the gateway responds with `{ ok: false }`.
+public struct GatewayMissingScopeErrorDetails: Equatable, Sendable {
+    public let missingScope: String
+    public let requiredScopes: [String]
+
+    public init(missingScope: String, requiredScopes: [String]) {
+        self.missingScope = missingScope
+        self.requiredScopes = requiredScopes
+    }
+}
+
+public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
+    public let method: String
+    public let code: String
+    public let message: String
+    public let details: [String: AnyCodable]
+    public let retryable: Bool?
+
+    public init(
+        method: String,
+        code: String?,
+        message: String?,
+        details: [String: AnyCodable]?,
+        retryable: Bool? = nil)
+    {
+        self.method = method
+        self.code = code?.trimmedNonEmpty ?? "GATEWAY_ERROR"
+        self.message = message?.trimmedNonEmpty ?? "gateway error"
+        self.details = details ?? [:]
+        self.retryable = retryable
+    }
+
+    public var detailsReason: String? {
+        self.details["reason"]?.stringValue?.trimmedNonEmpty
+    }
+
+    /// The startup admission contract proves this exact request was not dispatched.
+    public var isRetryableStartupAdmissionRefusal: Bool {
+        self.method == "chat.send" && self.code == "UNAVAILABLE" && self.retryable == true &&
+            self.detailsReason == "startup-sidecars" && self.details["method"]?.stringValue == self.method
+    }
+
+    public var missingScopeDetails: GatewayMissingScopeErrorDetails? {
+        guard self.details["code"]?.stringValue == "MISSING_SCOPE" else { return nil }
+        guard let missingScope = self.details["missingScope"]?.stringValue?.trimmedNonEmpty,
+              let values = self.details["requiredScopes"]?.arrayValue
+        else {
+            return nil
+        }
+        let requiredScopes = values.compactMap { $0.stringValue?.trimmedNonEmpty }
+        guard !requiredScopes.isEmpty, requiredScopes.count == values.count else { return nil }
+        return GatewayMissingScopeErrorDetails(
+            missingScope: missingScope,
+            requiredScopes: requiredScopes)
+    }
+
+    /// Structured missing scope with a fallback for gateways predating error details.
+    public var missingScope: String? {
+        if let structured = self.missingScopeDetails { return structured.missingScope }
+        guard self.code == "FORBIDDEN" || self.code == "INVALID_REQUEST" else { return nil }
+        guard let marker = self.message.range(of: "missing scope:", options: .caseInsensitive) else {
+            return nil
+        }
+        let suffix = self.message[marker.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return suffix.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+    }
+
+    public var isAuthorizationFailure: Bool {
+        if self.missingScope != nil { return true }
+        return self.code == "INVALID_REQUEST" &&
+            self.message.localizedCaseInsensitiveContains("unauthorized role")
+    }
+
+    public var errorDescription: String? {
+        if self.code == "GATEWAY_ERROR" { return "\(self.method): \(self.message)" }
+        return "\(self.method): [\(self.code)] \(self.message)"
+    }
+}
+
+/// The caller owns the pending turn until admission or cancellation. Each RPC keeps
+/// its ordinary deadline; only a method-bound startup refusal permits another attempt.
+public func withGatewayStartupAdmission<T>(
+    method: String,
+    isolation _: isolated (any Actor)? = #isolation,
+    operation: () async throws -> T) async throws -> T
+{
+    while true {
+        try Task.checkCancellation()
+        do {
+            return try await operation()
+        } catch let error as GatewayResponseError {
+            guard error.method == method, error.isRetryableStartupAdmissionRefusal else { throw error }
+            let hint = error.details["retryAfterMs"]?.doubleValue ?? 500
+            let delay = min(max(hint.isFinite ? hint : 500, 100), 2000)
+            try await Task.sleep(for: .milliseconds(delay))
+        }
+    }
+}
+
+public struct GatewayDecodingError: LocalizedError, Sendable {
+    public let method: String
+    public let message: String
+
+    public init(method: String, message: String) {
+        self.method = method
+        self.message = message
+    }
+
+    public var errorDescription: String? {
+        "\(self.method): \(self.message)"
+    }
+}

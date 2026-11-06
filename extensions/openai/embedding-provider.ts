@@ -1,0 +1,80 @@
+import {
+  createRemoteEmbeddingProvider,
+  normalizeEmbeddingModelWithPrefixes,
+  resolveRemoteEmbeddingClient,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
+
+export type OpenAiEmbeddingClient = RemoteEmbeddingClient & {
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
+  outputDimensionality?: number;
+};
+
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
+  "text-embedding-3-small": 8192,
+  "text-embedding-3-large": 8192,
+  "text-embedding-ada-002": 8191,
+};
+
+function normalizeOpenAiModel(model: string): string {
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: OPENAI_DEFAULT_EMBEDDING_MODEL,
+    prefixes: ["openai/"],
+  });
+}
+
+export async function createOpenAiEmbeddingProvider(
+  options: MemoryEmbeddingProviderCreateOptions,
+): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
+  const originalModel = options.model;
+  const resolvedClient = await resolveRemoteEmbeddingClient({
+    provider: options.provider ?? "openai",
+    capability: "embedding",
+    options,
+    defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
+    normalizeModel: normalizeOpenAiModel,
+  });
+  const isNativeOpenAi =
+    URL.parse(resolvedClient.baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") ===
+    "api.openai.com";
+  // Routers expect the provider-qualified model name; only native OpenAI strips it.
+  if (!isNativeOpenAi && originalModel.startsWith("openai/")) {
+    resolvedClient.model = `openai/${normalizeOpenAiModel(originalModel)}`;
+  }
+  const client: OpenAiEmbeddingClient = {
+    ...resolvedClient,
+    inputType: options.inputType,
+    queryInputType: options.queryInputType,
+    documentInputType: options.documentInputType,
+    outputDimensionality: options.dimensions,
+  };
+  return {
+    provider: createRemoteEmbeddingProvider({
+      id: "openai",
+      client,
+      errorPrefix: "openai embeddings failed",
+      maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
+      // https://developers.openai.com/api/reference/resources/embeddings/methods/create
+      maxInputsPerRequest: isNativeOpenAi ? 2048 : undefined,
+      buildRequestFields: (kind) => {
+        const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
+        const value = explicit ?? client.inputType;
+        const inputType = value?.trim();
+        return {
+          ...(client.outputDimensionality !== undefined
+            ? { dimensions: client.outputDimensionality }
+            : {}),
+          ...(inputType ? { input_type: inputType } : {}),
+        };
+      },
+    }),
+    client,
+  };
+}

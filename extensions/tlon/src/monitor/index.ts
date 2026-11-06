@@ -1,0 +1,1271 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  createChannelInboundEnvelopeBuilderAsync,
+  formatInboundMediaUnavailableText,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  bindIngressLifecycleToReplyOptions,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asFiniteNumber,
+  asNullableRecord as asRecord,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "../../runtime-api.js";
+import { createLoggerBackedRuntime } from "../../runtime-api.js";
+import { getTlonRuntime } from "../runtime.js";
+import { createSettingsManager, putTlonSetting } from "../settings.js";
+import { normalizeShip, parseChannelNest } from "../targets.js";
+import { resolveTlonAccount } from "../types.js";
+import { authenticate } from "../urbit/auth.js";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "../urbit/context.js";
+import type { DmInvite, Foreigns } from "../urbit/foreigns.js";
+import { sendDm, sendGroupMessage } from "../urbit/send.js";
+import { UrbitSSEClient } from "../urbit/sse-client.js";
+import { createTlonApprovalRuntime } from "./approval-runtime.js";
+import { createPendingApproval } from "./approval.js";
+import { resolveChannelAuthorization } from "./authorization.js";
+import { isCitedNestInScope, resolveTlonCitations } from "./cites.js";
+import { fetchInitData } from "./discovery.js";
+import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
+import {
+  createTlonIngressMonitor,
+  decodeTlonChannelsEvent,
+  decodeTlonChatEvent,
+  type TlonIngressLifecycle,
+} from "./ingress.js";
+import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
+import { prepareTlonGroupAdmission } from "./mentions.js";
+import {
+  applyTlonSettingsOverrides,
+  buildTlonSettingsMigrations,
+  createTlonSettingsInstaller,
+  mergeUniqueStrings,
+  shouldMigrateTlonSetting,
+} from "./settings-helpers.js";
+import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
+import {
+  extractDmPartnerShip,
+  extractMessageText,
+  formatModelName,
+  formatSummarizationHistoryText,
+  isDmAllowedWithIngress,
+  isGroupInviteAllowed,
+  isSummarizationRequest,
+  resolveTlonCommandAuthorizationWithIngress,
+  resolveTlonMessageIngress,
+  stripBotMention,
+} from "./utils.js";
+
+type MonitorTlonOpts = {
+  scheduler: PluginServiceSchedulerV1;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  accountId?: string | null;
+};
+
+/** Identity for an unverified group DM (club) author claim; never matches a bare ship. */
+function clubSenderId(clubId: string, claimedShip: string): string {
+  return `club:${clubId}:${claimedShip}`;
+}
+
+export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> {
+  const discoveryScheduler = opts.scheduler.scope();
+  const core = getTlonRuntime();
+  const cfg = core.config.current() as OpenClawConfig;
+  if (cfg.channels?.tlon?.enabled === false) {
+    return;
+  }
+
+  const logger = core.logging.getChildLogger({ module: "tlon-auto-reply" });
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createLoggerBackedRuntime({
+      logger,
+    });
+
+  const account = resolveTlonAccount(cfg, opts.accountId);
+  if (!account.enabled) {
+    return;
+  }
+  if (!account.configured || !account.ship || !account.url || !account.code) {
+    throw new Error("Tlon account not configured (ship/url/code required)");
+  }
+
+  const botShipName = normalizeShip(account.ship);
+  runtime.log?.(`[tlon] Starting monitor for ${botShipName}`);
+
+  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    account.dangerouslyAllowPrivateNetwork,
+  );
+
+  const accountUrl = account.url;
+  const accountCode = account.code;
+
+  async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
+    let authAttempt = 0;
+    return await retryAsync(
+      async () => {
+        authAttempt += 1;
+        if (opts.abortSignal?.aborted) {
+          throw new Error("Aborted while waiting to authenticate");
+        }
+        try {
+          runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
+          return await authenticate(accountUrl, accountCode, { ssrfPolicy });
+        } catch (error: unknown) {
+          runtime.error?.(
+            `[tlon] Failed to authenticate (attempt ${authAttempt}): ${formatErrorMessage(error)}`,
+          );
+          throw error;
+        }
+      },
+      {
+        attempts: Math.max(1, maxAttempts),
+        minDelayMs: 0,
+        shouldRetry: () => !opts.abortSignal?.aborted,
+        delayMs: ({ attempt }) => Math.min(30_000, 1_000 * 2 ** (attempt - 1)),
+        onRetry: ({ delayMs }) => {
+          runtime.log?.(`[tlon] Retrying authentication in ${delayMs}ms...`);
+        },
+        sleep: (delayMs) => sleepWithAbort(delayMs, opts.abortSignal),
+      },
+    );
+  }
+
+  const cookie = await authenticateWithRetry();
+  const api = new UrbitSSEClient(account.url, cookie, {
+    ship: botShipName,
+    ssrfPolicy,
+    logger: {
+      log: (message) => runtime.log?.(message),
+      error: (message) => runtime.error?.(message),
+    },
+    onReconnect: async (client) => {
+      runtime.log?.("[tlon] Re-authenticating on SSE reconnect...");
+      const newCookie = await authenticateWithRetry(5);
+      client.updateCookie(newCookie);
+      runtime.log?.("[tlon] Re-authentication successful");
+    },
+  });
+
+  let groupChannels: string[] = [];
+  let botNickname: string | null = null;
+
+  const settingsManager = createSettingsManager(api, {
+    log: (msg) => runtime.log?.(msg),
+    error: (msg) => runtime.error?.(msg),
+  });
+
+  const settingsState = applyTlonSettingsOverrides({ account, currentSettings: {} });
+  const installSettings = createTlonSettingsInstaller(settingsState, account, (message) =>
+    runtime.log?.(message),
+  );
+
+  // Track recent threads we've participated in so replies can omit a mention.
+  const participatedThreads = createParticipatedThreadTracker();
+  const channelHistory = createChannelHistoryCache();
+
+  // Track DM senders per session to detect shared sessions (security warning)
+  const dmSendersBySession = new Map<string, Set<string>>();
+  let sharedSessionWarningSent = false;
+
+  try {
+    const selfProfile = await api.scry("/contacts/v1/self.json");
+    if (selfProfile && typeof selfProfile === "object") {
+      const profile = selfProfile as { nickname?: { value?: string } };
+      botNickname = profile.nickname?.value || null;
+      if (botNickname) {
+        runtime.log?.(`[tlon] Bot nickname: ${botNickname}`);
+      }
+    }
+  } catch (error: unknown) {
+    runtime.log?.(`[tlon] Could not fetch nickname: ${formatErrorMessage(error)}`);
+  }
+
+  let initForeigns: Foreigns | null = null;
+
+  settingsState.currentSettings = await settingsManager.load();
+  const migrations = buildTlonSettingsMigrations(account, settingsState.currentSettings);
+
+  for (const { key, fileValue, settingsValue } of migrations) {
+    if (shouldMigrateTlonSetting(fileValue, settingsValue)) {
+      try {
+        await putTlonSetting(api, key, fileValue);
+        runtime.log?.(`[tlon] Migrated ${key} from config to settings store`);
+      } catch (err) {
+        runtime.log?.(`[tlon] Failed to migrate ${key}: ${String(err)}`);
+      }
+    }
+  }
+  installSettings(settingsState.currentSettings);
+
+  // Run channel discovery AFTER settings are loaded (so settings store value is used)
+  if (settingsState.effectiveAutoDiscoverChannels) {
+    const initData = await fetchInitData(api, runtime);
+    if (initData.channels.length > 0) {
+      groupChannels = initData.channels;
+    }
+    initForeigns = initData.foreigns;
+  }
+
+  if (account.groupChannels.length > 0) {
+    groupChannels = mergeUniqueStrings(groupChannels, account.groupChannels);
+    runtime.log?.(
+      `[tlon] Added ${account.groupChannels.length} manual groupChannels to monitoring`,
+    );
+  }
+
+  // Also merge settings store groupChannels (may have been set via tlon settings command)
+  groupChannels = mergeUniqueStrings(groupChannels, settingsState.currentSettings.groupChannels);
+
+  if (groupChannels.length > 0) {
+    runtime.log?.(
+      `[tlon] Monitoring ${groupChannels.length} group channel(s): ${groupChannels.join(", ")}`,
+    );
+  } else {
+    runtime.log?.("[tlon] No group channels to monitor (DMs only)");
+  }
+
+  function isOwner(ship: string): boolean {
+    if (!settingsState.effectiveOwnerShip) {
+      return false;
+    }
+    return normalizeShip(ship) === settingsState.effectiveOwnerShip;
+  }
+
+  /** DM ingress allowlist for one chat event; club claims only match as their club-scoped id. */
+  function resolveChatAllowFrom(params: {
+    ownerDm: boolean;
+    isClubMessage: boolean;
+    senderShip: string;
+    senderId: string;
+  }): string[] {
+    if (params.ownerDm) {
+      return [params.senderShip];
+    }
+    if (!params.isClubMessage) {
+      return settingsState.effectiveDmAllowlist;
+    }
+    const claimedShipAllowed = settingsState.effectiveDmAllowlist.some(
+      (ship) => normalizeShip(ship) === params.senderShip,
+    );
+    return claimedShipAllowed ? [params.senderId] : [];
+  }
+
+  const processMessage = async (params: {
+    messageId: string;
+    senderShip: string;
+    /**
+     * Group DM (club) id when the message came from a club. senderShip is then only the
+     * unverified author claim: authorization uses a club-scoped id and it never acts as owner.
+     */
+    clubId?: string;
+    messageText: string;
+    messageContent?: unknown; // Raw Tlon content for media extraction
+    isGroup: boolean;
+    channelNest?: string;
+    timestamp: number;
+    parentId?: string | null;
+    isThreadReply?: boolean;
+    isAdmissionAllowed?: () => boolean;
+    turnAdoptionLifecycle?: TlonIngressLifecycle;
+    resolveChannelIngress: (
+      contextBinding: ChannelIngressContextBinding,
+    ) => Promise<ResolvedChannelMessageIngress>;
+  }) => {
+    const {
+      messageId,
+      senderShip,
+      isGroup,
+      channelNest,
+      timestamp,
+      parentId,
+      isThreadReply,
+      isAdmissionAllowed,
+      messageContent,
+      turnAdoptionLifecycle,
+      resolveChannelIngress,
+    } = params;
+    let messageText = params.messageText;
+    const clubId = params.clubId;
+    const senderId = clubId === undefined ? senderShip : clubSenderId(clubId, senderShip);
+
+    let attachments: Array<{ path: string; contentType: string }> = [];
+    let unavailableMediaCount = 0;
+    if (messageContent) {
+      ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
+        messageContent,
+        account.mediaMaxBytes,
+      ));
+      if (attachments.length > 0) {
+        runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
+      }
+    }
+
+    if (isThreadReply && parentId && channelNest) {
+      const threadHistory = await fetchThreadHistory(api, channelNest, parentId, runtime);
+      if (threadHistory.length > 0) {
+        const threadContext = threadHistory
+          .slice(-10)
+          .map((msg) => `${msg.author}: ${msg.content}`)
+          .join("\n");
+
+        const contextNote = `[Thread conversation - ${threadHistory.length} previous replies. You are participating in this thread. Only respond if relevant or helpful - you don't need to reply to every message.]`;
+        messageText = `${contextNote}\n\n[Previous messages]\n${threadContext}\n\n[Current message]\n${messageText}`;
+        runtime?.log?.(`[tlon] Added thread context (${threadHistory.length} replies) to message`);
+      }
+    }
+
+    const groupTarget = isGroup && channelNest ? parseChannelNest(channelNest) : null;
+    const groupSendContext = groupTarget && { api, fromShip: botShipName, ...groupTarget };
+
+    if (isGroup && channelNest && isSummarizationRequest(messageText)) {
+      try {
+        const history = await channelHistory.getChannelHistory(api, channelNest, runtime);
+        if (history.length === 0) {
+          const noHistoryMsg =
+            "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";
+          if (groupSendContext && isAdmissionAllowed?.() !== false) {
+            await sendGroupMessage({ ...groupSendContext, text: noHistoryMsg });
+          }
+          return;
+        }
+
+        const historyText = formatSummarizationHistoryText(history, cfg);
+
+        messageText =
+          `Please summarize this channel conversation (${history.length} recent messages):\n\n${historyText}\n\n` +
+          "Provide a concise summary highlighting:\n" +
+          "1. Main topics discussed\n" +
+          "2. Key decisions or conclusions\n" +
+          "3. Action items if any\n" +
+          "4. Notable participants";
+      } catch (error: unknown) {
+        const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${formatErrorMessage(error)}`;
+        if (groupSendContext && isAdmissionAllowed?.() !== false) {
+          await sendGroupMessage({ ...groupSendContext, text: errorMsg });
+        }
+        return;
+      }
+    }
+
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "tlon",
+      accountId: opts.accountId,
+      peer: {
+        kind: isGroup ? "group" : "direct",
+        id: isGroup ? (channelNest ?? senderShip) : senderShip,
+      },
+    });
+    const channelIngress = await resolveChannelIngress({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    });
+    if (!channelIngress.senderAccess.allowed) {
+      runtime.log?.(`[tlon] Authorization changed before dispatch for ${senderShip}`);
+      return;
+    }
+
+    if (!isGroup) {
+      const sessionKey = route.sessionKey;
+      if (!dmSendersBySession.has(sessionKey)) {
+        dmSendersBySession.set(sessionKey, new Set());
+      }
+      const senders = dmSendersBySession.get(sessionKey)!;
+      if (senders.size > 0 && !senders.has(senderShip)) {
+        runtime.log?.(
+          `[tlon] ⚠️ SECURITY: Multiple users sharing DM session. ` +
+            `Configure "session.dmScope: per-channel-peer" in OpenClaw config.`,
+        );
+
+        if (!sharedSessionWarningSent && settingsState.effectiveOwnerShip) {
+          sharedSessionWarningSent = true;
+          const warningMsg =
+            `⚠️ Security Warning: Multiple users are sharing a DM session with this bot. ` +
+            `This can leak conversation context between users.\n\n` +
+            `Fix: Add to your OpenClaw config:\n` +
+            `session:\n  dmScope: "per-channel-peer"\n\n` +
+            `Docs: https://docs.openclaw.ai/concepts/session#dm-isolation`;
+
+          sendDm({
+            api,
+            fromShip: botShipName,
+            toShip: settingsState.effectiveOwnerShip,
+            text: warningMsg,
+          }).catch((err: unknown) =>
+            runtime.error?.(
+              `[tlon] Failed to send security warning to owner: ${formatErrorMessage(err)}`,
+            ),
+          );
+        }
+      }
+      senders.add(senderShip);
+    }
+
+    const senderRole = clubId === undefined && isOwner(senderShip) ? "owner" : "user";
+    const fromLabel = isGroup
+      ? `${senderShip} [${senderRole}] in ${channelNest}`
+      : clubId !== undefined
+        ? `${senderShip} (unverified) [${senderRole}] in group DM ${clubId}`
+        : `${senderShip} [${senderRole}]`;
+
+    const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
+      messageText,
+      cfg,
+    );
+    let commandAuthorized = false;
+
+    if (shouldComputeAuth) {
+      const commandAccess = await resolveTlonCommandAuthorizationWithIngress({
+        senderShip: senderId,
+        ownerShip: settingsState.effectiveOwnerShip,
+      });
+      commandAuthorized = commandAccess.commandAccess.authorized;
+
+      if (!commandAuthorized) {
+        console.log(
+          `[tlon] Command attempt denied: ${senderShip} is not owner (owner=${settingsState.effectiveOwnerShip ?? "not configured"})`,
+        );
+      }
+    }
+
+    const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments);
+
+    const body = (await createChannelInboundEnvelopeBuilderAsync({ cfg, route }))({
+      channel: "Tlon",
+      from: fromLabel,
+      timestamp,
+      body: promptMedia.body,
+    });
+
+    const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
+    const bodyForAgent =
+      unavailableMediaCount > 0
+        ? formatInboundMediaUnavailableText({
+            body: commandBody,
+            notice: `[tlon ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
+          })
+        : commandBody;
+    const ctxPayload = core.channel.inbound.buildContext({
+      channel: "tlon",
+      accountId: route.accountId,
+      messageId,
+      timestamp,
+      from: isGroup ? `tlon:group:${channelNest}` : `tlon:${senderId}`,
+      sender: {
+        id: senderId,
+        // Club authors are unverified, so the display name must not match name-based allowlists.
+        name: clubId === undefined ? senderShip : senderId,
+        roles: [senderRole],
+      },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: isGroup ? (channelNest ?? senderShip) : senderShip,
+        label: fromLabel,
+      },
+      route: {
+        agentId: route.agentId,
+        dmScope: route.dmScope,
+        accountId: route.accountId,
+        routeSessionKey: route.sessionKey,
+      },
+      reply: {
+        to: `tlon:${botShipName}`,
+        originatingTo: `tlon:${isGroup ? channelNest : botShipName}`,
+        replyToId: parentId ?? undefined,
+      },
+      message: {
+        body,
+        bodyForAgent,
+        rawBody: messageText,
+        commandBody,
+      },
+      channelIngress,
+      extra: {
+        GroupSubject: undefined,
+        SenderRole: senderRole,
+        CommandAuthorized: commandAuthorized,
+        CommandSource: "text" as const,
+        ...(attachments.length > 0 && { Attachments: attachments }),
+        // Tlon groups support one reply level: durable delivery selects the root or channel.
+        ...(isGroup && { ReplyThreading: { implicitCurrentMessage: "deny" as const } }),
+        ...(parentId && { ThreadId: parentId }),
+      },
+    });
+
+    const dispatchStartTime = Date.now();
+
+    const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
+    const deliveryTarget = isGroup ? channelNest : senderShip;
+
+    const prepareReplyPayload = (payload: ReplyPayload): ReplyPayload => {
+      const replyText = payload.text;
+      if (!replyText || !settingsState.effectiveShowModelSig) {
+        return payload;
+      }
+      const extPayload = payload as {
+        metadata?: { model?: string };
+        model?: string;
+      };
+      const defaultModel = cfg.agents?.defaults?.model;
+      const modelInfo =
+        extPayload.metadata?.model ||
+        extPayload.model ||
+        (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
+      return {
+        ...payload,
+        text: `${replyText}\n\n_[Generated by ${formatModelName(modelInfo)}]_`,
+      };
+    };
+
+    const replyOptions: GetReplyOptions = {
+      ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
+      ...(promptMedia.media.length > 0 ? { media: promptMedia.media } : {}),
+    };
+    if (isAdmissionAllowed?.() === false) {
+      return;
+    }
+    await core.channel.inbound.dispatch({
+      channel: "tlon",
+      accountId: route.accountId,
+      cfg,
+      route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
+      ctxPayload,
+      replyPipeline: {},
+      delivery: {
+        preparePayload: prepareReplyPayload,
+        durable: deliveryTarget
+          ? () => ({
+              to: deliveryTarget,
+              replyToId: parentId ?? undefined,
+              threadId: parentId ?? undefined,
+            })
+          : false,
+        deliver: async (payload: ReplyPayload) => {
+          const replyText = payload.text;
+          if (!replyText) {
+            return { visibleReplySent: false };
+          }
+
+          if (isGroup && channelNest) {
+            if (!groupSendContext) {
+              return { visibleReplySent: false };
+            }
+            await sendGroupMessage({
+              ...groupSendContext,
+              text: replyText,
+              replyToId: parentId,
+            });
+            return { visibleReplySent: true, replyToId: parentId ?? undefined };
+          }
+
+          await sendDm({
+            api,
+            fromShip: botShipName,
+            toShip: senderShip,
+            text: replyText,
+          });
+          return { visibleReplySent: true };
+        },
+        onDelivered: (_payload, _info, result) => {
+          if (isGroup && channelNest && parentId && result?.visibleReplySent !== false) {
+            participatedThreads.add(parentId);
+            runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
+          }
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            `[tlon] ${info.kind} reply failed after ${Date.now() - dispatchStartTime}ms: ${String(err)}`,
+          );
+        },
+      },
+      dispatcherOptions: {
+        humanDelay,
+      },
+      ...(turnAdoptionLifecycle || promptMedia.media.length > 0 ? { replyOptions } : {}),
+      record: {
+        onRecordError: (err) => {
+          runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);
+        },
+      },
+    });
+  };
+
+  const watchedChannels = new Set<string>(groupChannels);
+  // DMs bind no source channel; with cross-channel citations off, only owner 1:1 DMs cite there.
+  const citationScope = (sourceNest?: string) => (nest: string) =>
+    isCitedNestInScope(nest, settingsState, account.crossChannelCitations !== false, sourceNest);
+
+  const addWatchedChannels = (channels: readonly string[], logPrefix?: string): number => {
+    const previousCount = watchedChannels.size;
+    for (const channelNest of channels) {
+      if (!watchedChannels.has(channelNest)) {
+        watchedChannels.add(channelNest);
+        if (logPrefix) {
+          runtime.log?.(`${logPrefix}${channelNest}`);
+        }
+      }
+    }
+    return watchedChannels.size - previousCount;
+  };
+
+  const { queueApprovalRequest, handleApprovalResponse, handleAdminCommand } =
+    createTlonApprovalRuntime({
+      api,
+      runtime,
+      botShipName,
+      state: settingsState,
+      processApprovedMessage: async (approval) => {
+        if (!approval.originalMessage || approval.type === "group") {
+          return;
+        }
+        const isGroup = approval.type === "channel";
+        const conversationId = isGroup ? (approval.channelNest ?? "") : approval.requestingShip;
+        if (isGroup && !conversationId) {
+          return;
+        }
+        // A club-originated request replays with the same club-scoped, non-owner identity.
+        const clubId = !isGroup ? approval.clubId : undefined;
+        // DM requests stored before provenance was recorded may be group DM claims; approving
+        // still allowlists the ship, but the unverifiable message is not replayed.
+        if (!isGroup && clubId === undefined && approval.verifiedDirect !== true) {
+          runtime.log?.(
+            `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown`,
+          );
+          return;
+        }
+        const replaySenderId =
+          clubId === undefined
+            ? approval.requestingShip
+            : clubSenderId(clubId, approval.requestingShip);
+        await processMessage({
+          messageId: approval.originalMessage.messageId,
+          senderShip: approval.requestingShip,
+          clubId,
+          messageText: approval.originalMessage.messageText,
+          messageContent: approval.originalMessage.messageContent,
+          timestamp: approval.originalMessage.timestamp,
+          isGroup,
+          ...(isGroup
+            ? {
+                channelNest: conversationId,
+                parentId: approval.originalMessage.parentId,
+                isThreadReply: approval.originalMessage.isThreadReply,
+              }
+            : {}),
+          resolveChannelIngress: async (contextBinding) =>
+            await resolveTlonMessageIngress({
+              senderShip: replaySenderId,
+              accountId: account.accountId,
+              conversation: { kind: isGroup ? "group" : "direct", id: conversationId },
+              allowFrom: [replaySenderId],
+              ...(isGroup ? { groupPolicy: "allowlist" } : {}),
+              contextBinding,
+            }),
+        });
+      },
+      refreshWatchedChannels: async () => {
+        const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+        return addWatchedChannels(discoveredChannels);
+      },
+    });
+
+  const handleChannelsFirehose = async (
+    event: unknown,
+    turnAdoptionLifecycle?: TlonIngressLifecycle,
+  ) => {
+    try {
+      const message = decodeTlonChannelsEvent(event);
+      if (!message || !watchedChannels.has(message.nest)) {
+        return;
+      }
+      const { nest, messageId, content, isThreadReply, messageSet } = message;
+
+      const senderShip = normalizeShip(readString(content, "author") ?? "");
+      if (!senderShip || senderShip === botShipName) {
+        return;
+      }
+
+      // Extraction renders attacker-controlled content shapes; a failure here must
+      // never tear down the shared SSE stream (the event would replay unacked forever).
+      let rawText: string;
+      try {
+        rawText = extractMessageText(content.content);
+      } catch (error: unknown) {
+        runtime.log?.(`[tlon] Failed to extract message text: ${formatErrorMessage(error)}`);
+        return;
+      }
+      if (!rawText.trim()) {
+        return;
+      }
+
+      const sentAt = asFiniteNumber(content?.sent) ?? Date.now();
+
+      channelHistory.cacheMessage(nest, {
+        author: senderShip,
+        content: rawText,
+        timestamp: sentAt,
+      });
+
+      const { allowedShips, senderAllowed, mentionDecision, parentId, isAdmissionAllowed } =
+        await prepareTlonGroupAdmission({
+          cfg,
+          account,
+          api,
+          channelNest: nest,
+          senderShip,
+          isOwner,
+          botShipName,
+          botNickname,
+          rawText,
+          messageSeal: asRecord(messageSet?.seal),
+          isThreadReply,
+          hasParticipatedInThread: participatedThreads.has,
+          getSettings: () => settingsState.currentSettings,
+          runtime,
+        });
+
+      if (mentionDecision.shouldSkip) {
+        return;
+      }
+
+      if (!senderAllowed) {
+        if (settingsState.effectiveOwnerShip) {
+          const approval = createPendingApproval({
+            type: "channel",
+            requestingShip: senderShip,
+            channelNest: nest,
+            messagePreview: rawText,
+            originalMessage: {
+              messageId,
+              messageText: rawText,
+              messageContent: content.content,
+              timestamp: sentAt,
+              parentId: parentId ?? undefined,
+              isThreadReply,
+            },
+          });
+          await queueApprovalRequest(approval);
+        } else {
+          runtime.log?.(
+            `[tlon] Access denied: ${senderShip} in ${nest} (allowed: ${allowedShips.join(", ")})`,
+          );
+        }
+        return;
+      }
+
+      const messageText =
+        (await resolveTlonCitations(content.content, citationScope(nest), api, runtime)) + rawText;
+
+      await processMessage({
+        messageId,
+        senderShip,
+        messageText,
+        messageContent: content.content,
+        isGroup: true,
+        channelNest: nest,
+        timestamp: sentAt,
+        parentId,
+        isThreadReply,
+        turnAdoptionLifecycle,
+        isAdmissionAllowed,
+        resolveChannelIngress: async (contextBinding) => {
+          const { mode, allowedShips: currentAllowedShips } = resolveChannelAuthorization(
+            cfg,
+            nest,
+            settingsState.currentSettings,
+          );
+          return await resolveTlonMessageIngress({
+            senderShip,
+            accountId: account.accountId,
+            conversation: { kind: "group", id: nest },
+            allowFrom: [
+              ...currentAllowedShips.map(normalizeShip),
+              ...(settingsState.effectiveOwnerShip
+                ? [normalizeShip(settingsState.effectiveOwnerShip)]
+                : []),
+            ],
+            groupPolicy: mode === "restricted" ? "allowlist" : "open",
+            contextBinding,
+          });
+        },
+      });
+    } catch (error: unknown) {
+      runtime.error?.(`[tlon] Error handling channel firehose event: ${formatErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  // Track processed DM invites only while they remain in the active /v3 snapshot.
+  const processedDmInvites = createActiveSnapshotTracker();
+
+  const handleChatFirehose = async (
+    event: unknown,
+    turnAdoptionLifecycle?: TlonIngressLifecycle,
+  ) => {
+    try {
+      if (Array.isArray(event)) {
+        // UrbitSSEClient awaits each handler before reading and acking the next fact,
+        // so snapshot replacement and invite side effects cannot overlap.
+        // The /v3 invite array is the active snapshot. Forget ships that left it
+        // instead of retaining every invite seen during the monitor lifetime.
+        const ships = processedDmInvites.beginSnapshot(
+          (event as DmInvite[]).map((invite) => normalizeShip(invite.ship || "")).filter(Boolean),
+        );
+
+        for (const ship of ships) {
+          if (processedDmInvites.has(ship)) {
+            continue;
+          }
+
+          const ownerInvite = isOwner(ship);
+          const allowed =
+            ownerInvite || (await isDmAllowedWithIngress(ship, settingsState.effectiveDmAllowlist));
+          if (ownerInvite || (settingsState.effectiveAutoAcceptDmInvites && allowed)) {
+            await api.poke({
+              app: "chat",
+              mark: "chat-dm-rsvp",
+              json: { ship, ok: true },
+            });
+            processedDmInvites.add(ship);
+            runtime.log?.(
+              ownerInvite
+                ? `[tlon] Auto-accepted DM invite from owner ${ship}`
+                : `[tlon] Auto-accepted DM invite from ${ship}`,
+            );
+            continue;
+          }
+
+          if (settingsState.effectiveOwnerShip && !allowed) {
+            const approval = createPendingApproval({
+              type: "dm",
+              requestingShip: ship,
+              messagePreview: "(DM invite - no message yet)",
+            });
+            processedDmInvites.addIfAccepted(ship, await queueApprovalRequest(approval));
+          }
+        }
+        return;
+      }
+      const message = decodeTlonChatEvent(event);
+      if (!message) {
+        return;
+      }
+      const { whom, messageId, essay } = message;
+
+      const authorShip = normalizeShip(readString(essay, "author") ?? "");
+      const partnerShip = extractDmPartnerShip(whom);
+      const senderShip = partnerShip || authorShip;
+      // Club (group DM) events name the conversation, not the sender. Their author is
+      // whatever the sending ship wrote, so it must never carry owner or command identity.
+      const clubId = partnerShip ? undefined : typeof whom === "string" && whom ? whom : "unknown";
+      const isClubMessage = clubId !== undefined;
+      const senderId = isClubMessage ? clubSenderId(clubId, senderShip) : senderShip;
+
+      if (authorShip === botShipName) {
+        return;
+      }
+      if (!senderShip || senderShip === botShipName) {
+        return;
+      }
+
+      if (authorShip && partnerShip && authorShip !== partnerShip) {
+        runtime.log?.(
+          `[tlon] DM ship mismatch (author=${authorShip}, partner=${partnerShip}) - routing to partner`,
+        );
+      }
+
+      // Same extraction-failure containment as the channels firehose above.
+      let rawText: string;
+      try {
+        rawText = extractMessageText(essay.content);
+      } catch (error: unknown) {
+        runtime.log?.(`[tlon] Failed to extract message text: ${formatErrorMessage(error)}`);
+        return;
+      }
+      if (!rawText.trim()) {
+        return;
+      }
+
+      const ownerDm = !isClubMessage && isOwner(senderShip);
+      if (ownerDm && (await handleApprovalResponse(rawText))) {
+        runtime.log?.("[tlon] Processed approval response from owner");
+        return;
+      }
+
+      if (ownerDm && (await handleAdminCommand(rawText))) {
+        runtime.log?.("[tlon] Processed admin command from owner");
+        return;
+      }
+
+      const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
+        await resolveTlonMessageIngress({
+          senderShip: senderId,
+          accountId: account.accountId,
+          conversation: { kind: "direct", id: senderShip },
+          allowFrom: resolveChatAllowFrom({ ownerDm, isClubMessage, senderShip, senderId }),
+          contextBinding,
+        });
+      if (!ownerDm && !(await resolveChannelIngress()).senderAccess.allowed) {
+        if (settingsState.effectiveOwnerShip) {
+          const approval = createPendingApproval({
+            type: "dm",
+            requestingShip: senderShip,
+            messagePreview: rawText,
+            ...(isClubMessage ? { clubId } : { verifiedDirect: true }),
+            // Never store a club message claiming the owner for replay, even as a non-owner.
+            ...(isClubMessage && isOwner(senderShip)
+              ? {}
+              : {
+                  originalMessage: {
+                    messageId,
+                    messageText: rawText,
+                    messageContent: essay.content,
+                    timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
+                  },
+                }),
+          });
+          await queueApprovalRequest(approval);
+        } else {
+          runtime.log?.(`[tlon] Blocked DM from ${senderShip}: not in allowlist`);
+        }
+        return;
+      }
+
+      const can = (nest: string) =>
+          (!isClubMessage && isOwner(senderShip)) || citationScope()(nest),
+        agentText = (await resolveTlonCitations(essay.content, can, api, runtime)) + rawText;
+      if (ownerDm) {
+        runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
+      }
+      await processMessage({
+        messageText: agentText,
+        messageId,
+        senderShip,
+        clubId,
+        messageContent: essay.content,
+        isGroup: false,
+        timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
+        turnAdoptionLifecycle,
+        resolveChannelIngress,
+      });
+    } catch (error: unknown) {
+      runtime.error?.(`[tlon] Error handling chat firehose event: ${formatErrorMessage(error)}`);
+      throw error;
+    }
+  };
+
+  const ingress = createTlonIngressMonitor({
+    accountId: account.accountId,
+    runtime,
+    abortSignal: opts.abortSignal,
+    dispatch: async (source, event, turnAdoptionLifecycle) => {
+      if (source === "channels") {
+        await handleChannelsFirehose(event, turnAdoptionLifecycle);
+        return;
+      }
+      await handleChatFirehose(event, turnAdoptionLifecycle);
+    },
+  });
+
+  const subscriptionLogHandlers = (errorLabel: string, endedLabel: string) => ({
+    err: (error: unknown) => {
+      runtime.error?.(`[tlon] ${errorLabel} error: ${String(error)}`);
+    },
+    quit: () => {
+      runtime.log?.(`[tlon] ${endedLabel} ended`);
+    },
+  });
+
+  try {
+    runtime.log?.("[tlon] Subscribing to firehose updates...");
+
+    for (const [source, path, label, handleEvent] of [
+      ["channels", "/v2", "Channels", handleChannelsFirehose],
+      ["chat", "/v3", "Chat", handleChatFirehose],
+    ] as const) {
+      await api.subscribe({
+        app: source,
+        path,
+        event: async (event) => {
+          const result = await ingress.receive({ source, event });
+          if (result.kind === "ignored") {
+            await handleEvent(event);
+          }
+        },
+        ...subscriptionLogHandlers(`${label} firehose`, `${label} firehose subscription`),
+      });
+      runtime.log?.(`[tlon] Subscribed to ${source} firehose (${path})`);
+    }
+
+    await api.subscribe({
+      app: "contacts",
+      path: "/v1/news",
+      event: (event: unknown) => {
+        try {
+          const eventRecord = asRecord(event);
+          if (eventRecord?.self) {
+            const selfUpdate = asRecord(eventRecord.self);
+            const contact = asRecord(selfUpdate?.contact);
+            const nickname = asRecord(contact?.nickname);
+            if (nickname && "value" in nickname) {
+              const newNickname = readString(nickname, "value") ?? null;
+              if (newNickname !== botNickname) {
+                botNickname = newNickname;
+                runtime.log?.(`[tlon] Nickname updated: ${botNickname}`);
+              }
+            }
+          }
+        } catch (error: unknown) {
+          runtime.error?.(`[tlon] Error handling contacts event: ${formatErrorMessage(error)}`);
+        }
+      },
+      ...subscriptionLogHandlers("Contacts subscription", "Contacts subscription"),
+    });
+    runtime.log?.("[tlon] Subscribed to contacts updates (/v1/news)");
+
+    try {
+      await settingsManager.startSubscription((newSettings) => {
+        // Keep watching during transitions; the authorization check handles removals.
+        addWatchedChannels(
+          newSettings.groupChannels ?? [],
+          "[tlon] Settings: now watching channel ",
+        );
+
+        // Install the snapshot and effective overrides together; deleted overrides
+        // fall back to file config while empty arrays remain authoritative.
+        installSettings(newSettings);
+      });
+    } catch (err) {
+      // Settings subscription is optional - don't fail if it doesn't work
+      runtime.log?.(`[tlon] Settings subscription not available: ${String(err)}`);
+    }
+
+    // Subscribe to groups-ui for real-time channel additions (when invites are accepted)
+    try {
+      await api.subscribe({
+        app: "groups",
+        path: "/groups/ui",
+        event: async (event: unknown) => {
+          try {
+            const eventRecord = asRecord(event);
+            if (!eventRecord) {
+              return;
+            }
+
+            const join = asRecord(eventRecord.join);
+            const joinedChannels = Array.isArray(join?.channels) ? join.channels : [];
+            const discoveredChannels = mergeUniqueStrings(
+              Object.keys(asRecord(eventRecord.channels) ?? {}),
+              joinedChannels.filter((channel): channel is string => typeof channel === "string"),
+            ).filter((channel) => channel.startsWith("chat/"));
+
+            addWatchedChannels(discoveredChannels, "[tlon] Auto-detected new channel: ");
+
+            if (!settingsState.effectiveAutoAcceptGroupInvites) {
+              return;
+            }
+            const settingsSnapshot = settingsState.currentSettings;
+            const currentChannels = settingsSnapshot.groupChannels ?? [];
+            const unpersistedChannels = discoveredChannels.filter(
+              (channel) => !currentChannels.includes(channel),
+            );
+            if (unpersistedChannels.length === 0) {
+              return;
+            }
+            const updatedChannels = mergeUniqueStrings(currentChannels, unpersistedChannels);
+            await putTlonSetting(api, "groupChannels", updatedChannels);
+            if (settingsState.currentSettings === settingsSnapshot) {
+              installSettings({ ...settingsSnapshot, groupChannels: updatedChannels }, true);
+            }
+            runtime.log?.(`[tlon] Persisted ${unpersistedChannels.join(", ")} to settings store`);
+          } catch (error: unknown) {
+            runtime.error?.(`[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`);
+            // SSE advances its durable ack only after this callback resolves.
+            throw error;
+          }
+        },
+        ...subscriptionLogHandlers("Groups-ui subscription", "Groups-ui subscription"),
+      });
+      runtime.log?.("[tlon] Subscribed to groups-ui for real-time channel detection");
+    } catch (err) {
+      // Groups-ui subscription is optional - channel discovery will still work via polling
+      runtime.log?.(`[tlon] Groups-ui subscription failed (will rely on polling): ${String(err)}`);
+    }
+
+    // Subscribe to foreigns for auto-accepting group invites
+    // Always subscribe so we can hot-reload the setting via settings store
+    {
+      const processedGroupInvites = new Set<string>();
+
+      const processPendingInvites = async (foreigns: Foreigns, propagateWriteFailures = false) => {
+        if (!foreigns || typeof foreigns !== "object") {
+          return;
+        }
+
+        let firstWriteError: Error | undefined;
+        for (const [groupFlag, foreign] of Object.entries(foreigns)) {
+          const validInvite = foreign.invites?.find((invite) => invite.valid);
+          // Foreigns facts are per-group deltas. Retire only this group's terminal
+          // invite so a later invitation can be admitted without replaying other groups.
+          if (foreign.progress === "done" || !validInvite) {
+            processedGroupInvites.delete(groupFlag);
+            continue;
+          }
+          if (processedGroupInvites.has(groupFlag)) {
+            continue;
+          }
+
+          const inviterShip = validInvite.from;
+          const ownerInvite = isOwner(inviterShip);
+          const shouldAccept =
+            ownerInvite ||
+            (settingsState.effectiveAutoAcceptGroupInvites &&
+              isGroupInviteAllowed(inviterShip, settingsState.effectiveGroupInviteAllowlist));
+          if (shouldAccept) {
+            try {
+              await api.poke({
+                app: "groups",
+                mark: "group-join",
+                json: {
+                  flag: groupFlag,
+                  "join-all": true,
+                },
+              });
+              processedGroupInvites.add(groupFlag);
+              runtime.log?.(
+                ownerInvite
+                  ? `[tlon] Auto-accepted group invite from owner: ${groupFlag}`
+                  : `[tlon] Auto-accepted group invite: ${groupFlag} (from ${inviterShip})`,
+              );
+            } catch (err) {
+              runtime.error?.(
+                ownerInvite
+                  ? `[tlon] Failed to accept group invite from owner: ${String(err)}`
+                  : `[tlon] Failed to auto-accept group ${groupFlag}: ${String(err)}`,
+              );
+              if (propagateWriteFailures && firstWriteError === undefined) {
+                firstWriteError = err instanceof Error ? err : new Error(formatErrorMessage(err));
+              }
+            }
+            continue;
+          }
+
+          if (settingsState.effectiveOwnerShip) {
+            const approval = createPendingApproval({
+              type: "group",
+              requestingShip: inviterShip,
+              groupFlag,
+            });
+            if (await queueApprovalRequest(approval)) {
+              processedGroupInvites.add(groupFlag);
+            }
+            continue;
+          }
+
+          if (settingsState.effectiveAutoAcceptGroupInvites) {
+            runtime.log?.(
+              `[tlon] Rejected group invite from ${inviterShip} (not in groupInviteAllowlist): ${groupFlag}`,
+            );
+            processedGroupInvites.add(groupFlag);
+          }
+        }
+
+        if (firstWriteError !== undefined) {
+          throw firstWriteError;
+        }
+      };
+
+      if (initForeigns) {
+        try {
+          await processPendingInvites(initForeigns);
+        } catch (error: unknown) {
+          runtime.error?.(`[tlon] Error handling initial foreigns: ${formatErrorMessage(error)}`);
+        }
+      }
+
+      try {
+        await api.subscribe({
+          app: "groups",
+          path: "/v1/foreigns",
+          event: async (data: unknown) => {
+            try {
+              await processPendingInvites(data as Foreigns, true);
+            } catch (error: unknown) {
+              runtime.error?.(`[tlon] Error handling foreigns event: ${formatErrorMessage(error)}`);
+              // SSE advances its durable ack only after this callback resolves.
+              throw error;
+            }
+          },
+          ...subscriptionLogHandlers("Foreigns subscription", "Foreigns subscription"),
+        });
+        runtime.log?.(
+          "[tlon] Subscribed to foreigns (/v1/foreigns) for auto-accepting group invites",
+        );
+      } catch (err) {
+        runtime.log?.(`[tlon] Foreigns subscription failed: ${String(err)}`);
+      }
+    }
+
+    if (settingsState.effectiveAutoDiscoverChannels) {
+      const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+      addWatchedChannels(discoveredChannels);
+      runtime.log?.(`[tlon] Watching ${watchedChannels.size} channel(s)`);
+    }
+
+    for (const channelNest of watchedChannels) {
+      runtime.log?.(`[tlon] Watching channel: ${channelNest}`);
+    }
+
+    runtime.log?.("[tlon] All subscriptions registered, connecting to SSE stream...");
+    await api.connect();
+    if (discoveryScheduler.signal.aborted) {
+      return;
+    }
+    ingress.start();
+    runtime.log?.("[tlon] Connected! Firehose subscriptions active");
+
+    discoveryScheduler.schedule({
+      id: "channel-discovery",
+      delayMs: 2 * 60 * 1000,
+      everyMs: 2 * 60 * 1000,
+      run: async () => {
+        if (!settingsState.effectiveAutoDiscoverChannels) {
+          return;
+        }
+        const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+        if (discoveryScheduler.signal.aborted) {
+          return;
+        }
+        addWatchedChannels(discoveredChannels, "[tlon] Now watching new channel: ");
+      },
+    });
+    await waitUntilAbort(opts.abortSignal);
+  } finally {
+    discoveryScheduler.beginClose();
+    api.stopReceiving();
+    await discoveryScheduler.stop();
+    await ingress.stop();
+    try {
+      await api.close();
+    } catch (error: unknown) {
+      runtime.error?.(`[tlon] Cleanup error: ${formatErrorMessage(error)}`);
+    }
+  }
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

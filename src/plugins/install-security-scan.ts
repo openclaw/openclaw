@@ -1,0 +1,51 @@
+// Runs security checks over plugin install candidates before activation.
+import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
+import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
+export type {
+  InstallSafetyOverrides,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.types.js";
+
+/** Result returned by plugin/skill install security policy checks. */
+export type InstallSecurityScanResult = {
+  blocked?: {
+    code?: "security_scan_blocked" | "security_scan_failed";
+    reason: string;
+    installPolicyWarning?: InstallPolicyWarningDetails;
+  };
+};
+
+// Normal plugin startup must not import the install policy runtime.
+const bindInstallSecurityScanRuntime = createLazyRuntimeMethodBinder(
+  () => import("./install-security-scan.runtime.js"),
+);
+
+/** Scans an unpacked bundle source before plugin install/update. */
+export const scanBundleInstallSource = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanBundleInstallSourceRuntime,
+);
+
+/** Scans a package source directory and executable metadata before install/update. */
+export const scanPackageInstallSource = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanPackageInstallSourceRuntime,
+);
+
+/** Scans the installed package dependency tree after npm resolution. */
+export const scanInstalledPackageDependencyTree = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanInstalledPackageDependencyTreeRuntime,
+);
+
+/** Runs npm install policy checks before package install side effects. */
+export const preflightPluginNpmInstallPolicy = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.preflightPluginNpmInstallPolicyRuntime,
+);
+
+/** Runs git install policy checks before plugin install side effects. */
+export const preflightPluginGitInstallPolicy = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.preflightPluginGitInstallPolicyRuntime,
+);
+
+/** Evaluates shared install policy for skill-managed dependency installs. */
+export const evaluateSkillInstallPolicy = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.evaluateSkillInstallPolicyRuntime,
+);

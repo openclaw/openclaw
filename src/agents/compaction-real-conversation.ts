@@ -1,0 +1,119 @@
+/**
+ * Classifies transcript messages that contain real user-visible conversation
+ * for compaction and history pruning.
+ */
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
+import { isToolCallBlockType } from "../shared/tool-block-contract.js";
+import type { AgentMessage } from "./runtime/index.js";
+
+const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
+const NON_CONVERSATION_BLOCK_TYPES = new Set(["thinking", "reasoning"]);
+const CONVERSATION_ANCHOR_ROLES = new Set([
+  "user",
+  "custom",
+  "bashExecution",
+  "branchSummary",
+  "compactionSummary",
+]);
+
+function hasMeaningfulText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const heartbeat = stripHeartbeatToken(trimmed, { mode: "message" });
+  return !heartbeat.didStrip || heartbeat.text.trim().length > 0;
+}
+
+/** Returns whether a message has content worth preserving as conversation. */
+function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return false;
+  }
+  if (isSilentAssistantTranscriptMessage(message)) {
+    return false;
+  }
+  if ((message as { role?: unknown }).role === "custom") {
+    const custom = message as { content?: unknown; display?: unknown };
+    return custom.display !== false && hasMeaningfulMessageContent(custom.content);
+  }
+  if (message.role === "bashExecution") {
+    const command = typeof message.command === "string" ? message.command : "";
+    const output = typeof message.output === "string" ? message.output : "";
+    return hasMeaningfulText(`${command}\n${output}`);
+  }
+  if (message.role === "branchSummary" || message.role === "compactionSummary") {
+    const summary = message.summary;
+    return typeof summary === "string" && hasMeaningfulText(summary);
+  }
+  const content = (message as { content?: unknown }).content;
+  return hasMeaningfulMessageContent(content);
+}
+
+function hasMeaningfulMessageContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return hasMeaningfulText(content);
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  let sawMeaningfulNonTextBlock = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const { type, text } = block as { type?: unknown; text?: unknown };
+    if (type === "text") {
+      if (typeof text === "string" && hasMeaningfulText(text)) {
+        return true;
+      }
+    } else if (!isToolCallBlockType(type) && !NON_CONVERSATION_BLOCK_TYPES.has(String(type))) {
+      // Tool-call metadata and internal reasoning blocks do not make a
+      // heartbeat-only transcript count as real conversation.
+      sawMeaningfulNonTextBlock = true;
+    }
+  }
+  return sawMeaningfulNonTextBlock;
+}
+
+function isToolResultConversationAnchor(message: AgentMessage): boolean {
+  return CONVERSATION_ANCHOR_ROLES.has(message.role) && hasMeaningfulConversationContent(message);
+}
+
+/** Returns whether a transcript message should count as real conversation. */
+export function isRealConversationMessage(
+  message: AgentMessage,
+  messages: AgentMessage[],
+  index: number,
+): boolean {
+  if (message.role === "assistant" || CONVERSATION_ANCHOR_ROLES.has(message.role)) {
+    return hasMeaningfulConversationContent(message);
+  }
+  if (message.role !== "toolResult") {
+    return false;
+  }
+  const start = Math.max(0, index - TOOL_RESULT_REAL_CONVERSATION_LOOKBACK);
+  for (let i = index - 1; i >= start; i -= 1) {
+    const candidate = messages[i];
+    if (candidate && isToolResultConversationAnchor(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Classifies an ordered transcript without retaining earlier pages. */
+export function createRealConversationClassifier(): (message: AgentMessage) => boolean {
+  let anchorLookback = 0;
+  return (message) => {
+    const real =
+      message.role === "toolResult"
+        ? anchorLookback > 0
+        : isRealConversationMessage(message, [], 0);
+    anchorLookback = isToolResultConversationAnchor(message)
+      ? TOOL_RESULT_REAL_CONVERSATION_LOOKBACK
+      : Math.max(0, anchorLookback - 1);
+    return real;
+  };
+}

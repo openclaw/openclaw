@@ -1,0 +1,23 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it } from "vitest";
+import plugin from "./index.js";
+
+describe("sglang provider plugin", () => {
+  it("owns OpenAI-compatible replay without dropping reasoning history", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const policy = provider.buildReplayPolicy?.({
+      provider: "sglang",
+      modelApi: "openai-completions",
+      modelId: "moonshotai/kimi-k2-thinking",
+    } as never);
+
+    expect(policy).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+    expect(policy).not.toHaveProperty("dropReasoningFromHistory");
+  });
+});

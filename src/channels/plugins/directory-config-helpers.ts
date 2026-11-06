@@ -1,0 +1,218 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.js";
+import type { DirectoryConfigParams } from "./directory-types.js";
+import type { ChannelDirectoryEntry } from "./types.public.js";
+
+type AccountDirectorySources<Account> = DirectoryConfigParams & {
+  kind: "user" | "group";
+  resolveSources: (account: Account) => Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+};
+
+export function applyDirectoryQueryAndLimit(
+  ids: string[],
+  params: { query?: string | null; limit?: number | null },
+): string[] {
+  const q = normalizeLowercaseStringOrEmpty(params.query);
+  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const filtered: string[] = [];
+  for (const id of ids) {
+    if (q && !normalizeLowercaseStringOrEmpty(id).includes(q)) {
+      continue;
+    }
+    filtered.push(id);
+    if (typeof limit === "number" && filtered.length >= limit) {
+      break;
+    }
+  }
+  return filtered;
+}
+
+export function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
+  return Array.from(ids, (id) => ({ kind, id }));
+}
+
+function collectDirectoryIds(
+  values: Iterable<unknown>,
+  normalizeId?: (entry: string) => string | null | undefined,
+  readEntry: (value: unknown) => string | undefined = String,
+): string[] {
+  const ids: string[] = [];
+  for (const value of values) {
+    const entry = normalizeOptionalString(readEntry(value)) ?? "";
+    if (!entry || entry === "*") {
+      continue;
+    }
+    const normalized = normalizeId ? normalizeId(entry) : entry;
+    const id = normalizeOptionalString(normalized) ?? "";
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+export function collectNormalizedDirectoryIds(params: {
+  sources: Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+}): string[] {
+  // Arbitrary source helpers accept strings only; allowFrom helpers also stringify ids.
+  return uniqueStrings(
+    params.sources.flatMap((source) =>
+      collectDirectoryIds(source, params.normalizeId, normalizeOptionalString),
+    ),
+  );
+}
+
+export function listDirectoryEntriesFromSources(params: {
+  kind: "user" | "group";
+  sources: Iterable<unknown>[];
+  query?: string | null;
+  limit?: number | null;
+  normalizeId: (entry: string) => string | null | undefined;
+}): ChannelDirectoryEntry[] {
+  const ids = collectNormalizedDirectoryIds(params);
+  return toDirectoryEntries(params.kind, applyDirectoryQueryAndLimit(ids, params));
+}
+
+export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
+  params: AccountDirectorySources<InspectedAccount> & {
+    inspectAccount: (
+      cfg: OpenClawConfig,
+      accountId?: string | null,
+    ) => InspectedAccount | null | undefined;
+  },
+): ChannelDirectoryEntry[] {
+  const account = params.inspectAccount(params.cfg, params.accountId);
+  // Missing optional accounts produce an empty directory instead of forcing
+  // setup callers to special-case unconfigured channel state.
+  if (!account) {
+    return [];
+  }
+  return listDirectoryEntriesFromSources({
+    ...params,
+    sources: params.resolveSources(account),
+  });
+}
+
+export function createInspectedDirectoryEntriesLister<InspectedAccount>(
+  params: Omit<
+    Parameters<typeof listInspectedDirectoryEntriesFromSources<InspectedAccount>>[0],
+    keyof DirectoryConfigParams
+  >,
+) {
+  return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
+    listInspectedDirectoryEntriesFromSources({
+      ...configParams,
+      ...params,
+    });
+}
+
+export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
+  params: AccountDirectorySources<ResolvedAccount> & {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  },
+): ChannelDirectoryEntry[] {
+  const account = params.resolveAccount(params.cfg, params.accountId);
+  return listDirectoryEntriesFromSources({
+    ...params,
+    sources: params.resolveSources(account),
+  });
+}
+
+export function createResolvedDirectoryEntriesLister<ResolvedAccount>(
+  params: Omit<
+    Parameters<typeof listResolvedDirectoryEntriesFromSources<ResolvedAccount>>[0],
+    keyof DirectoryConfigParams
+  >,
+) {
+  return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
+    listResolvedDirectoryEntriesFromSources({
+      ...configParams,
+      ...params,
+    });
+}
+
+export function listDirectoryUserEntriesFromAllowFrom(params: {
+  allowFrom?: readonly unknown[];
+  query?: string | null;
+  limit?: number | null;
+  normalizeId?: (entry: string) => string | null | undefined;
+}): ChannelDirectoryEntry[] {
+  const ids = uniqueStrings(collectDirectoryIds(params.allowFrom ?? [], params.normalizeId));
+  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
+}
+
+export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
+  allowFrom?: readonly unknown[];
+  map?: Record<string, unknown>;
+  query?: string | null;
+  limit?: number | null;
+  normalizeAllowFromId?: (entry: string) => string | null | undefined;
+  normalizeMapKeyId?: (entry: string) => string | null | undefined;
+}): ChannelDirectoryEntry[] {
+  const ids = uniqueStrings([
+    ...collectDirectoryIds(params.allowFrom ?? [], params.normalizeAllowFromId),
+    ...collectDirectoryIds(Object.keys(params.map ?? {}), params.normalizeMapKeyId),
+  ]);
+  return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
+}
+
+export function listDirectoryGroupEntriesFromMapKeys(params: {
+  groups?: Record<string, unknown>;
+  query?: string | null;
+  limit?: number | null;
+  normalizeId?: (entry: string) => string | null | undefined;
+}): ChannelDirectoryEntry[] {
+  const ids = uniqueStrings(
+    collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeId),
+  );
+  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
+}
+
+export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
+  groups?: Record<string, unknown>;
+  allowFrom?: readonly unknown[];
+  query?: string | null;
+  limit?: number | null;
+  normalizeMapKeyId?: (entry: string) => string | null | undefined;
+  normalizeAllowFromId?: (entry: string) => string | null | undefined;
+}): ChannelDirectoryEntry[] {
+  const ids = uniqueStrings([
+    ...collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeMapKeyId),
+    ...collectDirectoryIds(params.allowFrom ?? [], params.normalizeAllowFromId),
+  ]);
+  return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
+}
+
+export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
+  params: DirectoryConfigParams & {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+    resolveAllowFrom: (account: ResolvedAccount) => readonly unknown[] | undefined;
+    normalizeId?: (entry: string) => string | null | undefined;
+  },
+): ChannelDirectoryEntry[] {
+  const account = params.resolveAccount(params.cfg, params.accountId);
+  return listDirectoryUserEntriesFromAllowFrom({
+    ...params,
+    allowFrom: params.resolveAllowFrom(account),
+  });
+}
+
+export function listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedAccount>(
+  params: DirectoryConfigParams & {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+    resolveGroups: (account: ResolvedAccount) => Record<string, unknown> | undefined;
+    normalizeId?: (entry: string) => string | null | undefined;
+  },
+): ChannelDirectoryEntry[] {
+  const account = params.resolveAccount(params.cfg, params.accountId);
+  return listDirectoryGroupEntriesFromMapKeys({
+    ...params,
+    groups: params.resolveGroups(account),
+  });
+}

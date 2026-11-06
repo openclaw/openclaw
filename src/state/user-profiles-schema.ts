@@ -1,0 +1,173 @@
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { generateSecureUuid } from "../infra/secure-random.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
+import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "./openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
+import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
+import {
+  runUserProfileWriteTransaction,
+  type UserProfileMutationOptions,
+} from "./user-profile-mutation.js";
+import type { UserProfilesDatabase, UserProfileOwnerErrorCode } from "./user-profiles.types.js";
+
+// Canonical additive schema for durable user profiles. Kept feature-local so
+// ordinary shared-state opens do not create identity tables until they are used.
+const ensureUserProfileTables = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql("user_profiles"),
+  {
+    tables: ["user_profiles", "user_profile_emails", "user_profile_identities"],
+    indexes: ["idx_user_profile_emails_profile_id"],
+  },
+);
+
+const ensureUserProfileIdentityIndexes = createSqliteSchemaEnsurer(
+  () => {
+    const schema = getOpenClawStateFeatureSchemaSql("user_profile_identities", {
+      endMarker: "ON user_profile_identities(authorization_id);",
+    });
+    return schema.slice(schema.indexOf("CREATE INDEX"));
+  },
+  {
+    tables: [],
+    indexes: [
+      "idx_user_profile_identities_profile_id",
+      "idx_user_profile_identities_authorization",
+    ],
+  },
+);
+
+export class UserProfileNotFoundError extends Error {
+  constructor(readonly profileId: string) {
+    super(`user profile not found: ${profileId}`);
+    this.name = "UserProfileNotFoundError";
+  }
+}
+
+export class UserProfileMergeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserProfileMergeError";
+  }
+}
+
+export class UserProfileOwnerError extends Error {
+  constructor(readonly code: UserProfileOwnerErrorCode) {
+    super(
+      code === "repair-required"
+        ? "the shared owner profile requires repair; run openclaw doctor --fix and reconnect"
+        : code === "merge"
+          ? "the shared owner profile cannot be merged; sign in with a personal identity instead"
+          : "the shared owner profile is not governed by operator roles",
+    );
+    this.name = "UserProfileOwnerError";
+  }
+}
+
+const ensuredDatabases = new WeakSet<EngineConnection>();
+
+function rememberEnsuredSchema(database: EngineConnection, cache: WeakSet<EngineConnection>): void {
+  if (cache.has(database)) {
+    return;
+  }
+  const remember = () => {
+    cache.add(database);
+  };
+  // A nested ensure is valid in its transaction but must disappear with its savepoint.
+  if (
+    !stageSqliteTransactionState(database, {
+      stage: remember,
+      rollback: () => {
+        cache.delete(database);
+      },
+      commit: remember,
+    })
+  ) {
+    remember();
+  }
+}
+
+export function ensureUserProfilesSchema(
+  options: UserProfileMutationOptions,
+  database = openOpenClawStateDatabase(options),
+): void {
+  if (ensuredDatabases.has(database.db)) {
+    return;
+  }
+  runUserProfileWriteTransaction(
+    ({ db }) => {
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "user_profiles");
+      } else {
+        ensureUserProfileTables(db);
+      }
+      ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
+      ensureColumn(db, "user_profile_identities", "verified_email_json TEXT");
+      ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
+      ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
+      // Legacy identity tables need the authorization column before its index.
+      if (!isPostgresSqlConnection(db)) {
+        ensureUserProfileIdentityIndexes(db);
+      }
+      ensureColumn(db, "user_profiles", "primary_github_account_id INTEGER");
+      ensureColumn(db, "user_profile_emails", "binding_id TEXT");
+      const kysely = getNodeSqliteKysely<UserProfilesDatabase>(db);
+      const unboundEmails = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("user_profile_emails")
+          .select(["email", "profile_id"])
+          .where("binding_id", "is", null),
+      ).rows;
+      const profiles = [...new Set(unboundEmails.map((row) => row.profile_id))];
+      options.mutation?.before(db, ...profiles);
+      for (const { email, profile_id } of unboundEmails) {
+        const bindingId = generateSecureUuid();
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("user_profile_emails")
+            .set({ binding_id: bindingId })
+            .where("email", "=", email)
+            .where("binding_id", "is", null),
+        );
+        stageUserProfileEmailBindingChange(db, email, {
+          email,
+          profileId: profile_id,
+          bindingId,
+        });
+      }
+      options.mutation?.publish(...profiles);
+    },
+    options,
+    { operationLabel: "user-profiles.schema.ensure" },
+  );
+  // A rolled-back ensure must retry rather than caching a missing table/column.
+  rememberEnsuredSchema(database.db, ensuredDatabases);
+}
+
+export function ensureUserProfileRoleSchema(
+  options: OpenClawStateDatabaseOptions,
+  database = openOpenClawStateDatabase(options),
+): void {
+  if (tableHasColumn(database.db, "user_profiles", "role")) {
+    return;
+  }
+  ensureUserProfilesSchema(options, database);
+  if (tableHasColumn(database.db, "user_profiles", "role")) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => ensureColumn(db, "user_profiles", "role TEXT"),
+    options,
+    { operationLabel: "user-profiles.role.schema.ensure" },
+  );
+}

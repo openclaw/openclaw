@@ -1,0 +1,593 @@
+import AppKit
+import Darwin
+import Dispatch
+import Foundation
+import OpenClawKit
+import OSLog
+import SwiftUI
+
+/// Routes private maintenance commands before SwiftUI constructs or activates the application.
+@main
+enum OpenClawProcessMain {
+    static func main() {
+        if let status = OpenClawProcessEntrypoint.run(arguments: CommandLine.arguments, launchApplication: {
+            guard GatewayKeychainAccess.configure(launchPlan: .current) == 0 else {
+                fputs(
+                    "OpenClaw could not disable Keychain interaction for --no-activate. Relaunch without the flag.\n",
+                    stderr)
+                Darwin.exit(2)
+            }
+            AppActivation.shared.configureLaunch()
+            OpenClawApp.main()
+        }) {
+            Darwin.exit(status)
+        }
+    }
+}
+
+enum OpenClawProcessEntrypoint {
+    static func run(arguments: [String], bundle: Bundle = .main, launchApplication: () -> Void) -> Int32? {
+        if let status = CloudWorkerHost.runIfRequested(arguments: arguments, bundle: bundle) {
+            return status
+        }
+        if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
+            return status
+        }
+        if let status = ElevationFilesystemSync.runIfRequested(arguments: arguments) {
+            return status
+        }
+        launchApplication()
+        return nil
+    }
+}
+
+struct OpenClawApp: App {
+    // periphery:ignore - SwiftUI installs the application delegate through this property wrapper.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @Environment(\.openSettings) private var openSettings
+    @State private var state: AppState
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
+
+    init() {
+        let launchPlan = AppLaunchRuntimePlan.current
+        if let error = AppProfile.current.validationError {
+            if launchPlan.isElevationHost {
+                fputs("OpenClaw elevation host profile is invalid: \(error.localizedDescription)\n", stderr)
+                Darwin.exit(2)
+            }
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw profile is invalid"
+            alert.informativeText = error.localizedDescription
+            if launchPlan.allowsActivation {
+                AppActivation.shared.presentAlert(alert)
+            } else {
+                Self.logger.error("OpenClaw profile is invalid: \(error.localizedDescription, privacy: .public)")
+            }
+            Darwin.exit(2)
+        }
+        if AppProfile.current.isActive,
+           !DeviceIdentityStore.configureStateDirectory(OpenClawPaths.stateDirURL)
+        {
+            fatalError("Device identity state root was already used before app profile configuration")
+        }
+        guard GatewayTLSStore.configureKeychainServiceSuffix(AppProfile.current.keychainServiceSuffix) else {
+            fatalError("Gateway TLS Keychain namespace was already used by another app profile")
+        }
+        OpenClawLogging.bootstrapIfNeeded()
+
+        Self.applyAttachOnlyOverrideIfNeeded(plan: launchPlan)
+        _state = State(initialValue: AppStateStore.shared)
+    }
+
+    var body: some Scene {
+        // Register before any window is opened, including connection recovery from the dashboard.
+        let openSettings = self.openSettings
+        ConnectionWindowOpener.shared.register {
+            if AppLaunchRuntimePlan.current.allowsActivation {
+                openSettings()
+            } else {
+                ConnectionWindowOpener.shared.openInBackground(state: self.state)
+            }
+        }
+        // The native Connection window is a standard macOS Settings window: toolbar tabs, fixed width,
+        // content-sized height per tab. Cmd-, still opens Dashboard settings via the replaced command.
+        return Settings {
+            ConnectionWindow(state: self.state)
+                .environment(TailscaleService.shared)
+        }
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Gateway Window…") {
+                    AppNavigationActions.newGatewayWindow()
+                }
+
+                if !self.state.nativeExperienceEnabled {
+                    Button("New Thread") {
+                        DashboardManager.shared.dispatchNativeCommand(.newSession)
+                    }
+                    .keyboardShortcut("n", modifiers: .command)
+                }
+            }
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    AppNavigationActions.openSettings()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+
+                Button("Connection…") {
+                    AppNavigationActions.openConnection()
+                }
+            }
+            CommandGroup(replacing: .appInfo) {
+                Button("About OpenClaw") {
+                    AppNavigationActions.openAbout()
+                }
+            }
+            SidebarCommands()
+            CommandMenu("Navigate") {
+                Button(String(localized: "Reload")) {
+                    DashboardManager.shared.reloadDashboard()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+
+                Divider()
+
+                if self.state.nativeExperienceEnabled {
+                    Button("Command Palette…") {
+                        WebChatManager.shared.showCommandPalette()
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(!WebChatManager.shared.canShowCommandPalette)
+                } else {
+                    Button("Back") {
+                        DashboardManager.shared.navigateBack()
+                    }
+                    .keyboardShortcut("[", modifiers: .command)
+
+                    Button("Forward") {
+                        DashboardManager.shared.navigateForward()
+                    }
+                    .keyboardShortcut("]", modifiers: .command)
+
+                    Divider()
+
+                    Button("Command Palette…") {
+                        DashboardManager.shared.dispatchNativeCommand(.commandPalette)
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
+                }
+            }
+            DashboardGatewayCommands()
+        }
+    }
+
+    private static func applyAttachOnlyOverrideIfNeeded(plan: AppLaunchRuntimePlan) {
+        guard plan.attachOnly else { return }
+        if let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride() {
+            self.logger.error("attach-only flag failed: \(error, privacy: .public)")
+            return
+        }
+        self.logger.info("attach-only flag enabled")
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusMenuController: StatusMenuController?
+    private lazy var dockMenu = AppDockMenu(
+        openDashboard: { [weak self] in self?.openDashboardAction() },
+        openGateway: { AppNavigationActions.openGateway($0) },
+        openSettings: { AppNavigationActions.openSettings() })
+    private var terminationCleanupTask: Task<Void, Never>?
+    private var terminationDeadlineTask: Task<Void, Never>?
+    private var credentialStartupTask: Task<Void, Never>?
+    private var credentialsReady = false
+    private var pendingOpenURLs: [URL] = []
+    private var pendingDashboardOpen = false
+    private var terminationCleanupFinished = false
+    private var profileInstanceLock: AppInstanceLock?
+    private let credentialLogger = Logger(subsystem: "ai.openclaw", category: "credentials")
+    private static func cleanUpProcesses() async {
+        let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
+        let macControlCleanup = MacControlServer.shared.stop()
+        // Start tunnel retirement before helper drains can consume the quit deadline.
+        async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
+        async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
+        async let profileCleanup = MacGatewayConnectionFleet.shared.shutdown()
+        // CUA must drain its worker before the node closes the daemon socket.
+        if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
+            await CuaDriverHostCoordinator.shared.shutdown()
+        }
+        await TalkMLXSpeechSynthesizer.shared.shutdown()
+        await MacNodeModeCoordinator.shared.stopAndWait()
+        _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
+        await execHostCleanup?.value
+        await macControlCleanup?.value
+        DeviceCredentialAccess.close()
+    }
+
+    var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
+    let updaterController: UpdaterProviding
+
+    override init() {
+        let environment = ProcessInfo.processInfo.environment
+        let hasReplacementMetadata = ApplicationRelocator.hasReplacementHandoffMetadata(
+            environment: environment)
+        let isReplacementHandoff = hasReplacementMetadata &&
+            ApplicationRelocator.acceptReplacementHandoff(environment: environment)
+        if hasReplacementMetadata, !isReplacementHandoff {
+            fputs("OpenClaw replacement handoff authentication failed.\n", stderr)
+            Darwin.exit(2)
+        }
+        let ownership = AppInstanceLock.acquire(
+            url: AppProfile.current.instanceLockURL(),
+            waitMilliseconds: isReplacementHandoff ? 5000 : 0)
+        if let exitCode = Self.processExitCode(for: ownership) {
+            fputs("OpenClaw profile is already running.\n", stderr)
+            Darwin.exit(exitCode)
+        }
+        let (profileInstanceLock, instanceOwnershipFailure): (AppInstanceLock?, String?) = switch ownership {
+        case let .acquired(lock):
+            (lock, nil)
+        case .busy:
+            (nil, nil)
+        case let .failed(message):
+            (nil, message)
+        }
+        self.profileInstanceLock = profileInstanceLock
+        self.updaterController = instanceOwnershipFailure == nil
+            ? makeUpdaterController()
+            : DisabledUpdaterController()
+        super.init()
+        if let instanceOwnershipFailure {
+            if AppLaunchRuntimePlan.current.isElevationHost {
+                fputs(
+                    "OpenClaw elevation host could not claim its instance lock: \(instanceOwnershipFailure)\n",
+                    stderr)
+                Darwin.exit(2)
+            }
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw could not claim its instance lock"
+            alert.informativeText = instanceOwnershipFailure
+            if AppLaunchRuntimePlan.current.allowsActivation {
+                AppActivation.shared.presentAlert(alert)
+            } else {
+                fputs("OpenClaw could not claim its instance lock: \(instanceOwnershipFailure)\n", stderr)
+            }
+            Darwin.exit(2)
+        }
+    }
+
+    static func processExitCode(for ownership: AppInstanceLockAcquisition) -> Int32? {
+        if case .busy = ownership {
+            return 0
+        }
+        return nil
+    }
+
+    func applicationWillFinishLaunching(_: Notification) {
+        // Configure presentation before URL/reopen callbacks arrive; defer their
+        // credential consumers until startup admission completes.
+        DashboardManager.shared.configure(updater: self.updaterController)
+    }
+
+    func applicationDockMenu(_: NSApplication) -> NSMenu? {
+        guard self.credentialsReady else { return nil }
+        return self.dockMenu.menu(
+            entries: DashboardManager.shared.gatewayEntries,
+            selectedTarget: AppNavigationActions.selectedGatewayTarget)
+    }
+
+    func application(_: NSApplication, open urls: [URL]) {
+        guard !AppLaunchRuntimePlan.current.isElevationHost else { return }
+        guard self.terminationCleanupTask == nil else { return }
+        guard self.credentialsReady else {
+            self.pendingOpenURLs.append(contentsOf: urls)
+            return
+        }
+        self.handleOpenURLs(urls)
+    }
+
+    private func handleOpenURLs(_ urls: [URL]) {
+        Task { @MainActor in
+            for url in urls {
+                guard self.credentialsReady else { return }
+                await DeepLinkHandler.shared.handle(url: url)
+            }
+        }
+    }
+
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        // Reopening is explicit user intent even after a background-only launch.
+        guard !AppLaunchRuntimePlan.current.isElevationHost else { return false }
+        guard self.terminationCleanupTask == nil else { return false }
+        guard self.credentialsReady else {
+            self.pendingDashboardOpen = true
+            return false
+        }
+        self.openDashboardAction()
+        return false
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
+        false
+    }
+
+    @MainActor
+    func applicationDidFinishLaunching(_: Notification) {
+        #if DEBUG
+        if CommandLine.arguments.contains("--swarm-chat-fixture") {
+            DockIconManager.shared.updateDockVisibility()
+            WebChatManager.shared.showSwarmFixture()
+            return
+        }
+        #endif
+        let launchPlan = AppLaunchRuntimePlan.current
+        let startUpdater: Bool
+        if !AppProfile.current.isActive, !launchPlan.isElevationHost {
+            switch ApplicationRelocator.handleLaunch() {
+            case .terminating:
+                return
+            case let .continueLaunch(shouldStartUpdater):
+                startUpdater = shouldStartUpdater && launchPlan.allowsUpdater
+            }
+        } else {
+            startUpdater = false
+        }
+        TerminationSignalWatcher.shared.start()
+        self.credentialStartupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.credentialStartupTask = nil }
+            do {
+                let root = DeviceIdentityStore.stateDirectoryURL
+                let executionRoot = OpenClawPaths.stateDirURL
+                if BundledRuntime.isBundledApp {
+                    let prepare = {
+                        try await ClientCredentialStartup.prepare(
+                            executionRoot: executionRoot,
+                            configURL: OpenClawPaths.configURL)
+                    }
+                    if let replacement = await StaleGatewayServiceReplacement.detect() {
+                        self.credentialLogger
+                            .info("Replacing the previous build's Gateway service before credential preparation")
+                        if let error = try await replacement.run(prepareCredentials: prepare) {
+                            self.credentialLogger
+                                .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
+                        }
+                    } else {
+                        try await prepare()
+                    }
+                }
+                try Task.checkCancellation()
+                // Independent native identities retain their native import owner.
+                // The shared execution root is prepared by its matching CLI first.
+                try DeviceCredentialAccess.prepareAppRoots(identityRoot: root, executionRoot: executionRoot)
+                guard await MacControlServer.shared.startAndWait() else {
+                    throw GatewayHostingError(message: "The local credential control server could not start.")
+                }
+                try Task.checkCancellation()
+                if startUpdater {
+                    if OpenClawConfigFile.gatewayUpdateChannel() == nil {
+                        self.updaterController.startAfterResolvingGatewayUpdateChannel()
+                    } else {
+                        self.updaterController.start()
+                    }
+                }
+                self.finishLaunchingWithCredentials(launchPlan: launchPlan)
+                self.credentialsReady = true
+                if self.pendingDashboardOpen {
+                    self.pendingDashboardOpen = false
+                    self.openDashboardAction()
+                }
+                let pendingURLs = self.pendingOpenURLs
+                self.pendingOpenURLs.removeAll()
+                self.handleOpenURLs(pendingURLs)
+            } catch {
+                self.pendingOpenURLs.removeAll()
+                self.pendingDashboardOpen = false
+                DeviceCredentialAccess.close()
+                guard !Task.isCancelled else { return }
+                self.credentialLogger
+                    .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
+                self.showCredentialStartupFailure()
+            }
+        }
+    }
+
+    private func showCredentialStartupFailure() {
+        let message = "Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
+            "If you restored a backup, restore its matching client credentials too."
+        self.credentialLogger
+            .error("Client credentials unavailable. Run openclaw doctor --fix before reopening the app.")
+        if AppLaunchRuntimePlan.current.allowsActivation {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw client credentials need recovery"
+            alert.informativeText = message
+            AppActivation.shared.presentAlert(alert)
+        } else {
+            fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func finishLaunchingWithCredentials(launchPlan: AppLaunchRuntimePlan) {
+        // Remote startup can spawn an SSH child. Admit tunnel work only after the
+        // singleton check so a short-lived handoff process cannot orphan that child.
+        GatewayEndpointStore.admitPrimaryAppLaunch()
+        ChromeExtensionSetup.shared.start(plan: launchPlan)
+        GatewayConnectivityCoordinator.shared.start()
+        let state = AppStateStore.shared
+        MacNodeModeCoordinator.prepareNodeIdentityProfile(
+            isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
+        DockIconManager.shared.updateDockVisibility()
+        if launchPlan.allowsInteractiveServices {
+            BundledRuntime.refreshOwnedMacCLILink(
+                allowsPersistentIntegration: ApplicationRelocator.currentBundleAllowsPersistentIntegration())
+            let controller = StatusMenuController(state: state, updater: updaterController)
+            controller.start()
+            self.statusMenuController = controller
+        }
+        let shouldWaitForConnection = state.connectionMode != .unconfigured
+        if !shouldWaitForConnection, launchPlan.allowsAutomaticPresentation {
+            Task { @MainActor in
+                await self.scheduleFirstRunOnboardingIfNeeded()
+            }
+        }
+        Task { @MainActor in
+            // Validate PATH selection before local startup. Existing installs may not
+            // have the validation cache yet, and a stale external CLI must not win.
+            if state.connectionMode == .local ||
+                (state.connectionMode == .remote && state.hostsLocalGatewayWithRemotePrimary)
+            {
+                _ = await CLIInstaller.status()
+            }
+            await ConnectionModeCoordinator.shared.apply(
+                mode: state.connectionMode,
+                paused: state.isPaused)
+            guard launchPlan.allowsAutomaticPresentation else { return }
+            if shouldWaitForConnection {
+                await self.scheduleFirstRunOnboardingIfNeeded()
+            }
+            // Attachment must settle before deciding whether this app needs to install a CLI.
+            if !PostUpdateController.shared.startIfNeeded() {
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded()
+            }
+        }
+        MacNodeModeCoordinator.shared.start()
+        if launchPlan.allowsInteractiveServices {
+            GatewayBrowserSignInCoordinator.shared.start()
+            GatewaysMainMenu.shared.install()
+            BackgroundSessionNotifications.shared.start()
+            NodePairingApprovalPrompter.shared.start()
+            DevicePairingApprovalPrompter.shared.start()
+            ExecApprovalsPromptServer.shared.start()
+            ExecApprovalsGatewayPrompter.shared.start()
+            CookieSyncManager.shared.start(state: state)
+            VoiceWakeGlobalSettingsSync.shared.start()
+            QuickChatController.shared.start()
+        }
+        Task { PresenceReporter.shared.start() }
+        Task { await HealthStore.shared.refresh(onDemand: true) }
+        Task { await PortGuardian.shared.reapOrphanedTunnels() }
+        AppStateStore.shared.applyComputerControlHostState()
+        if launchPlan.allowsAutomaticPresentation {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                DashboardManager.shared.preloadIfConfigured()
+            }
+        }
+
+        #if DEBUG
+        // Screenshot/demo helper: show the pairing panel with sample requests.
+        if launchPlan.allowsAutomaticPresentation,
+           ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1"
+        {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                DebugActions.showPairingPanelDemo()
+            }
+        }
+        #endif
+        // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
+        if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
+            AppNavigationActions.openChat()
+        }
+        if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
+            AppNavigationActions.openDashboard(userGesture: false)
+        }
+    }
+
+    func applicationWillTerminate(_: Notification) {
+        ChromeExtensionSetup.shared.stop()
+        BackgroundSessionNotifications.shared.stop()
+        self.statusMenuController?.stop()
+        QuickChatController.shared.stop()
+        PresenceReporter.shared.stop()
+        NodePairingApprovalPrompter.shared.stop()
+        DevicePairingApprovalPrompter.shared.stop()
+        ExecApprovalsPromptServer.shared.stop()
+        MacControlServer.shared.stop()
+        ExecApprovalsGatewayPrompter.shared.stop()
+        MacNodeModeCoordinator.shared.stop()
+        CookieSyncManager.shared.stop()
+        TerminationSignalWatcher.shared.stop()
+        VoiceWakeGlobalSettingsSync.shared.stop()
+        DashboardManager.shared.close()
+        WebChatManager.shared.close()
+    }
+
+    static func requestTermination() {
+        // terminateLater spins a nested AppKit loop. Calling terminate on the main
+        // dispatch queue prevents that loop from running MainActor cleanup or its deadline.
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0, inModes: [.common])
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if self.terminationCleanupFinished {
+            return .terminateNow
+        }
+        guard self.terminationCleanupTask == nil else {
+            return .terminateLater
+        }
+        self.credentialsReady = false
+        self.pendingOpenURLs.removeAll()
+        self.pendingDashboardOpen = false
+        // AppKit will not tear down onboarding while its sheet remains attached.
+        // Retire it before terminateLater starts the asynchronous cleanup loop.
+        OnboardingController.shared.close()
+        let cleanupDeadline = AppTerminationTiming.cleanupDeadlineSeconds(
+            hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway,
+            operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
+        let credentialStartup = self.credentialStartupTask
+        credentialStartup?.cancel()
+        self.terminationCleanupTask = Task { @MainActor [weak self] in
+            // Settle the migration child before releasing credentials; a late
+            // startup completion must not reacquire custody during shutdown.
+            await credentialStartup?.value
+            async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
+            async let processCleanupResult: Void = Self.cleanUpProcesses()
+            async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
+            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult)
+            self?.finishTerminationCleanup(for: sender)
+        }
+        self.terminationDeadlineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(cleanupDeadline))
+            guard !Task.isCancelled else { return }
+            self?.finishTerminationCleanup(for: sender)
+        }
+        return .terminateLater
+    }
+
+    private func finishTerminationCleanup(for sender: NSApplication) {
+        guard !self.terminationCleanupFinished else { return }
+        // Cleanup may ignore cancellation while transport or input teardown is stuck.
+        // The deadline replies without awaiting that loser; this gate keeps the reply single.
+        self.terminationCleanupFinished = true
+        self.terminationCleanupTask?.cancel()
+        self.terminationDeadlineTask?.cancel()
+        self.terminationCleanupTask = nil
+        self.terminationDeadlineTask = nil
+        sender.reply(toApplicationShouldTerminate: true)
+    }
+
+    private func scheduleFirstRunOnboardingIfNeeded() async {
+        if await OnboardingController.shared.startFirstRunIfFresh() {
+            return
+        }
+        let connectionMode = AppStateStore.shared.connectionMode
+        let onboardingSeen = AppStateStore.shared.onboardingSeen
+        if connectionMode != .unconfigured, onboardingSeen {
+            OnboardingController.markComplete()
+            return
+        }
+        let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
+        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
+        guard shouldShow else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard !AppStateStore.shared.onboardingSeen else { return }
+            OnboardingController.shared.show()
+        }
+    }
+}

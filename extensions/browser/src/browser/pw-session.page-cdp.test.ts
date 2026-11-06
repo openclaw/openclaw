@@ -1,0 +1,251 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { CDPSession } from "playwright-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  BROWSER_REF_MARKER_ATTRIBUTE,
+  markBackendDomRefsOnPage,
+  readDocumentIdentitiesForPage,
+  withPageScopedCdpClient,
+  withCdpSnapshotRoot,
+} from "./pw-session.page-cdp.js";
+
+function cdpPage(send: ReturnType<typeof vi.fn>, detach = vi.fn(async () => {})) {
+  return { context: () => ({ newCDPSession: vi.fn(async () => ({ send, detach })) }) };
+}
+
+function markerReply(method: string) {
+  if (method === "DOM.getDocument") {
+    return { root: { backendNodeId: 1 } };
+  }
+  if (method === "DOM.resolveNode") {
+    return { object: { objectId: "document" } };
+  }
+  if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+    return { nodeIds: [101, 202] };
+  }
+  return {};
+}
+const refs = [
+  { ref: "e1", backendDOMNodeId: 42 },
+  { ref: "ax2", backendDOMNodeId: 84 },
+];
+
+describe("pw-session page-scoped CDP client", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(["after-resolve", "after-nodes", "after-write"] as const)(
+    "stops marker writes when capture authority ends %s",
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error("capture ended");
+      const writes: number[] = [];
+      const commands: string[] = [];
+      const stopAfter = {
+        "after-resolve": "DOM.resolveNode",
+        "after-nodes": "DOM.pushNodesByBackendIdsToFrontend",
+        "after-write": "DOM.setAttributeValue",
+      }[stage];
+      const send = vi.fn(async (method: string, params?: { nodeId?: number }) => {
+        commands.push(method);
+        if (method === "DOM.setAttributeValue") {
+          writes.push(params!.nodeId!);
+        }
+        if (method === stopAfter) {
+          controller.abort(reason);
+        }
+        return markerReply(method);
+      });
+      const page = cdpPage(send);
+      await expect(
+        markBackendDomRefsOnPage({
+          page: page as never,
+          refs,
+          assertCurrent: () => controller.signal.throwIfAborted(),
+        }),
+      ).rejects.toBe(reason);
+      expect(commands.includes("Runtime.callFunctionOn")).toBe(stage !== "after-resolve");
+      expect(commands).toContain("Runtime.releaseObject");
+      expect(writes).toEqual(stage === "after-write" ? [101] : []);
+    },
+  );
+
+  it("clears a root marker when its injection reply rejects after mutation", async () => {
+    let markerInstalled = false;
+    const root = {
+      evaluate: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          markerInstalled = true;
+          throw new Error("Injection reply lost");
+        })
+        .mockImplementationOnce(async () => {
+          markerInstalled = false;
+        }),
+    };
+    const send = vi.fn();
+    const run = vi.fn();
+    await expect(withCdpSnapshotRoot({ root: root as never, send, run })).rejects.toThrow(
+      "Injection reply lost",
+    );
+    expect(markerInstalled).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("reads the main-frame loader identity through the existing page session", async () => {
+    const sessionSend = vi.fn(async (method: string) =>
+      method === "Page.getFrameTree"
+        ? { frameTree: { frame: { loaderId: "LOADER_SAME_URL" } } }
+        : {},
+    );
+    const sessionDetach = vi.fn(async () => {});
+    const page = cdpPage(sessionSend, sessionDetach);
+
+    await expect(readDocumentIdentitiesForPage(page as never)).resolves.toEqual({
+      mainFrame: "cdp:LOADER_SAME_URL",
+    });
+    expect(sessionDetach).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["attach", "command", "detach", "identity"] as const)(
+    "bounds page CDP %s and releases its exact session",
+    async (phase) => {
+      vi.useFakeTimers();
+      const gate = createDeferred<void>();
+      const wait = async (stage: string) => {
+        if (phase === stage) {
+          await gate.promise;
+        }
+      };
+      const session = {
+        send: vi.fn(async () => {
+          await wait(phase === "identity" ? "identity" : "command");
+          return {};
+        }),
+        detach: vi.fn(async () => {
+          await wait("detach");
+        }),
+      };
+      const page = {
+        context: () => ({
+          newCDPSession: async () => {
+            await wait("attach");
+            return session;
+          },
+        }),
+      };
+      const action = vi.fn(async (send: CDPSession["send"]) => {
+        await send("Page.getFrameTree");
+      });
+      const operation =
+        phase === "identity"
+          ? readDocumentIdentitiesForPage(page as never)
+          : withPageScopedCdpClient({ page: page as never, timeoutMs: 50, fn: action });
+      const rejection = expect(operation).rejects.toThrow(
+        phase === "identity" ? "timed out after 5000ms" : /timed out/,
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(phase === "identity" ? 5_000 : 50);
+        await rejection;
+        if (phase === "identity") {
+          expect(session.detach).toHaveBeenCalledOnce();
+        }
+      } finally {
+        gate.resolve();
+        await operation.catch(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+      }
+      expect(session.detach).toHaveBeenCalledOnce();
+      if (phase === "attach") {
+        expect(action).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "binds backend refs after requesting the document (write failure: %s)",
+    async (writeFails) => {
+      const sessionSend = vi.fn(async (method: string) => {
+        if (method === "DOM.setAttributeValue" && writeFails) {
+          throw new Error("detached");
+        }
+        return markerReply(method);
+      });
+      const sessionDetach = vi.fn(async () => {});
+      const page = cdpPage(sessionSend, sessionDetach);
+
+      const marked = await markBackendDomRefsOnPage({
+        assertCurrent: () => {},
+        page: page as never,
+        refs,
+      });
+
+      expect(marked).toEqual(new Set(writeFails ? [] : ["e1", "ax2"]));
+      expect(sessionSend).toHaveBeenNthCalledWith(1, "DOM.getDocument", { depth: 0 });
+      expect(sessionSend).toHaveBeenCalledWith("DOM.pushNodesByBackendIdsToFrontend", {
+        backendNodeIds: [42, 84],
+      });
+      for (const [nodeId, value] of [
+        [101, "e1"],
+        [202, "ax2"],
+      ]) {
+        expect(sessionSend).toHaveBeenCalledWith("DOM.setAttributeValue", {
+          nodeId,
+          name: BROWSER_REF_MARKER_ATTRIBUTE,
+          value,
+        });
+      }
+      expect(sessionDetach).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("clears stale markers even when no backend refs are valid", async () => {
+    const calls = vi.fn();
+    const send: CDPSession["send"] = async (method, params) => {
+      calls(method, params);
+      const response = responses[method];
+      if (response === undefined) {
+        throw new Error(`Unexpected CDP command: ${method}`);
+      }
+      return response;
+    };
+    const responses: {
+      [Method in Parameters<CDPSession["send"]>[0]]?: Awaited<ReturnType<typeof send<Method>>>;
+    } = {
+      "DOM.getDocument": {
+        root: {
+          nodeId: 1,
+          backendNodeId: 1,
+          nodeType: 9,
+          nodeName: "#document",
+          localName: "",
+          nodeValue: "",
+        },
+      },
+      "DOM.resolveNode": { object: { type: "object", objectId: "document" } },
+      "Runtime.callFunctionOn": { result: { type: "undefined" } },
+      "Runtime.releaseObject": {},
+    };
+    const marked = await markBackendDomRefsOnPage({
+      assertCurrent: () => {},
+      page: {} as never,
+      send,
+      refs: [{ ref: "e1", backendDOMNodeId: 0 }],
+    });
+    expect(calls).toHaveBeenCalledWith(
+      "Runtime.callFunctionOn",
+      expect.objectContaining({
+        objectId: "document",
+        arguments: [{ value: BROWSER_REF_MARKER_ATTRIBUTE }],
+      }),
+    );
+    expect(calls).not.toHaveBeenCalledWith(
+      "DOM.pushNodesByBackendIdsToFrontend",
+      expect.anything(),
+    );
+    expect(marked).toEqual(new Set());
+  });
+});

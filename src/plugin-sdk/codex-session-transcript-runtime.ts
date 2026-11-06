@@ -1,0 +1,305 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { TranscriptMessageAppendResult } from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  readSessionTranscriptContextMessages,
+  validateSessionTranscriptContextAdmission,
+  validateSessionTranscriptContextVersion,
+} from "../config/sessions/session-accessor.sqlite-model-context.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import type {
+  LockedTranscriptMessageAppendOptions,
+  SessionTranscriptReadScope,
+  SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.types.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { SessionTranscriptContextProjectionSource } from "../config/sessions/session-transcript-context-read.js";
+import type { SessionTranscriptContextReader } from "../config/sessions/session-transcript-context-reader.js";
+import {
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+  withSessionContextAdmission,
+} from "../config/sessions/session-transcript-read-fence.js";
+import type {
+  TranscriptTurnAdmission,
+  TranscriptEntryAnchor,
+} from "../config/sessions/transcript-entry-anchor.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withSessionTranscriptWriteAssertion,
+} from "../config/sessions/transcript-write-context.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { IncognitoSessionSyncAccessError } from "../state/incognito-session-error.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.paths.js";
+import type { AgentMessage } from "./agent-core.js";
+import type {
+  InternalSessionTranscriptWriteLockContext,
+  InternalSessionTranscriptWriteLockParams,
+} from "./session-transcript-lock-runtime.js";
+import type {
+  SessionTranscriptTargetParams,
+  SessionTranscriptWriteContext,
+} from "./session-transcript-runtime.js";
+
+export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
+export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
+export { SessionTranscriptReadFenceError };
+
+export {
+  createSessionTranscriptContextReader as createCodexSessionContextReader,
+  type SessionTranscriptContextReader as CodexSessionContextReader,
+} from "../config/sessions/session-transcript-context-reader.js";
+export type { SessionTranscriptContextSnapshot as CodexSessionContextSnapshot } from "../config/sessions/session-history-read.types.js";
+export type { SessionTranscriptContextProjectionSource };
+export { readSessionTranscriptContextProjectionAsync as readCodexSessionContextProjection } from "../config/sessions/session-transcript-context-read.js";
+
+/** Capture the current memory owner before yielding; durable contexts use their worker reader. */
+export function captureCodexSessionContextReader(
+  source: SessionTranscriptRuntimeTarget,
+  signal?: AbortSignal,
+): SessionTranscriptContextReader | undefined {
+  const memory = captureSessionActorTranscriptRead(source, signal);
+  if (!memory) {
+    return undefined;
+  }
+  const target = captureSessionTranscriptTargetBinding(source);
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    memory.assertCurrent();
+    assertOwned();
+  };
+  return async (readTarget, read) => {
+    if (
+      readTarget.agentId !== target.agentId ||
+      readTarget.sessionKey !== target.sessionKey ||
+      readTarget.sessionId !== target.sessionId
+    ) {
+      throw new SessionTranscriptReadFenceError(
+        "Context reader belongs to another transcript target",
+      );
+    }
+    const snapshot = await memory.read("session.history.context-messages", {});
+    // Detached content reflects the committed read; only live disclosure authority matters now.
+    const messages = (function* () {
+      for (const message of snapshot.messages) {
+        assertCurrent();
+        yield message;
+      }
+    })();
+    try {
+      assertCurrent();
+      const result = await read(messages, snapshot.header);
+      assertCurrent();
+      return result;
+    } finally {
+      messages.return(undefined);
+    }
+  };
+}
+
+function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method: string) {
+  if (
+    getSessionActorStorageBinding(target) ||
+    isIncognitoSessionKey(target.sessionKey) ||
+    (target.storePath && resolveExplicitIncognitoAgentSqliteTarget(target.storePath, target))
+  ) {
+    throw new IncognitoSessionSyncAccessError(method, "captureCodexSessionContextReader");
+  }
+}
+
+/** @deprecated Use createCodexSessionContextReader with the captured admission. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function validateCodexSessionTranscriptReadAdmission(
+  ...args: Parameters<typeof validateSessionTranscriptContextAdmission>
+): void {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "validateCodexSessionTranscriptReadAdmission",
+    replacement: "createCodexSessionContextReader with the captured admission",
+  });
+  assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptReadAdmission");
+  validateSessionTranscriptContextAdmission(...args);
+}
+
+/** @deprecated Use createCodexSessionContextReader with a prepared current source. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function validateCodexSessionTranscriptContextVersion(
+  ...args: Parameters<typeof validateSessionTranscriptContextVersion>
+): void {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "validateCodexSessionTranscriptContextVersion",
+    replacement: "createCodexSessionContextReader with a prepared current source",
+  });
+  assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptContextVersion");
+  validateSessionTranscriptContextVersion(...args);
+}
+
+/** @deprecated Use createCodexSessionContextReader. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function readCodexSessionContext<T>(
+  target: SessionTranscriptRuntimeTarget,
+  read: (
+    messages: Iterable<AgentMessage>,
+    header: unknown,
+    version?: SessionTranscriptContextVersion,
+  ) => T,
+  admission?: TranscriptTurnAdmission,
+  physicalSource?: SessionTranscriptContextProjectionSource["physicalSource"],
+): T {
+  warnPluginSdkDeprecation({
+    family: "codex-session-context",
+    method: "readCodexSessionContext",
+    replacement: "createCodexSessionContextReader",
+  });
+  assertCodexSessionSyncAccess(target, "readCodexSessionContext");
+  if (physicalSource) {
+    const databasePath = resolveOpenClawAgentSqlitePath(
+      toDatabaseOptions(resolveSqliteTranscriptReadScope(target)),
+    );
+    const identity = physicalSource.expectedIdentity;
+    if (identity) {
+      assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
+    } else if (readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
+      throw new Error("Session context changed its captured database owner");
+    }
+  }
+  return withSessionContextAdmission(target, admission, () =>
+    readSessionTranscriptContextMessages(target, read),
+  );
+}
+
+/** Reads the bundled Codex mirror strictly before one admitted user row. */
+export async function readCodexSessionTranscriptEventsBeforeAdmission(
+  params: SessionTranscriptTargetParams,
+  admission: TranscriptTurnAdmission,
+) {
+  const { readSessionTranscriptEvents, resolveSessionTranscriptIdentity } =
+    await import("./session-transcript-runtime.js");
+  const target = await resolveSessionTranscriptIdentity(params);
+  if (
+    target.agentId !== admission.agentId ||
+    target.sessionId !== admission.sessionId ||
+    target.sessionKey !== admission.sessionKey
+  ) {
+    throw new SessionTranscriptReadFenceError(
+      "Current-turn transcript admission belongs to a different transcript target",
+    );
+  }
+  return await runWithSessionTranscriptReadFence(
+    admission,
+    async () => await readSessionTranscriptEvents(params),
+  );
+}
+
+export type CodexSessionTranscriptMirrorWriteLockContext = Omit<
+  InternalSessionTranscriptWriteLockContext,
+  "readMessageFacts"
+> & {
+  appendMessageWithMessageSequence: <TMessage>(
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
+  ) => Promise<{
+    lifecycleRevision?: string;
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
+    existingIdempotencyKeys: Set<string>;
+    messagesByIdempotencyKey: Map<string, AgentMessage>;
+  }>;
+};
+
+/** @deprecated Use withCodexSessionTranscriptMirrorWrite. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export async function withCodexSessionTranscriptMirrorWriteLock<T>(
+  params: InternalSessionTranscriptWriteLockParams,
+  run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
+): Promise<T> {
+  return withMirrorWrite(params, run, "lock");
+}
+
+export type CodexSessionTranscriptMirrorWriteContext = Omit<
+  SessionTranscriptWriteContext,
+  "readMessageFacts"
+> & {
+  readMessageFacts: CodexSessionTranscriptMirrorWriteLockContext["readMessageFacts"];
+  appendMessageWithMessageSequence: <TMessage>(
+    options: Omit<
+      LockedTranscriptMessageAppendOptions<TMessage>,
+      | "config"
+      | "prepareMessageAfterIdempotencyCheck"
+      | "prepareMessageAfterIdempotencyCheckAsync"
+      | "beforeFreshMessageCommit"
+    >,
+  ) => Promise<{
+    lifecycleRevision?: string;
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+};
+
+/**
+ * Runs ordered optimistic mirror writes and returns each committed message's sequence.
+ * `assertCurrent` guards every commit; it is prepared before the writer is reserved,
+ * because its session-row reads cannot run while this write holds the database.
+ */
+export async function withCodexSessionTranscriptMirrorWrite<T>(
+  params: InternalSessionTranscriptWriteLockParams & { assertCurrent?: SessionSourceAssertion },
+  run: (context: CodexSessionTranscriptMirrorWriteContext) => Promise<T> | T,
+): Promise<T> {
+  const { assertCurrent, ...scope } = params;
+  return assertCurrent
+    ? withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+        withMirrorWrite(scope, run, "sequence"),
+      )
+    : withMirrorWrite(scope, run, "sequence");
+}
+
+async function withMirrorWrite<T>(
+  params: InternalSessionTranscriptWriteLockParams,
+  run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
+  mode: "lock" | "sequence",
+): Promise<T> {
+  const { withProjectedSessionTranscriptWriteLock } =
+    await import("./session-transcript-lock-runtime.js");
+  return await withProjectedSessionTranscriptWriteLock(
+    params,
+    run,
+    (context, locked) => ({
+      ...context,
+      appendMessageWithMessageSequence: (options) =>
+        locked.appendMessageWithMessageSequence({
+          ...options,
+          ...(params.config !== undefined ? { config: params.config } : {}),
+        }),
+      readMessageFacts: async (factParams) => {
+        const facts = await locked.readMessageFacts(factParams);
+        const messagesByIdempotencyKey = new Map<string, AgentMessage>();
+        for (const [idempotencyKey, message] of facts.messagesByIdempotencyKey) {
+          if (isAgentMessageRecord(message)) {
+            messagesByIdempotencyKey.set(idempotencyKey, message);
+          }
+        }
+        return { ...facts, messagesByIdempotencyKey };
+      },
+    }),
+    mode,
+    "withCodexSessionTranscriptMirrorWriteLock",
+  );
+}
+
+function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {
+  return isRecord(value) && typeof value.role === "string" && value.role.trim().length > 0;
+}

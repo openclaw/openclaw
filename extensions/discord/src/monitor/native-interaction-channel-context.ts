@@ -1,0 +1,33 @@
+import {
+  ChannelType,
+  type BaseComponentInteraction,
+  type CommandInteraction,
+} from "../internal/discord.js";
+import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
+
+export async function resolveDiscordNativeInteractionChannelContext(
+  interaction: CommandInteraction | BaseComponentInteraction,
+  channelIdFallback: string,
+) {
+  const { channel, client, guild, rawData } = interaction;
+  const hasGuild = Boolean(guild);
+  const channelContext = await resolveDiscordThreadLikeChannelContext({
+    client,
+    channel,
+    channelIdFallback: rawData.channel_id ?? channelIdFallback,
+  });
+  const channelType = channelContext.channelType;
+
+  return {
+    isDirectMessage: channelType === ChannelType.DM,
+    isGroupDm: channelType === ChannelType.GroupDM,
+    isThreadChannel: channelContext.isThreadChannel,
+    channelName: channelContext.channelName,
+    channelSlug: channelContext.channelSlug,
+    rawChannelId: channelContext.channelId,
+    memberRoleIds: interaction.rawData.member?.roles ?? [],
+    threadParentId: hasGuild ? channelContext.threadParentId : undefined,
+    threadParentName: hasGuild ? channelContext.threadParentName : undefined,
+    threadParentSlug: hasGuild ? channelContext.threadParentSlug : "",
+  };
+}

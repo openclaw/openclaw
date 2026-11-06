@@ -1,0 +1,230 @@
+---
+summary: "Connect MCP servers to OpenClaw from the Control UI, CLI, or config"
+title: "Connect MCP servers"
+read_when:
+  - Adding an MCP server for OpenClaw agents
+  - Choosing between Settings and `openclaw mcp`
+  - Troubleshooting MCP transport, OAuth, or tool discovery
+---
+
+The Model Context Protocol (MCP) is how an agent borrows tools from another program: an MCP server exposes tools, resources, and prompts, and OpenClaw connects to it and makes those tools available to your agents. Server definitions live under `mcp.servers` in config, and the tools they expose go through the same tool-profile and tool-policy controls as everything else — connecting a server does not bypass your policy.
+
+When a server publishes usage instructions during initialization, the embedded
+agent receives them alongside its available tools. Direct tools include the
+guidance in the system prompt; tools deferred behind Tool Search or Code Mode
+provide it through discovery. If discovery shows an `instructionsHint`, load
+the server guidance with `tool_describe` or the Code Mode handle's `describe()`
+before calling the tool. To bound embedded prompt cost, OpenClaw keeps at most
+the first 2,000 characters per server, followed by a truncation marker when needed.
+The system prompt, Tool Search, and Code Mode share that capped text. Native
+Claude CLI loopback connections continue to receive the complete server guidance.
+
+<Note>
+This guide is about connecting third-party MCP servers **to OpenClaw**. For the reverse — exposing OpenClaw channel conversations to another MCP client — use [`openclaw mcp serve`](/cli/mcp#openclaw-as-an-mcp-server).
+</Note>
+
+## Add a server from Settings
+
+1. Open the Control UI and go to **Settings → MCP**.
+2. Under **Configured servers**, select **Add server**.
+3. Give it a unique name and pick a transport: **Streamable HTTP**, **SSE**, or **Stdio**.
+4. For the HTTP transports, enter the server's `http://` or `https://` URL. For stdio, enter the command followed by its arguments.
+5. Select **Add server**.
+
+That writes the new `mcp.servers` entry through the Gateway. For anything beyond the basics — headers, environment values, OAuth metadata, TLS settings, timeouts, parallel-tool-call hints, tool filters — use the scoped config editor further down the page. The server rows also let you enable, disable, or remove a definition.
+
+Once the server is saved, verify it actually answers:
+
+```bash
+openclaw mcp doctor <name> --probe
+```
+
+Saving a definition proves nothing about reachability — the check does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
+
+If a connected server exits or its connection must be replaced, OpenClaw keeps
+its last successfully listed tools and utilities in the session's model-facing
+catalog while recovery runs in the background. Connection diagnostics and tool
+call errors still report unavailability; retained schemas do not grant execution
+access. A successful listing replaces the catalog, including tools removed by
+the server. Explicit config changes, removals, and plugin reloads retire the
+changed runtime immediately; unchanged servers keep their catalogs.
+
+For legacy SSE servers, reconnecting to the same session endpoint preserves the
+session. If the server announces a new endpoint, OpenClaw reconnects and
+initializes a fresh session before sending further tool calls.
+
+If a Streamable HTTP server does not confirm its session DELETE, OpenClaw logs a
+warning and continues local cleanup. Once the local transport and client close,
+the next turn can replace the runtime. Failed local cleanup still blocks
+replacement. The remote server may retain the abandoned session until it expires it.
+
+When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. The first connection for a server configuration and requester still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+
+Native OAuth authorization failures wait for a credential change instead of a
+timer. The Gateway remembers the failure across sessions, logs it once, and hides
+that server's tools while retaining the sign-in guidance in its catalog diagnostic.
+Signing in, updating that credential, changing the server configuration, or
+explicitly reloading MCP allows discovery again. Other users' credential changes
+do not clear the failure. Inspect `openclaw mcp status --verbose` or
+`openclaw mcp doctor <name>` for authorization status and sign-in instructions.
+
+## Add a server from the composer
+
+In a Control UI chat, select **+** → **Plugins** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
+
+Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition; session policy is the per-session layer. See [Composer capability menu](/web/control-ui/chat#composer-capability-menu) for the complete scope and tool-access behavior.
+
+From an active conversation, open **+ → Plugins → Tool access** to inspect
+or deny individual tools for that session. The view follows the session's
+actual runtime owner: built-in OpenClaw sessions read the in-process MCP
+catalog, while native agent harnesses can contribute their thread-owned
+catalog. Session server and tool denials are enforced by either runtime before
+the next turn starts.
+
+## Add a server from the CLI
+
+A local stdio server:
+
+```bash
+openclaw mcp add local-tools \
+  --command node \
+  --arg ./dist/mcp-server.js \
+  --cwd /srv/openclaw-tools
+openclaw mcp doctor local-tools --probe
+```
+
+A remote Streamable HTTP server, exposing only some of its tools:
+
+```bash
+openclaw mcp add docs \
+  --url https://mcp.example.com/mcp \
+  --transport streamable-http \
+  --include 'search,read_*'
+openclaw mcp doctor docs --probe
+```
+
+Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
+
+## Configure a server directly
+
+The same `docs` server, written straight into config:
+
+```json5
+{
+  mcp: {
+    servers: {
+      docs: {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        enabled: true,
+        connectionTimeoutMs: 5000,
+        requestTimeoutMs: 20000,
+        toolFilter: {
+          include: ["search", "read_*"],
+        },
+      },
+    },
+  },
+}
+```
+
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Config validation rejects definitions containing both, and writes reject new or edited mixed definitions. Existing mixed definitions keep their prior runtime behavior with a warning so upgrades can start. Doctor can normalize aliases but leaves the transport choice and authentication settings unchanged. For HTTP, remove the command, arguments, environment, and working directory; for stdio, remove the URL and HTTP transport, headers, OAuth, and TLS options. Updates can still record their channel before this explicit repair. The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+
+Local `claude-cli` turns receive configured server tools through the Gateway's
+MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
+The Gateway owns the server connections, so Claude does not start duplicate
+stdio servers. Node execution does not change that mode's native Bash or user
+settings. See [CLI backend MCP overlays](/gateway/cli-backends#bundle-mcp-overlays).
+
+## Interactive apps and plugin extensions
+
+MCP servers can also supply sandboxed interactive views. Enable the opt-in
+[MCP Apps host](/cli/mcp/apps) to use those views and supported
+[plugin extensions](/cli/mcp/apps#plugin-extensions), including app entrypoints,
+settings, composer resources, and workspace file viewers. Connecting a server
+does not enable its UI code automatically or bypass session tool permissions.
+
+## Approvals
+
+Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator).
+
+When durable persistence is offered, **Allow Always** saves a per-agent grant
+for the exact configured server and tool, even when its arguments change.
+This applies to Gateway-hosted Codex runs when OpenClaw can unambiguously match
+the approval to a live Gateway-owned tool call; missing or ambiguous matches retain
+Codex's native/session behavior. Codex apps, native plugin servers, and
+computer-use servers are excluded. Grants survive restarts and apply at the
+next thread configuration and hook registration, such as a new session or
+restart; the current session uses Codex's remembered decision.
+
+Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. Stored grants apply only under `auto` or an unspecified server mode; explicit `prompt` keeps asking. Inspect or revoke grants through [MCP tool grants](/tools/exec-approvals#mcp-tool-grants). See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack/rich-messages#native-approvals-in-slack) for Slack button delivery.
+
+## Troubleshooting
+
+### A tool returns an error
+
+When an MCP tool returns `isError: true`, OpenClaw passes its error content to
+the agent so it can follow the server's recovery guidance. The tool's
+`outputSchema` validates successful structured results only; structured error
+details do not need to match that schema.
+
+### JSON Schema validation
+
+MCP schemas use draft-07 unless they declare draft-2020-12. Draft-07 checks known
+formats such as `email`; draft-2020-12 treats formats as annotations. Schema URLs
+identify resources; validation does not fetch them from the network. Local
+references and resources already registered by the same MCP client are supported.
+
+Node, Bun, and JIT standalone hosts retain compiled validators. AOT standalone
+hosts evaluate cached schemas without generating JavaScript. In AOT hosts,
+`__proto__`, `constructor`, and `prototype` must be actual input properties when
+a schema requires them; inherited JavaScript prototype members do not satisfy
+those requirements.
+
+### The server appears in Settings but exposes no tools
+
+Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition first, then opens a live connection and reports the tools and other capabilities the server advertises. If it connects but expected tools are missing, check `toolFilter.include` and `toolFilter.exclude`.
+
+### A stdio server does not start
+
+Confirm the `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`, and an explicit `transport: "stdio"` requires a non-empty command.
+
+For servers launched by OpenClaw's built-in MCP client, debug logs report stderr activity once per connection as `bundle-mcp:<name>: stderr output omitted`. Server output is not copied into ordinary logs because it can contain message text or tool content. Stderr is still drained through shutdown. Startup and connection failures retain their normal diagnostics. Explicit SDK stderr collectors and their returned failure tails are unchanged.
+
+### An HTTP server needs authorization
+
+If a Streamable HTTP server refuses initialization with HTTP 401, its startup log and catalog diagnostic report `authentication refused (401)` alongside the configured server name. Check the credentials for that entry under `mcp.servers`, or sign in again if it uses OAuth. Response bodies and header values remain redacted; the diagnostic does not expose the server's raw error message.
+
+Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
+
+Agents sharing a native OAuth credential can reuse a fresh stored access token concurrently. Token refreshes, authorization challenges, sign-in, and sign-out still use the credential's exclusive flow lease. An expired or rejected token may wait for another refresh; the existing lease wait limit still applies.
+
+**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a check or use the server next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
+
+Browser sign-in requires Settings on the Gateway's own HTTPS address (including an operator-managed reverse proxy or Tailscale Serve route), its local loopback address, or its published Tailscale address. A separately hosted UI cannot receive the Gateway's callback. Older Gateways and unsupported addresses keep the terminal instructions. Servers with an existing auth-profile mapping or per-requester identity use that account's sign-in path instead; Settings does not create a second credential for them.
+
+An unfinished CLI attempt can leave a client registration for the CLI callback. When no credentials have been saved, browser sign-in registers its own callback automatically. Registrations associated with saved credentials are retained so refresh tokens remain usable.
+
+If **Sign in** is unavailable, or existing credentials require the CLI callback, sign in from the terminal of the installation that owns the server. `openclaw mcp login` runs offline only, so stop the Gateway first and start it again afterward:
+
+```bash
+openclaw gateway stop
+openclaw mcp login <name>
+```
+
+Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
+
+The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Sign in**, or **Accounts** → **Sign in**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+
+To sign out of a plugin-declared server, open the plugin's page and select **Accounts** → **Sign out**. OpenClaw removes the saved credentials on the Gateway; the plugin's tools need a new sign-in before their next call. Uninstalling the plugin also removes the saved sign-ins for its servers, so a reinstall starts signed out. A server under `mcp.servers` with the same name and URL keeps its credentials.
+
+### Changes do not reach an active agent
+
+`openclaw mcp reload` refreshes runtimes owned by the current CLI process. A Gateway or agent running elsewhere needs its own reload, config publish, or restart.
+
+## Related
+
+- [Control UI](/web/control-ui/chat#composer-capability-menu)
+- [MCP CLI reference](/cli/mcp)
+- [Manage plugins](/plugins/manage-plugins)
+- [Tool policies](/tools)

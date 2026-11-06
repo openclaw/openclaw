@@ -1,0 +1,136 @@
+import { confirm, isCancel } from "@clack/prompts";
+import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  normalizeUpdateChannel,
+  resolveUpdateChannelDisplay,
+} from "../../infra/update-channels.js";
+import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
+import { defaultRuntime } from "../../runtime.js";
+import { pathExists } from "../../utils.js";
+import { VERSION } from "../../version.js";
+import { reportHostOwnedUpdate } from "./host-owned.js";
+import {
+  isEmptyDir,
+  isGitCheckout,
+  parseUpdateTimeoutMs,
+  resolveGitInstallDir,
+  resolveUpdateRoot,
+  type UpdateWizardOptions,
+} from "./shared.js";
+import { readUpdateConfigFileSnapshot } from "./update-command-config.js";
+
+export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
+  if (!process.stdin.isTTY) {
+    defaultRuntime.error(
+      "Update wizard requires a TTY. Use `openclaw update --channel <stable|extended-stable|beta|dev>` instead.",
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const cancel = () => {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+  };
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
+
+  const root = await resolveUpdateRoot();
+  const [updateStatus, configSnapshot] = await Promise.all([
+    resolveUpdateInstallIdentity({
+      root,
+      timeoutMs: timeoutMs ?? 3500,
+    }),
+    readUpdateConfigFileSnapshot({ observe: false }),
+  ]);
+
+  if (updateStatus.installKind === "host") {
+    reportHostOwnedUpdate(updateStatus.installOwner ?? null, {});
+  }
+  if (updateStatus.installKind === "immutable") {
+    defaultRuntime.log(
+      "Use openclaw update for official main, or openclaw update --sha <full-sha> for an exact revision. Immutable activation runs only when explicitly enabled in the adoption record; --no-restart prepares only.",
+    );
+    return;
+  }
+
+  const configChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+  const channelInfo = resolveUpdateChannelDisplay({
+    configChannel,
+    currentVersion: VERSION,
+    installKind: updateStatus.installKind,
+    gitTag: updateStatus.git?.tag ?? null,
+    gitBranch: updateStatus.git?.branch ?? null,
+  });
+
+  const pickedChannel = await selectStyled({
+    message: "Update channel",
+    options: [
+      {
+        value: "keep",
+        label: `Keep current (${channelInfo.channel})`,
+        hint: channelInfo.label,
+      },
+      ...(
+        [
+          ["stable", "Stable", "Tagged releases (npm latest)"],
+          ["extended-stable", "Extended Stable", "Monthly supported release (npm extended-stable)"],
+          ["beta", "Beta", "Prereleases (npm beta)"],
+          ["dev", "Dev", "Git main"],
+        ] as const
+      ).map(([value, label, hint]) => ({ value, label, hint })),
+    ],
+    initialValue: "keep",
+  });
+
+  if (typeof pickedChannel === "symbol") {
+    return cancel();
+  }
+
+  const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
+
+  if (requestedChannel === "dev" && updateStatus.installKind !== "git") {
+    const gitDir = resolveGitInstallDir();
+    const hasGit = await isGitCheckout(gitDir);
+    if (!hasGit) {
+      if ((await pathExists(gitDir)) && !(await isEmptyDir(gitDir))) {
+        defaultRuntime.error(
+          `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+
+      const ok = await confirm({
+        message: stylePromptMessage(
+          `Create a git checkout at ${gitDir}? (override via OPENCLAW_GIT_DIR)`,
+        ),
+        initialValue: true,
+      });
+      if (isCancel(ok) || !ok) {
+        return cancel();
+      }
+    }
+  }
+
+  const restart = await confirm({
+    message: stylePromptMessage("Restart the gateway service after update?"),
+    initialValue: true,
+  });
+  if (typeof restart === "symbol") {
+    return cancel();
+  }
+
+  const { updateCommand } = await import("./update-command.js");
+  await updateCommand({
+    runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
+    channel: requestedChannel ?? undefined,
+    restart,
+    timeout: opts.timeout,
+    acceptCapabilities: opts.acceptCapabilities,
+    fullIntegrityCheck: opts.fullIntegrityCheck,
+  });
+}

@@ -1,0 +1,32 @@
+export { ChromeMcpDocumentUnavailableError } from "./chrome-mcp-contracts.js";
+export type { ChromeMcpOperationOptions, ChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
+export {
+  closeChromeMcpSession,
+  getChromeMcpPid,
+  getChromeMcpStatus,
+} from "./chrome-mcp-session.js";
+export {
+  ensureChromeMcpAvailable,
+  listChromeMcpTabs,
+  openChromeMcpTab,
+} from "./chrome-mcp-tabs.js";
+export {
+  clickChromeMcpCoords,
+  clickChromeMcpElement,
+  closeChromeMcpTab,
+  dragChromeMcpElement,
+  evaluateChromeMcpScript,
+  fillChromeMcpElement,
+  fillChromeMcpForm,
+  focusChromeMcpTab,
+  hoverChromeMcpElement,
+  navigateChromeMcpPage,
+  pressChromeMcpKey,
+  resizeChromeMcpPage,
+  selectChromeMcpOption,
+  resolveChromeMcpNavigateCallTimeoutMs,
+  takeChromeMcpScreenshot,
+  takeChromeMcpSnapshot,
+  uploadChromeMcpFile,
+  withChromeMcpDocument,
+} from "./chrome-mcp-actions.js";

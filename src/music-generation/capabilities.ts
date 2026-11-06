@@ -1,0 +1,26 @@
+import type {
+  MusicGenerationEditCapabilities,
+  MusicGenerationMode,
+  MusicGenerationModeCapabilities,
+  MusicGenerationProviderCapabilities,
+} from "./types.js";
+
+/** List modes supported by a provider in stable display order. */
+export function listSupportedMusicGenerationModes(provider: {
+  capabilities: MusicGenerationProviderCapabilities;
+}): MusicGenerationMode[] {
+  const modes: MusicGenerationMode[] = ["generate"];
+  const edit = provider.capabilities.edit;
+  if (edit?.enabled) {
+    modes.push("edit");
+  }
+  return modes;
+}
+
+/** Resolve the provider capability contract for one request. */
+export function resolveMusicGenerationModeCapabilities(params: {
+  provider: { capabilities: MusicGenerationProviderCapabilities };
+  inputImageCount: number;
+}): MusicGenerationModeCapabilities | MusicGenerationEditCapabilities | undefined {
+  return params.provider.capabilities[params.inputImageCount > 0 ? "edit" : "generate"];
+}

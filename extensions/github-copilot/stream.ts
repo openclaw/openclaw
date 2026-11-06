@@ -1,0 +1,178 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  applyAnthropicEphemeralCacheControlMarkers,
+  projectCopilotRequestFacts,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
+import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
+
+type CopilotAnthropicToolBlock = {
+  record: Record<string, unknown>;
+  idKey: "id" | "tool_use_id";
+  rawId: string;
+};
+
+function normalizeCopilotAnthropicToolIds(messages: unknown[]): void {
+  const blocks: CopilotAnthropicToolBlock[] = [];
+  for (const message of messages) {
+    const content = asOptionalObjectRecord(message)?.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const block of content) {
+      const record = asOptionalObjectRecord(block);
+      if (!record) {
+        continue;
+      }
+      const idKey =
+        record.type === "tool_use" ? "id" : record.type === "tool_result" ? "tool_use_id" : null;
+      const rawId = idKey ? record[idKey] : undefined;
+      if (idKey && typeof rawId === "string") {
+        blocks.push({ record, idKey, rawId });
+      }
+    }
+  }
+
+  // Reserve valid IDs globally so an earlier invalid call cannot steal the ID
+  // of a later native call; replaying this payload patch must also be stable.
+  const validId = /^[a-zA-Z0-9_-]{1,64}$/;
+  const reserved = new Set(
+    blocks
+      .filter((block) => block.idKey === "id" && validId.test(block.rawId))
+      .map((block) => block.rawId),
+  );
+  const used = new Set(reserved);
+  const claimedValid = new Set<string>();
+  const pendingByRawId = new Map<string, string[]>();
+  const lastResolvedByRawId = new Map<string, string>();
+
+  const allocate = (rawId: string): string => {
+    if (validId.test(rawId) && !claimedValid.has(rawId)) {
+      claimedValid.add(rawId);
+      return rawId;
+    }
+
+    const base = rawId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "tool";
+    if (!used.has(base)) {
+      used.add(base);
+      return base;
+    }
+
+    for (let occurrence = 2; ; occurrence += 1) {
+      const suffix = `_${occurrence}`;
+      const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
+      if (!used.has(candidate)) {
+        used.add(candidate);
+        return candidate;
+      }
+    }
+  };
+
+  for (const block of blocks) {
+    if (block.idKey === "id") {
+      const wireId = allocate(block.rawId);
+      const pending = pendingByRawId.get(block.rawId);
+      if (pending) {
+        pending.push(wireId);
+      } else {
+        pendingByRawId.set(block.rawId, [wireId]);
+      }
+      block.record.id = wireId;
+      continue;
+    }
+
+    // Upstream projection can collapse distinct raw calls to the same string;
+    // consume occurrences in order so each result answers its own tool call.
+    const pending = pendingByRawId.get(block.rawId);
+    const wireId =
+      pending?.shift() ?? lastResolvedByRawId.get(block.rawId) ?? allocate(block.rawId);
+    if (pending?.length === 0) {
+      pendingByRawId.delete(block.rawId);
+    }
+    lastResolvedByRawId.set(block.rawId, wireId);
+    block.record.tool_use_id = wireId;
+  }
+}
+
+function patchCopilotAnthropicPayload(payload: unknown): void {
+  const record = asOptionalObjectRecord(payload);
+  if (!record) {
+    return;
+  }
+  if (Array.isArray(record.messages)) {
+    const messages = stripCopilotAssistantThinkingMessages(record.messages);
+    record.messages = messages;
+    normalizeCopilotAnthropicToolIds(messages);
+  }
+  applyAnthropicEphemeralCacheControlMarkers(record);
+}
+
+/** Direct completions skip the agent wrapper but still need Copilot's request identity. */
+export function wrapCopilotSimpleCompletionStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  const stream = ctx.streamFn;
+  if (!stream) {
+    return undefined;
+  }
+  return (model, context, options) =>
+    stream(model, context, {
+      ...options,
+      headers: buildCopilotRuntimeHeaders({
+        config: ctx.config,
+        headers: { ...model.headers, ...options?.headers },
+      }),
+    });
+}
+
+export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const stream = ctx.streamFn;
+  if (!stream) {
+    return undefined;
+  }
+  return (model, context, options) => {
+    if (
+      model.provider !== "github-copilot" ||
+      !["anthropic-messages", "openai-responses", "openai-completions"].includes(model.api)
+    ) {
+      return stream(model, context, options);
+    }
+    const facts = projectCopilotRequestFacts(context.messages, "nested");
+    const anthropic = model.api === "anthropic-messages";
+    const originalOnPayload = options?.onPayload;
+    const patchPayload = anthropic
+      ? patchCopilotAnthropicPayload
+      : model.api === "openai-responses"
+        ? sanitizeCopilotReplayResponsePayload
+        : undefined;
+    return stream(model, context, {
+      ...options,
+      headers: buildCopilotRuntimeHeaders({
+        config: ctx.config,
+        headers: {
+          ...model.headers,
+          "x-initiator": facts.initiator,
+          ...(facts.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
+          ...options?.headers,
+        },
+      }),
+      ...(patchPayload
+        ? {
+            onPayload: wrapProviderPayloadHook(
+              (payload, payloadModel) =>
+                originalOnPayload?.(payload, anthropic ? model : payloadModel),
+              (payload, result) => {
+                patchPayload(result === undefined ? payload : result);
+                return result;
+              },
+              (payload) => patchPayload(payload),
+            ),
+          }
+        : {}),
+    });
+  };
+}

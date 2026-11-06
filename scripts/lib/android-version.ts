@@ -1,0 +1,253 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { validateAndroidStorePlan } from "./android-store-version.ts";
+import { extractChangelogSection } from "./mobile-changelog.ts";
+import {
+  normalizeGatewayVersionToPinnedMobileVersion,
+  readRootPackageVersion,
+} from "./mobile-version.ts";
+import { parsePinnedReleaseVersion } from "./release-version.mjs";
+
+const ANDROID_VERSION_FILE = "apps/android/version.json";
+const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
+const ANDROID_VERSION_PROPERTIES_FILE = "apps/android/Config/Version.properties";
+const ANDROID_RELEASE_NOTES_FILE = "apps/android/fastlane/metadata/android/en-US/release_notes.txt";
+const ANDROID_VERSION_CODE_MAX = 2_100_000_000;
+
+type AndroidVersionManifest = {
+  version: string;
+  versionCode: number;
+};
+
+type ResolvedAndroidVersion = ReturnType<typeof resolveAndroidVersion>;
+
+type SyncAndroidVersioningMode = "check" | "write";
+
+export function normalizePinnedAndroidVersion(rawVersion: string): string {
+  const trimmed = rawVersion.trim();
+  if (!trimmed) {
+    throw new Error(`Missing Android version in ${ANDROID_VERSION_FILE}.`);
+  }
+
+  const pinnedVersion = parsePinnedReleaseVersion(trimmed);
+  if (!pinnedVersion) {
+    throw new Error(
+      `Invalid Android version '${rawVersion}'. Expected pinned release version like 2026.6.5.`,
+    );
+  }
+
+  return pinnedVersion;
+}
+
+export function canonicalAndroidVersionCode(version: string): number {
+  const canonicalVersion = normalizePinnedAndroidVersion(version);
+  const [year, rawMonth, rawPatch] = canonicalVersion.split(".");
+  const month = rawMonth?.padStart(2, "0");
+  const patch = rawPatch?.padStart(2, "0");
+  const versionCode = Number(`${year}${month}${patch}01`);
+  if (
+    !Number.isSafeInteger(versionCode) ||
+    versionCode <= 0 ||
+    versionCode > ANDROID_VERSION_CODE_MAX
+  ) {
+    throw new Error(`Unable to derive Android versionCode from ${canonicalVersion}.`);
+  }
+  return versionCode;
+}
+
+export function normalizeAndroidVersionCode(rawVersionCode: number, version: string): number {
+  if (
+    !Number.isInteger(rawVersionCode) ||
+    rawVersionCode <= 0 ||
+    rawVersionCode > ANDROID_VERSION_CODE_MAX
+  ) {
+    throw new Error(
+      `Invalid Android versionCode '${rawVersionCode}'. Expected a positive integer no greater than 2100000000.`,
+    );
+  }
+
+  const prefix = canonicalAndroidVersionCode(version).toString().slice(0, -2);
+  const raw = rawVersionCode.toString();
+  const suffix = Number.parseInt(raw.slice(prefix.length), 10);
+  if (
+    !raw.startsWith(prefix) ||
+    raw.length !== prefix.length + 2 ||
+    !Number.isInteger(suffix) ||
+    suffix < 1 ||
+    suffix > 49
+  ) {
+    throw new Error(
+      `Invalid Android versionCode '${rawVersionCode}'. Expected ${prefix}01 through ${prefix}49 for version ${version}.`,
+    );
+  }
+
+  return rawVersionCode;
+}
+
+export function resolveGatewayVersionForAndroidRelease(rootDir = path.resolve(".")) {
+  const packageVersion = readRootPackageVersion(rootDir);
+  const pinnedAndroidVersion = normalizeGatewayVersionToPinnedMobileVersion(packageVersion);
+  return {
+    packageVersion,
+    pinnedAndroidVersion,
+    versionCode: canonicalAndroidVersionCode(pinnedAndroidVersion),
+  };
+}
+
+export function writeAndroidVersionManifest(
+  version: string,
+  versionCode: number | null,
+  rootDir = path.resolve("."),
+): string {
+  const versionFilePath = path.join(rootDir, ANDROID_VERSION_FILE);
+  const normalizedVersion = normalizePinnedAndroidVersion(version);
+  const normalizedVersionCode = normalizeAndroidVersionCode(
+    versionCode ?? canonicalAndroidVersionCode(normalizedVersion),
+    normalizedVersion,
+  );
+  const nextContent = `${JSON.stringify(
+    { version: normalizedVersion, versionCode: normalizedVersionCode },
+    null,
+    2,
+  )}\n`;
+  writeFileSync(versionFilePath, nextContent, "utf8");
+  return versionFilePath;
+}
+
+export function resolveAndroidVersion(rootDir = path.resolve(".")) {
+  const versionFilePath = path.join(rootDir, ANDROID_VERSION_FILE);
+  const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
+  const versionPropertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
+  const releaseNotesPath = path.join(rootDir, ANDROID_RELEASE_NOTES_FILE);
+  const manifest = JSON.parse(readFileSync(versionFilePath, "utf8")) as AndroidVersionManifest;
+  const canonicalVersion = normalizePinnedAndroidVersion(manifest.version ?? "");
+  const versionCode = normalizeAndroidVersionCode(manifest.versionCode, canonicalVersion);
+
+  return {
+    canonicalVersion,
+    changelogPath,
+    releaseNotesPath,
+    versionCode,
+    wearVersionCode: versionCode + 50,
+    versionFilePath,
+    versionPropertiesPath,
+  };
+}
+
+export function resolveAndroidBuildVersion(
+  rootDir = path.resolve("."),
+  planPath = process.env.OPENCLAW_ANDROID_RELEASE_PLAN,
+): ResolvedAndroidVersion {
+  const pinned = resolveAndroidVersion(rootDir);
+  if (!planPath) {
+    return pinned;
+  }
+  const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
+    schemaVersion?: number;
+    version: string;
+    versionCode: number;
+    wearVersionCode: number;
+    sourceSha: string;
+  };
+  let canonicalVersion: string;
+  let versionCode: number;
+  if (plan.schemaVersion === 2) {
+    const storePlan = validateAndroidStorePlan(plan);
+    canonicalVersion = storePlan.version;
+    versionCode = storePlan.versionCode;
+  } else if (plan.schemaVersion === undefined) {
+    // Retained pre-cutover plans must still reproduce their original artifacts.
+    canonicalVersion = normalizePinnedAndroidVersion(plan.version);
+    versionCode = normalizeAndroidVersionCode(plan.versionCode, canonicalVersion);
+    if (plan.wearVersionCode !== versionCode + 50) {
+      throw new Error("Android release plan Wear versionCode must equal the phone code plus 50.");
+    }
+  } else {
+    throw new Error(`Unsupported Android release plan schema ${plan.schemaVersion}.`);
+  }
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: rootDir,
+    encoding: "utf8",
+  }).trim();
+  if (!/^[a-f0-9]{40}$/u.test(plan.sourceSha) || plan.sourceSha !== head) {
+    throw new Error("Android release plan sourceSha must match the checked-out commit.");
+  }
+  return { ...pinned, canonicalVersion, versionCode, wearVersionCode: plan.wearVersionCode };
+}
+
+export function renderAndroidVersionProperties(
+  version: Pick<ResolvedAndroidVersion, "canonicalVersion" | "versionCode">,
+): string {
+  return `# Shared Android version defaults.\n# Source of truth: apps/android/version.json\n# Generated by scripts/android-sync-versioning.ts.\n\nOPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}\nOPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}\n`;
+}
+
+export function renderAndroidReleaseNotes(
+  version: Pick<ResolvedAndroidVersion, "canonicalVersion">,
+  changelogContent: string,
+): string {
+  for (const heading of [version.canonicalVersion, "Unreleased"]) {
+    const body = extractChangelogSection(changelogContent, heading);
+    if (body) {
+      return `${body}\n`;
+    }
+  }
+
+  throw new Error(
+    `Unable to find Android changelog notes for ${version.canonicalVersion}. Add a matching section to ${ANDROID_CHANGELOG_FILE}.`,
+  );
+}
+
+function syncFile(params: {
+  mode: SyncAndroidVersioningMode;
+  path: string;
+  nextContent: string;
+  label: string;
+}): boolean {
+  const nextContent = params.nextContent.endsWith("\n")
+    ? params.nextContent
+    : `${params.nextContent}\n`;
+  const currentContent = readFileSync(params.path, "utf8");
+  if (currentContent === nextContent) {
+    return false;
+  }
+
+  if (params.mode === "check") {
+    throw new Error(`${params.label} is stale: ${path.relative(process.cwd(), params.path)}`);
+  }
+
+  writeFileSync(params.path, nextContent, "utf8");
+  return true;
+}
+
+export function syncAndroidVersioning(params?: {
+  mode?: SyncAndroidVersioningMode;
+  rootDir?: string;
+}) {
+  const mode = params?.mode ?? "write";
+  const rootDir = path.resolve(params?.rootDir ?? ".");
+  const version = resolveAndroidVersion(rootDir);
+  const changelogContent = readFileSync(version.changelogPath, "utf8");
+  const nextVersionProperties = renderAndroidVersionProperties(version);
+  const nextReleaseNotes = renderAndroidReleaseNotes(version, changelogContent);
+  const updatedPaths: string[] = [];
+
+  for (const file of [
+    {
+      path: version.versionPropertiesPath,
+      nextContent: nextVersionProperties,
+      label: "Android version properties",
+    },
+    {
+      path: version.releaseNotesPath,
+      nextContent: nextReleaseNotes,
+      label: "Android release notes",
+    },
+  ]) {
+    if (syncFile({ mode, ...file })) {
+      updatedPaths.push(file.path);
+    }
+  }
+
+  return { updatedPaths };
+}

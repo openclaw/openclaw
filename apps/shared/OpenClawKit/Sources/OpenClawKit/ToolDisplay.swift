@@ -1,0 +1,261 @@
+import Foundation
+
+public struct ToolDisplaySummary: Sendable, Equatable {
+    public let name: String
+    public let icon: String
+    public let title: String
+    public let label: String
+    public let verb: String?
+    public let detail: String?
+
+    public var detailLine: String? {
+        let parts = [self.verb, self.detail].compactMap(\.self).filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+public enum ToolDisplayRegistry {
+    private static let resourceBundleName = "OpenClawKit_OpenClawKit"
+    private static let resourceBundle = locateResourceBundle()
+
+    private struct ToolDisplayActionSpec: Decodable {
+        let label: String?
+        let detailKeys: [String]?
+    }
+
+    private struct ToolDisplaySpec: Decodable {
+        let icon: String?
+        let title: String?
+        let label: String?
+        let detailKeys: [String]?
+        let actions: [String: ToolDisplayActionSpec]?
+    }
+
+    private struct ToolDisplayConfig: Decodable {
+        let version: Int?
+        let fallback: ToolDisplaySpec?
+        let tools: [String: ToolDisplaySpec]?
+    }
+
+    private static let config: ToolDisplayConfig = loadConfig()
+
+    /// Presentation only; invocation identity and stored tool names stay raw.
+    public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
+        // A tool bridged over MCP arrives as mcp__<server>__<tool>; show the tool, not the bridge.
+        if let name, name.hasPrefix("mcp__"),
+           let separator = name.range(of: "__", range: name.index(name.startIndex, offsetBy: 5)..<name.endIndex),
+           separator.upperBound < name.endIndex
+        {
+            return (String(name[separator.upperBound...]), args)
+        }
+        guard let key = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["dispatch_action", "tool_call"].contains(key),
+              let arguments = args?.dictionaryValue,
+              let id = arguments["id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty
+        else { return (name, args) }
+
+        let displayName = id.replacingOccurrences(
+            of: #"^(?:openclaw|mcp|client):[^:]+:(.+)$"#,
+            with: "$1",
+            options: .regularExpression)
+        return (displayName, AnyCodable(arguments["args"]?.dictionaryValue ?? [:]))
+    }
+
+    public static func resolve(name: String?, args: AnyCodable?, meta: String? = nil) -> ToolDisplaySummary {
+        let call = self.displayCall(name: name, args: args)
+        let args = call.args
+        let trimmedName = call.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
+        let key = trimmedName.lowercased()
+        let spec = self.config.tools?[key]
+        let fallback = self.config.fallback
+
+        let icon = spec?.icon ?? fallback?.icon ?? "puzzle"
+        let title = spec?.title ?? self.titleFromName(trimmedName)
+        let label = spec?.label ?? trimmedName
+
+        let actionRaw = self.valueForKeyPath(args, path: "action") as? String
+        let action = actionRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let actionSpec = action.flatMap { spec?.actions?[$0] }
+        let verb = (actionSpec?.label ?? action)?.trimmedNonEmpty?.replacingOccurrences(of: "_", with: " ")
+
+        var detail: String?
+        if key == "read" {
+            detail = self.readDetail(args)
+        } else if key == "write" || key == "edit" || key == "attach" {
+            detail = self.valueForKeyPath(args, path: "path") as? String
+        }
+
+        let detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallback?.detailKeys ?? []
+        detail = (detail ?? self.firstValue(args, keys: detailKeys) ?? meta).map(self.shortenHomeInString)
+
+        return ToolDisplaySummary(
+            name: trimmedName,
+            icon: icon,
+            title: title,
+            label: label,
+            verb: verb,
+            detail: detail)
+    }
+
+    private static func loadConfig() -> ToolDisplayConfig {
+        guard let url = self.resourceBundle.url(forResource: "tool-display", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(ToolDisplayConfig.self, from: data)
+        else {
+            return self.defaultConfig()
+        }
+        return config
+    }
+
+    private static func locateResourceBundle() -> Bundle {
+        if let mainResourceURL = Bundle.main.resourceURL,
+           let bundle = Bundle(
+               url: mainResourceURL.appendingPathComponent("\(self.resourceBundleName).bundle"))
+        {
+            return bundle
+        }
+
+        if Bundle.main.url(forResource: "tool-display", withExtension: "json") != nil {
+            return Bundle.main
+        }
+
+        let candidates: [URL?] = [
+            Bundle.main.resourceURL,
+            Bundle.main.bundleURL,
+            Bundle(for: ToolDisplayBundleLocator.self).resourceURL,
+            Bundle(for: ToolDisplayBundleLocator.self).bundleURL,
+        ]
+
+        for baseURL in candidates.compactMap(\.self) {
+            var current = baseURL
+            for _ in 0...5 {
+                for root in [
+                    current,
+                    current.appendingPathComponent("Resources"),
+                    current.appendingPathComponent("Contents/Resources"),
+                ] {
+                    if let bundle = Bundle(
+                        url: root.appendingPathComponent("\(self.resourceBundleName).bundle"))
+                    {
+                        return bundle
+                    }
+                }
+                current = current.deletingLastPathComponent()
+            }
+        }
+
+        return Bundle.main
+    }
+
+    private static func defaultConfig() -> ToolDisplayConfig {
+        ToolDisplayConfig(
+            version: 1,
+            fallback: ToolDisplaySpec(
+                icon: "puzzle",
+                title: nil,
+                label: nil,
+                detailKeys: [
+                    "command",
+                    "path",
+                    "url",
+                    "targetUrl",
+                    "targetId",
+                    "ref",
+                    "element",
+                    "node",
+                    "nodeId",
+                    "id",
+                    "requestId",
+                    "to",
+                    "channelId",
+                    "guildId",
+                    "userId",
+                    "name",
+                    "query",
+                    "pattern",
+                    "messageId",
+                ],
+                actions: nil),
+            tools: nil)
+    }
+
+    private static func titleFromName(_ name: String) -> String {
+        let cleaned = name.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespaces)
+        guard !cleaned.isEmpty else { return "Tool" }
+        return cleaned
+            .split(separator: " ")
+            .map { part in
+                let upper = part.uppercased()
+                if part.count <= 2, part == upper { return String(part) }
+                return String(upper.prefix(1)) + String(part.lowercased().dropFirst())
+            }
+            .joined(separator: " ")
+    }
+
+    private static func readDetail(_ args: AnyCodable?) -> String? {
+        guard let path = valueForKeyPath(args, path: "path") as? String else { return nil }
+        let offsetAny = self.valueForKeyPath(args, path: "offset")
+        let limitAny = self.valueForKeyPath(args, path: "limit")
+        let offset = (offsetAny as? Double) ?? (offsetAny as? Int).map(Double.init)
+        let limit = (limitAny as? Double) ?? (limitAny as? Int).map(Double.init)
+        if let offset, let limit,
+           let start = Int(exactly: offset.rounded(.towardZero)),
+           let end = Int(exactly: (offset + limit).rounded(.towardZero))
+        {
+            return "\(path):\(start)-\(end)"
+        }
+        return path
+    }
+
+    private static func firstValue(_ args: AnyCodable?, keys: [String]) -> String? {
+        keys.lazy.compactMap { self.valueForKeyPath(args, path: $0).flatMap(self.renderValue) }.first
+    }
+
+    private static func renderValue(_ value: Any) -> String? {
+        if let str = value as? String {
+            guard let trimmed = str.trimmedNonEmpty else { return nil }
+            let first = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+            if first.count > 160 { return String(first.prefix(157)) + "…" }
+            return first
+        }
+        if let num = value as? Int { return String(num) }
+        if let num = value as? Double { return String(num) }
+        if let bool = value as? Bool { return bool ? "true" : "false" }
+        if let array = value as? [Any] {
+            let items = array.compactMap { self.renderValue($0) }
+            guard !items.isEmpty else { return nil }
+            let preview = items.prefix(3).joined(separator: ", ")
+            return items.count > 3 ? "\(preview)…" : preview
+        }
+        if let dict = value as? [String: Any] {
+            if let label = dict["name"].flatMap({ renderValue($0) }) { return label }
+            if let label = dict["id"].flatMap({ renderValue($0) }) { return label }
+        }
+        return nil
+    }
+
+    private static func valueForKeyPath(_ args: AnyCodable?, path: String) -> Any? {
+        guard let args else { return nil }
+        let parts = path.split(separator: ".").map(String.init)
+        var current: Any? = args.value
+        for part in parts {
+            if let dict = current as? [String: AnyCodable] {
+                current = dict[part]?.value
+            } else if let dict = current as? [String: Any] {
+                current = dict[part]
+            } else {
+                return nil
+            }
+        }
+        return current
+    }
+
+    private static func shortenHomeInString(_ value: String) -> String {
+        let home = NSHomeDirectory()
+        guard !home.isEmpty else { return value }
+        return value.replacingOccurrences(of: home, with: "~")
+    }
+}
+
+private final class ToolDisplayBundleLocator {}

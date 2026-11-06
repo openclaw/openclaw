@@ -1,0 +1,59 @@
+title: "Runtime tool fixture — exec"
+
+scenario:
+  id: runtime-tool-exec
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - tools.exec-routing-exec
+  objective: Verify command execution behavior is tracked across OpenClaw and Codex while Codex owns exec/process natively.
+  successCriteria:
+    - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
+    - Codex executes the happy and failure paths through its native command tool and projects correlated bash receipts.
+    - The fixture validates the successful output marker and the failed command result.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/bash-tools.schemas.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the exec runtime tool family.
+    config:
+      toolName: exec
+      nativeWorkspaceBehavior: exec
+      toolCoverage:
+        family: exec
+        actualTool: exec
+        bucket: codex-native-workspace
+        expectedLayer: codex-native-workspace
+        required: true
+        tracking: "#80319"
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: execute native command behavior separately from OpenClaw dynamic tool parity
+        reason: Codex app-server intentionally owns command execution natively; the fixture must not require OpenClaw dynamic exec exposure.
+      happyPrompt: >-
+        tool search qa check target=exec. Use the shell command tool exec
+        to run `printf 'runtime-tool-fixture\n'` exactly once. If discovery is
+        needed, discover exec and then execute that shell command; discovery
+        alone does not complete this task. Summarize the actual command output.
+      failurePrompt: >-
+        tool search qa failure target=exec. Use the shell command tool exec
+        to run `exit 7` exactly once, then report its nonzero exit status.
+        This intentional failure is the task; do not retry or repair it.
+      promptSnippet: "target=exec"
+      failurePromptSnippet: "failure target=exec"
+
+flow:
+  steps:
+    - name: exercises exec happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

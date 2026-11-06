@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Onboarding
+    url: https://community.openclaw.ai/
+    about: "For official OpenClaw support with onboarding and setup, visit community.openclaw.ai."
+  - name: Support
+    url: https://community.openclaw.ai/
+    about: "For official OpenClaw support, visit community.openclaw.ai."

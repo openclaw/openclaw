@@ -1,0 +1,44 @@
+import type { GatewayProbeResult } from "../../gateway/probe.js";
+
+/** Builds gateway config where local and remote auth values use environment SecretRefs. */
+export function createSecretRefGatewayConfig(params?: { gatewayMode?: "local" | "remote" }) {
+  return {
+    secrets: {
+      defaults: {
+        env: "default",
+      },
+    },
+    gateway: {
+      ...(params?.gatewayMode ? { mode: params.gatewayMode } : {}),
+      auth: {
+        mode: "token" as const,
+        token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+        password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+      },
+      remote: {
+        url: "wss://remote.example:18789",
+        token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+        password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
+      },
+    },
+  };
+}
+
+export function createUnreachableGatewayProbe(url: string, error: string): GatewayProbeResult {
+  return {
+    ok: false,
+    url,
+    connectLatencyMs: null,
+    error,
+    close: null,
+    auth: {
+      role: null,
+      scopes: [],
+      capability: "unknown",
+    },
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+  };
+}

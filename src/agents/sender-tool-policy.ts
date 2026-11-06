@@ -1,0 +1,49 @@
+/**
+ * Applies per-agent toolsBySender matches before global sender policy so
+ * channel delivery can narrow tool access by sender identity.
+ */
+import { resolveToolsBySender } from "../config/group-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseSessionDeliveryRoute } from "../routing/session-key.js";
+import { resolveAgentConfig } from "./agent-scope.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
+
+type SenderToolPolicyParams = {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string | null;
+  messageProvider?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+};
+
+/** Resolves sender-scoped sandbox tool policy, preferring agent config over global config. */
+export function resolveSenderToolPolicy(
+  params: SenderToolPolicyParams,
+): SandboxToolPolicy | undefined {
+  const cfg = params.config;
+  if (!cfg) {
+    return undefined;
+  }
+  // The requester session is authoritative when a message action targets a different channel.
+  const messageProvider =
+    parseSessionDeliveryRoute(params.sessionKey)?.channel ?? params.messageProvider;
+  const sender = {
+    messageProvider,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  };
+  const agentTools =
+    params.agentId && params.agentId.trim()
+      ? resolveAgentConfig(cfg, params.agentId)?.tools
+      : undefined;
+  return pickSandboxToolPolicy(
+    resolveToolsBySender({ toolsBySender: agentTools?.toolsBySender, ...sender }) ||
+      resolveToolsBySender({ toolsBySender: cfg.tools?.toolsBySender, ...sender }),
+  );
+}

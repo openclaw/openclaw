@@ -1,0 +1,76 @@
+// Session-binding normalization creates stable channel/account/conversation keys
+// and removes invalid self-parent relationships.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeAccountId } from "../../routing/session-key.js";
+import type { ConversationRef } from "./session-binding.types.js";
+
+/**
+ * Normalizes conversation ids and drops self-referential parent ids.
+ */
+export function normalizeConversationTargetRef<
+  T extends { conversationId: string; parentConversationId?: string | null },
+>(ref: T): T {
+  const conversationId = normalizeOptionalString(ref.conversationId) ?? "";
+  const parentConversationId = normalizeOptionalString(ref.parentConversationId);
+  const { parentConversationId: _ignoredParentConversationId, ...rest } = ref;
+  return {
+    ...rest,
+    conversationId,
+    ...(parentConversationId && parentConversationId !== conversationId
+      ? { parentConversationId }
+      : {}),
+  } as T;
+}
+
+/**
+ * Normalizes a full conversation reference for stable binding keys.
+ */
+export function normalizeConversationRef<T extends ConversationRef>(ref: T): T {
+  return {
+    ...normalizeConversationTargetRef(ref),
+    channel: normalizeLowercaseStringOrEmpty(ref.channel),
+    accountId: normalizeAccountId(ref.accountId),
+  };
+}
+
+/** Capture only canonical identity fields; caller context must not cross IPC. */
+export function captureConversationRef(ref: ConversationRef): ConversationRef {
+  const { channel, accountId, conversationId, parentConversationId } = ref;
+  return normalizeConversationRef({
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+  });
+}
+
+/**
+ * Builds the adapter registry key shared by channel/account scoped bindings.
+ */
+export function buildChannelAccountKey(params: { channel: string; accountId: string }): string {
+  return `${normalizeLowercaseStringOrEmpty(params.channel)}:${normalizeAccountId(params.accountId)}`;
+}
+
+// The public inspection shape stays unchanged; private request scope survives
+// prepared-result copies even when the selected record belongs to a parent.
+const INSPECTED_CONVERSATION = Symbol.for("openclaw.sessionBinding.inspectedConversation");
+type ScopedBindingInspection = {
+  status: "available" | "unavailable";
+  [INSPECTED_CONVERSATION]?: Readonly<ConversationRef>;
+};
+
+export function withSessionBindingInspectionConversation<T extends ScopedBindingInspection>(
+  inspection: T,
+  conversation: ConversationRef,
+): T {
+  return Object.assign(inspection, {
+    [INSPECTED_CONVERSATION]: Object.freeze({ ...conversation }),
+  });
+}
+
+export function readSessionBindingInspectionConversation(inspection: ScopedBindingInspection) {
+  return inspection[INSPECTED_CONVERSATION];
+}

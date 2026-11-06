@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-browser-request"
+description = "Enables the native_browser_request command without any pre-configured scope."
+commands.allow = ["native_browser_request"]
+
+[[permission]]
+identifier = "deny-native-browser-request"
+description = "Denies the native_browser_request command without any pre-configured scope."
+commands.deny = ["native_browser_request"]

@@ -1,0 +1,47 @@
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+
+function normalizeUrbitHostname(hostname: string | undefined): string {
+  return (hostname ?? "").trim().toLowerCase().replace(/\.$/, "");
+}
+
+export function validateUrbitBaseUrl(
+  raw: string,
+): { ok: true; baseUrl: string; hostname: string } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: false, error: "Required" };
+  }
+
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  const parsed = URL.parse(candidate);
+  if (!parsed) {
+    return { ok: false, error: "Invalid URL" };
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return { ok: false, error: "URL must use http:// or https://" };
+  }
+
+  if (parsed.username || parsed.password) {
+    return { ok: false, error: "URL must not include credentials" };
+  }
+
+  const hostname = normalizeUrbitHostname(parsed.hostname);
+  if (!hostname) {
+    return { ok: false, error: "Invalid hostname" };
+  }
+
+  // Normalize to origin so callers can't smuggle paths/query fragments into the base URL,
+  // and strip a trailing dot from the hostname (DNS root label).
+  parsed.hostname = hostname;
+  return { ok: true, baseUrl: parsed.origin, hostname };
+}
+
+export function isBlockedUrbitHostname(hostname: string): boolean {
+  const normalized = normalizeUrbitHostname(hostname);
+  if (!normalized) {
+    return false;
+  }
+  return isBlockedHostnameOrIp(normalized);
+}

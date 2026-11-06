@@ -1,0 +1,211 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { hasMediaPayload } from "../media-payload.js";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+
+const STRUCTURED_TOOL_RESULT_MAX_CHARS = 8000;
+const IMAGE_TOOL_RESULT_TYPES = new Set(["image", "image_url", "input_image"]);
+const AUDIO_TOOL_RESULT_TYPES = new Set(["audio", "input_audio", "output_audio"]);
+const MEDIA_ONLY_TOOL_RESULT_TYPES = new Set([
+  ...IMAGE_TOOL_RESULT_TYPES,
+  ...AUDIO_TOOL_RESULT_TYPES,
+]);
+const INLINE_DATA_URI_PATTERN =
+  /(^|[^A-Za-z0-9_])data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+(?:;[a-z0-9.+-]+=[^,;"'\s]+|;base64)*,[^\s"'<>)]+)/gi;
+const MIME_KEY_CANDIDATES = [
+  "mimeType",
+  "mime_type",
+  "mediaType",
+  "media_type",
+  "contentType",
+  "content_type",
+];
+const TEXTUAL_MIME_PATTERN =
+  /^(?:text\/|application\/(?:json|ld\+json|x-ndjson|xml|javascript|x-www-form-urlencoded)|[^/]+\/[^+]+\+(?:json|xml)$)/i;
+const OPAQUE_OR_BINARY_FIELD_RE = /^(?:blob|buffer|bytes|encrypted_content|encrypted_stdout)$/i;
+
+function readMimeType(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  for (const key of MIME_KEY_CANDIDATES) {
+    const mimeType = value[key];
+    if (typeof mimeType === "string" && mimeType.trim().length > 0) {
+      return mimeType;
+    }
+  }
+  return undefined;
+}
+
+function truncateStructuredToolText(text: string): string {
+  if (text.length <= STRUCTURED_TOOL_RESULT_MAX_CHARS) {
+    return text;
+  }
+  return `${truncateUtf16Safe(text, STRUCTURED_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+}
+
+function classifyToolResultMedia(blocks: readonly unknown[]): {
+  hasImage: boolean;
+  hasAudio: boolean;
+} {
+  let hasImage = false;
+  let hasAudio = false;
+  for (const block of blocks) {
+    if (!hasMediaPayload(block) || block.type === "text") {
+      continue;
+    }
+    const type = typeof block.type === "string" ? block.type : undefined;
+    const mimeType = readMimeType(block)?.toLowerCase();
+    hasImage ||= Boolean(
+      (type && IMAGE_TOOL_RESULT_TYPES.has(type)) || mimeType?.startsWith("image/"),
+    );
+    hasAudio ||= Boolean(
+      (type && AUDIO_TOOL_RESULT_TYPES.has(type)) || mimeType?.startsWith("audio/"),
+    );
+  }
+  return { hasImage, hasAudio };
+}
+
+export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
+  const { hasImage, hasAudio } = classifyToolResultMedia(blocks);
+  if (hasImage && hasAudio) {
+    return "(see attached media)";
+  }
+  if (hasAudio) {
+    return "(see attached audio)";
+  }
+  return hasImage ? "(see attached image)" : undefined;
+}
+
+export function extractToolResultBlockText(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as Record<string, unknown>;
+  if (typeof record.type === "string" && MEDIA_ONLY_TOOL_RESULT_TYPES.has(record.type)) {
+    return undefined;
+  }
+  if (record.type === "text") {
+    const text = typeof record.text === "string" ? record.text : "";
+    return text ? sanitizeSurrogates(text) : undefined;
+  }
+  let structured: string | undefined;
+  const seen = new WeakSet<object>();
+  try {
+    structured = JSON.stringify(
+      record,
+      function structuredToolResultReplacer(this: unknown, key, value) {
+        if (OPAQUE_OR_BINARY_FIELD_RE.test(key)) {
+          return `[omitted ${key}]`;
+        }
+        if (key === "data") {
+          const mimeType = readMimeType(this);
+          const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
+          if (normalizedMimeType && !TEXTUAL_MIME_PATTERN.test(normalizedMimeType)) {
+            const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
+            return length ? `[binary data omitted: ${length} chars]` : "[binary data omitted]";
+          }
+        }
+        if (typeof value === "bigint") {
+          return value.toString();
+        }
+        if (typeof value === "string") {
+          return value.replace(
+            INLINE_DATA_URI_PATTERN,
+            (_match, prefix: string, uri: string) =>
+              `${prefix}[inline data URI: ${uri.length} chars]`,
+          );
+        }
+        if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
+          return undefined;
+        }
+        if (!value || typeof value !== "object") {
+          return value;
+        }
+        if (seen.has(value)) {
+          return "[Circular]";
+        }
+        seen.add(value);
+        return value;
+      },
+    );
+    if (!structured || structured === "{}") {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return sanitizeSurrogates(truncateStructuredToolText(structured));
+}
+
+export function extractToolResultText(
+  blocks: readonly unknown[],
+  options?: { includeStructured?: boolean },
+): string {
+  const explicitTexts: string[] = [];
+  const structuredBlocks: object[] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    if ((block as Record<string, unknown>).type === "text") {
+      const text = extractToolResultBlockText(block);
+      if (text) {
+        explicitTexts.push(text);
+      }
+    } else {
+      structuredBlocks.push(block);
+    }
+  }
+  if (explicitTexts.length > 0 && !options?.includeStructured) {
+    return explicitTexts.join("\n");
+  }
+  const structuredTexts: string[] = [];
+  for (const block of structuredBlocks) {
+    const text = extractToolResultBlockText(block);
+    if (text) {
+      structuredTexts.push(text);
+    }
+  }
+  if (explicitTexts.length > 0) {
+    // Text budgets belong to the caller; clipping here can remove continuation instructions.
+    if (structuredTexts.length > 0) {
+      explicitTexts.push(truncateStructuredToolText(structuredTexts.join("\n")));
+    }
+    return explicitTexts.join("\n");
+  }
+  return truncateStructuredToolText(structuredTexts.join("\n"));
+}
+
+/** Describe media that cannot be represented on the target provider wire. */
+export function describeUnsupportedToolResultMedia(
+  blocks: readonly unknown[],
+  support: { images: boolean; audio: boolean },
+): string | undefined {
+  const { hasImage, hasAudio } = classifyToolResultMedia(blocks);
+  const omittedImage = hasImage && !support.images;
+  const omittedAudio = hasAudio && !support.audio;
+  if (omittedImage && omittedAudio) {
+    return "[unsupported tool-result media omitted]";
+  }
+  if (omittedAudio) {
+    return "[unsupported tool-result audio omitted]";
+  }
+  return omittedImage ? "[unsupported tool-result image omitted]" : undefined;
+}
+
+export function formatToolResultText(params: {
+  text: string;
+  mediaPlaceholder?: string;
+  omittedMediaPlaceholder?: string;
+  isError: boolean;
+}): string {
+  const trimmed = params.text.trim();
+  // trim() is only an emptiness predicate here: tool output boundary
+  // whitespace (indentation, trailing newlines) is significant durable
+  // content, so the nonblank body must emit params.text unmodified.
+  const body = trimmed
+    ? `${params.text}${params.omittedMediaPlaceholder ? `\n${params.omittedMediaPlaceholder}` : ""}`
+    : (params.omittedMediaPlaceholder ?? params.mediaPlaceholder ?? "(no tool output)");
+  return `${params.isError ? "[tool error] " : ""}${body}`;
+}

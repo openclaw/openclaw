@@ -1,0 +1,200 @@
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
+import {
+  type FastMode,
+  normalizeFastMode,
+  normalizeOptionalLowercaseString,
+} from "../../packages/normalization-core/src/string-coerce.js";
+import type { ThinkingLevelMap } from "../llm/types.js";
+
+export { normalizeFastMode };
+export type { FastMode };
+
+/** Canonical thinking level values accepted by chat commands and session state. */
+export const ALL_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+] as const;
+export type ThinkLevel = (typeof ALL_THINKING_LEVELS)[number];
+export type VerboseLevel = "off" | "on" | "full";
+export type TraceLevel = "off" | "on" | "raw";
+export type ElevatedLevel = "off" | "on" | "ask" | "full";
+export type ReasoningLevel = "off" | "on" | "stream";
+type UsageDisplayLevel = "off" | "tokens" | "full";
+/** Prepared model catalog fields reused while choosing and dispatching a queued runtime. */
+export type ThinkingCatalogEntry = {
+  provider: string;
+  id: string;
+  nativeRuntime?: string;
+  api?: string;
+  baseUrl?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+  contextWindowSource?: "synthetic";
+  reasoning?: boolean;
+  configuredReasoning?: boolean;
+  /** Concrete runtime owner of thinking policy; internal and never project to clients. */
+  thinkingPolicyProvider?: string;
+  thinkingLevelMap?: ThinkingLevelMap;
+  input?: readonly ("text" | "image" | "audio" | "video" | "document")[];
+  params?: Record<string, unknown>;
+  compat?: {
+    thinkingFormat?: string;
+    supportsReasoningEffort?: boolean;
+    supportedReasoningEfforts?: readonly string[] | null;
+    reasoningEffortMap?: Record<string, string>;
+    defaultThinkingLevel?: string;
+    thinkingLevels?: readonly string[];
+    adaptiveThinking?: boolean;
+    thinkingRequired?: boolean;
+    thinkingLevelLabels?: Record<string, string>;
+  } | null;
+};
+
+export const THINKING_LEVELS_HELP = ALL_THINKING_LEVELS.join("|");
+export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
+export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
+  off: 0,
+  minimal: 10,
+  low: 20,
+  medium: 30,
+  high: 40,
+  adaptive: 30,
+  xhigh: 60,
+  max: 70,
+  ultra: 80,
+};
+
+export function formatThinkingLevelClampNotice(params: {
+  requested?: ThinkLevel;
+  effective?: string;
+  provider: string;
+  model: string;
+}): string | undefined {
+  if (!params.requested || !params.effective || params.requested === params.effective) {
+    return undefined;
+  }
+  return `Thinking level clamped to ${params.effective} for ${params.provider}/${params.model} (requested ${params.requested}; preference retained).`;
+}
+
+/** Normalizes user-provided thinking level strings to the canonical enum. */
+export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return undefined;
+  }
+  const collapsed = key.replace(/[\s_-]+/g, "");
+  // `none` is a documented provider-native spelling for disabled reasoning; store canonical off.
+  return (
+    normalizeAliasedLevel<ThinkLevel>(collapsed, [
+      ["adaptive", "auto"],
+      ["max", "maximum"],
+      ["ultra"],
+      ["xhigh", "extrahigh"],
+    ]) ??
+    normalizeAliasedLevel<ThinkLevel>(key, [
+      ["off", "none"],
+      ["low", "on", "enable", "enabled", "thinkhard", "think-hard", "think_hard"],
+      ["minimal", "min", "think"],
+      ["medium", "mid", "med", "thinkharder", "think-harder", "harder"],
+      ["high", "ultrathink", "thinkhardest", "highest"],
+    ])
+  );
+}
+
+/** Returns true for command values that clear an inherited session override. */
+export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return false;
+  }
+  return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
+}
+
+function normalizeAliasedLevel<T extends string>(
+  raw: string | null | undefined,
+  aliases: ReadonlyArray<readonly [T, ...string[]]>,
+): T | undefined {
+  const key = normalizeOptionalLowercaseString(raw);
+  return key ? aliases.find((group) => group.includes(key))?.[0] : undefined;
+}
+
+/** Normalizes /verbose values. */
+export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0"],
+    ["full", "all", "everything"],
+    ["on", "minimal", "true", "yes", "1"],
+  ]);
+}
+
+/** Normalizes /trace values. */
+export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined {
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0"],
+    ["on", "true", "yes", "1"],
+    ["raw", "unfiltered"],
+  ]);
+}
+
+/** Normalizes response usage display values. */
+export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0", "disable", "disabled"],
+    ["tokens", "token", "tok", "minimal", "min", "on", "true", "yes", "1", "enable", "enabled"],
+    ["full", "session"],
+  ]);
+}
+
+/** Resolves response usage display mode with the persisted default. */
+export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
+  return normalizeUsageDisplay(raw) ?? "off";
+}
+
+type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+type ResponseUsageDefaultConfig =
+  | ResponseUsageInput
+  | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
+
+export function resolveEffectiveResponseUsage(
+  sessionRaw: string | undefined | null,
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): UsageDisplayLevel {
+  const sessionNormalized = normalizeUsageDisplay(sessionRaw);
+  if (sessionNormalized !== undefined) {
+    return sessionNormalized;
+  }
+  const configDefault =
+    typeof configured === "string"
+      ? configured
+      : ((channel ? configured?.[channel] : undefined) ?? configured?.default);
+  return resolveResponseUsageMode(configDefault);
+}
+
+/** Normalizes elevated execution policy values. */
+export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0"],
+    ["full", "auto", "auto-approve", "autoapprove"],
+    ["ask", "prompt", "approval", "approve"],
+    ["on", "true", "yes", "1"],
+  ]);
+}
+
+/** Normalizes reasoning visibility values. */
+export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
+  return normalizeAliasedLevel(raw, [
+    ["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"],
+    ["on", "true", "yes", "1", "show", "visible", "enable", "enabled"],
+    ["stream", "streaming", "draft", "live"],
+  ]);
+}

@@ -1,0 +1,567 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  createMigrationItem,
+  createMigrationManualItem,
+  MIGRATION_REASON_TARGET_EXISTS,
+  readMigrationConfigPath,
+  summarizeMigrationItems,
+} from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
+import type {
+  MigrationItem,
+  MigrationPlan,
+  MigrationProviderContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import { buildCodexAuthItems } from "./auth.js";
+import { sanitizeName } from "./helpers.js";
+import { isOnlyMigrationKind } from "./scope.js";
+import type { CodexMemorySource, CodexPluginSource, CodexSkillSource } from "./source-files.js";
+import {
+  codexPluginMigrationSubscriptionWarning,
+  discoverCodexSource,
+  hasCodexSource,
+} from "./source.js";
+
+export const CODEX_PLUGIN_CONFIG_ITEM_ID = "config:codex-plugins";
+export const CODEX_PLUGIN_CONFIG_PATH = ["plugins", "entries", "codex"] as const;
+const CODEX_PLUGIN_ENABLED_PATH = [...CODEX_PLUGIN_CONFIG_PATH, "enabled"] as const;
+const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
+  ...CODEX_PLUGIN_CONFIG_PATH,
+  "config",
+  "codexPlugins",
+] as const;
+const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
+const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
+const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
+
+export type CodexPluginMigrationConfigEntry = {
+  configKey: string;
+  pluginName: string;
+  enabled: boolean;
+  allowDestructiveActions?: "auto" | "ask";
+};
+
+function pluginConfigValue(entry: CodexPluginMigrationConfigEntry) {
+  return {
+    enabled: entry.enabled,
+    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    pluginName: entry.pluginName,
+    ...(entry.allowDestructiveActions
+      ? { allow_destructive_actions: entry.allowDestructiveActions }
+      : {}),
+  };
+}
+
+async function buildCodexMemoryItems(params: {
+  memoryFiles: readonly CodexMemorySource[];
+  workspaceDir: string;
+  overwrite?: boolean;
+}): Promise<MigrationItem[]> {
+  const items: MigrationItem[] = [];
+  for (const memory of params.memoryFiles) {
+    const target = path.join(
+      params.workspaceDir,
+      "memory",
+      "imports",
+      "codex",
+      path.basename(memory.path),
+    );
+    const targetStat = await lstatIfExists(target);
+    const targetNotRegular = targetStat !== undefined && !targetStat.isFile();
+    if (!targetNotRegular) {
+      const [source, workspace, destination] = await Promise.all([
+        fs.realpath(path.dirname(memory.path)),
+        canonicalPathFromExistingAncestor(params.workspaceDir),
+        canonicalPathFromExistingAncestor(target),
+      ]);
+      if (!isPathInside(workspace, destination)) {
+        throw new Error("Codex memory import destination must stay in the selected workspace.");
+      }
+      if (isPathInside(source, destination) || isPathInside(destination, source)) {
+        throw new Error(
+          "Codex memory source and OpenClaw import destination must be separate paths.",
+        );
+      }
+    }
+    const targetConflict = targetStat !== undefined && !params.overwrite;
+    items.push(
+      createMigrationItem({
+        id: memory.id,
+        kind: "memory",
+        action: "copy",
+        source: memory.path,
+        target,
+        status: targetNotRegular || targetConflict ? "conflict" : "planned",
+        reason: targetNotRegular
+          ? MIGRATION_REASON_TARGET_NOT_REGULAR
+          : targetConflict
+            ? MIGRATION_REASON_TARGET_EXISTS
+            : undefined,
+        message: "Copy consolidated Codex memory into the OpenClaw memory index.",
+        details: {
+          sourceType: "codex-memory",
+          sourceLabel: memory.label,
+          collectionId: "codex",
+          collectionLabel: "Codex",
+          relativePath: path.basename(memory.path),
+        },
+      }),
+    );
+  }
+  return items;
+}
+
+async function buildCodexSkillItems(params: {
+  skills: CodexSkillSource[];
+  workspaceDir: string;
+  overwrite?: boolean;
+}): Promise<MigrationItem[]> {
+  const counts = new Map<string, number>();
+  const named = params.skills.map((skill) => {
+    const name = sanitizeName(skill.name) || "codex-skill";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    return { skill, name };
+  });
+  const resolvedCounts = new Map<string, number>();
+  const planned = named.map(({ skill, name: initialName }) => {
+    let name = initialName;
+    if ((counts.get(name) ?? 0) > 1) {
+      const parent = sanitizeName(path.basename(path.dirname(skill.source)));
+      name = sanitizeName(["codex", parent, name].filter(Boolean).join("-")) || name;
+    }
+    resolvedCounts.set(name, (resolvedCounts.get(name) ?? 0) + 1);
+    return { skill, name, target: path.join(params.workspaceDir, "skills", name) };
+  });
+  return await Promise.all(
+    planned.map(async (item) => {
+      const collision = (resolvedCounts.get(item.name) ?? 0) > 1;
+      const targetExists = await pathExists(item.target);
+      const conflict = collision || (targetExists && !params.overwrite);
+      return createMigrationItem({
+        id: `skill:${item.name}`,
+        kind: "skill",
+        action: "copy",
+        source: item.skill.source,
+        target: item.target,
+        status: conflict ? "conflict" : "planned",
+        reason: collision
+          ? `multiple Codex skills normalize to "${item.name}"`
+          : conflict
+            ? MIGRATION_REASON_TARGET_EXISTS
+            : undefined,
+        message: `Copy ${item.skill.sourceLabel} into this OpenClaw agent workspace.`,
+        details: { skillName: item.name, sourceLabel: item.skill.sourceLabel },
+      });
+    }),
+  );
+}
+
+function readExistingCodexPluginEntries(
+  config: MigrationProviderContext["config"],
+): Record<string, unknown> {
+  const entries = readMigrationConfigPath(config as Record<string, unknown>, [
+    ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+    "plugins",
+  ]);
+  return isRecord(entries) ? entries : {};
+}
+
+function hasExistingCodexPluginEntry(
+  existingEntries: Record<string, unknown>,
+  configKey: string,
+  pluginName: string,
+  nextEntry: Record<string, unknown>,
+): boolean {
+  const existingEntry = existingEntries[configKey];
+  if (existingEntry !== undefined) {
+    return !isLegacyDestructivePolicyRepair(existingEntry, nextEntry);
+  }
+  return Object.values(existingEntries).some(
+    (entry) => isRecord(entry) && entry.pluginName === pluginName,
+  );
+}
+
+function isLegacyDestructivePolicyRepair(
+  existing: unknown,
+  nextEntry: Record<string, unknown>,
+): boolean {
+  const existingEntry = isRecord(existing) ? existing : undefined;
+  if (
+    existingEntry?.allow_destructive_actions !== "on-request" ||
+    nextEntry.allow_destructive_actions !== "auto"
+  ) {
+    return false;
+  }
+  const normalizedExisting = { ...existingEntry, allow_destructive_actions: "auto" };
+  const normalizedEntries = Object.entries(normalizedExisting);
+  return (
+    normalizedEntries.length === Object.keys(nextEntry).length &&
+    normalizedEntries.every(([key, value]) => nextEntry[key] === value)
+  );
+}
+
+function readExistingPluginAllowDestructiveActions(
+  existing: unknown,
+  pluginName: string,
+): "auto" | "ask" | undefined {
+  const existingEntry = isRecord(existing) ? existing : undefined;
+  if (existingEntry?.pluginName !== pluginName) {
+    return undefined;
+  }
+  const normalized = normalizeExistingAllowDestructiveActions(
+    existingEntry.allow_destructive_actions,
+  );
+  return normalized === "auto" || normalized === "ask" ? normalized : undefined;
+}
+
+function buildPluginItems(
+  ctx: MigrationProviderContext,
+  plugins: readonly CodexPluginSource[],
+): MigrationItem[] {
+  const existingPluginEntries = readExistingCodexPluginEntries(ctx.config);
+  let manualIndex = 0;
+  const items: MigrationItem[] = [];
+  for (const plugin of plugins) {
+    if (
+      plugin.migratable &&
+      plugin.marketplaceName === CODEX_PLUGINS_MARKETPLACE_NAME &&
+      plugin.pluginName
+    ) {
+      const configKey = plugin.pluginName;
+      const allowDestructiveActions = readExistingPluginAllowDestructiveActions(
+        existingPluginEntries[configKey],
+        plugin.pluginName,
+      );
+      const plannedEntry = pluginConfigValue({
+        configKey,
+        enabled: true,
+        pluginName: plugin.pluginName,
+        allowDestructiveActions,
+      });
+      const conflict =
+        !ctx.overwrite &&
+        hasExistingCodexPluginEntry(
+          existingPluginEntries,
+          configKey,
+          plugin.pluginName,
+          plannedEntry,
+        );
+      items.push(
+        createMigrationItem({
+          id: `plugin:${configKey}`,
+          kind: "plugin",
+          action: "install",
+          status: conflict ? "conflict" : "planned",
+          reason: conflict ? MIGRATION_REASON_PLUGIN_EXISTS : undefined,
+          applyPhase: "after-promotion",
+          source: plugin.source,
+          target: `plugins.entries.codex.config.codexPlugins.plugins.${configKey}`,
+          message: `Install Codex plugin "${plugin.pluginName}" in the OpenClaw-managed Codex app-server runtime.`,
+          details: {
+            configKey,
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: plugin.pluginName,
+            sourceInstalled: plugin.installed === true,
+            sourceEnabled: plugin.enabled === true,
+            ...(allowDestructiveActions ? { allowDestructiveActions } : {}),
+            ...(plugin.apps &&
+            plugin.apps.length > 0 &&
+            ctx.providerOptions?.verifyPluginApps !== true
+              ? { sourceAppVerification: CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED }
+              : {}),
+          },
+        }),
+      );
+      continue;
+    }
+
+    manualIndex += 1;
+    const manualItem = {
+      id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
+      source: plugin.source,
+      message:
+        plugin.message ??
+        `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+    };
+    if (plugin.migrationBlock && plugin.pluginName) {
+      items.push(
+        createMigrationItem({
+          ...manualItem,
+          kind: "manual",
+          action: "manual",
+          status: "skipped",
+          reason: plugin.migrationBlock.code,
+          details: {
+            pluginName: plugin.pluginName,
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            ...(plugin.migrationBlock.apps ? { apps: plugin.migrationBlock.apps } : {}),
+            ...(plugin.migrationBlock.error ? { error: plugin.migrationBlock.error } : {}),
+          },
+        }),
+      );
+      continue;
+    }
+    items.push(
+      createMigrationManualItem({
+        ...manualItem,
+        recommendation:
+          "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path> --force.",
+      }),
+    );
+  }
+  return items;
+}
+
+export function readCodexPluginMigrationConfigEntry(
+  item: MigrationItem,
+  enabled: boolean,
+): CodexPluginMigrationConfigEntry | undefined {
+  const configKey = item.details?.configKey;
+  const marketplaceName = item.details?.marketplaceName;
+  const pluginName = item.details?.pluginName;
+  if (
+    item.kind !== "plugin" ||
+    item.action !== "install" ||
+    typeof configKey !== "string" ||
+    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+    typeof pluginName !== "string"
+  ) {
+    return undefined;
+  }
+  const allowDestructiveActions = item.details?.allowDestructiveActions;
+  return {
+    configKey,
+    pluginName,
+    enabled,
+    ...(allowDestructiveActions === "auto" || allowDestructiveActions === "ask"
+      ? { allowDestructiveActions }
+      : {}),
+  };
+}
+
+function normalizeExistingAllowDestructiveActions(
+  value: unknown,
+): boolean | "auto" | "ask" | undefined {
+  if (value === "auto" || value === "on-request") {
+    return "auto";
+  }
+  if (value === "ask") {
+    return "ask";
+  }
+  return asBoolean(value);
+}
+
+export function buildCodexPluginsConfigValue(
+  entries: readonly CodexPluginMigrationConfigEntry[],
+  config: MigrationProviderContext["config"],
+) {
+  const plugins = new Map<string, Record<string, unknown>>();
+  for (const [key, entry] of Object.entries(readExistingCodexPluginEntries(config))) {
+    if (isRecord(entry) && entry.allow_destructive_actions === "on-request") {
+      plugins.set(key, { ...entry, allow_destructive_actions: "auto" });
+    }
+  }
+  for (const entry of entries.toSorted((a, b) => a.configKey.localeCompare(b.configKey))) {
+    plugins.set(entry.configKey, pluginConfigValue(entry));
+  }
+  return {
+    enabled: true,
+    config: {
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions:
+          normalizeExistingAllowDestructiveActions(
+            readMigrationConfigPath(config as Record<string, unknown>, [
+              ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+              "allow_destructive_actions",
+            ]),
+          ) ?? true,
+        plugins: Object.fromEntries(plugins),
+      },
+    },
+  };
+}
+
+export function hasCodexPluginConfigConflict(
+  config: MigrationProviderContext["config"],
+  value: ReturnType<typeof buildCodexPluginsConfigValue>,
+): boolean {
+  const enabled = readMigrationConfigPath(
+    config as Record<string, unknown>,
+    CODEX_PLUGIN_ENABLED_PATH,
+  );
+  if (enabled !== undefined && enabled !== true) {
+    return true;
+  }
+  const nativeConfig = value.config.codexPlugins;
+  const existingNativeConfig = readMigrationConfigPath(
+    config as Record<string, unknown>,
+    CODEX_PLUGIN_NATIVE_CONFIG_PATH,
+  );
+  if (existingNativeConfig === undefined) {
+    return false;
+  }
+  if (!isRecord(existingNativeConfig)) {
+    return true;
+  }
+  if (existingNativeConfig.enabled !== undefined && existingNativeConfig.enabled !== true) {
+    return true;
+  }
+  const allowDestructiveActions = nativeConfig.allow_destructive_actions;
+  const existingAllowDestructiveActions = normalizeExistingAllowDestructiveActions(
+    existingNativeConfig.allow_destructive_actions,
+  );
+  if (
+    existingNativeConfig.allow_destructive_actions !== undefined &&
+    existingAllowDestructiveActions !== allowDestructiveActions
+  ) {
+    return true;
+  }
+  const existingEntries = readExistingCodexPluginEntries(config);
+  return Object.entries(nativeConfig.plugins).some(([configKey, plugin]) =>
+    hasExistingCodexPluginEntry(
+      existingEntries,
+      configKey,
+      typeof plugin.pluginName === "string" ? plugin.pluginName : configKey,
+      plugin,
+    ),
+  );
+}
+
+function buildPluginConfigItem(
+  ctx: MigrationProviderContext,
+  pluginItems: readonly MigrationItem[],
+): MigrationItem | undefined {
+  const entries = pluginItems
+    .filter((item) => item.status === "planned")
+    .map((item) => readCodexPluginMigrationConfigEntry(item, true))
+    .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const value = buildCodexPluginsConfigValue(entries, ctx.config);
+  const conflict = !ctx.overwrite && hasCodexPluginConfigConflict(ctx.config, value);
+  return createMigrationItem({
+    id: CODEX_PLUGIN_CONFIG_ITEM_ID,
+    kind: "config",
+    action: "merge",
+    target: "plugins.entries.codex.config.codexPlugins",
+    status: conflict ? "conflict" : "planned",
+    reason: conflict ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+    applyPhase: "after-promotion",
+    message:
+      "Enable OpenClaw's Codex plugin integration and record migrated source-installed curated plugins.",
+    details: {
+      path: [...CODEX_PLUGIN_CONFIG_PATH],
+      value,
+    },
+  });
+}
+
+export async function buildCodexMigrationPlan(
+  ctx: MigrationProviderContext,
+): Promise<MigrationPlan> {
+  const targets = resolvePlannedMigrationTargets(ctx);
+  const memoryOnly = isOnlyMigrationKind(ctx, "memory");
+  const authOnly = isOnlyMigrationKind(ctx, "auth");
+  const source = await discoverCodexSource({
+    input: ctx.source,
+    memoryOnly,
+    authOnly,
+    evaluatePluginMigrationEligibility: !memoryOnly && !authOnly,
+    verifyPluginApps: ctx.providerOptions?.verifyPluginApps === true,
+  });
+  if (!hasCodexSource(source) && !authOnly) {
+    throw new Error(
+      `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
+    );
+  }
+  const items: MigrationItem[] = [];
+  if (!authOnly) {
+    items.push(
+      ...(await buildCodexMemoryItems({
+        memoryFiles: source.memoryFiles,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
+    );
+  }
+  if (!memoryOnly) {
+    items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
+  }
+  if (!memoryOnly && !authOnly) {
+    items.push(
+      ...(await buildCodexSkillItems({
+        skills: source.skills,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
+    );
+    const pluginItems = buildPluginItems(ctx, source.plugins);
+    items.push(...pluginItems);
+    const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
+    if (pluginConfigItem) {
+      items.push(pluginConfigItem);
+    }
+    for (const archivePath of source.archivePaths) {
+      items.push(
+        createMigrationItem({
+          id: archivePath.id,
+          kind: "archive",
+          action: "archive",
+          source: archivePath.path,
+          message:
+            archivePath.message ??
+            "Archived in the migration report for manual review; not imported into live config.",
+          details: { archiveRelativePath: archivePath.relativePath },
+        }),
+      );
+    }
+  }
+  const warnings = [
+    ...(items.some((item) => item.status === "conflict")
+      ? [
+          "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
+        ]
+      : []),
+    ...(source.pluginDiscoveryError
+      ? [
+          `Codex app-server plugin inventory discovery failed: ${source.pluginDiscoveryError}. Cached plugin bundles, if any, are advisory only.`,
+        ]
+      : []),
+    ...(source.plugins.some(
+      (plugin) => plugin.migrationBlock?.code === "codex_subscription_required",
+    )
+      ? [codexPluginMigrationSubscriptionWarning()]
+      : []),
+  ];
+  return {
+    providerId: "codex",
+    source: source.root,
+    target: targets.workspaceDir,
+    summary: summarizeMigrationItems(items),
+    items,
+    warnings,
+    nextSteps: memoryOnly
+      ? []
+      : [
+          "Run openclaw doctor after applying the migration.",
+          "Review skipped or auth-required Codex plugin/config/hook items before exposing them in OpenClaw sessions.",
+        ],
+    metadata: {
+      agentDir: targets.agentDir,
+      codexHome: source.codexHome,
+      codexSkillsDir: source.codexSkillsDir,
+      personalAgentsSkillsDir: source.personalAgentsSkillsDir,
+    },
+  };
+}

@@ -1,0 +1,169 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  redactSupportString,
+  type SupportRedactionContext,
+} from "./diagnostic-support-redaction.js";
+
+const LOG_STRING_FIELD_RE =
+  /^(?:action|channel|code|component|endpoint|event|handshake|kind|level|localAddr|logger|method|model|module|msg|name|outcome|phase|pluginId|provider|reason|remoteAddr|requestId|runId|service|source|status|subsystem|surface|target|time|traceId|type)$/iu;
+const LOG_SCALAR_FIELD_RE =
+  /^(?:active|attempt|bytes|count|durationMs|enabled|exitCode|intervalMs|jobs|limitBytes|localPort|nextWakeAtMs|pid|port|queueDepth|queued|remotePort|statusCode|waitMs|waiting)$/iu;
+const OMITTED_LOG_FIELD_RE =
+  /(?:authorization|body|chat|content|cookie|credential|detail|error|header|instruction|message|password|payload|prompt|result|secret|session[-_]?id|session[-_]?key|text|token|tool|transcript|url)/iu;
+const UNSAFE_LOG_MESSAGE_RE =
+  /(?:\blastAssistant\s*=|\b(?:ai response|assistant said|chat text|message contents|prompt|raw webhook body|tool output|tool result|transcript|user said|webhook body)\b|auto-responding\b.*:\s*["']|partial for\b.*:)/iu;
+const MAX_LOG_STRING_LENGTH = 240;
+const LOGTAPE_ARG_FIELD_RE = /^\d+$/u;
+
+const LOGTAPE_META_STRING_FIELDS = new Map([
+  ["logLevelName", "level"],
+  ["name", "logger"],
+]);
+
+/** Parses and sanitizes one log line into safe support-bundle metadata. */
+export function sanitizeSupportLogRecord(
+  line: string,
+  redaction: SupportRedactionContext,
+): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return {
+      omitted: "unparsed",
+      bytes: Buffer.byteLength(line, "utf8"),
+    };
+  }
+
+  const source = asOptionalRecord(parsed);
+  if (!source) {
+    return {
+      omitted: "non-object",
+      bytes: Buffer.byteLength(line, "utf8"),
+    };
+  }
+
+  const sanitized: Record<string, unknown> = Object.create(null);
+  addLogObjectFields(sanitized, source, redaction);
+  addLogTapeMetaFields(sanitized, source, redaction);
+  addLogTapeArgFields(sanitized, source, redaction);
+
+  return Object.keys(sanitized).length > 0
+    ? sanitized
+    : {
+        omitted: "no-safe-fields",
+        bytes: Buffer.byteLength(line, "utf8"),
+      };
+}
+
+function addLogTapeMetaFields(
+  sanitized: Record<string, unknown>,
+  source: Record<string, unknown>,
+  redaction: SupportRedactionContext,
+): void {
+  const meta = asOptionalRecord(source._meta);
+  if (!meta) {
+    return;
+  }
+  for (const [sourceKey, outputKey] of LOGTAPE_META_STRING_FIELDS) {
+    if (sanitized[outputKey] !== undefined) {
+      continue;
+    }
+    const value = meta[sourceKey];
+    if (typeof value === "string") {
+      if (sourceKey === "name") {
+        const record = safeParseJsonRecord(value.trim());
+        if (record) {
+          addLogObjectFields(sanitized, record, redaction);
+          continue;
+        }
+      }
+      sanitized[outputKey] = sanitizeLogString(value, redaction);
+    }
+  }
+}
+
+function addLogTapeArgFields(
+  sanitized: Record<string, unknown>,
+  source: Record<string, unknown>,
+  redaction: SupportRedactionContext,
+): void {
+  const args = Object.entries(source)
+    .filter(([key]) => LOGTAPE_ARG_FIELD_RE.test(key))
+    .toSorted(([left], [right]) => Number(left) - Number(right));
+
+  // LogTape stores message args as numeric keys; only structured safe fields survive.
+  for (const [, value] of args) {
+    const record =
+      typeof value === "string" ? safeParseJsonRecord(value.trim()) : asOptionalRecord(value);
+    if (record) {
+      addLogObjectFields(sanitized, record, redaction);
+      continue;
+    }
+
+    if (typeof value === "string") {
+      addLogTapeMessageField(sanitized, value, redaction);
+    }
+  }
+}
+
+function addLogTapeMessageField(
+  sanitized: Record<string, unknown>,
+  value: string,
+  redaction: SupportRedactionContext,
+): void {
+  const message = sanitizeLogString(value, redaction);
+  if (sanitized.msg === undefined && message && !UNSAFE_LOG_MESSAGE_RE.test(message)) {
+    sanitized.msg = message;
+    return;
+  }
+  addOmittedLogMessageMetadata(sanitized, value);
+}
+
+function addOmittedLogMessageMetadata(sanitized: Record<string, unknown>, value: string): void {
+  sanitized.omitted = "log-message";
+  sanitized.omittedLogMessageBytes =
+    numericLogMetadata(sanitized.omittedLogMessageBytes) + Buffer.byteLength(value, "utf8");
+  sanitized.omittedLogMessageCount = numericLogMetadata(sanitized.omittedLogMessageCount) + 1;
+}
+
+function numericLogMetadata(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function addLogObjectFields(
+  sanitized: Record<string, unknown>,
+  source: Record<string, unknown>,
+  redaction: SupportRedactionContext,
+): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (OMITTED_LOG_FIELD_RE.test(key) || isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (typeof value === "string") {
+      if (!LOG_STRING_FIELD_RE.test(key)) {
+        continue;
+      }
+      const message = sanitizeLogString(value, redaction);
+      if (key === "msg" && (!message || UNSAFE_LOG_MESSAGE_RE.test(message))) {
+        addOmittedLogMessageMetadata(sanitized, value);
+        continue;
+      }
+      sanitized[key] = message;
+    } else if (
+      (LOG_STRING_FIELD_RE.test(key) || LOG_SCALAR_FIELD_RE.test(key)) &&
+      (typeof value === "number" || typeof value === "boolean" || value === null)
+    ) {
+      sanitized[key] = value;
+    }
+  }
+}
+
+function sanitizeLogString(value: string, redaction: SupportRedactionContext): string {
+  return redactSupportString(value, redaction, {
+    maxLength: MAX_LOG_STRING_LENGTH,
+    truncationSuffix: "",
+  });
+}

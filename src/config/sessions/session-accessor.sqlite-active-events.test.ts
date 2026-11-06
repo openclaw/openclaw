@@ -1,0 +1,844 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync as inTransaction } from "../../infra/sqlite-transaction.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
+import { resolveSessionStorePathCore } from "./paths.js";
+import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor as readAnchor,
+} from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore as readContext } from "./session-accessor.sqlite-active-context.js";
+import {
+  readLatestSessionTranscriptMessageEvent as readLatest,
+  readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActivePathEntryRelation as entryRelation,
+  readSessionTranscriptBoundedMessageTailPage as readTailPage,
+  readSessionTranscriptMessageEventPage as readPage,
+  readSessionTranscriptMessageEvents,
+  readSessionTranscriptVisibleMessageDeltaCore as readVisible,
+  SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
+} from "./session-accessor.sqlite-active-events.js";
+import {
+  readActiveTranscriptStats as activeStats,
+  readSessionTranscriptHistoryAnchorPage as anchorPage,
+  readSessionTranscriptHistoryEventById as messageById,
+} from "./session-accessor.sqlite-history.test-support.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { readPreviousIndexedTranscriptEventSync as readPrevious } from "./session-accessor.sqlite-suffix-read.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
+import {
+  closeSessionTranscriptReconcileWorkerPool,
+  getSessionTranscriptReconcileWorkerPoolSnapshot,
+} from "./session-transcript-reconcile-pool.js";
+import {
+  reconcileSessionTranscriptIndexes,
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcile,
+} from "./session-transcript-reconcile.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  createTranscriptEventInserter,
+  createTranscriptPayloadUpdater,
+  prepareTranscriptPayload,
+} from "./transcript-payload.js";
+
+const queuedSessionWrite = vi.hoisted(() => vi.fn());
+
+vi.mock("../../shared/store-writer-queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/store-writer-queue.js")>();
+  return {
+    ...actual,
+    runQueuedStoreWrite: async (
+      params: Parameters<typeof actual.runQueuedStoreWrite>[0],
+    ): Promise<unknown> => {
+      queuedSessionWrite();
+      return await actual.runQueuedStoreWrite(params);
+    },
+  };
+});
+
+const eventIds = (events: readonly { event: unknown }[]) =>
+  events.map(({ event }) => (event as { id?: unknown }).id);
+const toolEvent = (id: string, parentId: string | null, content: string) => ({
+  type: "message",
+  id,
+  parentId,
+  message: { role: "toolResult", content },
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const countMessages = (scope: Parameters<typeof readPage>[0]): number =>
+  readPage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
+
+describe("SQLite active transcript event projection", () => {
+  let scope: {
+    agentId: string;
+    env: NodeJS.ProcessEnv;
+    sessionId: string;
+    sessionKey: string;
+  };
+
+  const makeMessage = (id: string, parent: string | null, role: string, content: string) =>
+    transcriptMessage(id, parent, { role, content });
+  const readRecent = (maxMessages: number, maxLines: number, maxBytes: number) =>
+    readRecentSessionTranscriptMessageEvents(scope, { maxMessages, maxLines, maxBytes });
+  const reset = (id: string, parentId: string, timestamp: string, firstKeptEntryId?: string) =>
+    appendTranscriptEvent(scope, {
+      type: "reset",
+      id,
+      parentId,
+      timestamp,
+      reason: "new",
+      ...(firstKeptEntryId === undefined ? {} : { firstKeptEntryId }),
+    });
+  const sessionSql = (sql: string) => openDatabase().db.prepare(sql);
+  const indexState = (columns: string) =>
+    sessionSql(
+      "SELECT " + columns + " FROM session_transcript_index_state WHERE session_id = ?",
+    ).get(scope.sessionId);
+
+  const agentOptions = () => ({ agentId: scope.agentId, env: scope.env });
+  const openDatabase = () => openOpenClawAgentDatabase(agentOptions());
+  const reconcile = () => waitForSessionTranscriptIndexReconcile(agentOptions());
+  const persistMessages = (
+    messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
+    target = scope,
+  ) => persistSessionTranscriptTurn(target, { messages, touchSessionEntry: false });
+  const userMessage = (id: string, parentId: string | null, content = id) =>
+    transcriptMessage(id, parentId, { role: "user", content, idempotencyKey: `${id}:user` });
+  const admission = (logicalTurnId = "fenced") => {
+    const anchor = readAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("missing real admission anchor");
+    }
+    return { ...anchor, logicalTurnId, role: "user" as const };
+  };
+  const resetWindow = (limits: Parameters<typeof readVisible>[1] = {}) => {
+    const page = readVisible(scope, { start: "reset-window", ...limits });
+    assert(page.kind === "page", `expected a reset-window page, got ${page.kind}`);
+    return page;
+  };
+  const admissionReset = (id: string, parent: string, kept?: string) =>
+    reset(id, parent, "2026-09-14T00:00:00.000Z", kept);
+
+  beforeEach(() => {
+    queuedSessionWrite.mockReset();
+    const stateDir = tempDirs.make("openclaw-active-transcript-");
+    scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      sessionId: "active-transcript-test",
+      sessionKey: "agent:main:active-transcript-test",
+    };
+    setRuntimeConfigSnapshot({ session: { store: resolveSessionStorePathCore(undefined, scope) } });
+  });
+
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.for(["rewind", "legacy"] as const)(
+    "defers %s rebuilds off request and writer stacks",
+    async (kind, { signal }) => {
+      const rewind = kind === "rewind";
+      const count = rewind ? 2 : 1;
+      const resume = createDeferred();
+      const pool = await import("./session-transcript-reconcile-pool.js");
+      const runOperation = pool.runSessionTranscriptReconcileOperation;
+      const operationSpy = vi.spyOn(pool, "runSessionTranscriptReconcileOperation");
+      // Observe dirty state before the real deferred owner can claim the projection.
+      operationSpy.mockImplementationOnce((run, owner, operationSignal) =>
+        runOperation(
+          async (operation) => {
+            await resume.promise;
+            return run(operation);
+          },
+          owner,
+          operationSignal,
+        ),
+      );
+      try {
+        await withinTest(
+          persistMessages(
+            rewind
+              ? [
+                  makeMessage("root", null, "user", "root"),
+                  makeMessage("inactive", "root", "assistant", "inactive"),
+                  makeMessage("active", "root", "assistant", "active"),
+                ]
+              : [makeMessage("canonical-root", null, "user", "canonical")],
+          ),
+          signal,
+        );
+        if (!rewind) {
+          await withinTest(
+            appendTranscriptEvent(scope, {
+              id: "legacy-child",
+              parentId: "canonical-root",
+              message: { role: "assistant", content: "legacy" },
+            }),
+            signal,
+          );
+        }
+
+        expect(indexState("needs_rebuild, active_message_count")).toEqual({
+          active_message_count: count,
+          needs_rebuild: 1,
+        });
+
+        expect(() => countMessages(scope)).toThrow(ProjectionUnavailableError);
+        if (rewind) {
+          expect(() => readLatest(scope)).toThrow(ProjectionUnavailableError);
+        }
+        resume.resolve();
+        await reconcile();
+
+        const page = readPage(scope, { maxMessages: 10, offset: 0 });
+        expect(eventIds(page.events)).toEqual(rewind ? ["root", "active"] : ["canonical-root"]);
+        expect(page.totalMessages).toBe(count);
+        expect(indexState("needs_rebuild, active_message_count")).toEqual({
+          needs_rebuild: 0,
+          active_message_count: count,
+        });
+        if (!rewind) {
+          expect(messageById(scope, "legacy-child")).toBeUndefined();
+          return;
+        }
+        expect(entryRelation(scope, "active")).toBe("exact");
+        expect(readLatest(scope)?.event).toMatchObject({ id: "active" });
+        expect(entryRelation(scope, "root")).toBe("ancestor");
+        expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
+        const activeRows = sessionSql(
+          "SELECT event.event_json FROM session_transcript_active_events AS active JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq WHERE active.session_id = ? ORDER BY active.active_position",
+        ).all(scope.sessionId) as Array<{ event_json: string }>;
+        expect(activeStats(scope)).toEqual({
+          eventCount: activeRows.length,
+          sizeBytes: activeRows.reduce(
+            (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
+            0,
+          ),
+        });
+      } finally {
+        resume.resolve();
+        try {
+          await reconcile();
+        } finally {
+          operationSpy.mockRestore();
+        }
+      }
+    },
+  );
+
+  it("retains display history and the context reset boundary before admission", async () => {
+    await persistMessages([userMessage("source", null, "completed child")]);
+    expect(eventIds(resetWindow().events)).toEqual(["source"]);
+    await admissionReset("before-admission-reset", "source", "source");
+    await persistMessages([userMessage("admitted", "before-admission-reset")]);
+    expect(eventIds(readSessionTranscriptMessageEvents(scope))).toContain("source");
+    const context = withReadFence(admission("recovery"), () =>
+      readContext(scope, { maxBytes: 10_000, maxEvents: 10 }),
+    );
+    expect(context.boundaryCount).toBe(1);
+    expect(context.events).toContainEqual(
+      expect.objectContaining({
+        type: "reset",
+        id: "before-admission-reset",
+        firstKeptEntryId: "source",
+      }),
+    );
+    expect(context.firstKeptRanges.has("before-admission-reset")).toBe(true);
+    expect(eventIds(withReadFence(admission("recovery"), resetWindow).events)).toEqual(["source"]);
+  });
+
+  it("accepts an admission store path that aliases the same database", async () => {
+    await persistMessages([userMessage("source", null), userMessage("admitted", "source")]);
+    const anchor = admission("aliased-store");
+    const aliasDir = path.join(path.dirname(path.dirname(anchor.storePath)), "agent-alias");
+    fs.symlinkSync(
+      path.dirname(anchor.storePath),
+      aliasDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(
+      withReadFence(
+        { ...anchor, storePath: path.join(aliasDir, path.basename(anchor.storePath)) },
+        () => readLatest(scope),
+      )?.event,
+    ).toMatchObject({ id: "source" });
+  });
+
+  it.each([false, true])(
+    "keeps the pre-fence snapshot through a later reset (human=%s)",
+    async (human) => {
+      await persistMessages([
+        userMessage("source", null, `result ${"x".repeat(20_000)}`),
+        ...(human ? [userMessage("human", "source", "new work")] : []),
+        userMessage("admitted", human ? "human" : "source"),
+      ]);
+      const anchor = admission();
+      await admissionReset("later-reset", "admitted");
+      await persistMessages([makeMessage("after-reset", "later-reset", "user", "fresh")]);
+      expect(activeStats(scope)).toMatchObject({ eventCount: 1 });
+      expect(activeStats(scope).sizeBytes).toBeLessThan(1_000);
+      expect(readLatest(scope)?.event).toMatchObject({ id: "after-reset" });
+      expect(eventIds(resetWindow().events)).toEqual(["after-reset"]);
+      const fenced = withReadFence(anchor, resetWindow);
+      expect(eventIds(fenced.events)).toEqual(human ? ["source", "human"] : ["source"]);
+      expect(
+        fenced.events.map(
+          ({ event }) => (event as { message: { idempotencyKey?: string } }).message.idempotencyKey,
+        ),
+      ).toEqual(human ? ["source:user", "human:user"] : ["source:user"]);
+    },
+  );
+
+  it("reads the latest message before an admission fence and follows a selected older leaf", async () => {
+    expect(readLatest(scope)).toBeUndefined();
+    await persistMessages([
+      makeMessage("prior", null, "user", "prior"),
+      makeMessage("admitted", "prior", "user", "admitted"),
+      makeMessage("later", "admitted", "user", "later"),
+    ]);
+    const database = openDatabase();
+    const anchor = readAnchor({ ...scope, storePath: database.path, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("expected admitted message anchor");
+    }
+    const latest = readLatest(scope);
+    expect(latest?.event).toMatchObject({ id: "later" });
+    expect(
+      withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
+        readLatest(scope),
+      )?.event,
+    ).toMatchObject({ id: "prior" });
+
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "selected-leaf",
+      parentId: "later",
+      targetId: "prior",
+    });
+    await reconcile();
+    expect(readLatest(scope)?.event).toMatchObject({ id: "prior" });
+    expect(readPrevious(scope, latest!.eventSeq + 1)?.event).toMatchObject({ id: "prior" });
+  });
+
+  it("preserves legacy message identities, read fences and bounded reset-window payloads", async () => {
+    const provenance = {
+      kind: "internal_system",
+      sourceTool: "main_session_restart_recovery",
+      sourceSessionKey: scope.sessionKey,
+    };
+    await persistMessages([
+      transcriptMessage("source", null, {
+        role: "user",
+        content: "x".repeat(100_000),
+        idempotencyKey: "source:user",
+        __openclaw: { runId: "source" },
+        provenance,
+      }),
+      makeMessage("tool-output", "source", "assistant", "y".repeat(100_000)),
+      transcriptMessage("later-human", "tool-output", {
+        role: "user",
+        content: "new request",
+        idempotencyKey: "later:user",
+      }),
+    ]);
+    // An upgraded transcript keeps its original rows until a payload write.
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        database.db
+          .prepare(`UPDATE transcript_events
+        SET navigation_type = NULL, navigation_custom_type = NULL,
+            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+            navigation_last_custom_type = NULL, navigation_valid = 1
+        WHERE session_id = ?`)
+          .run(scope.sessionId);
+      },
+      { agentId: scope.agentId, env: scope.env },
+    );
+    const page = resetWindow();
+    expect(eventIds(page.events)).toEqual(["source", "tool-output", "later-human"]);
+    expect(page.events[0]?.event).toMatchObject({
+      message: {
+        role: "user",
+        idempotencyKey: "source:user",
+        __openclaw: { runId: "source" },
+        provenance,
+      },
+    });
+    expect(page.events[2]?.event).toMatchObject({
+      message: { role: "user", idempotencyKey: "later:user" },
+    });
+    const bounded = resetWindow({ maxBytes: 500 });
+    expect(bounded).toMatchObject({ events: [], serializedBytes: 0, hasMore: true });
+    expect(bounded.requiredBytes).toBeGreaterThan(100_000);
+    const anchor = readAnchor({ ...scope, entryId: "later-human" });
+    if (!anchor) {
+      throw new Error("missing later admission anchor");
+    }
+    const fenced = withReadFence(
+      { ...anchor, logicalTurnId: "fenced-turn", role: "user" },
+      resetWindow,
+    );
+    expect(eventIds(fenced.events)).toEqual(["source", "tool-output"]);
+    expect(fenced.events[0]?.event).toMatchObject({
+      message: {
+        role: "user",
+        idempotencyKey: "source:user",
+        __openclaw: { runId: "source" },
+        provenance,
+      },
+    });
+    expect(fenced.hasMore).toBe(false);
+    const context = withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
+      readContext(scope, { maxBytes: 300_000, maxEvents: 10 }),
+    );
+    expect(context.events).toMatchObject([
+      { type: "session" },
+      { id: "source", message: { idempotencyKey: "source:user" } },
+      { id: "tool-output" },
+    ]);
+    expect(context.activeLeafEntryId).toBe("tool-output");
+
+    await reset("reset", "later-human", "2026-09-13T00:00:00.000Z");
+    await persistMessages([
+      transcriptMessage("fresh", "reset", {
+        role: "user",
+        content: "new",
+        idempotencyKey: "fresh:user",
+      }),
+    ]);
+    const current = resetWindow();
+    expect(eventIds(current.events)).toEqual(["fresh"]);
+    expect(current.events[0]?.event).toMatchObject({
+      message: { role: "user", idempotencyKey: "fresh:user" },
+    });
+  });
+
+  it("bounds oversized tail rows and reuses page sizes for omission checks", async () => {
+    await persistMessages([makeMessage("small", null, "user", "keep")]);
+    const options = { maxBytes: 512, maxMessages: Number.MAX_SAFE_INTEGER, offset: 0 };
+    readTailPage(scope, options);
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const page = readTailPage(scope, options);
+      const withoutOmissionCheck = reads.queries.length;
+      reads.queries.length = 0;
+      expect(
+        readTailPage(scope, {
+          ...options,
+          oversizedMessageCheck: { roles: ["user", "assistant"] },
+        }),
+      ).toEqual({ ...page, hasOversizedMessages: false });
+      expect(reads.queries).toHaveLength(withoutOmissionCheck);
+    } finally {
+      reads.restore();
+    }
+
+    await persistMessages([makeMessage("oversized", "small", "assistant", "x".repeat(16_384))]);
+    const page = readTailPage(scope, {
+      ...options,
+      oversizedMessageCheck: { roles: ["assistant"] },
+    });
+    expect(page).toMatchObject({
+      hasOversizedMessages: true,
+      scannedMessages: 2,
+      newestContiguousEventCount: 0,
+    });
+    expect(page.serializedBytes).toBeLessThanOrEqual(512);
+    expect(eventIds(page.events)).toEqual(["small"]);
+    expect(
+      readTailPage(scope, { ...options, oversizedMessageCheck: { roles: ["user"] } }),
+    ).toMatchObject({ hasOversizedMessages: false });
+    expect(
+      readTailPage(scope, {
+        ...options,
+        maxMessages: 0,
+        oversizedMessageCheck: { roles: ["assistant"], includeEarlier: true },
+      }),
+    ).toMatchObject({ hasOversizedMessages: true, scannedMessages: 0 });
+  });
+
+  it("projects reset kept-tail positions and invalidates the window after a branch change", async () => {
+    await persistMessages([
+      makeMessage("old", null, "user", "old"),
+      makeMessage("kept-user", "old", "user", "kept question"),
+      makeMessage("kept-tool", "kept-user", "toolResult", `hidden tool ${"x".repeat(2_000)}`),
+      makeMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
+    ]);
+    await reset("reset-boundary", "kept-assistant", "2026-07-22T00:00:00.000Z", "kept-user");
+    await persistMessages([makeMessage("post-reset", "reset-boundary", "user", "new turn")]);
+
+    const page = readPage(scope, { maxMessages: 10, offset: 0 });
+    expect(eventIds(page.events)).toEqual(["kept-user", "kept-assistant", "post-reset"]);
+    expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
+    expect(page.totalMessages).toBe(3);
+    expect(countMessages(scope)).toBe(3);
+    expect(messageById(scope, "old")).toMatchObject({ event: { id: "old" } });
+    expect(messageById(scope, "kept-tool")).toMatchObject({ event: { id: "kept-tool" } });
+
+    const recent = readRecent(3, 10, 1_024);
+    expect(eventIds(recent.events)).toEqual(["kept-user", "kept-assistant", "post-reset"]);
+
+    await persistMessages([makeMessage("branch-message", "old", "assistant", "branched")]);
+    await reconcile();
+    expect(eventIds(readPage(scope, { maxMessages: 10, offset: 0 }).events)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+      "branch-message",
+    ]);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "newer-compaction",
+      parentId: "post-reset",
+      timestamp: "2026-07-22T00:01:00.000Z",
+      summary: "fresh-only summary",
+      firstKeptEntryId: "post-reset",
+      tokensBefore: 10,
+    });
+    await reconcile();
+    expect(readRecent(1, 1, 1_024).activeLeafEntryId).toBe("newer-compaction");
+    expect(entryRelation(scope, "newer-compaction")).toBe("exact");
+    expect(entryRelation(scope, "post-reset")).toBe("ancestor");
+    expect(countMessages(scope)).toBe(3);
+    expect(messageById(scope, "old")).toMatchObject({ event: { id: "old" } });
+  });
+
+  it("fails closed when the latest indexed reset payload is malformed", async () => {
+    await persistMessages([
+      makeMessage("old", null, "user", "old"),
+      makeMessage("kept", "old", "assistant", "kept"),
+    ]);
+    await reset("reset-boundary", "kept", "2026-08-12T00:00:00.000Z", "kept");
+    sessionSql(
+      "UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3",
+    ).run(scope.sessionId);
+
+    expect(() => countMessages(scope)).toThrow();
+  });
+
+  it("reconciles work scheduled while an earlier pass is yielding", async () => {
+    const secondScope = { ...scope, sessionId: "session-2", sessionKey: "agent:main:second" };
+    for (const target of [scope, secondScope]) {
+      await persistMessages(
+        [makeMessage(`${target.sessionId}-seed`, null, "user", target.sessionId)],
+        target,
+      );
+    }
+    const databaseOptions = agentOptions();
+    const markDirty = (sessionId: string) =>
+      sessionSql(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      ).run(sessionId);
+
+    markDirty(scope.sessionId);
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      preferredSessionId: scope.sessionId,
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        markDirty(secondScope.sessionId);
+        startSessionTranscriptIndexReconcile({
+          ...databaseOptions,
+          preferredSessionId: secondScope.sessionId,
+        });
+        resolve();
+      });
+    });
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+
+    expect(
+      sessionSql(
+        "SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0 ORDER BY session_id",
+      ).all(),
+    ).toEqual([]);
+  });
+
+  it.each(["current", "older"])(
+    "keeps projection state and rows on one snapshot during a concurrent %s writer append",
+    async (writerVersion) => {
+      await persistMessages([makeMessage("seed", null, "toolResult", "seed")]);
+      expect(countMessages(scope)).toBe(1);
+
+      const database = openDatabase();
+      const state = sessionSql(
+        "SELECT indexed_seq, active_event_count, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+      ).get(scope.sessionId) as {
+        active_event_count: number;
+        active_message_count: number;
+        indexed_seq: number;
+      };
+      const nextSeq = state.indexed_seq + 1;
+      const appendedEvent = toolEvent("concurrent", "seed", "concurrent");
+      const writer = openNodeSqliteDatabase(database.path);
+      writer.exec(
+        "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 1000; PRAGMA foreign_keys = ON;",
+      );
+      admitSqliteSchema(writer);
+      let appended = false;
+      const options = {
+        maxBytes: 1024 * 1024,
+        maxLines: 10,
+        get maxMessages() {
+          if (!appended) {
+            appended = true;
+            inTransaction(writer, () => {
+              createTranscriptEventInserter(
+                writer,
+                scope.sessionId,
+              )({ seq: nextSeq, eventJson: JSON.stringify(appendedEvent), createdAt: Date.now() });
+              writer
+                .prepare(
+                  "INSERT INTO transcript_event_identities (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at) VALUES (?, 'concurrent', ?, 'message', 'seed', NULL, ?)",
+                )
+                .run(scope.sessionId, nextSeq, Date.now());
+              writer
+                .prepare(
+                  "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position, context_eligible) VALUES (?, ?, ?, ?, ?)",
+                )
+                .run(
+                  scope.sessionId,
+                  state.active_event_count,
+                  nextSeq,
+                  state.active_message_count,
+                  writerVersion === "current" ? 1 : null,
+                );
+              writer
+                .prepare(
+                  "UPDATE session_transcript_index_state SET indexed_seq = ?, leaf_event_id = 'concurrent', needs_rebuild = 0, active_event_count = active_event_count + 1, active_message_count = active_message_count + 1, updated_at = ? WHERE session_id = ?",
+                )
+                .run(nextSeq, Date.now(), scope.sessionId);
+            });
+          }
+          return 10;
+        },
+      };
+
+      try {
+        const concurrentRead = readRecentSessionTranscriptMessageEvents(scope, options);
+        expect(concurrentRead.totalMessages).toBe(1);
+        expect(eventIds(concurrentRead.events)).toEqual(["seed"]);
+
+        if (writerVersion === "older") {
+          expect(() => activeStats(scope)).toThrow(ProjectionUnavailableError);
+          await reconcile();
+        }
+
+        const afterCommit = readRecent(10, 10, 1024 * 1024);
+        expect(afterCommit.totalMessages).toBe(2);
+        expect(eventIds(afterCommit.events)).toEqual(["seed", "concurrent"]);
+      } finally {
+        writer.close();
+      }
+    },
+  );
+
+  it("skips the preparation worker when the projection is already current", async () => {
+    const seed = [makeMessage("seed", null, "user", "seed")];
+    runOpenClawAgentWriteTransaction(
+      (database) => expect(appendTranscriptEventsInTransaction(database, scope, seed)).toBe(1),
+      agentOptions(),
+    );
+    await closeSessionTranscriptReconcileWorkerPool();
+    const poolBefore = getSessionTranscriptReconcileWorkerPoolSnapshot();
+    expect(poolBefore.workersCreated).toBe(0);
+    queuedSessionWrite.mockClear();
+    const completionQueued = createDeferred();
+    queuedSessionWrite.mockImplementation(() => {
+      if (queuedSessionWrite.mock.calls.length === 2) {
+        completionQueued.resolve();
+      }
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const heldWriter = runExclusiveSqliteSessionWrite(
+      agentOptions(),
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      "session.transcript.batch",
+    );
+    await entered.promise;
+    const outcome = reconcileSessionTranscriptIndexes(agentOptions()).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+
+    // The second queued write is the preflight transaction waiting behind the held writer.
+    try {
+      await completionQueued.promise;
+      expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await heldWriter;
+    }
+
+    expect(await outcome).toEqual({ value: { reconciledSessions: 0 } });
+    expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toEqual(poolBefore);
+  }, 10_000);
+
+  it("keeps dirty batch appends off the synchronous writer stack", async () => {
+    await persistMessages([{ eventId: "root", message: { role: "user", content: "root" } }]);
+    const databaseOptions = agentOptions();
+    const original = sessionSql(
+      "SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 1",
+    ).get(scope.sessionId) as { event_json: string };
+    sessionSql(
+      "UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1",
+    ).run(scope.sessionId);
+
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      expect(
+        appendTranscriptEventsInTransaction(writeDatabase, scope, [
+          { type: "leaf", id: "batch-leaf", parentId: "root", targetId: "root" },
+          {
+            type: "message",
+            id: "batch-tail",
+            parentId: "root",
+            message: { role: "assistant", content: "after branch selection" },
+          },
+        ]),
+      ).toBe(2);
+    }, databaseOptions);
+    sessionSql("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1").run(
+      original.event_json,
+      scope.sessionId,
+    );
+
+    expect(indexState("needs_rebuild")).toEqual({ needs_rebuild: 1 });
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    expect(countMessages(scope)).toBe(2);
+  });
+
+  it("keeps 100k-message reads bounded while rebuilds yield to live writes", async () => {
+    await persistMessages([{ eventId: "seed", message: { role: "toolResult", content: "seed" } }]);
+    const database = openDatabase();
+    const insertEvent = createTranscriptEventInserter(database.db, scope.sessionId);
+    const insertIdentity = sessionSql(
+      "INSERT INTO transcript_event_identities (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at) VALUES (?, ?, ?, 'message', ?, NULL, ?)",
+    );
+    const insertActive = sessionSql(
+      "INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position, context_eligible) VALUES (?, ?, ?, ?, 1)",
+    );
+    inTransaction(database.db, () => {
+      for (const table of [
+        "session_transcript_fts",
+        "session_transcript_index_state",
+        "transcript_event_identities",
+        "transcript_events",
+      ]) {
+        sessionSql("DELETE FROM " + table + " WHERE session_id = ?").run(scope.sessionId);
+      }
+      insertEvent({
+        seq: 0,
+        eventJson: JSON.stringify({ id: scope.sessionId, type: "session", version: 3 }),
+        createdAt: 0,
+      });
+      // Cardinality and parent links drive this bound; keep unrelated payload bytes minimal.
+      for (let index = 1; index <= 100_000; index += 1) {
+        const eventId = `m${index}`;
+        const parentId = index === 1 ? null : `m${index - 1}`;
+        insertEvent({
+          seq: index,
+          eventJson: JSON.stringify(toolEvent(eventId, parentId, "x")),
+          createdAt: index,
+        });
+        insertIdentity.run(scope.sessionId, eventId, index, parentId, index);
+        insertActive.run(scope.sessionId, index - 1, index, index - 1);
+      }
+      sessionSql(
+        "INSERT INTO session_transcript_index_state (session_id, indexed_seq, leaf_event_id, needs_rebuild, active_event_count, active_message_count, updated_at) VALUES (?, 100000, 'm100000', 0, 100000, 100000, 100000)",
+      ).run(scope.sessionId);
+    });
+
+    // Parse sentinel: any accidental full materialization fails before reaching the bounded tail.
+    sessionSql(
+      "UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1",
+    ).run(scope.sessionId);
+
+    const page = readPage(scope, { maxMessages: 25, offset: 0 });
+    const recent = readRecent(10, 10, 1024 * 1024);
+    const lineCappedRecent = readRecent(10, 3, 1024 * 1024);
+    const byId = messageById(scope, "m100000");
+    const anchor = anchorPage(scope, { maxMessages: 5, messageId: "m100000" });
+
+    expect(page.totalMessages).toBe(100_000);
+    expect(page.events.map((entry) => entry.seq)).toEqual(
+      Array.from({ length: 25 }, (_, index) => 99_976 + index),
+    );
+    expect(recent.totalMessages).toBe(100_000);
+    expect(recent.events).toHaveLength(10);
+    expect(recent.events.at(-1)?.seq).toBe(100_000);
+    expect(lineCappedRecent.events).toHaveLength(3);
+    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_000);
+    expect(countMessages(scope)).toBe(100_000);
+    expect(byId?.seq).toBe(100_000);
+    expect(anchor).toMatchObject({
+      found: true,
+      hasOverreadContext: true,
+      offset: 0,
+      totalMessages: 100_000,
+    });
+    expect(anchor.events).toHaveLength(6);
+    expect(anchor.events.at(-1)?.seq).toBe(100_000);
+
+    createTranscriptPayloadUpdater(
+      database.db,
+      scope.sessionId,
+    )({
+      ...prepareTranscriptPayload(database.db, JSON.stringify(toolEvent("m1", null, "x"))),
+      seq: 1,
+    });
+    sessionSql(
+      "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+    ).run(scope.sessionId);
+
+    expect(() => countMessages(scope)).toThrow(ProjectionUnavailableError);
+    const order: string[] = [];
+    const reconciliation = reconcile().then(() => order.push("reconciled"));
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        setTimeout(() => {
+          order.push("event-loop-responsive");
+          resolve();
+        }, 0);
+      });
+    });
+    expect(order).toEqual(["event-loop-responsive"]);
+    const liveWrite = await persistMessages([
+      makeMessage("m100001", "m100000", "toolResult", "live-write"),
+    ]);
+    expect(liveWrite.messages.filter((m) => m.appended)).toHaveLength(1);
+    order.push("live-write");
+    await reconciliation;
+    expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);
+    expect(countMessages(scope)).toBe(100_001);
+  }, 60_000);
+});

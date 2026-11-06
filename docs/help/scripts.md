@@ -1,0 +1,73 @@
+---
+summary: "Repository scripts: purpose, scope, and safety notes"
+read_when:
+  - Running scripts from the repo
+  - Adding or changing scripts under ./scripts
+title: "Scripts"
+---
+
+`scripts/` holds helper scripts for local workflows and ops tasks. Use these when a task is clearly tied to a script. Otherwise prefer the CLI.
+
+## Conventions
+
+- Scripts are **optional** unless referenced in docs or release checklists.
+- Prefer CLI surfaces when they exist (example: `openclaw models status --check`).
+- Assume scripts are host-specific. Read them before running on a new machine.
+
+## Formatting and linting
+
+`pnpm format` writes formatting, `pnpm format:check` checks it, and `pnpm lint`
+runs the lint pipeline. The [local development tool selector](/reference/test/local#openclaw-bun-fork)
+reference explains the pinned OpenClaw Bun fork, installation cache, supported
+platforms, overrides, fallbacks, and CI parity. Use
+`OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The
+[formatter caller inventory](https://github.com/openclaw/openclaw/blob/main/scripts/README.md#formatting-and-lint-selection)
+lists dedicated formatters that retain oxfmt.
+
+## Auth monitoring scripts
+
+General model auth is covered in [Authentication](/gateway/authentication). The scripts below are a separate, optional system. They monitor a **Claude Code CLI subscription token** on a remote/headless host. They also let you re-authenticate from a phone:
+
+- `scripts/setup-auth-system.sh` - one-time setup: checks current auth, helps generate a long-lived `claude setup-token`, and prints systemd/Termux install steps.
+- `scripts/claude-auth-status.sh [full|json|simple]` - checks Claude Code + OpenClaw auth status.
+- `scripts/auth-monitor.sh` - polls status and sends a notification (via `openclaw message send`, and/or ntfy.sh) when the token nears expiry, including its final hour while authentication remains usable. Env: `WARN_HOURS` (default `2`), `NOTIFY_PHONE`, `NOTIFY_NTFY`. Run on a schedule via the bundled `scripts/systemd/openclaw-auth-monitor.{service,timer}` (every 30 minutes).
+- `scripts/mobile-reauth.sh` - re-runs `claude setup-token` and prints URLs to open on a phone, for use over SSH from Termux.
+- `scripts/termux-quick-auth.sh`, `scripts/termux-auth-widget.sh` - Termux:Widget scripts. They SSH to the host and show a status toast. They open the re-auth console/instructions when auth has expired.
+
+To use a Claude CLI login with OpenClaw, follow [Claude CLI reuse](/gateway/authentication#anthropic-claude-cli-reuse). The Claude process owns its login credentials.
+
+## GitHub read helper
+
+Use `scripts/gh-read` when you want `gh` to use a GitHub App installation token for repo-scoped read calls. This leaves normal `gh` on your personal login for write actions.
+
+Required env:
+
+- `OPENCLAW_GH_READ_APP_ID`
+- `OPENCLAW_GH_READ_PRIVATE_KEY_FILE`
+
+Optional env:
+
+- `OPENCLAW_GH_READ_INSTALLATION_ID` when you want to skip repo-based installation lookup
+- `OPENCLAW_GH_READ_PERMISSIONS` as a comma-separated override for the read permission subset to request
+
+Repo resolution order:
+
+- `gh ... -R owner/repo`
+- `GH_REPO`
+- `git remote origin`
+
+Examples:
+
+- `scripts/gh-read pr view 123`
+- `scripts/gh-read run list -R openclaw/openclaw`
+- `scripts/gh-read api repos/openclaw/openclaw/pulls/123`
+
+## When adding scripts
+
+- Keep scripts focused and documented.
+- Add a short entry in the relevant doc (or create one if missing).
+
+## Related
+
+- [Testing](/help/testing)
+- [Testing live](/help/testing-live)

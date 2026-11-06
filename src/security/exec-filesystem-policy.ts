@@ -1,0 +1,89 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { AgentToolsConfig, ExecToolConfig } from "../config/types.tools.js";
+
+const MUTATING_FS_TOOLS = ["write", "edit", "apply_patch"] as const;
+const RUNTIME_TOOLS = ["exec", "process"] as const;
+
+/** Scope where exec-like tools remain available while mutating filesystem tools are disabled. */
+type ExecFilesystemPolicyDriftHit = {
+  scopeLabel: string;
+  runtimeTools: string[];
+  disabledFilesystemTools: string[];
+  sandboxMode: "off" | "non-main" | "all";
+  sandboxWorkspaceAccess: "none" | "ro" | "rw";
+  execHost: NonNullable<ExecToolConfig["host"]>;
+};
+
+/** Find policy scopes where exec can still mutate files despite disabled fs tools. */
+export function collectExecFilesystemPolicyDriftHits(
+  cfg: OpenClawConfig,
+): ExecFilesystemPolicyDriftHit[] {
+  const hits: ExecFilesystemPolicyDriftHit[] = [];
+  const globalExec = cfg.tools?.exec;
+  const contexts: Array<{
+    scopeLabel: string;
+    agentId?: string;
+    tools?: AgentToolsConfig;
+  }> = [{ scopeLabel: "tools" }];
+
+  for (const agent of listAgentEntries(cfg)) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    contexts.push({
+      scopeLabel: `agents.entries.${agent.id}.tools`,
+      agentId: agent.id,
+      tools: agent.tools,
+    });
+  }
+
+  for (const context of contexts) {
+    const sandbox = resolveSandboxConfigForAgent(cfg, context.agentId);
+    const execHost = context.tools?.exec?.host ?? globalExec?.host ?? "auto";
+    // Sandboxed all-mode with non-rw workspace access constrains local exec
+    // mutations enough that disabling write/edit/apply_patch is not misleading.
+    if (
+      sandbox.mode === "all" &&
+      execHost !== "gateway" &&
+      execHost !== "node" &&
+      sandbox.workspaceAccess !== "rw"
+    ) {
+      continue;
+    }
+
+    const policies = resolveConfiguredToolPolicies({
+      cfg,
+      agentTools: context.tools,
+      sandboxMode: sandbox.mode,
+      agentId: context.agentId,
+    });
+    const runtimeTools = RUNTIME_TOOLS.filter((tool) => isToolAllowedByPolicies(tool, policies));
+    if (!runtimeTools.includes("exec")) {
+      continue;
+    }
+
+    // Drift means every explicit mutating filesystem tool is disabled while a
+    // runtime path that can still mutate files remains allowed.
+    const disabledFilesystemTools = MUTATING_FS_TOOLS.filter(
+      (tool) => !isToolAllowedByPolicies(tool, policies),
+    );
+    if (disabledFilesystemTools.length !== MUTATING_FS_TOOLS.length) {
+      continue;
+    }
+
+    hits.push({
+      scopeLabel: context.scopeLabel,
+      runtimeTools,
+      disabledFilesystemTools,
+      sandboxMode: sandbox.mode,
+      sandboxWorkspaceAccess: sandbox.workspaceAccess,
+      execHost,
+    });
+  }
+
+  return hits;
+}

@@ -1,0 +1,54 @@
+/**
+ * Chooses a configured provider/model fallback when defaults are absent from
+ * the user's model config.
+ */
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.js";
+import type { ModelRef } from "./model-ref-shared.js";
+
+/** Resolve the first configured provider/model that can replace a missing default. */
+export function resolveConfiguredProviderFallback(params: {
+  cfg: Pick<OpenClawConfig, "models">;
+  defaultProvider: string;
+  defaultModel: string | undefined;
+  excludedModel?: ModelRef;
+}): ModelRef | null {
+  const configuredProviders = params.cfg.models?.providers;
+  if (!configuredProviders || typeof configuredProviders !== "object") {
+    return null;
+  }
+  const defaultProviderConfig = findNormalizedProviderValue(
+    configuredProviders,
+    params.defaultProvider,
+  );
+  const defaultModel = params.defaultModel?.trim();
+  if (
+    defaultProviderConfig?.models?.some(
+      (model) => model?.id && (!defaultModel || model.id === defaultModel),
+    )
+  ) {
+    return null;
+  }
+  // A utility-only row does not express primary intent. Keep the remaining
+  // provider/model insertion order as the operator's fallback preference.
+  for (const [provider, providerCfg] of Object.entries(configuredProviders)) {
+    const models = providerCfg?.models;
+    if (!models?.[0]?.id) {
+      continue;
+    }
+    const normalizedProvider = normalizeProviderId(provider);
+    const model = models.find(
+      (entry) =>
+        entry?.id &&
+        (normalizedProvider !== params.excludedModel?.provider ||
+          entry.id !== params.excludedModel.model),
+    );
+    if (model) {
+      return { provider: normalizedProvider, model: model.id };
+    }
+  }
+  return null;
+}

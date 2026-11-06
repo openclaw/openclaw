@@ -1,0 +1,645 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
+import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
+import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
+import {
+  canvasPreviewsMatch,
+  readCanvasContentPreview,
+  normalizeRoleForGrouping,
+  normalizeMessage,
+} from "../../lib/chat/message-normalizer.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
+import {
+  extractToolCardsCached,
+  extractToolPreview,
+  type CanvasToolPreview,
+} from "../../lib/chat/tool-cards.ts";
+import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import { phraseQueryPattern } from "../../lib/text-match.ts";
+import {
+  messageRecoveryKey,
+  resolveFullMessageRecovery,
+  type ChatMessageRecovery,
+} from "./chat-message-recovery.ts";
+import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
+
+export function appendCanvasBlockToAssistantMessage(
+  message: unknown,
+  preview: CanvasToolPreview,
+  rawText: string | null,
+) {
+  const raw = message as Record<string, unknown>;
+  const existingContent = Array.isArray(raw.content)
+    ? [...raw.content]
+    : typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : typeof raw.text === "string"
+        ? [{ type: "text", text: raw.text }]
+        : [];
+  // A shortcode carries identity, not the tool's sandbox or App descriptor.
+  // Only an existing structured block can replace the canonical projection.
+  if (
+    existingContent.some((block) => {
+      const existing = readCanvasContentPreview(block);
+      return existing && canvasPreviewsMatch(existing, preview);
+    })
+  ) {
+    return message;
+  }
+  const projection = {
+    ...raw,
+    content: [
+      ...existingContent,
+      {
+        type: "canvas",
+        preview,
+        ...(rawText ? { rawText } : {}),
+      },
+    ],
+  };
+  copyLiveTerminalIdentity(message, projection);
+  return projection;
+}
+
+export function createChatSearchMatcher(
+  query: string,
+  recovery?: ChatMessageRecovery,
+): (message: unknown) => boolean {
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
+  if (!normalizedQuery) {
+    return () => true;
+  }
+  const phrase = phraseQueryPattern(query);
+  const sourceMatches = (markdown: string | null) =>
+    normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
+  return (message) => {
+    const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
+    const expansion = recovery
+      ? resolveFullMessageRecovery(message, role, {
+          displayFacts: recovery.displayFacts,
+          canFetchFullMessage: recovery.canFetchFullMessage ?? true,
+          getAssistantMessageExpansion: (id) =>
+            recovery.messages.get(messageRecoveryKey(recovery.agentId, id)),
+        })?.state
+      : undefined;
+    // Keep source syntax and link destinations searchable, then compare the same
+    // display preparation used by message rendering.
+    if (expansion?.status === "loaded") {
+      const markdown =
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
+      const recovered = expansion.message ? prepareChatMessageRender(expansion.message) : undefined;
+      return (
+        sourceMatches(markdown) ||
+        (phrase !== null &&
+          markdownVisibleText(expansion, markdown, {
+            mode: "document",
+            humanMentions:
+              recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
+            assistantTranscriptRoleHeaders: role === "assistant",
+          }).search(phrase) >= 0)
+      );
+    }
+    if (sourceMatches(extractTextCached(message))) {
+      return true;
+    }
+    const prepared = prepareChatMessageRender(message);
+    return (
+      phrase !== null &&
+      markdownVisibleText(message, prepared.displayMarkdown, {
+        humanMentions: prepared.humanMentions,
+        assistantTranscriptRoleHeaders: prepared.normalizedMessage.role === "assistant",
+      }).search(phrase) >= 0
+    );
+  };
+}
+
+type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;
+
+const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
+
+export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
+  const message = asRecord(toolMessage);
+  if (!message) {
+    return null;
+  }
+  const cached = chatMessagePreviews.get(message);
+  if (cached !== undefined) {
+    return cached;
+  }
+  // A negative result also belongs to this immutable message snapshot.
+  const preview = readChatMessagePreview(message);
+  chatMessagePreviews.set(message, preview);
+  return preview;
+}
+
+function readChatMessagePreview(toolMessage: Record<string, unknown>) {
+  // Recorded Canvas references are text, not views created by this OpenClaw session.
+  if (asRecord(toolMessage["__openclaw"])?.catalogSource === true) {
+    return null;
+  }
+  if (!safeNormalizeMessage(toolMessage)) {
+    return null;
+  }
+  const cards = extractToolCardsCached(toolMessage);
+  for (let index = cards.length - 1; index >= 0; index--) {
+    const card = cards[index];
+    if (card?.preview?.kind === "canvas") {
+      return {
+        runId: card.runId,
+        parentToolCallId: card.parentToolCallId,
+        preview: card.preview,
+        text: card.outputText ?? null,
+        timestamp: rawMessageTimestamp(toolMessage),
+      };
+    }
+  }
+  const text = extractTextCached(toolMessage) ?? undefined;
+  const preview = extractToolPreview(text);
+  if (preview?.kind !== "canvas") {
+    return null;
+  }
+  return { preview, text: text ?? null, timestamp: rawMessageTimestamp(toolMessage) };
+}
+
+export function canvasPreviewBaseIdentity(
+  message: unknown,
+  source: ChatMessagePreview,
+): string | null {
+  // A nested result and its wrapper are receipts for the same invocation.
+  const toolCallId = source.parentToolCallId ?? resolveMessageToolUseId(asRecord(message) ?? {});
+  const previewId = source.preview.viewId
+    ? `viewId:${source.preview.viewId}`
+    : source.preview.url
+      ? `url:${source.preview.url}`
+      : null;
+  return toolCallId && previewId
+    ? JSON.stringify([source.runId ?? null, toolCallId, previewId])
+    : null;
+}
+
+export function createCanvasAssistantMessage(
+  source: ChatMessagePreview,
+  timestamp: number | null,
+): unknown {
+  return appendCanvasBlockToAssistantMessage(
+    {
+      role: "assistant",
+      content: [],
+      ...(source.runId ? { runId: source.runId } : {}),
+      ...(timestamp != null ? { timestamp } : {}),
+    },
+    source.preview,
+    source.text,
+  );
+}
+
+export function transcriptPositionTimestamp(
+  messages: unknown[],
+  sourceIndex: number,
+): number | null {
+  let previous: number | null = null;
+  for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+    previous = rawMessageTimestamp(messages[index]);
+    if (previous != null) {
+      break;
+    }
+  }
+  let next: number | null = null;
+  for (let index = sourceIndex + 1; index < messages.length; index += 1) {
+    next = rawMessageTimestamp(messages[index]);
+    if (next != null) {
+      break;
+    }
+  }
+  if (previous != null && next != null) {
+    return previous < next ? Math.min(previous + 1, next) : next;
+  }
+  if (previous != null) {
+    return previous + 1;
+  }
+  return next;
+}
+
+export function findNearestAssistantMessage(
+  items: ChatItem[],
+  toolTimestamp: number | null,
+  minimumIndex: number,
+  maximumIndex: number,
+) {
+  let currentTurnStart = minimumIndex;
+  let currentTurnEnd = maximumIndex;
+  for (let index = minimumIndex; index < maximumIndex; index += 1) {
+    const item = items[index];
+    if (!item || !chatItemStartsUserTurn(item)) {
+      continue;
+    }
+    const boundaryTimestamp =
+      item.kind === "notice"
+        ? item.timestamp
+        : item.kind === "message"
+          ? (safeNormalizeMessage(item.message)?.timestamp ?? null)
+          : null;
+    if (toolTimestamp != null && boundaryTimestamp != null && boundaryTimestamp > toolTimestamp) {
+      currentTurnEnd = index;
+      break;
+    }
+    currentTurnStart = index + 1;
+  }
+  type Anchor = { index: number; item: Extract<ChatItem, { kind: "message" }> };
+  let last: Anchor | null = null;
+  let previous: { anchor: Anchor; timestamp: number } | null = null;
+  // Keep stable traversal order: last preceding / first following assistant,
+  // not a timestamp sort that could cross an existing reply.
+  for (let index = currentTurnStart; index < currentTurnEnd; index++) {
+    const item = items[index];
+    if (item?.kind !== "message") {
+      continue;
+    }
+    const message = asRecord(item.message);
+    if (typeof message?.role !== "string" || message.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+    last = { index, item };
+    const timestamp = safeNormalizeMessage(item.message)?.timestamp;
+    if (toolTimestamp == null || timestamp == null) {
+      continue;
+    }
+    if (timestamp <= toolTimestamp) {
+      previous = { anchor: last, timestamp };
+      continue;
+    }
+    return previous && toolTimestamp - previous.timestamp <= timestamp - toolTimestamp
+      ? previous.anchor
+      : last;
+  }
+  return previous?.anchor ?? last;
+}
+
+export function findCanvasInsertionIndex(
+  items: ChatItem[],
+  toolTimestamp: number | null,
+  minimumIndex: number,
+  maximumIndex: number,
+): number {
+  if (toolTimestamp == null) {
+    return maximumIndex;
+  }
+  for (let index = minimumIndex; index < maximumIndex; index += 1) {
+    const item = items[index];
+    if (item?.kind !== "message") {
+      continue;
+    }
+    const normalized = safeNormalizeMessage(item.message);
+    if (
+      normalized &&
+      normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" &&
+      normalized.timestamp != null &&
+      normalized.timestamp > toolTimestamp
+    ) {
+      return index;
+    }
+  }
+  return maximumIndex;
+}
+
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+  return resolveToolUseId({ ...message, id: undefined });
+}
+
+export function resolveToolBlockId(
+  block: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  return resolveToolUseId(block) ?? resolveMessageToolUseId(message);
+}
+
+export function isPendingSendMessage(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+export function readPendingSendStatus(message: unknown): {
+  error?: string;
+  id: string;
+  state:
+    | "failed"
+    | "held"
+    | "waiting-reconnect"
+    | "waiting-model"
+    | "waiting-idle"
+    | "submitting"
+    | "sending";
+} | null {
+  const metadata = asRecord(asRecord(message)?.["__openclaw"]);
+  const state = metadata?.state;
+  const id = metadata?.id;
+  if (
+    metadata?.kind !== "pending-send" ||
+    (state !== "failed" &&
+      state !== "held" &&
+      state !== "waiting-reconnect" &&
+      state !== "waiting-model" &&
+      state !== "waiting-idle" &&
+      state !== "submitting" &&
+      state !== "sending") ||
+    typeof id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id,
+    state,
+    ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
+  };
+}
+
+export function persistedMessageEntryId(message: unknown): string | null {
+  const id = readChatThreadMessageIdentity(message)?.id;
+  return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
+    ? null
+    : (id ?? null);
+}
+
+export function transcriptMessageSourceKey(message: unknown): string | null {
+  // Send identity outranks transcript ids: the same submit is re-projected with
+  // different id/seq metadata across the pending -> history handoff, and a key
+  // change there remounts the bubble (visible flicker).
+  const identity = readChatThreadMessageIdentity(message);
+  if (identity?.sendId) {
+    return `send:${identity.sendId}`;
+  }
+  if (identity?.isImported) {
+    if (identity.externalSource) {
+      return `import:${identity.externalSource}`;
+    }
+    return identity.sequence === null ? null : `import-seq:${identity.sequence}`;
+  }
+  if (identity?.id) {
+    return `id:${identity.id}`;
+  }
+  return identity?.sequence == null ? null : `seq:${identity.sequence}`;
+}
+
+const messageProjectionDigests = new WeakMap<object, string>();
+
+function messageProjectionDigest(message: unknown): string {
+  if (message && typeof message === "object") {
+    const cached = messageProjectionDigests.get(message);
+    if (cached) {
+      return cached;
+    }
+  }
+  const record = asRecord(message);
+  const source = [
+    typeof record?.role === "string" ? record.role : "",
+    typeof record?.toolCallId === "string" ? record.toolCallId : "",
+    record ? extractTextCached(message) : "",
+  ].join("\u0000");
+  const digest = `p${fnv1aUtf16(source).toString(36)}${source.length.toString(36)}`;
+  if (message && typeof message === "object") {
+    messageProjectionDigests.set(message, digest);
+  }
+  return digest;
+}
+
+export function buildMessageItems<Message>(
+  messages: Message[],
+  resolveSourceKey: (message: Message) => string | null = transcriptMessageSourceKey,
+): Array<Extract<ChatItem, { kind: "message" }> & { message: Message }> {
+  const sourceKeys = messages.map(resolveSourceKey);
+  const sourceCounts = new Map<string, number>();
+  for (const sourceKey of sourceKeys) {
+    if (sourceKey) {
+      sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1);
+    }
+  }
+  const projectionOccurrences = new Map<string, number>();
+  return messages.map((message, index) => {
+    const sourceKey = sourceKeys[index];
+    const needsProjectionIdentity = sourceKey == null || (sourceCounts.get(sourceKey) ?? 0) > 1;
+    const projectionKey = needsProjectionIdentity
+      ? `${sourceKey ?? "legacy"}:projection:${messageProjectionDigest(message)}`
+      : (sourceKey ?? "legacy");
+    const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
+    projectionOccurrences.set(projectionKey, occurrence + 1);
+    const record = asRecord(message);
+    const callId = typeof record?.toolCallId === "string" ? record.toolCallId : "";
+    const role = typeof record?.role === "string" ? record.role : "unknown";
+    const transcriptKey = `${projectionKey}:${occurrence}`;
+    return {
+      kind: "message",
+      key: callId ? `tool:${role}:${callId}:${transcriptKey}` : `msg:${transcriptKey}`,
+      message,
+    };
+  });
+}
+
+export function hasRenderableNormalizedMessage(
+  message: unknown,
+  normalized = safeNormalizeMessage(message),
+): boolean {
+  if (!normalized) {
+    return false;
+  }
+  const role = normalizeRoleForGrouping(normalized.role);
+  const label = role === "assistant" && normalized.senderLabel?.trim();
+  return Boolean(
+    role === "tool" ||
+    normalized.content.length ||
+    normalized.replyTarget ||
+    label ||
+    hasVisiblePreparedActivity(message) ||
+    readTranscriptMediaEntries(message).length,
+  );
+}
+
+export function sanitizeStreamText(text: string): string {
+  const stripped = stripInboundMetadata(text);
+  return stripped.trim().length > 0 ? stripped : "";
+}
+
+export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
+  return buildLocalUserMessage({
+    text: item.text,
+    workContext: item.workContext,
+    appContext: item.appContext,
+    mentions: item.mentions,
+    attachments: item.attachments,
+    createdAt: item.createdAt,
+    runId: item.sendRunId ?? item.pendingRunId,
+    replyToId: item.replyToId,
+    sender: item.sender,
+    pending: {
+      id: item.id,
+      state: item.sendState,
+      error: item.sendError,
+    },
+  });
+}
+
+export function rawMessageTimestamp(message: unknown): number | null {
+  return asFiniteNumber(asRecord(message)?.timestamp) ?? null;
+}
+
+function chatItemTimestamp(item: ChatItem): number | null {
+  switch (item.kind) {
+    case "message":
+      return rawMessageTimestamp(item.message);
+    case "divider":
+    case "notice":
+      return item.timestamp;
+    case "stream":
+    case "question":
+      return item.startedAt;
+    case "reading-indicator":
+      return null;
+  }
+  return null;
+}
+
+export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
+  const latestTimestamp = items.reduce<number | null>((latest, item) => {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp == null) {
+      return latest;
+    }
+    return latest == null || timestamp > latest ? timestamp : latest;
+  }, null);
+  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
+    ? latestTimestamp + 1
+    : desiredTimestamp;
+}
+
+// Insert live tool/stream items into an already-ordered list of stable chat rows
+// (history, queued sends, canvas previews, etc.) by visible timestamp. Stable
+// rows keep their relative order; only tool cards and stream segments are
+// repositioned. This avoids reordering optimistic user bubbles or final
+// assistant replies when their timestamps come from different clocks (#112943).
+export type TurnInsertionBounds = { afterKey?: string; beforeKey?: string };
+
+export type ChatProjection<Item extends ChatItem = ChatItem> = {
+  item: Item;
+  bounds?: TurnInsertionBounds;
+  predecessorKey?: string;
+};
+
+export function insertionIndexesForBounds(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+): { minimum: number; maximum: number } {
+  const afterIndex = bounds?.afterKey
+    ? items.findIndex((item) => item.key === bounds.afterKey)
+    : -1;
+  const beforeIndex = bounds?.beforeKey
+    ? items.findIndex((item) => item.key === bounds.beforeKey)
+    : -1;
+  return {
+    minimum: afterIndex + 1,
+    maximum: beforeIndex >= 0 ? beforeIndex : items.length,
+  };
+}
+
+export function appendActiveRunItem(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+  item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+): void {
+  // Queued custody is a ceiling for the whole live response, not just its text.
+  // Moving its working indicator past that ceiling splits and remeasures the run.
+  if (bounds) {
+    const { maximum } = insertionIndexesForBounds(items, bounds);
+    items.splice(maximum, 0, item);
+  } else {
+    items.push(item);
+  }
+}
+
+export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {
+  const timestampsByKey = new Map<string, number>();
+  const placementsByKey = new Map<string, Pick<ChatProjection, "bounds" | "predecessorKey">>();
+  for (const { item, bounds, predecessorKey } of inserts) {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp != null) {
+      timestampsByKey.set(item.key, timestamp);
+    }
+    // Repeated logical keys share the last supplied fact for each field;
+    // an unbounded projection must not erase an earlier causal constraint.
+    const placement = placementsByKey.get(item.key) ?? {};
+    if (bounds) {
+      placement.bounds = bounds;
+    }
+    if (predecessorKey) {
+      placement.predecessorKey = predecessorKey;
+    }
+    placementsByKey.set(item.key, placement);
+  }
+  // Sort inserts among themselves by timestamp, preserving the original index
+  // order for ties and honoring predecessor relationships so a stream segment
+  // stays before the tool card it introduced.
+  const sortedInserts = inserts
+    .map(({ item }, index) => {
+      const rawTimestamp = chatItemTimestamp(item);
+      const predecessorKey = placementsByKey.get(item.key)?.predecessorKey;
+      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+      return {
+        item,
+        index,
+        predecessorKey,
+        effectiveTimestamp:
+          rawTimestamp != null && predecessorTimestamp != null
+            ? Math.max(rawTimestamp, predecessorTimestamp)
+            : rawTimestamp,
+      };
+    })
+    .toSorted((a, b) => {
+      if (a.effectiveTimestamp == null) {
+        return b.effectiveTimestamp == null ? a.index - b.index : 1;
+      }
+      if (b.effectiveTimestamp == null) {
+        return -1;
+      }
+      if (a.effectiveTimestamp !== b.effectiveTimestamp) {
+        return a.effectiveTimestamp - b.effectiveTimestamp;
+      }
+      if (a.predecessorKey === b.item.key) {
+        return 1;
+      }
+      if (b.predecessorKey === a.item.key) {
+        return -1;
+      }
+      return a.index - b.index;
+    });
+
+  for (const { item, effectiveTimestamp } of sortedInserts) {
+    const { minimum, maximum } = insertionIndexesForBounds(
+      items,
+      placementsByKey.get(item.key)?.bounds,
+    );
+    if (effectiveTimestamp == null) {
+      items.splice(maximum, 0, item);
+      continue;
+    }
+    const insertionIndex = items.findIndex((existing, index) => {
+      if (index < minimum || index >= maximum) {
+        return false;
+      }
+      const existingTimestamp = chatItemTimestamp(existing);
+      // Timestamped inserts render before stable items that lack a timestamp.
+      if (existingTimestamp == null) {
+        return true;
+      }
+      return existingTimestamp > effectiveTimestamp;
+    });
+
+    items.splice(insertionIndex === -1 ? maximum : insertionIndex, 0, item);
+  }
+}

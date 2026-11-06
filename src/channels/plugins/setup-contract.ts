@@ -1,0 +1,302 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { Option } from "commander";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
+
+type ChannelSetupCliOption = {
+  flags: string;
+  negatedFlags?: string;
+  description: string;
+  defaultValue?: boolean | string;
+};
+
+type ChannelSetupField = {
+  cli: ChannelSetupCliOption;
+} & (
+  | { kind: "string"; sensitive?: boolean }
+  | { kind: "boolean"; envVars?: readonly string[]; envVarMode?: "all" | "any" }
+  | { kind: "integer" }
+  | { kind: "string-list"; sensitive?: boolean }
+  | { kind: "choice"; choices: readonly string[] }
+);
+
+export type ChannelSetupFieldMetadata = ChannelSetupField & { key: string };
+
+export type ChannelSetupMetadata = {
+  fields: readonly ChannelSetupFieldMetadata[];
+};
+
+export function resolveChannelSetupFieldCliAttributeName(flags: string): string | undefined {
+  const option = new Option(flags);
+  return option.long ? option.attributeName() : undefined;
+}
+
+function assertChannelSetupFieldCliAttributeName(key: string, flags: string): void {
+  let attributeName: string | undefined;
+  try {
+    attributeName = resolveChannelSetupFieldCliAttributeName(flags);
+  } catch {
+    throw new Error(`Channel setup field "${key}" has invalid CLI flags "${flags}".`);
+  }
+  if (!attributeName) {
+    throw new Error(`Channel setup field "${key}" must declare a long CLI flag.`);
+  }
+  if (attributeName !== key) {
+    throw new Error(
+      `Channel setup field "${key}" must match camelCased long flag name "${attributeName}" from "${flags}".`,
+    );
+  }
+}
+
+type ChannelSetupFieldValue<Field extends ChannelSetupField> = Field extends {
+  kind: "boolean";
+}
+  ? boolean
+  : Field extends { kind: "integer" }
+    ? number
+    : Field extends { kind: "string-list" }
+      ? string[]
+      : Field extends { kind: "choice"; choices: infer Choices extends readonly string[] }
+        ? Choices[number]
+        : string;
+
+type ChannelSetupInputForFields<Fields extends Record<string, ChannelSetupField>> = {
+  name?: string;
+} & {
+  [Key in keyof Fields]?: ChannelSetupFieldValue<Fields[Key]>;
+};
+
+type ChannelSetupParseResult = Result<unknown, string>;
+
+type ChannelSetupContractAdapterParams<Fields extends Record<string, ChannelSetupField>> =
+  | {
+      adapter: ChannelSetupAdapter<ChannelSetupInputForFields<Fields>>;
+      legacyAdapter?: never;
+    }
+  | {
+      adapter?: never;
+      legacyAdapter: ChannelSetupAdapter;
+    };
+
+export type ChannelOwnedSetupContract = Omit<
+  ChannelSetupAdapter<{ name?: string }>,
+  | "resolveAccountId"
+  | "prepareAccountConfigInput"
+  | "applyAccountConfig"
+  | "afterAccountConfigWritten"
+  | "validateInput"
+> & {
+  kind: "channel-owned";
+  metadata: ChannelSetupMetadata;
+  parseInput: (input: unknown) => ChannelSetupParseResult;
+  resolveAccountId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    input?: unknown;
+  }) => string;
+  prepareAccountConfigInput?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: unknown;
+    runtime: RuntimeEnv;
+  }) => Promise<object> | object;
+  applyAccountConfig: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: unknown;
+  }) => OpenClawConfig;
+  afterAccountConfigWritten?: (params: {
+    previousCfg: OpenClawConfig;
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: unknown;
+    runtime: RuntimeEnv;
+  }) => Promise<void> | void;
+  validateInput?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: unknown;
+  }) => string | null;
+};
+
+type ChannelSetupExecutionAdapter = Omit<
+  ChannelOwnedSetupContract,
+  "kind" | "metadata" | "parseInput"
+>;
+
+/** Adapts the released shared-bag contract at one explicit compatibility boundary. */
+export function resolveChannelSetupExecutionAdapter(plugin: {
+  setupContract?: ChannelOwnedSetupContract;
+  setup?: ChannelSetupAdapter;
+}): ChannelSetupExecutionAdapter | undefined {
+  // Legacy callbacks receive the same caller-prepared object as owned contracts;
+  // retain their published shape without allocating a parallel wrapper chain.
+  return plugin.setupContract ?? (plugin.setup as ChannelSetupExecutionAdapter | undefined);
+}
+
+function parseStringList(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.every((entry) => typeof entry === "string") ? value : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value
+    .split(/[\n,]/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function parseFieldValue(
+  key: string,
+  field: ChannelSetupField,
+  value: unknown,
+): ChannelSetupParseResult {
+  if (field.kind === "string") {
+    return typeof value === "string" ? ok(value) : err(`${key} must be a string.`);
+  }
+  if (field.kind === "boolean") {
+    return typeof value === "boolean" ? ok(value) : err(`${key} must be true or false.`);
+  }
+  if (field.kind === "integer") {
+    const parsed = parseStrictNonNegativeInteger(value);
+    return parsed === undefined ? err(`${key} must be a non-negative integer.`) : ok(parsed);
+  }
+  if (field.kind === "string-list") {
+    const parsed = parseStringList(value);
+    return parsed ? ok(parsed) : err(`${key} must be a comma-separated list of strings.`);
+  }
+  if (typeof value !== "string" || !field.choices.includes(value)) {
+    return err(
+      `${key} must be one of: ${field.choices.map((choice) => JSON.stringify(choice)).join(", ")}.`,
+    );
+  }
+  return ok(value);
+}
+
+function parseSetupInput<Fields extends Record<string, ChannelSetupField>>(
+  fields: Fields,
+  rawInput: unknown,
+): Result<ChannelSetupInputForFields<Fields>, string> {
+  if (!isRecord(rawInput)) {
+    return err("Channel setup input must be an object.");
+  }
+  const value: Record<string, unknown> = {};
+  for (const [key, rawValue] of Object.entries(rawInput)) {
+    if (rawValue === undefined) {
+      continue;
+    }
+    if (key === "name") {
+      if (typeof rawValue !== "string") {
+        return err("name must be a string.");
+      }
+      value.name = rawValue;
+      continue;
+    }
+    const field = fields[key];
+    if (!field) {
+      return err(`Unsupported setup option: ${key}`);
+    }
+    const parsed = parseFieldValue(key, field, rawValue);
+    if (!parsed.ok) {
+      return parsed;
+    }
+    value[key] = parsed.value;
+  }
+  // Every property was checked against the field map above. This assertion is
+  // the single dynamic-object boundary; plugin callbacks remain fully typed.
+  return ok(value as ChannelSetupInputForFields<Fields>);
+}
+
+function requireParsedInput<Fields extends Record<string, ChannelSetupField>>(
+  fields: Fields,
+  input: unknown,
+): ChannelSetupInputForFields<Fields> {
+  const parsed = parseSetupInput(fields, input);
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
+  return parsed.value;
+}
+
+export function defineChannelSetupContract<const Fields extends Record<string, ChannelSetupField>>(
+  params: { fields: Fields } & ChannelSetupContractAdapterParams<Fields>,
+): ChannelOwnedSetupContract {
+  const { fields } = params;
+  const fieldEntries = Object.entries(fields);
+  // The field key crosses serialized projections, Commander parsing, and parseInput.
+  // Match Commander's attribute name so all three stay aligned by construction.
+  for (const [key, field] of fieldEntries) {
+    assertChannelSetupFieldCliAttributeName(key, field.cli.flags);
+    if (field.cli.negatedFlags) {
+      assertChannelSetupFieldCliAttributeName(key, field.cli.negatedFlags);
+    }
+  }
+  const adapter =
+    params.adapter ??
+    (params.legacyAdapter as ChannelSetupAdapter<ChannelSetupInputForFields<Fields>>);
+  const prepareAccountConfigInput = adapter.prepareAccountConfigInput;
+  const metadata: ChannelSetupMetadata = {
+    fields: fieldEntries.map(([key, field]) => Object.assign({}, field, { key })),
+  };
+  return {
+    kind: "channel-owned",
+    metadata,
+    parseInput: (input) => parseSetupInput(fields, input),
+    ...(adapter.resolveAccountId
+      ? {
+          resolveAccountId: (inputParams) =>
+            adapter.resolveAccountId?.({
+              ...inputParams,
+              input: requireParsedInput(fields, inputParams.input ?? {}),
+            }) ??
+            inputParams.accountId ??
+            "default",
+        }
+      : {}),
+    ...(prepareAccountConfigInput
+      ? {
+          prepareAccountConfigInput: async (inputParams) =>
+            await prepareAccountConfigInput({
+              ...inputParams,
+              input: requireParsedInput(fields, inputParams.input),
+            }),
+        }
+      : {}),
+    resolveBindingAccountId: adapter.resolveBindingAccountId,
+    applyAccountName: adapter.applyAccountName,
+    applyAccountConfig: (inputParams) =>
+      adapter.applyAccountConfig({
+        ...inputParams,
+        input: requireParsedInput(fields, inputParams.input),
+      }),
+    ...(adapter.afterAccountConfigWritten
+      ? {
+          afterAccountConfigWritten: (inputParams) =>
+            adapter.afterAccountConfigWritten?.({
+              ...inputParams,
+              input: requireParsedInput(fields, inputParams.input),
+            }),
+        }
+      : {}),
+    ...(adapter.validateInput
+      ? {
+          validateInput: (inputParams) => {
+            const parsed = parseSetupInput(fields, inputParams.input);
+            if (!parsed.ok) {
+              return parsed.error;
+            }
+            return adapter.validateInput?.({ ...inputParams, input: parsed.value }) ?? null;
+          },
+        }
+      : {}),
+    accountKeyPolicy: adapter.accountKeyPolicy,
+    configPromotion: adapter.configPromotion,
+    singleAccountKeysToMove: adapter.singleAccountKeysToMove,
+    namedAccountPromotionKeys: adapter.namedAccountPromotionKeys,
+    resolveSingleAccountPromotionTarget: adapter.resolveSingleAccountPromotionTarget,
+  };
+}

@@ -1,0 +1,48 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { BaseComponentInteraction, ModalInteraction } from "../internal/discord.js";
+import type { DiscordGuildEntryResolved } from "./allow-list.js";
+import type { formatDiscordUserTag } from "./format.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
+
+export type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
+
+export type AgentComponentMessageInteraction = BaseComponentInteraction;
+
+export type AgentComponentInteraction = AgentComponentMessageInteraction | ModalInteraction;
+
+export type DiscordChannelContext = {
+  channelName: string | undefined;
+  channelSlug: string;
+  displayChannelSlug: string;
+  channelType: number | undefined;
+  isThread: boolean;
+  parentId: string | undefined;
+  parentName: string | undefined;
+  parentSlug: string;
+};
+
+export type AgentComponentContext = {
+  isPolicyCurrent?: () => boolean;
+  readPolicy?: DiscordLivePolicyReader;
+  cfg: OpenClawConfig;
+  accountId: string;
+  discordConfig?: DiscordAccountConfig;
+  runtime?: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
+  token?: string;
+  guildEntries?: Record<string, DiscordGuildEntryResolved>;
+  allowFrom?: string[];
+  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+};
+
+export type ComponentInteractionContext = {
+  channelId: string;
+  user: DiscordUser;
+  username: string;
+  userId: string;
+  rawGuildId: string | undefined;
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  memberRoleIds: string[];
+};

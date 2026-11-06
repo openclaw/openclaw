@@ -1,0 +1,115 @@
+/* @vitest-environment jsdom */
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import * as clipboard from "../lib/clipboard.ts";
+import "../lib/toast-host.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";
+import { settleTooltip, tooltipSurface } from "./tooltip.test-support.ts";
+
+function append<K extends keyof HTMLElementTagNameMap>(tag: K) {
+  return document.body.appendChild(document.createElement(tag));
+}
+function keydown(target: EventTarget, key: string, code?: string) {
+  const event = new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true });
+  target.dispatchEvent(event);
+  return event;
+}
+beforeEach(() => i18n.setLocale("en"));
+afterEach(async () => {
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+  await i18n.setLocale("en");
+});
+async function mountMenu(withTrigger = false) {
+  const trigger = withTrigger ? Object.assign(append("a"), { href: "https://example.com" }) : null;
+  const menu = document.createElement("openclaw-native-link-menu");
+  const calls: string[] = [];
+  const onClose = vi.fn(() => calls.push("close"));
+  Object.assign(menu, {
+    x: 100,
+    y: 100,
+    trigger,
+    onClose,
+    onAction: (action: string) => calls.push(action),
+  });
+  document.body.append(menu);
+  await menu.updateComplete;
+  const items = () => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  const labels = () =>
+    items().map((item) => item.querySelector(".session-menu__text")?.textContent?.trim());
+  return { menu, trigger, onClose, calls, items, labels, item: items()[0]! };
+}
+
+it.each([
+  [true, "Copied"],
+  [false, "Couldn’t copy. Try again."],
+])("reports clipboard success=%s after the menu closes", async (copied, message) => {
+  const pending = Promise.withResolvers<boolean>();
+  const copy = vi.spyOn(clipboard, "copyToClipboard").mockReturnValue(pending.promise);
+  const host = append("openclaw-toast-host");
+  const anchor = Object.assign(append("a"), { href: "https://example.com/report" });
+  const menu = mountNativeLinkMenu({
+    path: [anchor, document, window],
+    anchor,
+    url: new URL(anchor.href),
+    x: 100,
+    y: 100,
+    close: (current) => current.remove(),
+    openExternal: vi.fn(),
+    openInline: vi.fn(),
+  })!;
+  await menu.updateComplete;
+  menu.querySelector<HTMLButtonElement>('[data-value="copy"]')!.click();
+  expect(menu.isConnected).toBe(false);
+  expect(copy).toHaveBeenCalledExactlyOnceWith(anchor.href);
+  expect(host.querySelector(".app-toast")).toBeNull();
+
+  pending.resolve(copied);
+  await waitForSolid(() => {
+    expect(host.querySelector(".app-toast")?.textContent).toContain(message);
+    expect(host.querySelector(".app-toast")?.classList.contains("app-toast--error")).toBe(!copied);
+  });
+});
+
+it("rerenders open actions when the locale changes", async () => {
+  const { menu, labels } = await mountMenu();
+  const surface = menu.querySelector('[role="menu"]');
+  await i18n.setLocale("de");
+  await menu.updateComplete;
+  await vi.waitFor(() =>
+    expect(surface?.getAttribute("aria-label")).toBe(i18n.t("nativeLinkMenu.label")),
+  );
+  expect(labels()).toContain(i18n.t("nativeLinkMenu.copy"));
+});
+
+it.each([
+  ["s", "KeyS", "inline"],
+  ["b", "KeyB", "external"],
+  ["с", "KeyC", "copy"],
+])("dispatches shortcut %s (%s) as %s", async (key, code, action) => {
+  const { item, calls } = await mountMenu();
+  expect(document.activeElement).toBe(item);
+  keydown(item, key, code);
+  await Promise.resolve();
+  expect(calls).toEqual(["close", action]);
+});
+
+it("dismisses the tooltip before its menu and restores focus", async () => {
+  const { menu, trigger, onClose, item } = await mountMenu(true);
+  const tooltip = document.createElement("openclaw-tooltip");
+  Object.assign(tooltip, { content: "Link action details", anchor: item });
+  menu.append(tooltip);
+  await tooltip.updateComplete;
+  item.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+  await settleTooltip(tooltip);
+  const popup = tooltipSurface(tooltip)!;
+  expect(popup.matches(":popover-open")).toBe(true);
+  const firstEscape = keydown(item, "Escape");
+  expect([popup.matches(":popover-open"), firstEscape.defaultPrevented]).toEqual([false, true]);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(document.activeElement).not.toBe(trigger);
+  expect(keydown(item, "Escape").defaultPrevented).toBe(true);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).toBe(trigger);
+});

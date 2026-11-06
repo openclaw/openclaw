@@ -1,0 +1,823 @@
+@media (max-width: 1320px) {
+  .chat-controls__model {
+    grid-area: model;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .chat-controls__inline-select-trigger {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+/* The app host chooses this class from the platform-aware drawer breakpoint.
+   Native macOS keeps its rail beside the half-width link browser until 600px;
+   browsers and Tauri keep the sidebar at the default 1080px window width. */
+.shell--mobile-nav,
+.shell--mobile-nav.shell--nav-collapsed {
+  --shell-topbar-height: 58px;
+  --sidebar-nav-row-height: 40px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "notice"
+    "content";
+  /* The nav collapses to an overlay drawer here, so it no longer reserves a
+     column. Zero the width the docked terminal reads or it would leave a
+     258px gap and waste most of a phone viewport. */
+  --shell-nav-width: 0px;
+}
+
+/* Plain-browser chat owns the only narrow chrome row in its pane header. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome {
+  --shell-topbar-height: 0px;
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome
+  .topbar {
+  display: none;
+}
+
+/* A phone draft starts at the same edges as the session it opens. */
+.shell--mobile-nav.shell--merged-chat-chrome main.content--new-session {
+  --content-inline-padding: 0px;
+  padding: 0;
+}
+
+.shell--mobile-nav .shell-nav,
+.shell--mobile-nav.shell--nav-collapsed .shell-nav {
+  position: fixed;
+  top: calc(8px + var(--safe-area-top));
+  height: calc(var(--shell-content-height) - 16px);
+  left: var(--safe-area-left);
+  z-index: 70;
+  width: min(90vw, 336px);
+  max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right));
+  min-width: 0;
+  min-height: 0;
+  border-inline-end: none;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border-radius: 0 22px 22px 0;
+  box-shadow: var(--shadow-xl);
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
+  /* The drawer slides on the sheet spring; opacity only softens its leading edge. */
+  transition:
+    transform var(--motion-sheet),
+    opacity 100ms ease-out;
+}
+
+.shell--mobile-nav .sidebar-resizer {
+  display: none;
+}
+
+.shell--mobile-nav .shell-nav-backdrop {
+  /* Use the positioned app canvas, including its safe-area padding. Safari
+     extends fixed backgrounds into browser chrome with an independent fade. */
+  position: absolute;
+  z-index: 65;
+  inset: 0;
+  display: block;
+  width: auto;
+  padding: 0;
+  pointer-events: none;
+  visibility: hidden;
+  border: 0;
+  border-radius: 0;
+  background: rgb(0 0 0 / 44%);
+  opacity: 0;
+  /* Hide after the fade without interpolating visibility on every animation frame. */
+  transition:
+    opacity var(--motion-sheet),
+    visibility 0s linear var(--motion-sheet-duration);
+  touch-action: none;
+}
+
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
+
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav,
+.shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+  transition-duration: var(--motion-sheet-duration), 140ms;
+}
+
+/* Keep selection feedback immediate without scheduling color/background animation frames. */
+.shell--mobile-nav .settings-sidebar__item {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .shell-nav,
+  .shell--mobile-nav.shell--nav-collapsed .shell-nav,
+  .shell--mobile-nav.shell--nav-drawer-open .shell-nav {
+    transition-duration: 0.01ms, 100ms;
+  }
+
+  .shell--mobile-nav .shell-nav-backdrop {
+    transition-duration: 100ms, 0s;
+    transition-delay: 0s, 100ms;
+  }
+}
+
+/* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+   the desktop rail toggle makes no sense once the sidebar is a drawer. */
+.shell--mobile-nav .topbar .topbar-nav-toggle {
+  display: grid;
+}
+
+/* One drawer button for the topbar, mobile chat and pending-session headers. */
+.mobile-nav-toggle {
+  display: grid;
+  flex: 0 0 40px;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.mobile-nav-toggle:hover {
+  color: var(--text);
+}
+
+.mobile-nav-toggle > svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.mobile-nav-toggle > .gateway-status-dot {
+  inset: 4px 4px auto auto;
+}
+
+.shell--mobile-nav .topbar {
+  display: flex;
+}
+
+.shell--mobile-nav .topnav-shell {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
+  gap: 10px;
+}
+
+.mobile-connection-status {
+  min-width: 0;
+  height: 18px;
+}
+
+/* One connection notice for the chat header and the floating page header. */
+.mobile-header__notices {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: calc(100% + 8px);
+  inset-inline: 12px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.mobile-header__notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: calc(18px * var(--openclaw-corner-radius-scale));
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font: 400 12px/20px var(--font-body);
+}
+
+.mobile-header__notice > svg {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.mobile-header__device-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-header__notice-divider {
+  width: 1px;
+  height: 12px;
+  background: var(--border-strong);
+}
+
+.mobile-header__retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+}
+
+.mobile-header__retry,
+.mobile-header__machine {
+  cursor: var(--cursor-action);
+  pointer-events: auto;
+}
+
+.mobile-header__spinner {
+  animation: btn-spinner-spin 1s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+.shell--mobile-nav .topbar-brand {
+  display: flex;
+}
+
+.shell--mobile-nav .topnav-shell__actions {
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.shell--mobile-nav .topbar-search {
+  display: inline-flex;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+}
+
+/* Phone pages float the header over the scrolling page: a fade instead of a row
+   and a hairline, with the page title moved into the header. The row stays zero
+   height while --shell-topbar-height keeps docked panels where they were. */
+.shell--mobile-nav.shell--floating-header {
+  --floating-header-clearance: 64px;
+  --floating-header-control: 45px;
+  --floating-header-radius: calc(
+    var(--floating-header-control) / 2 * var(--openclaw-corner-radius-scale)
+  );
+  grid-template-rows: 0 auto minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "notice"
+    "content";
+
+  & .topbar {
+    position: absolute;
+    grid-area: auto;
+    /* Anchored to the app canvas, so it clears the safe area itself. */
+    inset: var(--safe-area-top) var(--safe-area-right) auto var(--safe-area-left);
+    display: block;
+    min-height: 0;
+    padding: 8px 12px 0;
+    border-bottom: 0;
+    background: none;
+    backdrop-filter: none;
+    /* The fade is decoration; taps on it reach the page. */
+    pointer-events: none;
+  }
+
+  & .topbar::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 72px;
+    /* Solid to the controls' bottom edge, so content passing beneath never crowds
+       the title or reads as a line under the header. */
+    background: linear-gradient(
+      var(--bg-content, var(--bg)) calc(8px + var(--floating-header-control)),
+      transparent
+    );
+  }
+
+  & .topnav-shell {
+    position: relative;
+    display: grid;
+    /* Reserve title clearance for a page action before it mounts, without an empty pill slot. */
+    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
+    grid-template-columns:
+      minmax(max-content, 1fr) minmax(0, auto)
+      minmax(calc(3 * var(--floating-header-pill-button) + 6px), 1fr);
+    gap: 6px;
+    min-height: var(--floating-header-control);
+  }
+
+  & .topnav-shell__content {
+    display: contents;
+  }
+
+  & .topbar-page-title {
+    grid-column: 2;
+    justify-self: center;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-strong);
+    font: 600 16px / 20px var(--font-body);
+    /* The narrowest phones leave less room than the pill takes: 15px keeps the
+       settings titles whole and closer to center. */
+    font-size: clamp(15px, 4.6vw, 16px);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* This header is 1px shorter than chat's, and the notice sits at the same height. */
+  & .mobile-header__notices {
+    inset-block-start: calc(100% + 9px);
+  }
+
+  & .topbar-nav-toggle,
+  & .topnav-shell__actions {
+    border: 0;
+    border-radius: var(--floating-header-radius);
+    background: var(--bg-hover);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    color: var(--text);
+    pointer-events: auto;
+  }
+
+  & .topbar-nav-toggle {
+    flex: none;
+    width: var(--floating-header-control);
+    height: var(--floating-header-control);
+  }
+
+  & .topnav-shell__actions {
+    /* Only wrap actions that are present; title clearance belongs to the grid. */
+    grid-column: 3;
+    justify-self: end;
+    gap: 0;
+    width: max-content;
+    height: var(--floating-header-control);
+    padding: 0 3px;
+  }
+
+  & .topnav-shell__page-actions {
+    display: contents;
+  }
+
+  /* The pill holds its shape behind the drawer, which owns new session while open. */
+  &.shell--nav-drawer-open .header-new-session {
+    visibility: hidden;
+  }
+
+  /* Pill controls only; a menu opened from the pill keeps its own rows. */
+  & .topnav-shell__actions :is(a, button):not(.oc-menu *) {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: var(--floating-header-pill-button, 39px);
+    min-width: var(--floating-header-pill-button, 39px);
+    height: 39px;
+    min-height: 39px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--floating-header-radius);
+    background: transparent;
+    color: inherit;
+  }
+
+  &
+    .topnav-shell__actions
+    :is(a, button):not(.oc-menu *):hover:not(:disabled, [aria-disabled="true"]) {
+    border: 0;
+    background: transparent;
+    color: inherit;
+  }
+
+  & .topnav-shell__actions :is(a, button):not(.oc-menu *):focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: -4px;
+  }
+
+  /* A menu trigger's label wrapper must not move its icon off the pill's center. */
+  & .topnav-shell__actions .oc-menu-item__label:not(.oc-menu *) {
+    display: contents;
+  }
+
+  & :is(.topbar-nav-toggle, .topnav-shell__actions) svg:not(.oc-menu *) {
+    width: 20px;
+    height: 20px;
+    stroke-width: 1.75;
+  }
+
+  /* The header carries the title; the heading stays for assistive tech. */
+  & .content .content-header .page-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* A header that held only the title leaves no gap behind it. */
+  & .content .content-header:has(> .page-title:only-child, > :only-child > .page-title:only-child) {
+    padding-block: 0;
+
+    & + * {
+      margin-top: 0;
+    }
+  }
+
+  & main.content {
+    padding-top: var(--floating-header-clearance);
+    scroll-padding-top: var(--floating-header-clearance);
+  }
+
+  /* A config notice sits below the header and already clears it for the page. */
+  & .shell-config-read-only {
+    margin-top: var(--floating-header-clearance);
+  }
+
+  & .shell-config-read-only + main.content {
+    padding-top: 8px;
+  }
+}
+
+.shell--mobile-nav .sidebar {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  border-inline-end: none;
+}
+
+.shell--mobile-nav .sidebar-shell {
+  --sidebar-pad-x: 8px;
+  --sidebar-pad-bottom: 14px;
+  padding: 18px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
+  border-radius: 0;
+}
+
+/* The drawer has nothing to collapse into, so the desktop controls go. Search is
+   the exception, and only where nothing else is left to carry it: merged chat
+   chrome hides the topbar above, so the drawer is the last surface standing.
+   Everywhere else the topbar keeps its own search - including every native host,
+   which never merges the chat chrome - and a drawer copy would show two. */
+.shell--mobile-nav .sidebar-brand__desktop-control:not(.sidebar-brand__search),
+.shell--mobile-nav:not(.shell--merged-chat-chrome) .sidebar-brand__search {
+  display: none;
+}
+
+.shell--mobile-nav .nav-item {
+  margin: 0;
+  padding: 0 12px 0 8px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* Native macOS narrow widths (e.g. the in-app link browser splitting the
+   window): fold the titlebar clearance into one 58px row instead of stacking
+   it. body-qualified + !important outranks the Mac-app-injected topbar rules
+   (DashboardWindowController), so shipped apps get the compact row too. The
+   brand moves first, clears the traffic lights, and stays non-interactive
+   under the AppKit drag region (x 78-254, y < 46); the drawer toggle and
+   search sit to its right. */
+html.openclaw-native-macos body .shell--mobile-nav {
+  --shell-topbar-height: 58px;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topbar {
+  padding: 0 12px 0 92px !important;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell {
+  display: flex;
+  gap: 8px;
+  min-height: 58px;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__content {
+  order: -1;
+  flex: 0 0 auto;
+  min-width: 176px;
+  justify-content: flex-start;
+}
+
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
+  margin-left: auto;
+}
+
+/* Desktop webviews keep their caption buttons when resized into drawer mode. */
+html.openclaw-native-desktop body .shell--mobile-nav {
+  --shell-topbar-height: var(--openclaw-native-titlebar-height, 52px);
+
+  .topbar {
+    padding: 0 calc(var(--openclaw-native-window-controls-width, 0px) + 12px) 0
+      var(--openclaw-native-controls-inset, 12px);
+  }
+
+  .topnav-shell {
+    min-height: var(--openclaw-native-titlebar-height, 52px);
+  }
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .shell--mobile-nav .topbar {
+    padding: 10px 12px;
+    min-height: auto;
+  }
+
+  .shell--mobile-nav .sidebar-mode-switch {
+    display: block;
+  }
+
+  .shell--mobile-nav .sidebar-shell {
+    --sidebar-pad-bottom: 10px;
+    padding: 8px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
+  }
+
+  .shell--mobile-nav .nav-item {
+    font-size: var(--control-ui-text-sm);
+  }
+
+  /* Match desktop: the composer owns its own bottom breathing room, so the
+     page shell adds none. The `main` qualifier outranks the generic mobile
+     `.content` padding rules later in this file that would re-add 12-16px. */
+  main.content--chat {
+    gap: 2px;
+    padding-bottom: 0;
+  }
+
+  /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
+     content rule below from stacking shell spacing onto that owner. */
+  main.content--custodian {
+    gap: 0;
+    padding: 0;
+  }
+
+  .content {
+    --content-inline-padding: 4px;
+    padding: 4px var(--content-inline-padding) 16px;
+    gap: 12px;
+  }
+
+  .card {
+    padding: 12px;
+    border-radius: var(--radius-md);
+  }
+
+  .card-title {
+    font-size: 13px;
+  }
+
+  .stat {
+    padding: 10px;
+    border-radius: var(--radius-md);
+  }
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .chat-thread {
+    --chat-thread-padding-top: 0px;
+
+    margin-top: 0;
+    /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
+       on the scroll container floats macOS overlay scrollbars off the edge. */
+    padding: 0 0 12px;
+  }
+
+  .chat-bubble {
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+  }
+
+  .agent-chat__input {
+    margin: 0 8px 10px;
+  }
+
+  .agent-chat__input-btn,
+  .chat-send-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .agent-chat__input-btn svg,
+  .chat-send-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .log-stream {
+    max-height: 380px;
+  }
+
+  main.content:where(.content--logs-page) {
+    display: block;
+    overflow-y: auto;
+  }
+
+  main.content:where(.content--logs-page) > openclaw-router-outlet,
+  .content openclaw-logs-page,
+  .content .settings-workspace--fill-height,
+  .content .settings-workspace--fill-height > .settings-workspace__body,
+  .content .settings-workspace--fill-height .logs-card {
+    display: block;
+    height: auto;
+    min-height: 0;
+    flex: initial;
+    overflow-y: visible;
+  }
+
+  .content .settings-workspace--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .list-title {
+    font-size: 13px;
+  }
+
+  .code-block {
+    padding: 8px;
+    border-radius: var(--radius-md);
+    font-size: 12px;
+  }
+}
+
+/* Controls take their phone size with the floating header and stacked rows. */
+@media (max-width: 640px) {
+  .field input,
+  .field textarea,
+  .field select {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+  }
+
+  .btn {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 400px) {
+  .topbar {
+    padding: 8px 10px;
+  }
+
+  .nav-item {
+    padding: 6px 8px;
+    font-size: var(--control-ui-text-sm);
+  }
+
+  .content {
+    padding: 4px var(--content-inline-padding) 12px;
+    gap: 10px;
+  }
+
+  .card {
+    padding: 10px;
+  }
+
+  .stat {
+    padding: 8px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .chat-bubble {
+    padding: 8px 10px;
+  }
+
+  .btn {
+    padding: 6px 10px;
+  }
+}
+
+@media (max-width: 900px) {
+  .data-table.sessions-table {
+    min-width: 640px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 10px;
+  }
+}
+
+/* ≤768px: tighten padding and stack pagination */
+@media (max-width: 768px) {
+  .session-menu__panel {
+    --menu-item-height: 40px;
+    --menu-padding: 3px;
+  }
+
+  .session-menu .session-menu__separator {
+    margin-block: 2px;
+  }
+
+  .data-table.sessions-table {
+    min-width: 500px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .data-table-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .data-table-pagination__info {
+    text-align: center;
+  }
+
+  .data-table-pagination__controls {
+    justify-content: center;
+  }
+
+  .data-table-search input {
+    font-size: 14px;
+    padding: 8px 10px;
+  }
+
+  .session-key-cell {
+    max-width: 200px;
+  }
+
+  .session-details-panel,
+  .session-details-panel__hero,
+  .session-details-section {
+    padding: 12px;
+  }
+
+  .session-details-panel__title {
+    max-width: 100%;
+  }
+
+  .session-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-key-cell .session-link,
+  .session-key-cell .session-key-display-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+}
+
+/* ≤560px: keep the scoped columns available through horizontal scrolling. */
+@media (max-width: 560px) {
+  .data-table.sessions-table {
+    min-width: 320px;
+  }
+
+  .data-table.sessions-table .data-table-key-col {
+    width: 106px;
+    min-width: 106px;
+    max-width: 106px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 6px 4px;
+  }
+
+  .session-key-cell {
+    max-width: 140px;
+  }
+}

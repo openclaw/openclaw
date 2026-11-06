@@ -1,0 +1,186 @@
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isMissingPathError } from "./errors.js";
+import { readGitHead, readGitMetadataPrefix } from "./git-root.js";
+import { LruCache } from "./lru-cache.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+
+const formatCommit = (value?: string | null) => {
+  const match = value?.match(/[0-9a-fA-F]{7,40}/);
+  return match ? normalizeLowercaseStringOrEmpty(match[0].slice(0, 7)) : null;
+};
+
+export function gitCommitPrefixesMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
+  const normalizedRight = normalizeLowercaseStringOrEmpty(right);
+  return (
+    normalizedLeft.length >= 7 &&
+    normalizedRight.length >= 7 &&
+    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
+  );
+}
+
+const GIT_COMMIT_CACHE_LIMIT = 256;
+const cachedGitCommitBySearchDir = new LruCache<string | null>(GIT_COMMIT_CACHE_LIMIT);
+declare const WORKER_DEPLOY_BUILD: boolean;
+
+const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
+  if (options.cwd) {
+    return path.resolve(options.cwd);
+  }
+  if (options.moduleUrl) {
+    try {
+      return path.dirname(fileURLToPath(options.moduleUrl));
+    } catch {
+      // moduleUrl is not a valid file:// URL; fall back to process.cwd().
+    }
+  }
+  return process.cwd();
+};
+
+const cacheGitCommit = (searchDir: string, commit: string | null) => {
+  cachedGitCommitBySearchDir.set(searchDir, commit);
+  return commit;
+};
+const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
+  if (!packageRoot) {
+    return undefined;
+  }
+  const relative = path.relative(packageRoot, searchDir);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  const depth = relative ? relative.split(path.sep).filter(Boolean).length : 0;
+  return depth + 1;
+};
+
+const readCommitFromGit = (
+  searchDir: string,
+  packageRoot: string | null,
+): string | null | undefined => {
+  const head = readGitHead(searchDir, {
+    maxDepth: resolveGitLookupDepth(searchDir, packageRoot),
+  });
+  return head === undefined ? undefined : formatCommit(head.value);
+};
+
+const readCommitFromPackageJson = () => {
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    return null;
+  }
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require("../../package.json") as {
+      gitHead?: string;
+      githead?: string;
+    };
+    return formatCommit(pkg.gitHead ?? pkg.githead ?? null);
+  } catch {
+    return null;
+  }
+};
+
+const readCommitProbe = (
+  moduleUrl: string,
+  candidates: readonly string[],
+  field: "commit" | "head",
+): string | null | undefined => {
+  try {
+    for (const candidate of candidates) {
+      const filePath = fileURLToPath(new URL(candidate, moduleUrl));
+      let raw: string;
+      try {
+        raw = readGitMetadataPrefix(filePath, 1024);
+      } catch (error) {
+        if (isMissingPathError(error)) {
+          continue;
+        }
+        return null;
+      }
+      try {
+        const value = asNullableRecord(JSON.parse(raw))?.[field];
+        return typeof value === "string" ? formatCommit(value) : null;
+      } catch {
+        return null;
+      }
+    }
+  } catch {
+    // Invalid module URL means no loaded build metadata is available.
+  }
+  return undefined;
+};
+
+const readCommitFromBuildInfo = (moduleUrl = import.meta.url) => {
+  return readCommitProbe(moduleUrl, ["../build-info.json", "./build-info.json"], "commit") ?? null;
+};
+
+const readLoadedCommit = (moduleUrl: string): string | null | undefined => {
+  const buildStamp = readCommitProbe(moduleUrl, ["../.buildstamp", "./.buildstamp"], "head");
+  const runtimeStamp = readCommitProbe(
+    moduleUrl,
+    ["../.runtime-postbuildstamp", "./.runtime-postbuildstamp"],
+    "head",
+  );
+  if (buildStamp !== undefined || runtimeStamp !== undefined) {
+    if (buildStamp || runtimeStamp) {
+      return buildStamp && buildStamp === runtimeStamp ? buildStamp : null;
+    }
+    return readCommitFromBuildInfo(moduleUrl);
+  }
+  return readCommitProbe(moduleUrl, ["../build-info.json", "./build-info.json"], "commit");
+};
+
+export const resolveCommitHash = (
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    moduleUrl?: string;
+  } = {},
+) => {
+  const env = options.env ?? process.env;
+  const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  const normalized = formatCommit(envCommit);
+  if (normalized) {
+    return normalized;
+  }
+  const searchDir = resolveCommitSearchDir(options);
+  const cached = cachedGitCommitBySearchDir.get(searchDir);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: options.cwd,
+    moduleUrl: options.moduleUrl,
+  });
+  try {
+    const gitCommit = readCommitFromGit(searchDir, packageRoot);
+    if (gitCommit !== undefined) {
+      return cacheGitCommit(searchDir, gitCommit);
+    }
+  } catch {
+    // Fall through to baked metadata for packaged installs that are not in a live checkout.
+  }
+  const buildInfoCommit = readCommitFromBuildInfo();
+  if (buildInfoCommit) {
+    return cacheGitCommit(searchDir, buildInfoCommit);
+  }
+  const pkgCommit = readCommitFromPackageJson();
+  if (pkgCommit) {
+    return cacheGitCommit(searchDir, pkgCommit);
+  }
+  return cacheGitCommit(searchDir, null);
+};
+
+/** Resolve the commit that produced the loaded artifact, not the checkout's current revision. */
+export function resolveLoadedCommitHash(
+  options: { env?: NodeJS.ProcessEnv; moduleUrl?: string } = {},
+): string | null {
+  const moduleUrl = options.moduleUrl ?? import.meta.url;
+  const loaded = readLoadedCommit(moduleUrl);
+  return loaded === undefined
+    ? resolveCommitHash({ moduleUrl, ...(options.env ? { env: options.env } : {}) })
+    : loaded;
+}

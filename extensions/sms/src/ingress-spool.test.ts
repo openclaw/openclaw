@@ -1,0 +1,485 @@
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import type { SmsChannelRuntime } from "./inbound.js";
+import { createSmsIngressSpool } from "./ingress-spool.js";
+import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsWebhookHandler } from "./webhook.js";
+import {
+  createSmsTestAccount,
+  createSmsTestForm,
+  signSmsTestForm,
+} from "./webhook.test-support.js";
+
+type SmsIngressPayload = {
+  version: 1;
+  form: Record<string, string>;
+};
+
+const account = createSmsTestAccount({ accountId: "default" });
+
+const stateDirs: string[] = [];
+const disposers: Array<() => void | Promise<void>> = [];
+const heldFixtures: Array<{ retire: () => void; drain: () => Promise<void> }> = [];
+type SmsIngressDeliver = NonNullable<Parameters<typeof createSmsIngressSpool>[0]["deliver"]>;
+type SmsIngressSpool = ReturnType<typeof createSmsIngressSpool>;
+
+function adoptingDelivery() {
+  return vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+    await lifecycle.onAdopted();
+  });
+}
+
+async function createStateDir(): Promise<string> {
+  const created = await mkdtemp(path.join(os.tmpdir(), "openclaw-sms-ingress-"));
+  const resolved = await realpath(created);
+  stateDirs.push(resolved);
+  return resolved;
+}
+
+function createQueue(stateDir: string) {
+  return createChannelIngressQueueForTests<SmsIngressPayload>({
+    channelId: "sms",
+    accountId: account.accountId,
+    stateDir,
+  });
+}
+
+function createTestSpool(
+  stateDir: string,
+  options: { deliver: SmsIngressDeliver } & Partial<
+    Pick<Parameters<typeof createSmsIngressSpool>[0], "account" | "queue">
+  >,
+): SmsIngressSpool {
+  const spool = createSmsIngressSpool({
+    cfg: {},
+    account,
+    channelRuntime: {} as SmsChannelRuntime,
+    ...options,
+    queue: options.queue ?? createQueue(stateDir),
+  });
+  disposers.push(spool.stop);
+  return spool;
+}
+
+function form(messageSid: string): Record<string, string> {
+  return createSmsTestForm({ MessageSid: messageSid }, account);
+}
+
+async function drainSpool(spool: SmsIngressSpool): Promise<void> {
+  spool.start();
+  await spool.waitForIdle();
+}
+
+async function listenSmsTestServer(server: ReturnType<typeof createServer>): Promise<string> {
+  const port = await listenOnLoopback(server);
+  disposers.push(() => server[Symbol.asyncDispose]());
+  return `http://127.0.0.1:${port}`;
+}
+
+afterEach(async () => {
+  const failures: unknown[] = [];
+  const fixtures = heldFixtures.splice(0);
+  // Stop cancellation cannot join a non-cooperative callback. Release its test gate
+  // and join the actual producer before removing the queue's state directory.
+  for (const fixture of fixtures) {
+    fixture.retire();
+  }
+  // Snapshot each next stage only after the previous one joins late acquisitions.
+  for (const callbacks of [
+    () => fixtures.map((fixture) => fixture.drain),
+    () => disposers.splice(0).toReversed(),
+    () =>
+      stateDirs
+        .splice(0)
+        .toReversed()
+        .map((stateDir) => () => rm(stateDir, { recursive: true, force: true })),
+  ]) {
+    for (const dispose of callbacks()) {
+      try {
+        await dispose();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  vi.useRealTimers();
+  if (failures.length) {
+    throw new AggregateError(failures, "SMS ingress fixture cleanup failed");
+  }
+});
+
+describe("createSmsIngressSpool", () => {
+  it("retries acknowledged MMS provider outages before adopting later same-sender messages", async () => {
+    const stateDir = await createStateDir();
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    disposers.push(() => nowSpy.mockRestore());
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    disposers.push(() => {
+      vi.unstubAllEnvs();
+    });
+    const mediaBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a0cAAAAASUVORK5CYII=",
+      "base64",
+    );
+    let mediaRequests = 0;
+    let authenticatedMediaRequests = 0;
+    const accountSid = `AC${"c".repeat(32)}`;
+    const mediaOrigin = await listenSmsTestServer(
+      createServer((req, res) => {
+        mediaRequests += 1;
+        if (
+          req.headers.authorization ===
+          `Basic ${Buffer.from(`${accountSid}:${account.authToken}`).toString("base64")}`
+        ) {
+          authenticatedMediaRequests += 1;
+        }
+        if (mediaRequests === 1) {
+          res.statusCode = 429;
+          res.end("Twilio rate limited");
+          return;
+        }
+        res.setHeader("content-type", "image/png");
+        res.end(mediaBytes);
+      }),
+    );
+    const sender = "+15551234567";
+    const messageSid = `MM${"a".repeat(32)}`;
+    const testAccount = {
+      ...account,
+      accountSid,
+      dmPolicy: "allowlist" as const,
+      allowFrom: [sender],
+    };
+    const deliveries: Array<{ id: string; body: string; attachments: number }> = [];
+    const channelRuntime = {
+      commands: {
+        shouldComputeCommandAuthorized: () => false,
+        isControlCommandMessage: () => false,
+      },
+      pairing: { readAllowFromStore: async () => [] },
+      routing: {
+        resolveAgentRoute: (
+          input: Parameters<SmsChannelRuntime["routing"]["resolveAgentRoute"]>[0],
+        ) => {
+          expect(input.peer).toEqual({ kind: "direct", id: sender });
+          return {
+            agentId: "main",
+            accountId: account.accountId,
+            sessionKey: `agent:main:sms:direct:${sender}`,
+          };
+        },
+      },
+      media: {
+        saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) => {
+          expect(options).toMatchObject({
+            ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+            requestInit: { signal: expect.any(AbortSignal) },
+          });
+          return await saveRemoteMedia({
+            ...options,
+            // The guard resolves Twilio before the loopback fetch override runs.
+            lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+            fetchImpl: async (_url, init) =>
+              await fetch(`${mediaOrigin}/twilio-media`, {
+                headers: init?.headers,
+                signal: init?.signal,
+              }),
+          });
+        },
+      },
+      inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
+        buildContext: (input: Parameters<SmsChannelRuntime["inbound"]["buildContext"]>[0]) => {
+          expect(input).toMatchObject({
+            from: `sms:${sender}`,
+            sender: { id: sender },
+            conversation: { id: sender },
+            reply: { to: `sms:${sender}` },
+            route: {
+              routeSessionKey: `agent:main:sms:direct:${sender}`,
+              dispatchSessionKey: `agent:main:sms:direct:${sender}`,
+            },
+          });
+          deliveries.push({
+            id: String(input.extra?.MessageSid),
+            body: input.message.bodyForAgent ?? input.message.rawBody,
+            attachments: input.media?.length ?? 0,
+          });
+          return {};
+        },
+        run: async (input: Parameters<SmsChannelRuntime["inbound"]["run"]>[0]) => {
+          const turnInput = await input.adapter.ingest(input.raw);
+          if (!turnInput) {
+            throw new Error("expected normalized SMS turn");
+          }
+          const turn = await input.adapter.resolveTurn(
+            turnInput,
+            { kind: "message", canStartAgentTurn: true },
+            {},
+          );
+          expect(turn).toMatchObject({ route: { sessionKey: `agent:main:sms:direct:${sender}` } });
+          await input.turnAdoptionLifecycle?.onAdopted();
+        },
+      },
+      reply: {},
+      session: {},
+    } as unknown as SmsChannelRuntime;
+    const queue = createQueue(stateDir);
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account: testAccount,
+      channelRuntime,
+      queue,
+      log: { warn: () => undefined },
+    });
+    disposers.push(spool.stop);
+    const webhookHandler = createSmsWebhookHandler({
+      cfg: {},
+      account: testAccount,
+      ingress: spool,
+    });
+    const webhookOrigin = await listenSmsTestServer(
+      createServer((req, res) => {
+        void webhookHandler(req, res).catch((error: unknown) => {
+          res.statusCode = 500;
+          res.end(error instanceof Error ? error.message : String(error));
+        });
+      }),
+    );
+    testAccount.publicWebhookUrl = `${webhookOrigin}/webhooks/sms`;
+    spool.start();
+
+    async function postSignedCallback(callback: Record<string, string>) {
+      const { signature } = signSmsTestForm(callback, testAccount);
+      return await fetch(testAccount.publicWebhookUrl, {
+        method: "POST",
+        headers: { "x-twilio-signature": signature },
+        body: new URLSearchParams(callback),
+      });
+    }
+
+    const mediaCallback = {
+      ...form(messageSid),
+      AccountSid: testAccount.accountSid,
+      Body: "keep this attachment",
+      NumMedia: "1",
+      MediaUrl0: `https://api.twilio.com/2010-04-01/Accounts/${testAccount.accountSid}/Messages/${messageSid}/Media/ME${"b".repeat(32)}`,
+      MediaContentType0: "image/png",
+    };
+    const firstResponse = await postSignedCallback(mediaCallback);
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+    await spool.waitForIdle();
+    expect(mediaRequests).toBe(1);
+    expect(await queue.listPending()).toEqual([
+      expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
+    ]);
+    expect(deliveries).toEqual([]);
+
+    now += 1_000;
+    const secondSid = `SM${"d".repeat(32)}`;
+    const secondResponse = await postSignedCallback({
+      ...form(secondSid),
+      AccountSid: testAccount.accountSid,
+      Body: "the later message",
+    });
+    expect(secondResponse.status).toBe(200);
+    await spool.waitForIdle();
+    expect(deliveries).toEqual([
+      { id: messageSid, body: "keep this attachment", attachments: 1 },
+      { id: secondSid, body: "the later message", attachments: 0 },
+    ]);
+    expect(mediaRequests).toBe(2);
+    expect(authenticatedMediaRequests).toBe(2);
+    expect(await spool.enqueue(mediaCallback)).toMatchObject({
+      kind: "completed",
+      duplicate: true,
+    });
+    expect(await queue.listPending()).toEqual([]);
+  });
+
+  it.each([false, true])("replays an event admitted after shutdown: %s", async (afterStop) => {
+    const stateDir = await createStateDir();
+    const receivedAt = 1_700_000_000_456;
+    const now = afterStop
+      ? undefined
+      : vi
+          .spyOn(Date, "now")
+          .mockReturnValueOnce(receivedAt)
+          .mockReturnValue(receivedAt + 60_000);
+    const retired = createTestSpool(stateDir, {
+      deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
+    });
+    if (afterStop) {
+      retired.start();
+    } else {
+      await retired.enqueue(form("SM-replay"));
+    }
+    await retired.stop();
+    if (afterStop) {
+      await expect(retired.enqueue(form("SM-replay"))).resolves.toMatchObject({ kind: "accepted" });
+    }
+    now?.mockRestore();
+    const deliver = adoptingDelivery();
+    const recovered = createTestSpool(stateDir, { deliver });
+    await drainSpool(recovered);
+
+    expect(deliver).toHaveBeenCalledOnce();
+    if (!afterStop) {
+      expect(deliver).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), receivedAt);
+    }
+  });
+
+  it("does not let a non-cooperative delivery block route replacement shutdown", () => {
+    const lifetime = createFixtureLifetime();
+    const retirement = new AbortController();
+    const deliveryGate = Promise.withResolvers<void>();
+    let spool: SmsIngressSpool | undefined;
+    heldFixtures.push({
+      retire: () => {
+        retirement.abort(new Error("SMS ingress fixture retired"));
+        deliveryGate.resolve();
+      },
+      drain: async () => {
+        await lifetime.cleanup();
+        // This is supplemental monitor settlement, not a replacement for the
+        // exact callback join above after the monitor's non-waiting stop.
+        await spool?.waitForIdle();
+      },
+    });
+    return lifetime.run(async () => {
+      const stateDir = await createStateDir();
+      retirement.signal.throwIfAborted();
+      const { promise: deliveryStarted, resolve: markDeliveryStarted } =
+        Promise.withResolvers<void>();
+      let deliverySignal: AbortSignal | undefined;
+      spool = createTestSpool(stateDir, {
+        deliver: vi.fn<SmsIngressDeliver>((_message, lifecycle) =>
+          lifetime.run(async () => {
+            deliverySignal = lifecycle.abortSignal;
+            markDeliveryStarted();
+            await deliveryGate.promise;
+          }),
+        ),
+      });
+      spool.start();
+      await withinTest(
+        lifetime.track(spool.enqueue(form("SM-non-cooperative-stop"))),
+        retirement.signal,
+      );
+      await withinTest(deliveryStarted, retirement.signal);
+
+      await withinTest(lifetime.track(spool.stop()), retirement.signal);
+
+      expect(deliverySignal?.aborted).toBe(true);
+      deliveryGate.resolve();
+    });
+  });
+
+  it.each(["SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {
+    const stateDir = await createStateDir();
+    const deliver = adoptingDelivery();
+    const spool = createTestSpool(stateDir, { deliver });
+    const rawForm = form("SM-alias");
+    delete rawForm.MessageSid;
+    rawForm[key] = "SM-alias";
+
+    expect(await spool.enqueue(rawForm)).toMatchObject({ kind: "accepted", duplicate: false });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ messageSid: "SM-alias" }),
+      expect.any(Object),
+      expect.any(Number),
+    );
+  });
+
+  it("preserves the old handler-reload replay guard scenario with a tombstone", async () => {
+    const stateDir = await createStateDir();
+    const firstDeliver = adoptingDelivery();
+    const first = createTestSpool(stateDir, { deliver: firstDeliver });
+    await first.enqueue(form("SM-handler-reload"));
+    await drainSpool(first);
+    await first.stop();
+
+    const reloadedDeliver = vi.fn<SmsIngressDeliver>(async () => undefined);
+    const reloaded = createTestSpool(stateDir, { deliver: reloadedDeliver });
+    expect(await reloaded.enqueue(form("SM-handler-reload"))).toMatchObject({
+      kind: "completed",
+      duplicate: true,
+    });
+    await drainSpool(reloaded);
+
+    expect(firstDeliver).toHaveBeenCalledOnce();
+    expect(reloadedDeliver).not.toHaveBeenCalled();
+  });
+
+  it("preserves Messaging Service RCS identity", async () => {
+    const stateDir = await createStateDir();
+    const deliver = adoptingDelivery();
+    const spool = createTestSpool(stateDir, {
+      account: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+      deliver,
+    });
+
+    await spool.enqueue({
+      ...form("SM-rcs-service"),
+      From: "rcs:+15551234567",
+      To: "rcs:example-agent",
+      MessagingServiceSid: "MG123",
+    });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, Record<string, string>, ResolvedSmsAccount?]>([
+    ["invalid payload", { MessageSid: "SM-invalid", From: "+15551234567" }],
+    ["account mismatch", { ...form("SM-account"), AccountSid: "AC-other" }],
+    [
+      "recipient mismatch",
+      {
+        ...form("MM-recipient"),
+        To: "+15550000000",
+        NumMedia: "1",
+        MediaUrl0: "https://api.twilio.com/media/photo",
+      },
+    ],
+    [
+      "Messaging Service mismatch",
+      { ...form("SM-service-mismatch"), MessagingServiceSid: "MG-other" },
+      { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+    ],
+    [
+      "RCS media-only",
+      {
+        ...form("MM-rcs-media"),
+        Body: "",
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+        NumMedia: "1",
+        MediaUrl0: "https://api.twilio.com/media/photo",
+      },
+    ],
+  ])("dead-letters a permanent %s failure", async (_name, rawForm, ingressAccount = account) => {
+    const stateDir = await createStateDir();
+    const deliver = vi.fn<SmsIngressDeliver>(async () => undefined);
+    const spool = createTestSpool(stateDir, { account: ingressAccount, deliver });
+
+    await spool.enqueue(rawForm);
+    await drainSpool(spool);
+
+    expect(await spool.enqueue(rawForm)).toMatchObject({ kind: "failed", duplicate: true });
+    expect(deliver).not.toHaveBeenCalled();
+  });
+});

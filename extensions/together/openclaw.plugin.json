@@ -1,0 +1,101 @@
+{
+  "id": "together",
+  "categories": ["models"],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["together"],
+  "providerRequest": {
+    "providers": {
+      "together": {
+        "family": "together"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "together",
+        "envVars": ["TOGETHER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "together",
+      "method": "api-key",
+      "choiceId": "together-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Together AI API key",
+      "groupId": "together",
+      "groupLabel": "Together AI",
+      "groupHint": "API key",
+      "optionKey": "togetherApiKey",
+      "cliFlag": "--together-api-key",
+      "cliOption": "--together-api-key <key>",
+      "cliDescription": "Together AI API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["together"]
+  },
+  "modelCatalog": {
+    "aliases": {
+      "togetherai": {
+        "provider": "together",
+        "api": "openai-completions"
+      }
+    },
+    "modelsDev": {
+      "together": "togetherai"
+    },
+    "providers": {
+      "together": {
+        "baseUrl": "https://api.together.xyz/v1",
+        "api": "openai-completions",
+        "defaultModel": "zai-org/GLM-5.2",
+        "models": [
+          {
+            "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "name": "Llama 3.3 70B Instruct Turbo",
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 1.04,
+              "output": 1.04,
+              "cacheRead": 1.04,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/GLM-5.2",
+            "name": "GLM 5.2 FP4",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "together": "refreshable"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

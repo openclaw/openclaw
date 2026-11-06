@@ -1,0 +1,247 @@
+import { Readable } from "node:stream";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
+import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getDiscordRuntime } from "../runtime.js";
+import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
+import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
+import { formatVoiceIngressPrompt } from "./prompt.js";
+import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
+import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
+import { synthesizeVoiceReplyAudio } from "./tts.js";
+
+const logger = createSubsystemLogger("discord/voice");
+
+type DiscordVoiceResponseParams = {
+  entry: VoiceSessionEntry;
+  accountId: string;
+  userId: string;
+  cfg: OpenClawConfig;
+  discordConfig: DiscordAccountConfig;
+  runtime: RuntimeEnv;
+  enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
+};
+
+type DiscordVoiceSegmentParams = Pick<DiscordVoiceResponseParams, "entry" | "userId" | "cfg"> & {
+  wavPath: string;
+  resolveIngressContext: () => Promise<DiscordVoiceIngressContext | null>;
+  isConversationCurrent: () => boolean;
+  onConversationOnly: () => void;
+  recording?: {
+    capture: NonNullable<VoiceSessionEntry["transcripts"]>;
+    startedAt: number;
+    speaker: Promise<{ label: string }>;
+  };
+};
+
+export async function processDiscordVoiceSegment(
+  params: DiscordVoiceSegmentParams,
+): Promise<DiscordVoiceSegmentOutcome> {
+  const { entry, wavPath, userId } = params;
+  const conversationCurrent = () =>
+    !entry.captureOnly &&
+    entry.sessionLifecycle.status === "active" &&
+    params.isConversationCurrent();
+  // Recording owns STT; conversation authorization cannot hold the recording queue.
+  const ingress = params.resolveIngressContext().catch((error: unknown) => {
+    logger.warn(`discord voice: conversation authorization failed: ${formatErrorMessage(error)}`);
+    return null;
+  });
+  const conversationAuthorized = ingress.then(
+    (context) => Boolean(context) && conversationCurrent(),
+  );
+  const recording = params.recording;
+  let admitted: DiscordVoiceIngressContext | null = null;
+  if (!recording?.capture.isCurrent()) {
+    params.onConversationOnly();
+    admitted = await ingress;
+  }
+  if (!recording?.capture.isCurrent() && (!admitted || !conversationCurrent())) {
+    logVoiceVerbose(
+      `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+    return { status: "excluded" };
+  }
+  const speakerLabel = recording?.capture.isCurrent()
+    ? (await recording.speaker).label
+    : (admitted?.speakerLabel ?? userId);
+  if (!recording?.capture.isCurrent()) {
+    params.onConversationOnly();
+    admitted = await ingress;
+  }
+  if (!recording?.capture.isCurrent() && (!admitted || !conversationCurrent())) {
+    return { status: "excluded" };
+  }
+  const cfg = params.cfg;
+  const agentId = entry.route.agentId;
+  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
+    filePath: wavPath,
+    cfg,
+    agentDir: resolveAgentDir(cfg, agentId),
+    mime: "audio/wav",
+  });
+  const transcript = normalizeOptionalString(result.text);
+  const processing = result.decision?.attachmentProcessing?.[0];
+  if (
+    result.decision?.outcome === "skipped" &&
+    result.decision.attachmentDispositions?.[0]?.kind === "no-model" &&
+    result.decision.attachmentProcessing?.[0] === "omitted" &&
+    result.decision.attachments.length > 0 &&
+    result.decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  ) {
+    recording?.capture.onBatchUnavailable?.();
+    return { status: "unavailable" };
+  }
+  // Known omitted input cannot become a partial command. Completed silent input
+  // remains empty, including CLI success without text and successful fallback.
+  if (processing === "omitted") {
+    return { status: "excluded" };
+  }
+  if (!transcript) {
+    logVoiceVerbose(
+      `transcription empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+    return { status: "empty", conversationAuthorized };
+  }
+  if (recording?.capture.isCurrent()) {
+    await recording.capture.onUtterance({
+      sessionId: recording.capture.sessionId,
+      startedAt: new Date(recording.startedAt).toISOString(),
+      final: true,
+      speaker: {
+        id: userId,
+        label: speakerLabel,
+      },
+      text: transcript,
+      metadata: {
+        channel: "discord",
+        guildId: entry.guildId,
+        channelId: entry.channelId,
+        voiceSessionKey: entry.voiceSessionKey,
+      },
+    });
+  }
+  return { status: "transcribed", text: transcript, conversationAuthorized };
+}
+
+export async function respondToDiscordVoiceTranscript(
+  params: DiscordVoiceResponseParams & {
+    ingress: DiscordVoiceIngressContext;
+    transcript: string;
+  },
+): Promise<void> {
+  const { entry, ingress, transcript, userId } = params;
+  const conversationCurrent = () =>
+    !entry.captureOnly &&
+    entry.sessionLifecycle.status === "active" &&
+    ingress.isCurrent?.() !== false;
+  if (!conversationCurrent()) {
+    return;
+  }
+  let replyText: string;
+  const control = await maybeControlDiscordVoiceAgentRun({
+    entry,
+    accountId: params.accountId,
+    context: ingress,
+    isCurrent: conversationCurrent,
+    text: transcript,
+  }).catch((error: unknown) => {
+    if (readErrorName(error) === "AbortError") {
+      logger.warn(`discord voice: active-run control cancelled: ${formatErrorMessage(error)}`);
+      return null;
+    }
+    logger.warn(
+      `discord voice: active-run control failed; falling back to normal segment handling: ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  });
+  if (control === null || !conversationCurrent()) {
+    return;
+  }
+
+  if (control?.handled) {
+    replyText = control.speakText ?? "";
+  } else {
+    const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
+    const text = await runDiscordVoiceAgentTurn({
+      ...params,
+      message: prompt,
+      context: ingress,
+    });
+    if (text === null) {
+      logVoiceVerbose(
+        `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return;
+    }
+    replyText = text;
+  }
+
+  if (!conversationCurrent()) {
+    return;
+  }
+  if (!replyText) {
+    logVoiceVerbose(
+      `reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+    return;
+  }
+
+  const voiceReplyAudio = await synthesizeVoiceReplyAudio({
+    cfg: params.cfg,
+    override: params.discordConfig.voice?.tts,
+    replyText,
+    speakerLabel: ingress.speakerLabel,
+  });
+  if (voiceReplyAudio.status === "empty") {
+    logVoiceVerbose(
+      `tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+    return;
+  }
+  if (voiceReplyAudio.status === "failed") {
+    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error}`);
+    return;
+  }
+  const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;
+  if (streamFailure && !entry.ttsStreamFallbackWarned) {
+    entry.ttsStreamFallbackWarned = true;
+    logger.warn(
+      `discord voice: streaming TTS failed provider=${streamFailure.provider} reasonCode=${streamFailure.reasonCode}; using file fallback`,
+    );
+  }
+
+  const releaseAudio =
+    voiceReplyAudio.mode === "stream"
+      ? voiceReplyAudio.release
+      : () => unlinkIfExists(voiceReplyAudio.audioPath);
+  // Synthesis can settle after leave; release before the playback queue gets ownership.
+  if (entry.sessionLifecycle.status === "stopped") {
+    await releaseAudio?.();
+    return;
+  }
+  params.enqueuePlayback(entry, async () => {
+    try {
+      if (entry.sessionLifecycle.status === "stopped") {
+        return;
+      }
+      const input =
+        voiceReplyAudio.mode === "stream"
+          ? Readable.fromWeb(
+              voiceReplyAudio.audioStream as import("node:stream/web").ReadableStream<Uint8Array>,
+            )
+          : voiceReplyAudio.audioPath;
+      await entry.audio.play(input);
+    } catch (error) {
+      if (entry.sessionLifecycle.status !== "stopped") {
+        throw error;
+      }
+    } finally {
+      await releaseAudio?.();
+    }
+  });
+}

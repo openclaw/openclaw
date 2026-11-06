@@ -1,0 +1,104 @@
+import { Buffer } from "node:buffer";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import {
+  generateSecureFraction,
+  generateSecureHex,
+  generateSecureInt,
+  generateSecureToken,
+  generateSecureUuid,
+} from "./secure-random.js";
+
+const cryptoMocks = vi.hoisted(() => ({
+  randomBytes: vi.fn((bytes: number) => Buffer.alloc(bytes, 0xab)),
+  randomInt: vi.fn(),
+  randomUUID: vi.fn(),
+}));
+
+vi.mock("node:crypto", () => cryptoMocks);
+
+beforeEach(() => {
+  cryptoMocks.randomBytes.mockClear();
+  cryptoMocks.randomUUID.mockReset();
+});
+
+describe("secure-random", () => {
+  it("delegates UUID generation to crypto.randomUUID", () => {
+    cryptoMocks.randomUUID.mockReturnValueOnce("uuid-1").mockReturnValueOnce("uuid-2");
+
+    expect(generateSecureUuid()).toBe("uuid-1");
+    expect(generateSecureUuid()).toBe("uuid-2");
+    expect(cryptoMocks.randomUUID).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "uses the default byte count",
+      byteCount: undefined,
+      expectedBytes: 16,
+      expectedToken: Buffer.alloc(16, 0xab).toString("base64url"),
+    },
+    {
+      name: "passes custom byte counts through",
+      byteCount: 18,
+      expectedBytes: 18,
+      expectedToken: Buffer.alloc(18, 0xab).toString("base64url"),
+    },
+    {
+      name: "supports zero-byte tokens",
+      byteCount: 0,
+      expectedBytes: 0,
+      expectedToken: "",
+    },
+  ])("generates url-safe tokens when $name", ({ byteCount, expectedBytes, expectedToken }) => {
+    cryptoMocks.randomBytes.mockClear();
+
+    const token = byteCount === undefined ? generateSecureToken() : generateSecureToken(byteCount);
+
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(expectedBytes);
+    expect(token).toBe(expectedToken);
+    expect(token).toMatch(/^[A-Za-z0-9_-]*$/);
+  });
+
+  it("registers redacted tokens at creation without redacting ordinary generated IDs", () => {
+    cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.alloc(32, 0xc1));
+    const secret = generateSecureToken({ bytes: 32, redact: true });
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(32);
+    expect(redactRegisteredSecretValues("route/" + secret, () => "hidden")).toBe("route/hidden");
+    const publicId = generateSecureToken(18);
+    expect(redactRegisteredSecretValues(publicId, () => "hidden")).toBe(publicId);
+    expect(() => generateSecureToken({ bytes: 0, redact: true })).toThrow("at least 16 bytes");
+    cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.alloc(32, 0xff));
+    const signingKey = generateSecureToken({
+      bytes: 32,
+      redact: true,
+      encoding: "base64",
+      prefix: "whsec_",
+    });
+    expect(signingKey).toMatch(/^whsec_[A-Za-z0-9+/]+=$/);
+    expect(Buffer.from(signingKey.slice(6), "base64")).toEqual(Buffer.alloc(32, 0xff));
+    expect(redactRegisteredSecretValues("secret=" + signingKey, () => "hidden")).toBe(
+      "secret=hidden",
+    );
+    expect(redactRegisteredSecretValues(signingKey.slice(6), () => "hidden")).toBe("hidden");
+  });
+
+  it("generates secure hex strings", () => {
+    expect(generateSecureHex(4)).toBe(Buffer.alloc(4, 0xab).toString("hex"));
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(4);
+  });
+
+  it("maps random bytes into a unit interval fraction", () => {
+    cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.from([0x80, 0x00, 0x00, 0x00]));
+
+    expect(generateSecureFraction()).toBe(0.5);
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(4);
+  });
+
+  it("delegates bounded integer generation to crypto.randomInt", () => {
+    cryptoMocks.randomInt.mockReturnValueOnce(2);
+
+    expect(generateSecureInt(5)).toBe(2);
+    expect(cryptoMocks.randomInt).toHaveBeenCalledExactlyOnceWith(5);
+  });
+});

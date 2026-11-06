@@ -1,0 +1,240 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  createConfiguredProviderModelResolver,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
+import { mergeConfiguredThinkingLevelMap } from "./model-catalog-metadata.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
+
+export type ModelCatalogRouteProjection =
+  | { kind: "unmanaged" }
+  | { kind: "unresolved" }
+  | {
+      kind: "selected";
+      route: ProviderModelRouteCandidate;
+    };
+
+type ModelCatalogLogicalOverrides = Partial<
+  Pick<
+    ModelCatalogEntry,
+    | "name"
+    | "contextWindow"
+    | "contextTokens"
+    | "reasoning"
+    | "configuredReasoning"
+    | "thinkingLevelMap"
+    | "input"
+  >
+>;
+
+/** Prepares configured-row indexes for one stable catalog config and policy projection. */
+export function createConfiguredModelCatalogOverridesResolver(params: {
+  cfg: OpenClawConfig;
+}): (
+  entry: Pick<ModelCatalogEntry, "provider" | "id">,
+) => ModelCatalogLogicalOverrides | undefined {
+  const modelsByProvider = new Map<
+    string,
+    ((modelId: string) => ModelDefinitionConfig | undefined) | null
+  >();
+  return (entry) => {
+    const providerId = entry.provider;
+    let findModel = modelsByProvider.get(providerId);
+    if (findModel === undefined) {
+      const provider = normalizeProviderId(providerId);
+      const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+      if (!providerConfig?.models?.length) {
+        modelsByProvider.set(providerId, null);
+        return undefined;
+      }
+      const surface = resolveProviderModelPolicySurface(provider);
+      const normalizeConfiguredModelId = (modelId: string) =>
+        openAIModelCatalogRoutePolicy.resolveIdentity({ provider: providerId, id: modelId })?.id ??
+        resolveProviderModelCatalogId({ provider, modelId, surface }) ??
+        modelId.trim();
+      const resolveModel = createConfiguredProviderModelResolver(
+        providerConfig,
+        provider,
+        normalizeConfiguredModelId,
+      );
+      findModel = (modelId) => resolveModel(normalizeConfiguredModelId(modelId));
+      // Policy callbacks receive the original spelling, even when config keys normalize alike.
+      modelsByProvider.set(providerId, findModel);
+    }
+    if (findModel === null) {
+      return undefined;
+    }
+    const model = findModel(entry.id);
+    const overrides: ModelCatalogLogicalOverrides = {
+      ...(model?.name ? { name: model.name } : {}),
+      ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+      ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+      ...(model?.reasoning !== undefined ? { configuredReasoning: model.reasoning } : {}),
+      ...(model?.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(model?.input !== undefined ? { input: model.input } : {}),
+    };
+    return Object.keys(overrides).length > 0 ? overrides : undefined;
+  };
+}
+
+function logicalIdentity(
+  entry: ModelCatalogEntry,
+  id: string,
+  name?: string,
+  lifecycleEntry: ModelCatalogEntry = entry,
+): ModelCatalogEntry {
+  return {
+    id,
+    name: name ?? id,
+    provider: entry.provider,
+    ...(entry.alias ? { alias: entry.alias } : {}),
+    // Family names the model's developer, so it survives a route projection with the identity.
+    ...(lifecycleEntry.family ? { family: lifecycleEntry.family } : {}),
+    ...(lifecycleEntry.providerOrder !== undefined
+      ? { providerOrder: lifecycleEntry.providerOrder }
+      : {}),
+    ...(lifecycleEntry.status ? { status: lifecycleEntry.status } : {}),
+    ...(lifecycleEntry.statusReason ? { statusReason: lifecycleEntry.statusReason } : {}),
+    ...(lifecycleEntry.replaces ? { replaces: lifecycleEntry.replaces } : {}),
+    ...(lifecycleEntry.replacedBy ? { replacedBy: lifecycleEntry.replacedBy } : {}),
+  };
+}
+
+function applyLogicalOverrides(
+  entry: ModelCatalogEntry,
+  overrides: ModelCatalogLogicalOverrides | undefined,
+): ModelCatalogEntry {
+  if (!overrides) {
+    return entry;
+  }
+  const thinkingLevelMap = mergeConfiguredThinkingLevelMap(entry, overrides);
+  return { ...entry, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
+}
+
+/**
+ * Builds public and private runtime rows from one selected physical donor.
+ *
+ * Selected-route capabilities come only from a physical row accepted by the
+ * provider-owned matcher. Unresolved managed routes expose identity only.
+ * Auth, runtime, request overrides, and other private transport facts never
+ * enter the public catalog shape.
+ */
+export function projectModelCatalogEntryForRoute(params: {
+  entry: ModelCatalogEntry;
+  projection: ModelCatalogRouteProjection;
+  catalog?: readonly ModelCatalogEntry[];
+  overrides?: ModelCatalogLogicalOverrides;
+}): { entry: ModelCatalogEntry; runtimeEntry: ModelCatalogEntry } {
+  if (params.projection.kind === "unmanaged") {
+    const provider = normalizeProviderId(params.entry.provider);
+    const surface = resolveProviderModelPolicySurface(provider);
+    // Route-capable owners project identity only with their route facts.
+    const id = surface?.resolveModelRoutes
+      ? null
+      : resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface });
+    const logicalEntry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
+    const entry = applyLogicalOverrides(logicalEntry, params.overrides);
+    return { entry, runtimeEntry: entry };
+  }
+
+  const id =
+    openAIModelCatalogRoutePolicy.resolveIdentity(params.entry)?.id ??
+    splitTrailingAuthProfile(params.entry.id).model;
+  if (params.projection.kind === "unresolved") {
+    const entry = applyLogicalOverrides(
+      logicalIdentity(params.entry, id, params.entry.name),
+      params.overrides,
+    );
+    return { entry, runtimeEntry: entry };
+  }
+
+  const { route } = params.projection;
+  const policy = openAIModelCatalogRoutePolicy;
+  const identity = policy.resolveIdentity(params.entry);
+  const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
+    (identity
+      ? params.catalog?.find(
+          (candidate) =>
+            policy.resolveIdentity(candidate)?.key === identity.key &&
+            policy.matchesRoute(candidate, route),
+        )
+      : undefined) ?? (policy.matchesRoute(params.entry, route) ? params.entry : undefined);
+  const projected = logicalIdentity(
+    params.entry,
+    id,
+    donor?.name ?? params.entry.name,
+    donor ?? params.entry,
+  );
+  // Only the selected physical donor can supply its prepared policy owner.
+  const thinkingPolicy = donor?.[PREPARED_THINKING_POLICY];
+  const entry = applyLogicalOverrides(
+    {
+      ...projected,
+      api: route.api,
+      baseUrl: route.baseUrl,
+      ...(donor?.contextWindow !== undefined
+        ? { contextWindow: donor.contextWindow, contextWindowSource: donor.contextWindowSource }
+        : {}),
+      ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
+      ...(donor?.parameterCount !== undefined ? { parameterCount: donor.parameterCount } : {}),
+      ...(donor?.contextCapacitySource
+        ? { contextCapacitySource: donor.contextCapacitySource }
+        : {}),
+      ...(donor?.contextWindows !== undefined ? { contextWindows: donor.contextWindows } : {}),
+      ...(donor?.contextWindowDefault !== undefined
+        ? { contextWindowDefault: donor.contextWindowDefault }
+        : {}),
+      ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
+      ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
+      ...(donor?.thinkingPolicyProvider
+        ? { thinkingPolicyProvider: donor.thinkingPolicyProvider }
+        : {}),
+      ...(thinkingPolicy !== undefined ? { [PREPARED_THINKING_POLICY]: thinkingPolicy } : {}),
+      ...(donor?.input !== undefined ? { input: donor.input } : {}),
+    },
+    params.overrides,
+  );
+  return {
+    entry,
+    runtimeEntry: donor
+      ? {
+          ...entry,
+          ...(Object.hasOwn(donor, "compat") ? { compat: donor.compat } : {}),
+          ...(Object.hasOwn(donor, "params") ? { params: donor.params } : {}),
+        }
+      : entry,
+  };
+}
+
+/** Returns true for loopback, wildcard, and mDNS local base URLs. */
+export const isLocalBaseUrl = (baseUrl: string) => {
+  const url = URL.parse(baseUrl);
+  if (!url) {
+    return false;
+  }
+  const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
+  return (
+    host === "localhost" ||
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.endsWith(".local")
+  );
+};

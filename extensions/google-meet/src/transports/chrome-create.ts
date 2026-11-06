@@ -1,0 +1,289 @@
+import {
+  asMeetingBrowserTabs,
+  callMeetingBrowserProxyOnNode,
+  readMeetingBrowserTab,
+  resolveMeetingBrowserNode,
+  type MeetingBrowserCandidateTab,
+  type MeetingBrowserRequestParams,
+} from "openclaw/plugin-sdk/meeting-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asRecord,
+  asOptionalObjectRecord,
+  readStringValue,
+  filterStringEntries,
+  asFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
+import type { GoogleMeetConfig } from "../config.js";
+import { GOOGLE_MEET_BROWSER_NODE_ADAPTER } from "./google-meet-platform-constants.js";
+import { forceMeetEnglishUi } from "./google-meet-urls.js";
+import type { GoogleMeetChromeHealth } from "./types.js";
+
+const GOOGLE_MEET_NEW_URL = "https://meet.google.com/new";
+const GOOGLE_MEET_BROWSER_CREATE_TIMEOUT_MS = 60_000;
+const GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS = 10_000;
+const GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS = 1_000;
+const GOOGLE_MEET_BROWSER_POLL_MS = 500;
+
+type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
+
+type GoogleMeetBrowserCreateResult = {
+  meetingUri: string;
+  nodeId: string;
+  targetId?: string;
+  openedByPlugin: boolean;
+  browserUrl?: string;
+  browserTitle?: string;
+  notes?: string[];
+  source: "browser";
+};
+
+function formatBrowserAutomationError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown error";
+  }
+}
+
+function isBrowserNavigationInterruption(error: unknown): boolean {
+  return /execution context was destroyed|navigation|target closed/i.test(
+    formatBrowserAutomationError(error),
+  );
+}
+
+function isGoogleMeetCreateTab(tab: MeetingBrowserCandidateTab): boolean {
+  const url = tab.url ?? "";
+  if (/^https:\/\/meet\.google\.com\/(?:new|[a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.test(url)) {
+    return true;
+  }
+  return (
+    url.startsWith("https://accounts.google.com/") &&
+    /sign in|google accounts|meet/i.test(tab.title ?? "")
+  );
+}
+
+function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionState | undefined {
+  const action = asRecord(value);
+  return typeof action.reason === "string" && typeof action.message === "string"
+    ? {
+        reason: action.reason as GoogleMeetBrowserManualActionState["reason"],
+        message: action.message,
+      }
+    : undefined;
+}
+
+function readBrowserCreateResult(result: unknown) {
+  const record = asRecord(result);
+  const nested = asOptionalObjectRecord(record.result) ?? record;
+  return {
+    meetingUri: readStringValue(nested.meetingUri),
+    browserUrl: readStringValue(nested.browserUrl),
+    browserTitle: readStringValue(nested.browserTitle),
+    manualAction: readBrowserManualAction(nested.manualAction),
+    notes: Array.isArray(nested.notes) ? filterStringEntries(nested.notes) : undefined,
+    retryAfterMs: asFiniteNumber(nested.retryAfterMs),
+  };
+}
+
+const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
+  const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const current = () => location.href;
+  const notes = [];
+  const manualActionFor = (reason, message, browserUrl = current()) => ({
+    manualAction: { reason, message },
+    browserUrl,
+    browserTitle: document.title,
+    notes,
+  });
+  const findButton = (pattern) =>
+    [...document.querySelectorAll("button")].find((button) => {
+      const label = [
+        button.getAttribute("aria-label"),
+        button.getAttribute("data-tooltip"),
+        text(button),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return pattern.test(label) && !button.disabled;
+    });
+  const clickButton = (pattern, note) => {
+    const button = findButton(pattern);
+    if (!button) {
+      return false;
+    }
+    button.click();
+    notes.push(note);
+    return true;
+  };
+  if (!current().startsWith("https://meet.google.com/")) {
+    return manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.");
+  }
+  const href = current();
+  if (meetUrlPattern.test(href)) {
+    // The /new redirect keeps the hl=en param we open with; strip query/hash so the
+    // meeting link handed to users stays canonical instead of forcing English on them.
+    return { meetingUri: href.split(/[?#]/)[0], browserUrl: href, browserTitle: document.title, notes };
+  }
+  const pageText = text(document.body);
+  if (
+    clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.") ||
+    clickButton(
+      /continue without microphone/i,
+      "Continued through Meet microphone prompt with browser automation.",
+    )
+  ) {
+    return { browserUrl: href, browserTitle: document.title, notes, retryAfterMs: 1000 };
+  }
+  if (/do you want people to hear you in the meeting/i.test(pageText)) {
+    return manualActionFor("meet-audio-choice-required", "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry meeting creation.", href);
+  }
+  if (/allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
+    return manualActionFor("meet-permission-required", "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.", href);
+  }
+  if (/couldn't create|unable to create/i.test(pageText)) {
+    return manualActionFor("browser-control-unavailable", "Resolve the Google Meet page prompt in the OpenClaw browser profile, then retry meeting creation.", href);
+  }
+  if (location.hostname.toLowerCase() === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText)) {
+    return manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.", href);
+  }
+  return {
+    retryAfterMs: 500,
+    browserUrl: current(),
+    browserTitle: document.title,
+    notes,
+  };
+}`;
+
+export async function createMeetWithBrowserProxyOnNode(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+}): Promise<GoogleMeetBrowserCreateResult> {
+  const nodeId = await resolveMeetingBrowserNode({
+    runtime: params.runtime,
+    requestedNode: params.config.chromeNode.node,
+    adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
+  });
+  const timeoutMs = Math.max(
+    GOOGLE_MEET_BROWSER_CREATE_TIMEOUT_MS,
+    params.config.chrome.joinTimeoutMs,
+  );
+  const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
+  const callBrowser = (request: Omit<MeetingBrowserRequestParams, "timeoutMs">) =>
+    callMeetingBrowserProxyOnNode({
+      ...request,
+      runtime: params.runtime,
+      nodeId,
+      timeoutMs: stepTimeoutMs,
+      adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
+    });
+  let openedByPlugin = false;
+  let tab = asMeetingBrowserTabs(
+    await callBrowser({
+      method: "GET",
+      path: "/tabs",
+    }),
+  ).find(isGoogleMeetCreateTab);
+  if (tab?.targetId) {
+    await callBrowser({
+      method: "POST",
+      path: "/tabs/focus",
+      body: { targetId: tab.targetId },
+    });
+    // Meet automation scripts match English UI labels; a reused tab may have
+    // been opened by the browser/profile in a non-English locale. Only force
+    // English on the /new creation page or sign-in flow; a reused tab that
+    // already has a meeting code may be an active call, and reloading it would
+    // interrupt the meeting and replace its target.
+    const reusedUrl = tab.url ?? "";
+    const isCreatePage =
+      /^https:\/\/meet\.google\.com\/new(?:$|[/?#])/i.test(reusedUrl) ||
+      reusedUrl.startsWith("https://accounts.google.com/");
+    const englishUrl = isCreatePage && reusedUrl ? forceMeetEnglishUi(reusedUrl) : undefined;
+    if (englishUrl && englishUrl !== reusedUrl) {
+      tab =
+        readMeetingBrowserTab(
+          await callBrowser({
+            method: "POST",
+            path: "/navigate",
+            body: { targetId: tab.targetId, url: englishUrl },
+          }),
+        ) ?? tab;
+    }
+  } else {
+    tab = readMeetingBrowserTab(
+      await callBrowser({
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
+      }),
+    );
+    openedByPlugin = Boolean(tab?.targetId);
+  }
+  const targetId = tab?.targetId;
+  if (!targetId) {
+    throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
+  }
+  const notes = new Set<string>();
+  let lastError: unknown;
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() <= deadline) {
+    try {
+      const evaluated = await callBrowser({
+        method: "POST",
+        path: "/act",
+        body: {
+          kind: "evaluate",
+          targetId,
+          fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
+        },
+      });
+      const result = readBrowserCreateResult(evaluated);
+      for (const note of result.notes ?? []) {
+        notes.add(note);
+      }
+      if (result.meetingUri) {
+        return {
+          source: "browser",
+          nodeId,
+          targetId,
+          openedByPlugin,
+          meetingUri: result.meetingUri,
+          browserUrl: result.browserUrl,
+          browserTitle: result.browserTitle,
+          notes: [...notes],
+        };
+      }
+      if (result.manualAction) {
+        throw new GoogleMeetBrowserManualActionError({
+          manualAction: result.manualAction,
+          browser: {
+            nodeId,
+            targetId,
+            browserUrl: result.browserUrl,
+            browserTitle: result.browserTitle,
+            notes: [...notes],
+          },
+        });
+      }
+      await sleep(result.retryAfterMs ?? GOOGLE_MEET_BROWSER_POLL_MS);
+    } catch (error) {
+      lastError = error;
+      if (!isBrowserNavigationInterruption(error)) {
+        throw error;
+      }
+      await sleep(GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS);
+    }
+  }
+  throw new Error(
+    `Google Meet did not return a meeting URL from the browser create flow before timeout.${
+      lastError ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}` : ""
+    }`,
+  );
+}

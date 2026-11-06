@@ -1,0 +1,279 @@
+{
+  "id": "openrouter",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "managesOwnAvailability": true,
+  "providers": ["openrouter"],
+  "modelCatalog": {
+    "discovery": {
+      "openrouter": "runtime"
+    },
+    "providers": {
+      "openrouter": {
+        "models": [
+          {
+            "id": "typesafe/jev-1.13",
+            "name": "TypeSafe: Jev 1.13",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": ["text", "image"],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "limits": {
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": {
+                    "input": 0.042,
+                    "output": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "typesafe/jev-1.14",
+            "name": "TypeSafe: Jev 1.14",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": ["text", "image"],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  },
+                  "box": {
+                    "probabilities": "none",
+                    "abstention": false
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "limits": {
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": {
+                    "input": 0.042,
+                    "output": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "~typesafe/jev-latest",
+            "name": "TypeSafe: Jev (latest)",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "openrouter-systemone",
+                "input": ["text", "image"],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  },
+                  "box": {
+                    "probabilities": "none",
+                    "abstention": false
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "limits": {
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "modelIdNormalization": {
+    "providers": {
+      "openrouter": {
+        "prefixWhenBare": "openrouter"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "openrouter": {
+        "openRouter": {
+          "provider": "openrouter"
+        },
+        "modelsDev": false,
+        "liteLLM": false
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "openrouter",
+      "hostSuffixes": ["openrouter.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "openrouter": {
+        "family": "openrouter"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openrouter",
+      "method": "api-key",
+      "choiceId": "openrouter-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "OpenRouter API key",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
+      "optionKey": "openrouterApiKey",
+      "cliFlag": "--openrouter-api-key",
+      "cliOption": "--openrouter-api-key <key>",
+      "cliDescription": "OpenRouter API key"
+    },
+    {
+      "provider": "openrouter",
+      "method": "oauth",
+      "choiceId": "openrouter-oauth",
+      "credentialOnly": true,
+      "appGuidedAuth": "oauth",
+      "channelLogin": {},
+      "choiceLabel": "OpenRouter OAuth",
+      "choiceHint": "Browser sign-in",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
+      "onboardingFeatured": true
+    }
+  ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["openrouter"],
+    "imageGenerationProviders": ["openrouter"],
+    "musicGenerationProviders": ["openrouter"],
+    "videoGenerationProviders": ["openrouter"],
+    "speechProviders": ["openrouter"],
+    "usageProviders": ["openrouter"],
+    "decisionProviders": ["openrouter"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "openrouter": {
+      "capabilities": ["image", "audio"],
+      "defaultModels": {
+        "image": "auto",
+        "audio": "openai/whisper-large-v3-turbo"
+      },
+      "autoPriority": {
+        "audio": 35
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

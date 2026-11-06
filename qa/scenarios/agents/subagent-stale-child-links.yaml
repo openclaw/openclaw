@@ -1,0 +1,229 @@
+title: Durable native and stale non-native child links
+
+scenario:
+  id: subagent-stale-child-links
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - gateway.session-apis-subagents
+      - gateway.session-apis-sessions-list
+  objective: Verify restarted gateways preserve native child lineage and hide stale non-native child links.
+  successCriteria:
+    - Old ended native subagent children remain visible after restart.
+    - Old non-native store-only parentSessionKey rows are not exposed as current children.
+    - Child-side ACP store rows from sibling agents are not exposed as current children.
+    - Live subagent runs and fresh dashboard children remain visible.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/session-utils.ts
+    - src/agents/subagents/registry/subagent-run-liveness.ts
+    - extensions/qa-lab/src/gateway-child.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Seeds persisted gateway session/subagent state and restarts the gateway.
+    summary: Seed native and non-native child session state, restart the real gateway, then assert sessions.list preserves native lineage and filters stale non-native links.
+
+flow:
+  steps:
+    - name: restarted gateway preserves native lineage and filters stale non-native links
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - set: mainKey
+          value: "agent:qa:main"
+        - set: retainedRunKey
+          value: "agent:qa:subagent:qa-stale-ended"
+        - set: staleOrphanKey
+          value: "agent:qa:chat:qa-orphan"
+        - set: staleAcpKey
+          value: "agent:claude:acp:qa-stale-acp"
+        - set: freshDashboardKey
+          value: "agent:qa:dashboard:qa-fresh-child"
+        - set: liveRunKey
+          value: "agent:qa:subagent:qa-live-child"
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                params:
+                  - ctx
+                async: true
+                expr: |-
+                  await (async () => {
+                    const now = Date.now();
+                    const old = now - 2 * 60 * 60 * 1000;
+                    const recent = now - 5000;
+                    const subagentDir = path.join(ctx.stateDir, "subagents");
+                    await fs.mkdir(subagentDir, { recursive: true });
+                    await fs.writeFile(path.join(subagentDir, "runs.json"), `${JSON.stringify({
+                      version: 2,
+                      runs: {
+                        "run-stale-ended": {
+                          runId: "run-stale-ended",
+                          childSessionKey: retainedRunKey,
+                          controllerSessionKey: mainKey,
+                          requesterSessionKey: mainKey,
+                          requesterDisplayKey: "main",
+                          task: "old ended native child remains visible",
+                          cleanup: "keep",
+                          createdAt: old - 60000,
+                          startedAt: old - 50000,
+                          endedAt: old,
+                          outcome: { status: "ok" },
+                        },
+                        "run-live-visible": {
+                          runId: "run-live-visible",
+                          childSessionKey: liveRunKey,
+                          controllerSessionKey: mainKey,
+                          requesterSessionKey: mainKey,
+                          requesterDisplayKey: "main",
+                          task: "live child remains visible",
+                          cleanup: "keep",
+                          createdAt: recent,
+                          startedAt: recent,
+                        },
+                      },
+                    }, null, 2)}\n`, "utf8");
+                    await seedQaSessionEntries(env, [
+                      {
+                        agentId: "qa",
+                        sessionKey: mainKey,
+                        entry: {
+                          sessionId: "sess-main",
+                          updatedAt: now,
+                        },
+                      },
+                      {
+                        agentId: "qa",
+                        sessionKey: retainedRunKey,
+                        entry: {
+                          sessionId: "sess-stale-run",
+                          updatedAt: old,
+                          spawnedBy: mainKey,
+                          status: "done",
+                          endedAt: old,
+                        },
+                      },
+                      {
+                        agentId: "qa",
+                        sessionKey: staleOrphanKey,
+                        entry: {
+                          sessionId: "sess-orphan",
+                          updatedAt: old,
+                          parentSessionKey: mainKey,
+                        },
+                      },
+                      {
+                        agentId: "qa",
+                        sessionKey: freshDashboardKey,
+                        entry: {
+                          sessionId: "sess-fresh-dashboard",
+                          updatedAt: now,
+                          parentSessionKey: mainKey,
+                        },
+                      },
+                      {
+                        agentId: "qa",
+                        sessionKey: liveRunKey,
+                        entry: {
+                          sessionId: "sess-live-child",
+                          updatedAt: recent,
+                          spawnedBy: mainKey,
+                        },
+                      },
+                      {
+                        agentId: "claude",
+                        sessionKey: staleAcpKey,
+                        entry: {
+                          sessionId: "sess-acp-stale",
+                          updatedAt: old,
+                          spawnedBy: mainKey,
+                          status: "done",
+                          endedAt: old,
+                        },
+                      },
+                    ]);
+                  })()
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: readRawQaSessionStore
+          saveAs: qaSessionStore
+          args:
+            - ref: env
+            - agentId: qa
+        - call: readRawQaSessionStore
+          saveAs: claudeSessionStore
+          args:
+            - ref: env
+            - agentId: claude
+        - assert:
+            expr: "[mainKey, retainedRunKey, staleOrphanKey, freshDashboardKey, liveRunKey].every((key) => qaSessionStore[key]?.sessionId)"
+            message:
+              expr: "`canonical QA session entries missing: ${JSON.stringify(Object.keys(qaSessionStore))}`"
+        - assert:
+            expr: "claudeSessionStore[staleAcpKey]?.sessionId === 'sess-acp-stale'"
+            message:
+              expr: "`canonical Claude session entry missing: ${JSON.stringify(Object.keys(claudeSessionStore))}`"
+        # Unscoped sessions.list returns only admitted agents while the restarted
+        # Gateway finishes the qa agent's background database inspection, which can
+        # outlive /readyz. Poll until the expected live/fresh children are listed,
+        # bounded by a deadline after which the last listing reaches the unchanged
+        # assertions below so a real regression still reports its precise failure.
+        - set: listDeadline
+          value:
+            expr: "Date.now() + 30000"
+        - call: waitForCondition
+          saveAs: listed
+          args:
+            - lambda:
+                async: true
+                expr: |-
+                  env.gateway.call("sessions.list", {}, { timeoutMs: 15000 }).then((result) => {
+                    const children = result.sessions.find((session) => session.key === mainKey)?.childSessions ?? [];
+                    const settled = children.includes(freshDashboardKey) && children.includes(liveRunKey);
+                    return settled || Date.now() >= listDeadline ? result : undefined;
+                  })
+            - 60000
+            - 250
+        - call: env.gateway.call
+          saveAs: filtered
+          args:
+            - "sessions.list"
+            - spawnedBy:
+                ref: mainKey
+            - timeoutMs: 60000
+        - set: mainChildren
+          value:
+            expr: "(listed.sessions.find((session) => session.key === mainKey)?.childSessions ?? [])"
+        - set: filteredKeys
+          value:
+            expr: "filtered.sessions.map((session) => session.key)"
+        - assert:
+            expr: "mainChildren.includes(retainedRunKey) && filteredKeys.includes(retainedRunKey)"
+            message:
+              expr: "`ended native child missing after restart (main=${JSON.stringify(mainChildren)} filtered=${JSON.stringify(filteredKeys)})`"
+        - assert:
+            expr: "mainChildren.includes(freshDashboardKey)"
+            message:
+              expr: "`fresh dashboard child missing from main children: ${JSON.stringify(mainChildren)}`"
+        - assert:
+            expr: "mainChildren.includes(liveRunKey)"
+            message:
+              expr: "`live subagent child missing from main children: ${JSON.stringify(mainChildren)}`"
+        - assert:
+            expr: "filteredKeys.includes(freshDashboardKey) && filteredKeys.includes(liveRunKey)"
+            message:
+              expr: "`spawnedBy filter dropped live/fresh children: ${JSON.stringify(filteredKeys)}`"
+        - assert:
+            expr: "![staleOrphanKey, staleAcpKey].some((key) => mainChildren.includes(key) || filteredKeys.includes(key))"
+            message:
+              expr: "`stale child leaked through sessions.list (main=${JSON.stringify(mainChildren)} filtered=${JSON.stringify(filteredKeys)})`"
+      detailsExpr: "({ persistedQaKeys: Object.keys(qaSessionStore), persistedClaudeKeys: Object.keys(claudeSessionStore), mainChildren, filteredKeys })"

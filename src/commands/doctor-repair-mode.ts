@@ -1,0 +1,44 @@
+import { isTruthyEnvValue } from "../infra/env.js";
+import type { DoctorOptions } from "./doctor.types.js";
+
+export type DoctorRepairMode = ReturnType<typeof resolveDoctorRepairMode>;
+
+export function resolveDoctorRepairMode(
+  options: DoctorOptions,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const yes = options.yes === true;
+  const requestedNonInteractive = options.nonInteractive === true;
+  const shouldRepair = options.repair === true || yes;
+  const shouldForce = options.force === true;
+  const isTty = process.stdin.isTTY;
+  const nonInteractive = requestedNonInteractive || (!isTty && !yes);
+  const updateInProgress = isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
+  const canPrompt = isTty && !yes && !nonInteractive;
+
+  return {
+    shouldRepair,
+    shouldForce,
+    nonInteractive,
+    canPrompt,
+    updateInProgress,
+  };
+}
+
+export function isDoctorUpdateRepairMode(mode: DoctorRepairMode): boolean {
+  return mode.updateInProgress && mode.nonInteractive;
+}
+
+export function shouldAutoApproveDoctorFix(
+  mode: DoctorRepairMode,
+  params: {
+    requiresForce?: boolean;
+    blockDuringUpdate?: boolean;
+  } = {},
+): boolean {
+  return (
+    mode.shouldRepair &&
+    !(params.requiresForce && !mode.shouldForce) &&
+    !(params.blockDuringUpdate && isDoctorUpdateRepairMode(mode))
+  );
+}

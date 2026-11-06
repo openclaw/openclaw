@@ -1,0 +1,31 @@
+// Gateway RPC handler for ordered node invocation progress.
+import {
+  ErrorCodes,
+  errorShape,
+  validateNodeInvokeProgressParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
+
+const MAX_PROGRESS_CHUNK_BYTES = 16 * 1024;
+
+/** Accept one bounded stdout chunk for an active node invocation. */
+export const handleNodeInvokeProgress = defineValidatedGatewayHandler(
+  "node.invoke.progress",
+  validateNodeInvokeProgressParams,
+  async ({ params, respond, context, client }) => {
+    const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    if (callerNodeId && callerNodeId !== params.nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
+      return;
+    }
+    if (Buffer.byteLength(params.chunk, "utf8") > MAX_PROGRESS_CHUNK_BYTES) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "progress chunk too large"));
+      return;
+    }
+    const accepted = context.nodeRegistry.handleInvokeProgress({
+      ...params,
+      connId: client?.connId,
+    });
+    respond(true, { ok: true, ignored: !accepted }, undefined);
+  },
+);

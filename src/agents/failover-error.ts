@@ -1,0 +1,747 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
+import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
+import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
+import { failoverReasonFromClassification } from "./failover/classification-rules.js";
+import {
+  classifyFailoverSignal,
+  extractFailoverSignalDetails,
+  isUnclassifiedNoBodyHttpSignal,
+} from "./failover/classify.js";
+import {
+  FailoverError,
+  findErrorProperty,
+  isFailoverError,
+  isTimeoutError,
+  readDirectErrorCode,
+  readDirectErrorMessage,
+  type CliTimeoutContext,
+} from "./failover/error.js";
+import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
+import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
+import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
+import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
+import {
+  AgentHarnessSessionSupersededError,
+  isAgentHarnessPreflightError,
+} from "./harness/errors.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
+import {
+  isSessionPlacementSettlementClosedError,
+  isAgentRunSupersededAbortReason,
+} from "./run-termination.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "./sessions/transcript-turn-error.js";
+
+export {
+  FailoverError,
+  isFailoverError,
+  isSignalTimeoutReason,
+  isTimeoutError,
+  type CliTimeoutContext,
+  type FallbackAttemptRecord,
+} from "./failover/error.js";
+
+const MAX_FAILOVER_CAUSE_DEPTH = 25;
+const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
+const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
+const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
+  "CodexNodeExecServerDisconnectedError",
+  "GatewayDrainingError",
+  "NodeRunnerUpdateRequiredError",
+  "WorkerRunnerUnavailableError",
+  "WorkerRunnerCapacityError",
+  "WorkerWorkspaceReconciliationError",
+  "ActiveTurnClaimError",
+  "CliHistoryOwnerChangedError",
+  "SessionEntryChangedDuringReadError",
+  "SessionTranscriptReadFenceError",
+  "SqliteWorkerError",
+  "SessionCapabilityMetadataChangedError",
+]);
+
+export { recordModelFallbackStop } from "./model-fallback-stop.js";
+
+export function hasRecordedModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(isRecordedModelFallbackStop);
+}
+
+export function hasModelFallbackStop(error: unknown): boolean {
+  return (
+    isSessionPlacementSettlementClosedError(error) ||
+    isAgentRunSupersededAbortReason(error) ||
+    collectErrorGraphCandidates(error, resolveNestedErrors).some(
+      (candidate) =>
+        isRecordedModelFallbackStop(candidate) ||
+        isSessionTranscriptTurnMismatchErrorMessage(readDirectErrorMessage(candidate)) ||
+        (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
+    )
+  );
+}
+
+function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
+  const errors = candidate.errors;
+  const nested = [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
+  try {
+    nested.push(candidate.suppressed);
+  } catch {
+    // An opaque disposal branch must not hide the other recorded CLI facts.
+  }
+  return nested;
+}
+
+function findCliFailoverError<T extends FailoverError>(
+  err: unknown,
+  match: (error: FailoverError) => T | undefined,
+  seen: Set<object>,
+): T | undefined {
+  const direct = isFailoverError(err) ? match(err) : undefined;
+  if (direct) {
+    return direct;
+  }
+  if (!err || typeof err !== "object" || seen.has(err)) {
+    return undefined;
+  }
+  // Preserve depth-first error/cause/aggregate order for both CLI facts,
+  // including a terminal run wrapped by a fork-persistence failure.
+  seen.add(err);
+  for (const value of resolveNestedErrors(err as Record<string, unknown>)) {
+    const found = findCliFailoverError(value, match, seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+// Codes for turns the CLI backend ended itself. Their tool effects already ran,
+// so replay, model rotation, and generic failure copy must all defer to them.
+const CLI_TERMINAL_STOP_CODES = new Set(["cli_max_turns", "cli_turn_stopped"]);
+
+export function isCliTerminalStopCode(code: string | undefined): boolean {
+  return code !== undefined && CLI_TERMINAL_STOP_CODES.has(code);
+}
+
+export function findCliTerminalStopError(err: unknown): FailoverError | undefined {
+  return findCliFailoverError(
+    err,
+    (error) => (isCliTerminalStopCode(error.code) ? error : undefined),
+    new Set(),
+  );
+}
+
+function hasCliTimeoutContext(error: FailoverError): error is FailoverError & {
+  cliTimeout: CliTimeoutContext;
+} {
+  const context = error.cliTimeout;
+  return Boolean(
+    context &&
+    (context.mode === "overall" || context.mode === "no-output") &&
+    Number.isFinite(context.timeoutSeconds) &&
+    context.timeoutSeconds >= 0 &&
+    typeof context.observedActivity === "boolean" &&
+    Number.isInteger(context.activeToolCount) &&
+    context.activeToolCount >= 0 &&
+    Number.isInteger(context.backgroundTaskCount) &&
+    context.backgroundTaskCount >= 0,
+  );
+}
+
+export function findCliTimeoutError(
+  err: unknown,
+): (FailoverError & { cliTimeout: CliTimeoutContext }) | undefined {
+  return findCliFailoverError(
+    err,
+    (error) => (hasCliTimeoutContext(error) ? error : undefined),
+    new Set(),
+  );
+}
+
+/** Map a failover reason to the closest HTTP-like status code. */
+export function resolveFailoverStatus(reason: FailoverReason, code?: string): number | undefined {
+  return normalizeFailoverStatus(FAILOVER_STATUS.get(reason), code);
+}
+
+function normalizeFailoverStatus(status: number | undefined, code?: string): number | undefined {
+  return code === "selected_auth_profile_unavailable" ? undefined : status;
+}
+
+const FAILOVER_STATUS = new Map<FailoverReason, number>([
+  ["billing", 402],
+  ["server_error", 500],
+  ["route_unavailable", 503],
+  ["rate_limit", 429],
+  ["overloaded", 503],
+  ["auth", 401],
+  ["auth_permanent", 403],
+  ["timeout", 408],
+  ["tls_certificate", 502],
+  ["context_overflow", 413],
+  ["format", 400],
+  ["model_not_found", 404],
+  ["session_expired", 410],
+]);
+
+function readDirectStatusCode(err: unknown): number | undefined {
+  const record = asOptionalObjectRecord(err);
+  const candidate = record?.status ?? record?.statusCode;
+  if (typeof candidate === "number") {
+    return candidate;
+  }
+  if (typeof candidate === "string") {
+    return parseStrictNonNegativeInteger(candidate);
+  }
+  return undefined;
+}
+
+function readStableProviderErrorType(raw: string): string | undefined {
+  const value = raw.trim();
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value) &&
+    !/^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+      value,
+    )
+    ? value
+    : undefined;
+}
+
+function readDirectErrorType(err: unknown): string | undefined {
+  const record = asOptionalObjectRecord(err);
+  if (!record) {
+    return undefined;
+  }
+  const directType = record.errorType;
+  if (typeof directType === "string") {
+    return readStableProviderErrorType(directType);
+  }
+  const detailType = (record.detail as { type?: unknown } | undefined)?.type;
+  if (typeof detailType === "string") {
+    return readStableProviderErrorType(detailType);
+  }
+  const type = normalizeOptionalString(record.type);
+  return type && !/^(?:error|exception)$/i.test(type)
+    ? readStableProviderErrorType(type)
+    : undefined;
+}
+
+function readDirectProvider(err: unknown): string | undefined {
+  return normalizeOptionalString(asOptionalObjectRecord(err)?.provider);
+}
+
+function readDirectErrorDetails(err: unknown): string[] | undefined {
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate) {
+    return undefined;
+  }
+  return extractFailoverSignalDetails(
+    candidate.param,
+    candidate.errorBody,
+    candidate.body,
+    candidate.detail,
+    candidate.error,
+  );
+}
+
+function hasSessionTranscriptWriterClaimRebound(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): boolean {
+  if (readErrorName(err) === "SessionTranscriptWriterClaimReboundError") {
+    return true;
+  }
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate || seen.has(candidate)) {
+    return false;
+  }
+  seen.add(candidate);
+  return (
+    hasSessionTranscriptWriterClaimRebound(candidate.error, seen) ||
+    hasSessionTranscriptWriterClaimRebound(candidate.cause, seen) ||
+    hasSessionTranscriptWriterClaimRebound(candidate.reason, seen)
+  );
+}
+
+function readMissingToolResultMarker(err: unknown): true | undefined {
+  const message = readDirectErrorMessage(err);
+  if (message && MISSING_TOOL_RESULT_TEXT_RE.test(message)) {
+    return true;
+  }
+  const record = asOptionalObjectRecord(err);
+  for (const key of ["code", "reason", "status"] as const) {
+    if (readStringField(record, key)?.trim() === MISSING_TOOL_RESULT_REASON) {
+      return true;
+    }
+  }
+  const output = readStringField(record, "output");
+  if (output && MISSING_TOOL_RESULT_TEXT_RE.test(output)) {
+    return true;
+  }
+  const resultReason = readStringField(asOptionalObjectRecord(record?.result), "reason");
+  const detailReason = readStringField(asOptionalObjectRecord(record?.detail), "reason");
+  if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
+    return true;
+  }
+  return undefined;
+}
+
+function hasMissingToolResultFailure(err: unknown): boolean {
+  return findErrorProperty(err, readMissingToolResultMarker) === true;
+}
+
+function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
+  return (
+    findErrorProperty(err, (candidate) =>
+      isAgentRunStaleLifecycleError(candidate) ? true : undefined,
+    ) === true
+  );
+}
+
+function hasRuntimeCoordinationFailure(err: unknown): boolean {
+  if (isChannelRunAuthorizationError(err) || isLocalStorageOutcomeError(err)) {
+    return true;
+  }
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) =>
+      isSessionWorkStartInvalidatedError(candidate) ||
+      RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
+      resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
+  );
+}
+
+function hasPreparedModelRuntimeOwnerNotPublished(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) => candidate instanceof PreparedModelRuntimeOwnerNotPublishedError,
+  );
+}
+
+function hasDirectProviderFailureIdentity(err: unknown): boolean {
+  if (isFailoverError(err)) {
+    return true;
+  }
+  const signal = normalizeErrorSignal(err, undefined, "direct");
+  return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
+}
+
+/** Local coordination failures stop fallback because changing models cannot repair them. */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  return resolveModelFallbackError(err).kind === "coordination";
+}
+
+function normalizeErrorSignal(
+  err: unknown,
+  providerHint?: string,
+  scope: "direct" | "nested" = "nested",
+): FailoverSignal {
+  const read = <T>(reader: (candidate: unknown) => T | undefined) =>
+    scope === "direct" ? reader(err) : findErrorProperty(err, reader);
+  const message = read(readDirectErrorMessage);
+  const code = read(readDirectErrorCode);
+  return {
+    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
+    code,
+    errorType: read(readDirectErrorType),
+    message: message || undefined,
+    provider: read(readDirectProvider) ?? providerHint,
+    details: readDirectErrorDetails(err),
+  };
+}
+
+function getNestedErrorCandidates(err: unknown): unknown[] {
+  const candidate = asOptionalObjectRecord(err);
+  return [candidate?.error, candidate?.cause].filter(
+    (value): value is unknown => value !== undefined && value !== err,
+  );
+}
+
+function isFormatClassification(classification: FailoverClassification | null): boolean {
+  return classification?.kind === "reason" && classification.reason === "format";
+}
+
+function decideNestedFormatOverride(
+  candidate: unknown,
+  inheritedStatus: number | undefined,
+  seen: Set<object>,
+  depth: number,
+): boolean | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (candidate && typeof candidate === "object") {
+    if (seen.has(candidate)) {
+      return null;
+    }
+    seen.add(candidate);
+  }
+
+  const directSignal = normalizeErrorSignal(candidate, undefined, "direct");
+  const nestedCandidates = getNestedErrorCandidates(candidate);
+  const nestedStatus = directSignal.status ?? inheritedStatus;
+  const hasDirectMessage = Boolean(directSignal.message?.trim());
+  if (
+    hasDirectMessage &&
+    isUnclassifiedNoBodyHttpSignal({ ...directSignal, status: nestedStatus })
+  ) {
+    return true;
+  }
+  if (hasDirectMessage && (nestedCandidates.length === 0 || classifyFailoverSignal(directSignal))) {
+    return false;
+  }
+  for (const nestedCandidate of nestedCandidates) {
+    const decision = decideNestedFormatOverride(nestedCandidate, nestedStatus, seen, depth + 1);
+    if (decision !== null) {
+      return decision;
+    }
+  }
+  return null;
+}
+
+function resolveFailoverClassificationFromErrorInternal(
+  err: unknown,
+  seen: Set<object>,
+  depth: number,
+  providerHint?: string,
+): FailoverClassification | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (err && typeof err === "object") {
+    if (seen.has(err)) {
+      return null;
+    }
+    seen.add(err);
+  }
+  if (isFailoverError(err)) {
+    const classification = classifyFailoverSignal({
+      ...normalizeErrorSignal(err, providerHint),
+      message: err.rawError ?? err.message,
+    });
+    if (classification?.kind === "reason" && classification.sameModelRetry === false) {
+      return { kind: "reason", reason: err.reason, sameModelRetry: false };
+    }
+    return {
+      kind: "reason",
+      reason: err.reason,
+    };
+  }
+  const signal = normalizeErrorSignal(err, providerHint);
+  const classification = classifyFailoverSignal(signal);
+  const nestedCandidates = getNestedErrorCandidates(err);
+
+  if (!classification || classification.kind === "context_overflow") {
+    for (const candidate of nestedCandidates) {
+      const nestedClassification = resolveFailoverClassificationFromErrorInternal(
+        candidate,
+        seen,
+        depth + 1,
+        providerHint,
+      );
+      if (nestedClassification) {
+        return nestedClassification;
+      }
+    }
+  }
+
+  if (isFormatClassification(classification)) {
+    for (const candidate of nestedCandidates) {
+      const shouldClearFormat = decideNestedFormatOverride(
+        candidate,
+        signal.status,
+        seen,
+        depth + 1,
+      );
+      if (shouldClearFormat === true) {
+        return null;
+      }
+      if (shouldClearFormat === false) {
+        break;
+      }
+    }
+  }
+
+  if (classification) {
+    return classification;
+  }
+
+  if (isTimeoutError(err)) {
+    return {
+      kind: "reason",
+      reason: "timeout",
+    };
+  }
+  return null;
+}
+
+export function resolveFailoverClassificationFromError(
+  err: unknown,
+  providerHint?: string,
+): FailoverClassification | null {
+  // A direct preflight owns the refusal; its cause is diagnostic, not a failed
+  // provider attempt that may rotate credentials or replay the turn.
+  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
+    return null;
+  }
+  // Local coordination codes such as SQLite "overloaded" are not provider signals.
+  if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
+    return null;
+  }
+  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
+}
+
+export function resolveFailoverReasonFromError(
+  err: unknown,
+  providerHint?: string,
+): FailoverReason | null {
+  return failoverReasonFromClassification(
+    resolveFailoverClassificationFromError(err, providerHint),
+  );
+}
+
+/** Build a copy-pasteable reauthentication hint for attributed auth failures. */
+export function buildFailoverRemediationHint(err: unknown): string | undefined {
+  if (!isFailoverError(err) || err.code === "selected_auth_profile_unavailable") {
+    return undefined;
+  }
+  if (err.reason !== "auth" && err.reason !== "auth_permanent") {
+    return undefined;
+  }
+  const provider = err.provider?.trim();
+  if (!provider) {
+    return undefined;
+  }
+  if (provider === "google-gemini-cli") {
+    return `Authenticate in Gemini CLI directly, or configure a supported Google API key with: ${formatCliCommand("openclaw configure")}`;
+  }
+  const command = buildProviderReauthCommand(provider);
+  return command ? `Re-authenticate with: ${command}` : undefined;
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function buildProviderReauthCommand(
+  provider: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string | undefined {
+  const trimmed = provider.trim();
+  if (!trimmed || containsAsciiControlCharacter(trimmed)) {
+    return undefined;
+  }
+  return formatCliCommand(
+    `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`,
+    env,
+  );
+}
+
+export function describeFailoverError(err: unknown): {
+  message: string;
+  rawError?: string;
+  rateLimitRetriesExhausted?: number;
+  reason?: FailoverReason;
+  status?: number;
+  code?: string;
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  authMode?: string;
+  sessionId?: string;
+  lane?: string;
+} {
+  const localFailure = findLocalWorkerTaskFailure(err);
+  if (localFailure) {
+    return { message: localFailure.message };
+  }
+  if (isAgentHarnessPreflightError(err)) {
+    return { message: err.message };
+  }
+  if (isFailoverError(err)) {
+    return {
+      message: err.message,
+      rawError: err.rawError,
+      rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
+      reason: err.reason,
+      status: normalizeFailoverStatus(err.status, err.code),
+      code: err.code,
+      provider: err.provider,
+      model: err.model,
+      profileId: err.profileId,
+      authMode: err.authMode,
+      sessionId: err.sessionId,
+      lane: err.lane,
+    };
+  }
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
+  return {
+    message,
+    reason: resolveFailoverReasonFromError(err) ?? undefined,
+    status: signal.status,
+    code: signal.code,
+    provider: signal.provider,
+  };
+}
+
+type FailoverErrorContext = {
+  rateLimitRetriesExhausted?: number;
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  authMode?: string;
+  sessionId?: string;
+  lane?: string;
+  timeout?: FailoverError["timeout"];
+};
+
+type ModelFallbackErrorResolution =
+  | { kind: "failover"; error: FailoverError }
+  | { kind: "terminal"; error: unknown }
+  | { kind: "coordination"; error: unknown }
+  | { kind: "unknown"; error: unknown };
+
+/** Convert a classified raw error into a FailoverError with optional request context. */
+export function coerceToFailoverError(
+  err: unknown,
+  context?: FailoverErrorContext,
+): FailoverError | null {
+  if (isFailoverError(err)) {
+    if (findLocalWorkerTaskFailure(err)) {
+      return null;
+    }
+    const status = normalizeFailoverStatus(err.status, err.code);
+    if (
+      !Object.is(status, err.status) ||
+      (context?.authMode && !err.authMode) ||
+      (context?.timeout && !err.timeout) ||
+      context?.rateLimitRetriesExhausted !== undefined
+    ) {
+      const message = typeof err.message === "string" ? err.message : String(err);
+      const enriched = new FailoverError(
+        renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+        {
+          reason: err.reason,
+          provider: err.provider,
+          model: err.model,
+          profileId: err.profileId,
+          authMode: err.authMode ?? context?.authMode,
+          status,
+          code: err.code,
+          rawError:
+            err.rawError ??
+            (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),
+          rateLimitRetriesExhausted:
+            context?.rateLimitRetriesExhausted ?? err.rateLimitRetriesExhausted,
+          authProfileFailure: err.authProfileFailure,
+          sessionId: err.sessionId,
+          lane: err.lane,
+          cause: err.cause,
+          suspend: err.suspend,
+          cliTimeout: err.cliTimeout,
+          timeout: err.timeout ?? context?.timeout,
+          attempts: err.attempts,
+          soonestCooldownExpiry: err.soonestCooldownExpiry,
+        },
+      );
+      copyErrorDiagnostic(err, enriched);
+      return withAgentTerminalSnapshot(enriched, readAgentTerminalSnapshot(err));
+    }
+    return err;
+  }
+  const reason = resolveFailoverReasonFromError(err, context?.provider);
+  if (!reason) {
+    return null;
+  }
+
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
+  const code = signal.code;
+  const status = signal.status ?? resolveFailoverStatus(reason, code);
+
+  // Suspend when hitting rate limits or billing issues in an attributed session
+  const shouldSuspend =
+    Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
+
+  return withAgentTerminalSnapshot(
+    new FailoverError(
+      renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+      {
+        reason,
+        rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+        provider: context?.provider ?? signal.provider,
+        model: context?.model,
+        profileId: context?.profileId,
+        authMode: context?.authMode,
+        sessionId: context?.sessionId,
+        lane: context?.lane,
+        status,
+        code,
+        rawError: message,
+        cause: err instanceof Error ? err : undefined,
+        timeout: context?.timeout,
+        suspend: shouldSuspend,
+      },
+    ),
+    readAgentTerminalSnapshot(err),
+  );
+}
+
+/** Classify one candidate failure once so fallback routing and diagnostics share it. */
+export function resolveModelFallbackError(
+  err: unknown,
+  context?: FailoverErrorContext,
+): ModelFallbackErrorResolution {
+  if (
+    err instanceof AgentHarnessSessionSupersededError ||
+    isSqliteTranscriptMutationConflict(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  // Prepared-owner publication is an OpenClaw runtime fact, not a provider
+  // failure. Changing models cannot republish the current owner (#156975).
+  if (hasPreparedModelRuntimeOwnerNotPublished(err)) {
+    return { kind: "coordination", error: err };
+  }
+  // Gateway admission can fail before any provider turn starts. Preserve that
+  // identity through wrappers and aggregates so fallback cannot blame a model.
+  if (hasRuntimeCoordinationFailure(err) || findLocalWorkerTaskFailure(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);
+  if (
+    staleLifecycleFailure &&
+    (isAgentRunStaleLifecycleError(err) || !hasDirectProviderFailureIdentity(err))
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  // The in-transaction transcript fence owns writer supersession. A rebound is
+  // local coordination failure even when provider-looking wrappers contain it.
+  if (hasSessionTranscriptWriterClaimRebound(err)) {
+    return { kind: "coordination", error: err };
+  }
+  // Recorded terminal stops prohibit replay regardless of provider policy.
+  // Keep the wrapper identity before coercion can discard the terminal fact.
+  if (hasModelFallbackStop(err)) {
+    return { kind: "terminal", error: err };
+  }
+  if (isAgentHarnessPreflightError(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const failoverError = coerceToFailoverError(err, context);
+  if (failoverError) {
+    return { kind: "failover", error: failoverError };
+  }
+  if (hasMissingToolResultFailure(err) || staleLifecycleFailure) {
+    return { kind: "coordination", error: err };
+  }
+  return { kind: "unknown", error: err };
+}

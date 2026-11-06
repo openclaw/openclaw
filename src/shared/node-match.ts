@@ -1,0 +1,109 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+
+/**
+ * Shared node-selection policy for CLI, gateway-facing SDK helpers, and plugins.
+ *
+ * Exact ids, remote IPs, normalized display names, and long id prefixes are the
+ * only accepted query shapes; fuzzy ordering lives here so callers agree.
+ */
+
+export type NodeMatchCandidate = {
+  nodeId: string;
+  displayName?: string;
+  /** Tailscale or network address accepted as an exact match. */
+  remoteIp?: string;
+  /** Connected nodes win only after the strongest match type is chosen. */
+  connected?: boolean;
+  /** Client id included in ambiguous-node diagnostics. */
+  clientId?: string;
+};
+
+function normalizeNodeKey(value: string) {
+  // Emoji components can also be marks (variation selectors and keycaps); drop
+  // them so decorated and plain display-name selectors stay equivalent.
+  // Retain script marks only when attached to a surviving letter/number; marks
+  // on stripped emoji or symbols must not become invisible selector bytes.
+  const normalized = normalizeLowercaseStringOrEmpty(value.normalize("NFC"))
+    .replace(/(?=\p{M})\p{Emoji_Component}/gu, "")
+    .replace(/(?<![\p{L}\p{M}\p{N}])\p{M}+/gu, "");
+  return normalized
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+}
+
+function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
+  const label = node.displayName || node.remoteIp || node.nodeId;
+  const details = [`node=${node.nodeId}`];
+  const clientId = normalizeOptionalString(node.clientId);
+  if (clientId) {
+    details.push(`client=${clientId}`);
+  }
+  return `${label} [${details.join(", ")}]`;
+}
+
+export function resolveNodeIdFromCandidates(
+  nodes: NodeMatchCandidate[],
+  query: string,
+  allowCompactDisplayName = false,
+): string {
+  const q = query.trim();
+  if (!q) {
+    throw new Error("node required");
+  }
+
+  // Exact ids and IPs outrank names; retain every tie before applying heuristics.
+  let strongestMatches = nodes.filter((node) => node.nodeId === q);
+  if (strongestMatches.length === 0) {
+    strongestMatches = nodes.filter((node) => node.remoteIp === q);
+  }
+  if (strongestMatches.length === 0) {
+    const normalized = normalizeNodeKey(q);
+    const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
+    let topMatchScore = 0;
+    nodes.forEach((node) => {
+      const name = node.displayName ?? "";
+      const nameNormalized = name ? normalizeNodeKey(name) : "";
+      let score = 0;
+      if (nameNormalized && nameNormalized === normalized) {
+        score = 2_000;
+      } else if (
+        compact !== undefined &&
+        nameNormalized &&
+        nameNormalized.replace(/-/g, "") === compact
+      ) {
+        score = 1_900;
+      } else if (q.length >= 6 && node.nodeId.startsWith(q)) {
+        score = 1_000;
+      }
+      if (score > topMatchScore) {
+        topMatchScore = score;
+        strongestMatches.length = 0;
+      }
+      if (score > 0 && score === topMatchScore) {
+        strongestMatches.push(node);
+      }
+    });
+  }
+  if (strongestMatches.length === 0) {
+    const known = nodes
+      .map((node) => node.displayName || node.remoteIp || node.nodeId)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
+  }
+
+  // Connected state only breaks ties within the strongest match class.
+  const connectedMatches = strongestMatches.filter((match) => match.connected === true);
+  const matches = connectedMatches.length > 0 ? connectedMatches : strongestMatches;
+  if (matches.length === 1) {
+    return matches[0]?.nodeId ?? "";
+  }
+
+  throw new Error(
+    `ambiguous node: ${q} (matches: ${matches.map(formatNodeCandidateLabel).join(", ")})`,
+  );
+}

@@ -1,0 +1,671 @@
+import {
+  type APIAttachment,
+  type APIStickerItem,
+  MessageReferenceType,
+  StickerFormatType,
+} from "discord-api-types/v10";
+// Discord tests cover message utils plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Message } from "../internal/discord.js";
+
+const readRemoteMediaBuffer = vi.fn();
+const saveMediaBuffer = vi.fn();
+const logVerboseMock = vi.hoisted(() => vi.fn());
+const mediaWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
+    saveRemoteMedia: async (...args: unknown[]) => {
+      const fetched = await readRemoteMediaBuffer(...args);
+      if (fetched && typeof fetched === "object" && "path" in fetched) {
+        return fetched;
+      }
+      const options = (args[0] ?? {}) as { maxBytes?: number; originalFilename?: string };
+      return await saveMediaBuffer(
+        Buffer.from((fetched as { buffer?: Uint8Array }).buffer ?? new Uint8Array()),
+        (fetched as { contentType?: string }).contentType,
+        "inbound",
+        options.maxBytes,
+        options.originalFilename,
+      );
+    },
+    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    getChildLogger: () => ({ warn: mediaWarn }),
+  };
+});
+
+let resolveForwardedMediaList: typeof import("./message-media.js").resolveForwardedMediaList;
+let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
+const DISCORD_API_URL_ENV = "DISCORD_API_URL";
+
+beforeAll(async () => {
+  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-media.js"));
+});
+
+afterEach(() => {
+  delete process.env[DISCORD_API_URL_ENV];
+  vi.restoreAllMocks();
+});
+beforeEach(() => vi.resetAllMocks());
+
+function asMessage(payload: Record<string, unknown>): Message {
+  return payload as unknown as Message;
+}
+
+type AttachmentFixture = Pick<APIAttachment, "id" | "filename" | "url"> &
+  Partial<Omit<APIAttachment, "id" | "filename" | "url">>;
+
+function attachmentFixture(
+  id: string,
+  filename: string,
+  overrides: Partial<APIAttachment> = {},
+): AttachmentFixture {
+  return {
+    id,
+    filename,
+    url: `https://cdn.discordapp.com/attachments/1/${filename}`,
+    content_type: "image/png",
+    ...overrides,
+  };
+}
+
+function resolveBlockedAttachmentMedia(attachment: AttachmentFixture) {
+  readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+  return resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+}
+
+function stickerFixture(id: string, name: string): APIStickerItem {
+  return { id, name, format_type: StickerFormatType.PNG };
+}
+
+function mockDownload(path: string, options: { buffer?: string; contentType?: string } = {}): void {
+  const contentType = options.contentType ?? "image/png";
+  readRemoteMediaBuffer.mockResolvedValueOnce({
+    buffer: Buffer.from(options.buffer ?? "image"),
+    contentType,
+  });
+  saveMediaBuffer.mockResolvedValueOnce({ path, contentType });
+}
+
+function installMediaEndpoint(): void {
+  process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
+}
+
+const DISCORD_CDN_HOSTNAMES = [
+  "cdn.discordapp.com",
+  "media.discordapp.net",
+  "*.discordapp.com",
+  "*.discordapp.net",
+];
+
+const requireRecord = createRequireRecord("object", "expected-label");
+
+function requireArray(value: unknown, label: string): Array<unknown> {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as Array<unknown>;
+}
+
+function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
+}
+
+function fetchParams(): Record<string, unknown> {
+  return requireRecord(
+    callArg(readRemoteMediaBuffer, 0, 0, "fetch media params"),
+    "fetch media params",
+  );
+}
+
+function expectDiscordCdnSsrFPolicy(policy: unknown) {
+  const policyRecord = requireRecord(policy, "ssrf policy");
+  expect(policyRecord.allowRfc2544BenchmarkRange).toBe(true);
+  const hostnameAllowlist = requireArray(policyRecord.hostnameAllowlist, "hostname allowlist");
+  for (const hostname of DISCORD_CDN_HOSTNAMES) {
+    expect(hostnameAllowlist).toContain(hostname);
+  }
+}
+
+function expectSinglePngDownload(params: {
+  result: unknown;
+  expectedUrl: string;
+  filePathHint: string;
+  expectedPath: string;
+  kind?: "sticker";
+  fetchImpl?: typeof fetch;
+  readIdleTimeoutMs?: number;
+}) {
+  expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+  const call = fetchParams();
+  expect(call.url).toBe(params.expectedUrl);
+  expect(call.filePathHint).toBe(params.filePathHint);
+  expect(call.maxBytes).toBe(512);
+  expect(call.fetchImpl).toBe(params.fetchImpl);
+  expect(call.readIdleTimeoutMs).toBe(params.readIdleTimeoutMs);
+  expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
+  expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+  expect(Buffer.isBuffer(callArg(saveMediaBuffer, 0, 0, "saved buffer"))).toBe(true);
+  expect(callArg(saveMediaBuffer, 0, 1, "saved content type")).toBe("image/png");
+  expect(callArg(saveMediaBuffer, 0, 2, "saved direction")).toBe("inbound");
+  expect(callArg(saveMediaBuffer, 0, 3, "saved max bytes")).toBe(512);
+  expect(callArg(saveMediaBuffer, 0, 4, "saved file path hint")).toBe(params.filePathHint);
+  expect(params.result).toEqual([
+    {
+      path: params.expectedPath,
+      contentType: "image/png",
+      fileName: params.filePathHint,
+      ...(params.kind ? { kind: params.kind } : {}),
+    },
+  ]);
+}
+
+function asReferencedForwardMessage(attachments: AttachmentFixture[]) {
+  return asMessage({
+    messageReference: { type: MessageReferenceType.Forward },
+    referencedMessage: asMessage({ attachments }),
+  });
+}
+
+describe("resolveForwardedMediaList", () => {
+  it("downloads forwarded attachments", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const attachment = attachmentFixture("att-1", "image.png");
+    mockDownload("/tmp/image.png");
+    const snapshot = { message: { attachments: [attachment] } };
+
+    const result = await resolveForwardedMediaList(
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
+      512,
+      { fetchImpl, readIdleTimeoutMs: 60_000 },
+    );
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: attachment.url,
+      filePathHint: attachment.filename,
+      expectedPath: "/tmp/image.png",
+      fetchImpl,
+      readIdleTimeoutMs: 60_000,
+    });
+  });
+
+  it("downloads forwarded stickers", async () => {
+    const sticker = stickerFixture("sticker-1", "wave");
+    mockDownload("/tmp/sticker.png", { buffer: "sticker" });
+    const snapshot = { message: { sticker_items: [sticker] } };
+
+    const result = await resolveForwardedMediaList(
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
+      512,
+      { readIdleTimeoutMs: 60_000 },
+    );
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-1.png",
+      filePathHint: "wave.png",
+      expectedPath: "/tmp/sticker.png",
+      kind: "sticker",
+      readIdleTimeoutMs: 60_000,
+    });
+  });
+
+  it("returns empty when no snapshots are present", async () => {
+    const result = await resolveForwardedMediaList(asMessage({}), 512);
+
+    expect(result).toStrictEqual([]);
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("downloads forwarded referenced attachments when snapshots are absent", async () => {
+    const attachment = attachmentFixture("att-ref-1", "ref-image.png");
+    mockDownload("/tmp/ref-image.png");
+
+    const result = await resolveForwardedMediaList(asReferencedForwardMessage([attachment]), 512);
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: attachment.url,
+      filePathHint: attachment.filename,
+      expectedPath: "/tmp/ref-image.png",
+    });
+  });
+
+  it("skips snapshots without attachments", async () => {
+    const snapshot = { message: { content: "hello" } };
+    const result = await resolveForwardedMediaList(
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
+      512,
+    );
+
+    expect(result).toStrictEqual([]);
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveMediaList", () => {
+  it("downloads media from the configured endpoint origin without redirects", async () => {
+    installMediaEndpoint();
+    mockDownload("/tmp/provider-media.png");
+    const attachment = attachmentFixture("provider-media", "provider-media.png", {
+      url: "http://127.0.0.1:43210/media/provider-media.png",
+    });
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result[0]?.path).toBe("/tmp/provider-media.png");
+    expect(fetchParams()).toEqual(
+      expect.objectContaining({
+        url: "http://127.0.0.1:43210/media/provider-media.png",
+        maxRedirects: 0,
+        ssrfPolicy: expect.objectContaining({
+          allowedOrigins: ["http://127.0.0.1:43210"],
+        }),
+      }),
+    );
+  });
+
+  it("rejects public Discord CDN media before the downloader is called", async () => {
+    installMediaEndpoint();
+    const attachment = attachmentFixture("public-media", "public-media.png");
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([{ contentType: "image/png" }]);
+  });
+
+  it("keeps the whole media batch bound to its originating environment value", async () => {
+    installMediaEndpoint();
+    readRemoteMediaBuffer.mockImplementationOnce(async () => {
+      process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43211/api/v10";
+      return { buffer: Buffer.from("provider"), contentType: "image/png" };
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/provider-media.png",
+      contentType: "image/png",
+    });
+    const providerAttachment = attachmentFixture("provider", "provider.png", {
+      url: "http://127.0.0.1:43210/media/provider.png",
+    });
+    const publicAttachment = attachmentFixture("public", "public.png");
+
+    const result = await resolveMediaList(
+      asMessage({ attachments: [providerAttachment, publicAttachment] }),
+      512,
+    );
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalledOnce();
+    expect(result).toEqual([
+      {
+        path: "/tmp/provider-media.png",
+        contentType: "image/png",
+        fileName: "provider.png",
+      },
+      { contentType: "image/png" },
+    ]);
+  });
+
+  it("downloads stickers", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const sticker = stickerFixture("sticker-2", "hello");
+    mockDownload("/tmp/sticker-2.png", { buffer: "sticker" });
+    const message = asMessage({ stickers: [sticker] });
+
+    const result = await resolveMediaList(message, 512, { fetchImpl, readIdleTimeoutMs: 60_000 });
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-2.png",
+      filePathHint: "hello.png",
+      expectedPath: "/tmp/sticker-2.png",
+      kind: "sticker",
+      fetchImpl,
+      readIdleTimeoutMs: 60_000,
+    });
+  });
+
+  it.each([
+    { withId: true, correlation: "att-missing-url" },
+    { withId: false, correlation: "attachment" },
+  ])(
+    "keeps type-only facts without logging missing-URL filenames (withId=$withId)",
+    async ({ withId, correlation }) => {
+      const filename = "z22-private-voice-caption.ogg";
+      const {
+        url: _url,
+        id,
+        ...fields
+      } = attachmentFixture("att-missing-url", filename, {
+        content_type: "audio/ogg",
+      });
+      const attachment = { ...fields, ...(withId ? { id } : {}) };
+      const message = asMessage({ attachments: [attachment] });
+      const result = await resolveMediaList(message, 512);
+
+      expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+      expect(saveMediaBuffer).not.toHaveBeenCalled();
+      expect(result).toStrictEqual([{ contentType: "audio/ogg", kind: "audio" }]);
+      expect(logVerboseMock).toHaveBeenCalledExactlyOnceWith(
+        `discord: failed to download attachment ${correlation}: missing url`,
+      );
+      expect(logVerboseMock.mock.calls.flat().join(" ")).not.toContain(filename);
+    },
+  );
+
+  it.each([
+    [
+      "classifies audio attachments by filename when content type is missing",
+      attachmentFixture("att-audio-fallback", "voice.ogg", {
+        content_type: undefined,
+      }),
+      {
+        contentType: undefined,
+        kind: "audio",
+      },
+    ],
+    [
+      "classifies Discord voice attachments by waveform metadata",
+      attachmentFixture("att-voice-metadata", "voice", {
+        content_type: undefined,
+        duration_secs: 1.5,
+        waveform: "AAAA",
+      }),
+      {
+        contentType: undefined,
+        kind: "audio",
+      },
+    ],
+    [
+      "lets native Discord voice metadata override a conflicting definitive MIME",
+      attachmentFixture("att-voice-conflicting-mime", "voice", {
+        content_type: "video/ogg",
+        duration_secs: 1.5,
+        waveform: "AAAA",
+      }),
+      { contentType: undefined, kind: "audio" },
+    ],
+    [
+      "normalizes MIME case before classifying audio",
+      attachmentFixture("att-audio-mime-case", "voice.bin", {
+        content_type: "Audio/OGG",
+      }),
+      {
+        contentType: "Audio/OGG",
+        kind: "audio",
+      },
+    ],
+    [
+      "does not let an audio-looking filename override video MIME",
+      attachmentFixture("att-video-audio-extension", "clip.ogg", {
+        content_type: "video/ogg",
+      }),
+      {
+        contentType: "video/ogg",
+      },
+    ],
+    [
+      "does not infer audio from an .ogg filename with definitive MIME application/pdf",
+      attachmentFixture("att-definitive-application/pdf", "document.ogg", {
+        content_type: "application/pdf",
+      }),
+      { contentType: "application/pdf" },
+    ],
+    [
+      "does not infer audio from an .ogg filename with definitive MIME text/plain",
+      attachmentFixture("att-definitive-text/plain", "document.ogg", {
+        content_type: "text/plain",
+      }),
+      { contentType: "text/plain" },
+    ],
+    [
+      "does not classify a duration-bearing video attachment as audio",
+      attachmentFixture("att-video-duration", "PXL_2024.mp4", {
+        content_type: "video/mp4",
+        duration_secs: 11.262232780456543,
+      }),
+      {
+        contentType: "video/mp4",
+      },
+    ],
+    [
+      "keeps an image with a duration field as an image, not audio",
+      attachmentFixture("att-image-duration", "photo.png", {
+        content_type: "image/png",
+        duration_secs: 0.5,
+      }),
+      {
+        contentType: "image/png",
+      },
+    ],
+  ] as const)("%s", async (_name, attachment, expected) => {
+    const result = await resolveBlockedAttachmentMedia(attachment);
+
+    expect(result).toEqual([expected]);
+  });
+
+  it.each([
+    [
+      "prefers the structured audio kind over non-audio MIME application/octet-stream",
+      attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
+        content_type: "application/octet-stream",
+      }),
+      "/tmp/voice.ogg",
+      { buffer: "audio", contentType: "application/octet-stream" },
+      { path: "/tmp/voice.ogg", contentType: undefined, fileName: "voice.ogg", kind: "audio" },
+    ],
+    [
+      "prefers the structured audio kind over non-audio MIME application/ogg",
+      attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
+        content_type: "application/ogg",
+      }),
+      "/tmp/voice.ogg",
+      { buffer: "audio", contentType: "application/ogg" },
+      { path: "/tmp/voice.ogg", contentType: undefined, fileName: "voice.ogg", kind: "audio" },
+    ],
+    [
+      "does not let an audio-looking filename override fetched image MIME",
+      attachmentFixture("att-image-audio-extension", "image.ogg", {
+        content_type: undefined,
+      }),
+      "/tmp/image.png",
+      {},
+      {
+        path: "/tmp/image.png",
+        contentType: "image/png",
+        fileName: "image.ogg",
+      },
+    ],
+    [
+      "keeps declared audio when the fetched MIME is generic",
+      attachmentFixture("att-declared-audio-fetched-generic", "voice", {
+        content_type: "audio/ogg",
+      }),
+      "/tmp/voice",
+      { buffer: "audio", contentType: "application/octet-stream" },
+      {
+        path: "/tmp/voice",
+        contentType: "audio/ogg",
+        fileName: "voice",
+        kind: "audio",
+      },
+    ],
+    [
+      "uses fetched image MIME over declared audio",
+      attachmentFixture("att-declared-audio-fetched-image", "voice.ogg", {
+        content_type: "audio/ogg",
+      }),
+      "/tmp/image.png",
+      {},
+      {
+        path: "/tmp/image.png",
+        contentType: "image/png",
+        fileName: "voice.ogg",
+      },
+    ],
+    [
+      "keeps a fetched video MIME over a declared duration-only attachment",
+      attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
+        content_type: "video/quicktime",
+        duration_secs: 5.5,
+      }),
+      "/tmp/PXL_2024.mov",
+      { buffer: "video", contentType: "video/quicktime" },
+      {
+        path: "/tmp/PXL_2024.mov",
+        contentType: "video/quicktime",
+        fileName: "PXL_2024.mov",
+      },
+    ],
+  ] as const)("%s", async (_name, attachment, downloadPath, downloadOptions, expected) => {
+    mockDownload(downloadPath, downloadOptions);
+
+    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+
+    expect(result).toEqual([expected]);
+  });
+
+  it("keeps a type-only fact when saveMediaBuffer fails", async () => {
+    const attachment = attachmentFixture("att-save-fail", "photo.png");
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockRejectedValueOnce(new Error("disk full"));
+    const message = asMessage({ attachments: [attachment] });
+
+    const result = await resolveMediaList(message, 512);
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      {
+        contentType: "image/png",
+      },
+    ]);
+  });
+
+  it("preserves downloaded attachments alongside failed ones", async () => {
+    const goodAttachment = attachmentFixture("att-good", "good.png");
+    const badAttachment = attachmentFixture("att-bad", "bad.pdf", {
+      content_type: "application/pdf",
+    });
+
+    mockDownload("/tmp/good.png");
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("private-download-response-body"));
+    const message = asMessage({ attachments: [goodAttachment, badAttachment] });
+
+    const result = await resolveMediaList(message, 512, { readIdleTimeoutMs: 60_000 });
+
+    expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
+    expect(mediaWarn).toHaveBeenCalledExactlyOnceWith(
+      "discord: failed to download attachment att-bad",
+    );
+    expect(result).toEqual([
+      {
+        path: "/tmp/good.png",
+        contentType: "image/png",
+        fileName: "good.png",
+      },
+      {
+        contentType: "application/pdf",
+      },
+    ]);
+  });
+
+  it("keeps sticker metadata when sticker download fails", async () => {
+    const sticker = stickerFixture("sticker-fallback", "fallback");
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("private-sticker-response-body"));
+    const message = asMessage({ stickers: [sticker] });
+
+    const result = await resolveMediaList(message, 512);
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(mediaWarn).toHaveBeenCalledExactlyOnceWith(
+      "discord: failed to download sticker sticker-fallback",
+    );
+    expect(result).toEqual([
+      {
+        contentType: "image/png",
+        kind: "sticker",
+      },
+    ]);
+  });
+
+  it("times out slow attachment downloads and returns a type-only fact", async () => {
+    const attachment = attachmentFixture("att-total-timeout", "slow.png");
+    const message = asMessage({ attachments: [attachment] });
+    vi.useFakeTimers();
+    readRemoteMediaBuffer.mockImplementation(
+      () =>
+        new Promise(() => {
+          // never resolves
+        }),
+    );
+
+    try {
+      const resultPromise = resolveMediaList(message, 512, { totalTimeoutMs: 100 });
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(resultPromise).resolves.toEqual([
+        {
+          contentType: "image/png",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes abortSignal to readRemoteMediaBuffer and keeps a type-only fact when aborted", async () => {
+    const attachment = attachmentFixture("att-abort", "abort.png");
+    const message = asMessage({ attachments: [attachment] });
+    const abortController = new AbortController();
+    readRemoteMediaBuffer.mockImplementationOnce(
+      (params: { requestInit?: { signal?: AbortSignal } }) =>
+        new Promise((_, reject) => {
+          const signal = params.requestInit?.signal;
+          const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+          if (signal?.aborted) {
+            reject(abortError);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(abortError), { once: true });
+        }),
+    );
+
+    const resultPromise = resolveMediaList(message, 512, {
+      abortSignal: abortController.signal,
+    });
+    abortController.abort();
+
+    await expect(resultPromise).resolves.toEqual([
+      {
+        contentType: "image/png",
+      },
+    ]);
+    const requestInit = requireRecord(fetchParams().requestInit, "fetch request init");
+    expect(requestInit.signal).toBe(abortController.signal);
+  });
+});

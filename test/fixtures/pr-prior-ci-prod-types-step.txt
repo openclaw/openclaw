@@ -1,0 +1,266 @@
+set -euo pipefail
+has_package_script() {
+  node -e '
+    const scripts = require("./package.json").scripts ?? {};
+    process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+  ' "$1"
+}
+if [ -n "${NARROW_CHECK_PATHS_JSON:-}" ] && { [ "$TASK" = "test-types" ] || [ "$TASK" = "prod-types" ]; }; then
+  source .ci-harness/scripts/ci-static-step.sh tsgo
+  if [ -n "${CI_CORE_TYPE_GRAPHS_JSON:-}" ] && [ "$CI_CORE_TYPE_GRAPHS_JSON" != "[]" ]; then
+    core_type_command=(node scripts/run-tsgo-core-test-shards.mjs)
+    if [ "$CI_CORE_TYPE_CONCURRENCY" = "2" ]; then
+      core_type_command=(env -u OPENCLAW_LOCAL_CHECK "${core_type_command[@]}")
+    fi
+    run_static_check "${core_type_command[@]}" \
+      --ci-graphs-json "$CI_CORE_TYPE_GRAPHS_JSON" --concurrency "$CI_CORE_TYPE_CONCURRENCY"
+  fi
+  if [ -n "${CI_TYPE_GRAPHS_JSON:-}" ] && [ "$CI_TYPE_GRAPHS_JSON" != "[]" ]; then
+    run_static_check node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "$CI_TYPE_GRAPHS_JSON"
+  fi
+  finish_static_checks
+fi
+case "$TASK" in
+  guards)
+    if [ -z "${NARROW_CHECK_PATHS_JSON:-}" ]; then
+      pnpm check:no-conflict-markers
+      if has_package_script "check:doctor-deprecation-registry"; then
+        pnpm check:doctor-deprecation-registry
+      elif [[ "$FROZEN_TARGET" == "true" ]]; then
+        echo "[skip] frozen target predates the wall-clock doctor deprecation registry guard"
+      else
+        echo "Current CI targets must provide the check:doctor-deprecation-registry package script." >&2
+        exit 1
+      fi
+    fi
+    pnpm tool-display:check
+    pnpm check:host-env-policy:swift
+    if has_package_script "check:browser-inspect-script:swift"; then
+      pnpm check:browser-inspect-script:swift
+    elif [[ "$FROZEN_TARGET" == "true" ]]; then
+      echo "[skip] frozen target predates the browser inspect Swift script guard"
+    else
+      echo "Current CI targets must provide the check:browser-inspect-script:swift package script." >&2
+      exit 1
+    fi
+    if has_package_script "check:temp-path-guardrails"; then
+      pnpm check:temp-path-guardrails
+    elif [[ "$FROZEN_TARGET" == "true" ]]; then
+      echo "[skip] frozen target predates the temp path guardrails"
+    else
+      echo "Current CI targets must provide the check:temp-path-guardrails package script." >&2
+      exit 1
+    fi
+    if [[ "$FROZEN_TARGET" == "true" ]]; then
+      pnpm dup:check:coverage
+    else
+      pnpm dup:check
+    fi
+    if has_package_script "check:coercion-helpers"; then
+      pnpm check:coercion-helpers
+    elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+      echo "[skip] historical target predates the coercion-helper declaration guard"
+    else
+      echo "Current CI targets must provide the check:coercion-helpers package script." >&2
+      exit 1
+    fi
+    if [ -n "$CHECKOUT_BASE_SHA" ]; then
+      test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
+      node scripts/report-test-temp-creations.mjs --base "$CHECKOUT_BASE_SHA" --head HEAD --no-merge-base
+    fi
+    pnpm deps:patches:check
+    pnpm lint:webhook:no-low-level-body-read
+    pnpm lint:auth:no-pairing-store-group
+    pnpm lint:auth:pairing-account-scope
+    pnpm check:import-cycles
+    ;;
+  npm-lock)
+    if [[ "$SKIP_NPM_LOCK" == "true" ]]; then
+      echo "No npm-lock package changes detected; dependency setup skipped."
+      exit 0
+    fi
+    # Changed checks retain full registry-drift sweeps on manual/release runs.
+    if [[ -n "$CHECKOUT_BASE_SHA" ]] &&
+      has_package_script "deps:npm-lock:check:changed"; then
+      test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
+      pnpm deps:npm-lock:check:changed --base "$CHECKOUT_BASE_SHA" --head HEAD
+    elif has_package_script "deps:npm-lock:check"; then
+      pnpm deps:npm-lock:check
+    elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+      echo "Current CI targets must provide the deps:npm-lock:check package script." >&2
+      exit 1
+    else
+      echo "[skip] historical target predates the transient npm lock contract"
+    fi
+    ;;
+  bundled-channel-config-metadata)
+    pnpm check:bundled-channel-config-metadata
+    ;;
+  prod-types)
+    pnpm tsgo:prod
+    ;;
+  lint)
+    # The i18n verify covers keys extracted from every ui/ source,
+    # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
+    # i18n-tooling diff must run it. oxlint always runs.
+    lint_args=(--threads=8)
+    hosted_extension_stripe=""
+    if [ "$HOSTED_RUNNER_STRIPES" = "true" ]; then
+      # Five dedicated hosted jobs own the aggregated core Programs.
+      # Frozen targets keep their original extension ownership.
+      lint_args=(--only=extensions --only=scripts --threads=1)
+      if [ "$RELEASE_GATE" = "true" ]; then
+        lint_args=(--only=scripts --threads=1)
+      elif [ "$RUNNER_PROFILE" = "hybrid" ] && [ "$FROZEN_TARGET" != "true" ]; then
+        # Independent hosted rows own the complete extension inventory.
+        lint_args=(--only=scripts --threads=1)
+      elif [ "$RUNNER_PROFILE" = "github" ] &&
+        grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+        # Six existing hosted lint jobs divide the independently bounded
+        # extension Programs without running two Programs concurrently.
+        hosted_extension_stripe="6/6"
+        lint_args=(--only=scripts --threads=1)
+      fi
+    elif [ "$(nproc)" -lt 8 ]; then
+      # Fork PRs build each semantic Program once on small runners.
+      lint_args=(--threads=1)
+    fi
+    if [ "$FROZEN_TARGET" = "true" ] &&
+      { [ "$HOSTED_RUNNER_STRIPES" = "true" ] || [ "$(nproc)" -lt 8 ]; }; then
+      # Frozen wrappers can predate native resource policy. Current
+      # wrappers limit lint without throttling declaration preparation.
+      export GOMAXPROCS=2
+      export GOGC=30 GOMEMLIMIT=3GiB
+    fi
+    if [[ ! -f scripts/run-oxlint-shards.mts ]]; then
+      # The candidate's older shard runner owns all three source
+      # groups; do not split core stripes it cannot represent.
+      pnpm lint
+    else
+      if [ -n "$hosted_extension_stripe" ]; then
+        node --import tsx scripts/run-oxlint-shards.mts \
+          --only=extensions --extension-stripe="$hosted_extension_stripe" --threads=1
+      fi
+      if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
+        pnpm lint "${lint_args[@]}"
+      else
+        echo "[skip] changed scope cannot affect control-UI i18n catalogs"
+        node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
+      fi
+    fi
+    if [ "$FORMAT_CHECK" = "true" ]; then
+      pnpm format:check
+    fi
+    ;;
+  dependencies)
+    # The beta.1 release commit backported this workflow-only helper after its
+    # Knip config was frozen. Register that exact executable root without
+    # weakening the target's remaining dead-code scan.
+    release_evidence_entry='"scripts/generate-dependency-release-evidence.mts!"'
+    if [[
+      "$FROZEN_TARGET" == "true" &&
+      -f scripts/generate-dependency-release-evidence.mts &&
+      -f config/knip.config.ts
+    ]] && ! grep -Fq "$release_evidence_entry" config/knip.config.ts; then
+      RELEASE_EVIDENCE_ENTRY="$release_evidence_entry" node --input-type=module -e '
+        import { readFileSync, writeFileSync } from "node:fs";
+        const configPath = "config/knip.config.ts";
+        const marker = "const repositoryScriptEntries = [";
+        const source = readFileSync(configPath, "utf8");
+        // Pre-refactor frozen configs ignore scripts/** wholesale, so
+        // they need no synthetic executable-root registration.
+        if (!source.includes(marker)) process.exit(0);
+        writeFileSync(configPath, source.replace(
+          marker,
+          `${marker}\n  ${process.env.RELEASE_EVIDENCE_ENTRY},`,
+        ));
+      '
+    fi
+    if has_package_script "deadcode:dependencies" &&
+      has_package_script "deadcode:unused-files"; then
+      # Independent Knip scans overlap only when the runner has capacity.
+      dc_scripts=(deadcode:dependencies deadcode:unused-files)
+      if has_package_script "deadcode:exports"; then
+        dc_scripts+=(deadcode:exports)
+      elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+        echo "Current CI targets must provide the deadcode:exports package script." >&2
+        exit 1
+      fi
+      if [ "$(nproc)" -lt 8 ]; then
+        # Hosted/dispatch runners are too small for up to seven
+        # concurrent Knip processes; keep the serial path there.
+        for dc in "${dc_scripts[@]}"; do
+          pnpm "$dc"
+        done
+      else
+        dc_pids=()
+        dc_logs=()
+        for dc in "${dc_scripts[@]}"; do
+          dc_log="$(mktemp -t deadcode-log.XXXXXX)"
+          dc_logs+=("$dc_log")
+          pnpm "$dc" >"$dc_log" 2>&1 &
+          dc_pids+=($!)
+        done
+        dc_failures=0
+        for i in "${!dc_scripts[@]}"; do
+          if wait "${dc_pids[$i]}"; then
+            echo "[ok] ${dc_scripts[$i]}"
+          else
+            echo "::error title=${dc_scripts[$i]} failed::${dc_scripts[$i]} failed"
+            dc_failures=1
+          fi
+          cat "${dc_logs[$i]}"
+        done
+        if [ "$dc_failures" -ne 0 ]; then
+          exit 1
+        fi
+      fi
+    elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
+      pnpm deadcode:ci
+    else
+      echo "Target does not provide a supported deadcode check." >&2
+      exit 1
+    fi
+    ;;
+  test-types)
+    root_covered=false
+    if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
+      grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+      if [ "$FROZEN_TARGET" = "true" ]; then
+        env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
+      elif grep -q -- '--root-stripe' scripts/run-tsgo-core-test-shards.mts; then
+        root_covered=true
+      fi
+      pnpm tsgo:extensions:test
+    elif [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+      env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON" --concurrency 2
+      pnpm tsgo:extensions:test
+    else
+      pnpm check:test-types
+      if node -e '
+        const scripts = require("./package.json").scripts ?? {};
+        process.exit(/tsgo:test:root/.test(scripts["tsgo:test"] ?? "") ? 0 : 1);
+      '; then
+        root_covered=true
+      fi
+    fi
+    if has_package_script "tsgo:scripts"; then
+      pnpm tsgo:scripts
+    elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+      echo "Current CI targets must provide the tsgo:scripts package script." >&2
+      exit 1
+    fi
+    if [ "$root_covered" != "true" ]; then
+      if has_package_script "tsgo:test:root"; then
+        pnpm tsgo:test:root
+      elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+        echo "Current CI targets must provide the tsgo:test:root package script." >&2
+        exit 1
+      fi
+    fi
+    ;;
+  *)
+    echo "Unsupported check task: $TASK" >&2
+    exit 1
+    ;;
+esac

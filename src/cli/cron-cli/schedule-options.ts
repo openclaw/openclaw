@@ -1,0 +1,334 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isValidCronExpression } from "../../cron/expression.js";
+import type { CronSchedule } from "../../cron/types.js";
+import { CronCliError } from "./cron-cli-error.js";
+import {
+  parseAt,
+  parseCronStaggerMs,
+  parseCronStreamCommandArgv,
+  parseCronTimezoneOption,
+  parsePositiveCronDurationMs,
+} from "./shared.js";
+
+type ScheduleOptionInput = {
+  at?: unknown;
+  cron?: unknown;
+  every?: unknown;
+  onExit?: unknown;
+  onExitCwd?: unknown;
+  streamCommand?: unknown;
+  streamCwd?: unknown;
+  streamMode?: unknown;
+  streamMatch?: unknown;
+  streamBatchMs?: unknown;
+  streamMaxBatchBytes?: unknown;
+  exact?: unknown;
+  stagger?: unknown;
+  tz?: unknown;
+};
+
+type NormalizedScheduleOptions = ReturnType<typeof normalizeScheduleOptions>;
+
+/** Normalized schedule edit request, including patch-only updates for cron metadata. */
+type CronEditScheduleRequest =
+  | { kind: "direct"; schedule: CronSchedule }
+  | { kind: "patch-existing-cron"; staggerMs: number | undefined; tz: string | undefined }
+  | {
+      kind: "patch-existing-stream";
+      cwd: string | null | undefined;
+      mode: "line" | "match" | undefined;
+      match: string | null | undefined;
+      batchMs: number | undefined;
+      maxBatchBytes: number | undefined;
+    }
+  | { kind: "none" };
+
+/** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
+export function resolveCronCreateScheduleFromArgs(
+  options: ScheduleOptionInput & { positionalSchedule?: unknown },
+): CronSchedule {
+  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
+  const normalized = normalizeScheduleOptions(options);
+  if (positionalSchedule) {
+    if (countChosenSchedules(normalized) > 0) {
+      throw new CronCliError(
+        "Choose a positional schedule or one of --at, --every, --cron, --on-exit, or --stream-command.",
+      );
+    }
+    normalized.every = /^every\s+(.+)$/iu.exec(positionalSchedule)?.[1]?.trim() ?? "";
+    if (normalized.every) {
+      // An every-prefixed positional owns the every slot: a valid cron expression
+      // starts with a minute field, so it can never begin with "every". Filling
+      // cronExpr from the word count here used to double-fill and surface
+      // "Choose exactly one schedule" for a single positional argument.
+      normalized.cronExpr = "";
+      normalized.at = "";
+    } else {
+      const fields = positionalSchedule.split(/\s+/u).length;
+      normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
+      normalized.at = normalized.cronExpr ? "" : positionalSchedule;
+    }
+  }
+  if (normalized.onExitCwd && !normalized.onExitCommand) {
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+  }
+  const chosen = countChosenSchedules(normalized);
+  if (chosen !== 1) {
+    throw new CronCliError(
+      "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
+    );
+  }
+  return expectDefined(resolveDirectSchedule(normalized), "created cron schedule");
+}
+
+/** Resolve a cron edit request, allowing at most one direct schedule replacement. */
+export function resolveCronEditScheduleRequest(
+  options: ScheduleOptionInput,
+): CronEditScheduleRequest {
+  const normalized = normalizeScheduleOptions(options);
+  const chosen = countChosenSchedules(normalized);
+  const streamPatchRequested = hasStreamSchedulePatch(normalized);
+  if (streamPatchRequested && !normalized.streamCommand) {
+    if (normalized.tz !== undefined || normalized.requestedStaggerMs !== undefined) {
+      throw new CronCliError("--tz/--stagger/--exact are not valid with stream schedule edits");
+    }
+    if (chosen > 0) {
+      throw new CronCliError("Choose at most one schedule change");
+    }
+    return {
+      kind: "patch-existing-stream",
+      cwd: normalized.streamCwdSupplied ? (normalized.streamCwd ?? null) : undefined,
+      mode: normalized.streamModeSupplied ? normalized.streamMode : undefined,
+      match: normalized.streamMatchSupplied ? (normalized.streamMatch ?? null) : undefined,
+      batchMs: normalized.streamBatchMs,
+      maxBatchBytes: normalized.streamMaxBatchBytes,
+    };
+  }
+  if (chosen > 1) {
+    throw new CronCliError("Choose at most one schedule change");
+  }
+  const schedule = resolveDirectSchedule(normalized, { deferStreamMetadataValidation: true });
+  if (schedule) {
+    return { kind: "direct", schedule };
+  }
+  if (normalized.requestedStaggerMs !== undefined || normalized.tz !== undefined) {
+    return {
+      kind: "patch-existing-cron",
+      tz: parseCronTimezoneOption(normalized.tz),
+      staggerMs: normalized.requestedStaggerMs,
+    };
+  }
+  return { kind: "none" };
+}
+
+/** Apply stream metadata edits without requiring callers to restate the source argv. */
+export function applyExistingStreamSchedulePatch(
+  existingSchedule: CronSchedule,
+  request: Extract<CronEditScheduleRequest, { kind: "patch-existing-stream" }>,
+): CronSchedule {
+  if (existingSchedule.kind !== "stream") {
+    throw new CronCliError(
+      "Current job is not a stream schedule; use --stream-command to convert first",
+    );
+  }
+  const mode = request.mode ?? existingSchedule.mode ?? "line";
+  const requestedMatch =
+    request.match === undefined ? existingSchedule.match : (request.match ?? undefined);
+  if (mode === "match" && !requestedMatch) {
+    throw new CronCliError("--stream-match is required when --stream-mode=match");
+  }
+  if (mode === "line" && request.match) {
+    throw new CronCliError("--stream-match requires --stream-mode=match");
+  }
+  return {
+    ...existingSchedule,
+    cwd: request.cwd === undefined ? existingSchedule.cwd : (request.cwd ?? undefined),
+    mode,
+    match: mode === "match" ? requestedMatch : undefined,
+    batchMs: request.batchMs ?? existingSchedule.batchMs,
+    maxBatchBytes: request.maxBatchBytes ?? existingSchedule.maxBatchBytes,
+  };
+}
+
+/** Validate a newly-created stream schedule after edit metadata has been merged. */
+export function validateStreamScheduleMetadata(
+  schedule: Extract<CronSchedule, { kind: "stream" }>,
+): void {
+  const mode = schedule.mode ?? "line";
+  if (mode === "match" && !schedule.match) {
+    throw new CronCliError("--stream-match is required when --stream-mode=match");
+  }
+  if (mode === "line" && schedule.match) {
+    throw new CronCliError("--stream-match requires --stream-mode=match");
+  }
+}
+
+/** Apply `--tz`, `--stagger`, or `--exact` metadata changes to an existing cron schedule. */
+export function applyExistingCronSchedulePatch(
+  existingSchedule: CronSchedule,
+  request: Extract<CronEditScheduleRequest, { kind: "patch-existing-cron" }>,
+): CronSchedule {
+  if (existingSchedule.kind !== "cron") {
+    throw new CronCliError("Current job is not a cron schedule; use --cron to convert first");
+  }
+  return {
+    kind: "cron",
+    expr: existingSchedule.expr,
+    tz: request.tz ?? existingSchedule.tz,
+    staggerMs: request.staggerMs !== undefined ? request.staggerMs : existingSchedule.staggerMs,
+  };
+}
+
+function normalizeScheduleOptions(options: ScheduleOptionInput) {
+  for (const value of [options.at, options.every, options.cron, options.onExit]) {
+    if (typeof value === "string" && !value.trim()) {
+      throw new CronCliError("Schedule values must not be blank");
+    }
+  }
+  const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
+  const useExact = Boolean(options.exact);
+  if (staggerRaw && useExact) {
+    throw new CronCliError("Choose either --stagger or --exact, not both");
+  }
+  const streamModeSupplied = options.streamMode !== undefined;
+  const streamModeRaw =
+    normalizeOptionalString(options.streamMode) ?? (streamModeSupplied ? undefined : "line");
+  if (streamModeRaw !== "line" && streamModeRaw !== "match") {
+    throw new CronCliError("--stream-mode must be line or match");
+  }
+  const streamMode: "line" | "match" = streamModeRaw;
+  const parsePositiveInteger = (value: unknown, flag: string): number | undefined => {
+    const parsed =
+      (typeof value === "string" || typeof value === "number") &&
+      /^\d+$/u.test(String(value).trim())
+        ? parseStrictPositiveInteger(value)
+        : undefined;
+    if (value !== undefined && parsed === undefined) {
+      throw new CronCliError(`${flag} must be a positive integer`);
+    }
+    return parsed;
+  };
+  return {
+    at: normalizeOptionalString(options.at) ?? "",
+    every: normalizeOptionalString(options.every) ?? "",
+    cronExpr: normalizeOptionalString(options.cron) ?? "",
+    onExitCommand: readNonBlankString(options.onExit) ?? "",
+    onExitCwd: readNonBlankString(options.onExitCwd),
+    streamCommand: parseCronStreamCommandArgv(options.streamCommand),
+    streamCwd: readNonBlankString(options.streamCwd),
+    streamCwdSupplied: options.streamCwd !== undefined,
+    streamMode,
+    streamModeSupplied,
+    streamMatch: normalizeOptionalString(options.streamMatch),
+    streamMatchSupplied: options.streamMatch !== undefined,
+    streamBatchMs: parsePositiveInteger(options.streamBatchMs, "--stream-batch-ms"),
+    streamMaxBatchBytes: parsePositiveInteger(
+      options.streamMaxBatchBytes,
+      "--stream-max-batch-bytes",
+    ),
+    tz: normalizeOptionalString(options.tz),
+    requestedStaggerMs: parseCronStaggerMs({ staggerRaw, useExact }),
+  };
+}
+
+function hasStreamSchedulePatch(options: NormalizedScheduleOptions): boolean {
+  return (
+    options.streamCwdSupplied ||
+    options.streamModeSupplied ||
+    options.streamMatchSupplied ||
+    options.streamBatchMs !== undefined ||
+    options.streamMaxBatchBytes !== undefined
+  );
+}
+
+function countChosenSchedules(options: NormalizedScheduleOptions): number {
+  return [
+    options.at,
+    options.every,
+    options.cronExpr,
+    options.onExitCommand,
+    options.streamCommand,
+  ].filter(Boolean).length;
+}
+
+function resolveDirectSchedule(
+  options: NormalizedScheduleOptions,
+  behavior: { deferStreamMetadataValidation?: boolean } = {},
+): CronSchedule | undefined {
+  if (options.onExitCwd && !options.onExitCommand) {
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+  }
+  if (hasStreamSchedulePatch(options) && !options.streamCommand) {
+    throw new CronCliError("Stream options require --stream-command.");
+  }
+  if (options.tz && options.every) {
+    throw new CronCliError("--tz is only valid with --cron or offset-less --at");
+  }
+  if (options.requestedStaggerMs !== undefined && (options.at || options.every)) {
+    throw new CronCliError("--stagger/--exact are only valid for cron schedules");
+  }
+  if (options.at) {
+    const atIso = parseAt(options.at, options.tz);
+    if (!atIso) {
+      throw new CronCliError("Invalid --at. Use an ISO timestamp or a duration like 20m.");
+    }
+    return { kind: "at", at: atIso };
+  }
+  if (options.every) {
+    const everyMs = parsePositiveCronDurationMs(options.every);
+    if (!everyMs) {
+      throw new CronCliError("Invalid --every. Use a duration like 10m, 1h, or 1d.");
+    }
+    return { kind: "every", everyMs };
+  }
+  if (options.cronExpr) {
+    const tz = parseCronTimezoneOption(options.tz);
+    if (!isValidCronExpression(options.cronExpr, tz)) {
+      throw new CronCliError(
+        `Invalid cron expression "${options.cronExpr}". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".`,
+      );
+    }
+    return {
+      kind: "cron",
+      expr: options.cronExpr,
+      tz,
+      staggerMs: options.requestedStaggerMs,
+    };
+  }
+  if (options.onExitCommand) {
+    if (options.tz || options.requestedStaggerMs !== undefined) {
+      throw new CronCliError("--tz/--stagger/--exact are not valid with --on-exit");
+    }
+    return {
+      kind: "on-exit",
+      command: options.onExitCommand,
+      ...(options.onExitCwd ? { cwd: options.onExitCwd } : {}),
+    };
+  }
+  if (options.streamCommand) {
+    if (options.tz || options.requestedStaggerMs !== undefined) {
+      throw new CronCliError("--tz/--stagger/--exact are not valid with --stream-command");
+    }
+    const schedule: Extract<CronSchedule, { kind: "stream" }> = {
+      kind: "stream",
+      command: options.streamCommand,
+      ...(options.streamCwd ? { cwd: options.streamCwd } : {}),
+      mode: options.streamMode,
+      ...(options.streamMatch ? { match: options.streamMatch } : {}),
+      ...(options.streamBatchMs !== undefined ? { batchMs: options.streamBatchMs } : {}),
+      ...(options.streamMaxBatchBytes !== undefined
+        ? { maxBatchBytes: options.streamMaxBatchBytes }
+        : {}),
+    };
+    if (!behavior.deferStreamMetadataValidation) {
+      validateStreamScheduleMetadata(schedule);
+    }
+    return schedule;
+  }
+  return undefined;
+}

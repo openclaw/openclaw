@@ -1,0 +1,103 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+function formatStatus(cfg: OpenClawConfig): string {
+  const dreaming = resolveMemoryDreamingConfig({
+    pluginConfig: resolvePluginConfigObject(cfg, "memory-core") ?? {},
+    cfg,
+  });
+  const deep = dreaming.phases.deep;
+  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+
+  return [
+    "Dreaming status:",
+    `- enabled: ${dreaming.enabled ? "on" : "off"}${timezone}`,
+    `- sweep cadence: ${dreaming.frequency}`,
+    `- promotion policy: score>=${deep.minScore}, recalls>=${deep.minRecallCount}, uniqueQueries>=${deep.minUniqueQueries}`,
+  ].join("\n");
+}
+
+function formatUsage(includeStatus: string): string {
+  return [
+    "Usage: /dreaming status",
+    "Usage: /dreaming on|off",
+    "",
+    includeStatus,
+    "",
+    "Phases:",
+    "- implementation detail: each sweep runs light -> REM -> deep.",
+    "- deep is the only stage that writes durable entries to MEMORY.md.",
+    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
+  ].join("\n");
+}
+
+function lacksAdminOrOwnerForDreamingMutation(params: {
+  gatewayClientScopes?: readonly string[];
+  senderIsOwner?: boolean;
+}): boolean {
+  if (Array.isArray(params.gatewayClientScopes)) {
+    return !params.gatewayClientScopes.includes("operator.admin");
+  }
+  return params.senderIsOwner !== true;
+}
+
+export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginCommandContext) {
+  const args = ctx.args?.trim() ?? "";
+  const firstToken = normalizeLowercaseStringOrEmpty(args.split(/\s+/, 1)[0]);
+  const currentConfig = ctx.config;
+
+  if (!firstToken || firstToken === "help" || firstToken === "options" || firstToken === "phases") {
+    return { text: formatUsage(formatStatus(currentConfig)) };
+  }
+
+  if (firstToken === "status") {
+    return { text: formatStatus(currentConfig) };
+  }
+
+  if (firstToken === "on" || firstToken === "off") {
+    if (lacksAdminOrOwnerForDreamingMutation(ctx)) {
+      return {
+        text: "⚠️ /dreaming on|off requires owner status for channel callers or operator.admin for gateway clients.",
+      };
+    }
+    const enabled = firstToken === "on";
+    const committed = await api.runtime.config.mutateConfigFile({
+      afterWrite: { mode: "auto" },
+      writeOptions: {
+        assertCurrent: Array.isArray(ctx.gatewayClientScopes) ? undefined : ctx.assertOwnerCurrent,
+      },
+      mutate: (draft) => {
+        const entries = { ...draft.plugins?.entries };
+        const existingEntry = asNullableRecord(entries["memory-core"]) ?? {};
+        const existingConfig = asNullableRecord(existingEntry.config) ?? {};
+        const existingSleep = asNullableRecord(existingConfig.dreaming) ?? {};
+        entries["memory-core"] = {
+          ...existingEntry,
+          config: {
+            ...existingConfig,
+            dreaming: {
+              ...existingSleep,
+              enabled,
+            },
+          },
+        };
+        draft.plugins = { ...draft.plugins, entries };
+      },
+    });
+    return {
+      text: [
+        `Dreaming ${enabled ? "enabled" : "disabled"}.`,
+        "",
+        formatStatus(committed.nextConfig),
+      ].join("\n"),
+    };
+  }
+
+  return { text: formatUsage(formatStatus(currentConfig)) };
+}

@@ -1,0 +1,144 @@
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+  type ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
+import { resolveDefaultWhatsAppAccountId } from "./account-ids.js";
+import {
+  normalizeWhatsAppOutboundPayload,
+  normalizeWhatsAppPayloadTextPreservingIndentation as normalizeText,
+} from "./outbound-media-contract.js";
+import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
+import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
+import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+import { getWhatsAppRuntime } from "./runtime.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { toWhatsappJid } from "./targets-runtime.js";
+
+type WhatsAppSendMessage = typeof import("./send.js").sendMessageWhatsApp;
+type WhatsAppSendOptions = Parameters<WhatsAppSendMessage>[2];
+type WhatsAppDispatchParams = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+
+const dispatchMessage = async (
+  params: WhatsAppDispatchParams,
+  text: string | undefined,
+  mediaOptions?: Pick<
+    WhatsAppSendOptions,
+    | "mediaUrl"
+    | "mediaAccess"
+    | "mediaLocalRoots"
+    | "mediaReadFile"
+    | "audioAsVoice"
+    | "forceDocument"
+  >,
+) => {
+  const lookupAccountId =
+    normalizeOptionalAccountId(params.accountId) ?? resolveDefaultWhatsAppAccountId(params.cfg);
+  const replyToId = params.replyToId?.trim();
+  let quotedMessageKey: WhatsAppSendOptions["quotedMessageKey"];
+  if (replyToId) {
+    const targetJid = toWhatsappJid(params.to);
+    const cachedMeta = lookupInboundMessageMetaForTarget(lookupAccountId, targetJid, replyToId);
+    quotedMessageKey = {
+      id: replyToId,
+      remoteJid: cachedMeta?.remoteJid ?? targetJid,
+      fromMe: cachedMeta?.fromMe ?? false,
+      participant: cachedMeta?.participant,
+      ...(cachedMeta && cachedMeta.remoteJid !== targetJid ? { lookupTargetJid: targetJid } : {}),
+      messageText: cachedMeta?.body,
+      media: cachedMeta?.media,
+    };
+  }
+  const send = quotedMessageKey
+    ? undefined
+    : resolveOutboundSendDep<WhatsAppSendMessage>(params.deps, "whatsapp", {
+        legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+      });
+  const onDeliveryResult = params.onDeliveryResult;
+  return await (send ?? sendMessageWhatsApp)(params.to, text ?? normalizeText(params.text), {
+    verbose: false,
+    ...(!send ? { preserveLeadingWhitespace: true } : {}),
+    cfg: params.cfg,
+    ...mediaOptions,
+    accountId: params.accountId ?? undefined,
+    gifPlayback: params.gifPlayback,
+    replyToIdSource: params.replyToIdSource,
+    replyToMode: params.replyToMode,
+    formatting: params.formatting,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    ...(quotedMessageKey ? { quotedMessageKey } : {}),
+    ...(onDeliveryResult
+      ? {
+          onDeliveryResult: async (result) => {
+            await onDeliveryResult(attachChannelToResult("whatsapp", result));
+          },
+        }
+      : {}),
+  });
+};
+
+const outbound = {
+  deliveryMode: "gateway",
+  textChunkLimit: 4000,
+  sanitizeText: ({ text }) => normalizeText(text),
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      replyTo: true,
+      messageSendingHooks: true,
+    },
+  },
+  pollMaxOptions: 12,
+  resolveTarget: ({ to, allowFrom, mode }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  ...createAttachedChannelResultAdapter({
+    channel: "whatsapp",
+    sendText: async (params) => {
+      const normalizedText = normalizeText(params.text);
+      if (!normalizedText) {
+        return { messageId: "" };
+      }
+      return await dispatchMessage(params, normalizedText);
+    },
+    sendMedia: async (params) =>
+      await dispatchMessage(params, undefined, {
+        mediaUrl: params.mediaUrl,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
+        ...(params.audioAsVoice === undefined ? {} : { audioAsVoice: params.audioAsVoice }),
+        forceDocument: params.forceDocument,
+      }),
+    sendPoll: async ({ cfg, to, poll, accountId }) =>
+      await sendPollWhatsApp(to, poll, {
+        verbose: getWhatsAppRuntime().logging.shouldLogVerbose(),
+        accountId: accountId ?? undefined,
+        cfg,
+      }),
+  }),
+} satisfies ChannelOutboundAdapter;
+export const whatsappOutboundBase = {
+  ...outbound,
+  sendPayload: async (ctx) => {
+    const payload = normalizeWhatsAppOutboundPayload(ctx.payload, { normalizeText });
+    if (!payload.text && !(payload.mediaUrl || payload.mediaUrls?.length)) {
+      if (ctx.payload.interactive || ctx.payload.presentation || ctx.payload.channelData) {
+        throw new Error(
+          "WhatsApp sendPayload does not support structured-only payloads without text or media.",
+        );
+      }
+      return { channel: "whatsapp", messageId: "" };
+    }
+    return await sendTextMediaPayload({
+      channel: "whatsapp",
+      ctx: {
+        ...ctx,
+        payload,
+      },
+      adapter: outbound,
+    });
+  },
+} satisfies ChannelOutboundAdapter;

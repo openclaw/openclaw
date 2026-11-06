@@ -1,0 +1,259 @@
+// Lets local agent paths reuse Gateway server methods without starting a server.
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import type { CliDeps } from "../cli/deps.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  getLegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
+import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
+import { NodeRegistry } from "./node-registry.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import { createChatRunState } from "./server-chat-state.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
+import {
+  loadGatewayModelCatalog,
+  loadGatewayModelCatalogSnapshot,
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogBatch,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "./server-model-catalog.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+
+// Embedded/local agent calls need enough GatewayRequestContext to reuse server
+// methods without starting the full gateway. Unsupported subsystems fail loudly
+// so local command paths do not silently enqueue cron/channel work.
+type LocalGatewayRequestContextParams = {
+  deps: CliDeps;
+  getRuntimeConfig: () => OpenClawConfig;
+};
+
+async function cronUnavailable(): Promise<never> {
+  throw new Error("Cron is unavailable in local embedded agent gateway context.");
+}
+
+const unavailableCron: GatewayCronServiceContract = {
+  start: cronUnavailable,
+  stop: () => {},
+  pauseScheduling: () => {},
+  resumeScheduling: () => {},
+  status: cronUnavailable,
+  list: cronUnavailable,
+  listPage: cronUnavailable,
+  add: cronUnavailable,
+  update: cronUnavailable,
+  updateWithPrecondition: cronUnavailable,
+  remove: cronUnavailable,
+  removeStaleJobFamily: cronUnavailable,
+  removeAgentJobsTransactional: cronUnavailable,
+  quiesceJobs: cronUnavailable,
+  run: cronUnavailable,
+  enqueueRun: cronUnavailable,
+  readEventSources: cronUnavailable,
+  runEvent: cronUnavailable,
+  waitForManualRun: cronUnavailable,
+  getJob: () => undefined,
+  getLoadedJobs: () => undefined,
+  readJob: async () => undefined,
+  readScratch: cronUnavailable,
+  writeScratch: cronUnavailable,
+  getDefaultAgentId: () => undefined,
+  wake: async () => ({ ok: false, reason: "unwakeable-session-key" }),
+};
+
+/** Creates the minimal gateway context used by embedded local agent execution. */
+async function createLocalGatewayRequestContext(
+  params: LocalGatewayRequestContextParams,
+): Promise<GatewayRequestContext> {
+  const logGateway = createSubsystemLogger("gateway/local");
+  const resourceHost = getLegacyPluginSdkResourceHost();
+  const cron: GatewayCronServiceContract = {
+    ...unavailableCron,
+    removeAgentJobsTransactional: async (agentId, commit) =>
+      await withLocalAgentCronJobsRemoved(agentId, params.getRuntimeConfig, commit),
+  };
+  const sessionEvents = new Set<string>();
+  const chatRunState = createChatRunState();
+  const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
+    loadParams,
+  ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: params.getRuntimeConfig });
+  registerGatewayModelCatalogPrivateAccess(loadCatalogSnapshot, {
+    loadDeferred: (loadParams) =>
+      loadPreparedGatewayModelCatalogSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    readPrepared: (loadParams) =>
+      readPreparedGatewayModelCatalogOwnerSnapshot({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+  });
+  const context: GatewayRequestContext = {
+    localEmbedded: true,
+    trackExecution: trackAsyncWork,
+    deps: params.deps,
+    configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
+    cron,
+    cronStorePath: "",
+    getRuntimeConfig: params.getRuntimeConfig,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
+    // Embedded calls have no running Gateway application owner.
+    isConfigReloadSettled: () => false,
+    resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
+    isTerminalEnabled: () => false,
+    loadGatewayModelCatalog: (loadParams) =>
+      loadGatewayModelCatalog({
+        ...loadParams,
+        getConfig: params.getRuntimeConfig,
+      }),
+    loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
+    readPreparedGatewayModelCatalog: (loadParams) =>
+      readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
+    readPreparedGatewayModelCatalogBatch: (agentIds, options) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, {
+        ...options,
+        getConfig: params.getRuntimeConfig,
+      }),
+    readChatMetadata: async () => {
+      throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
+    },
+    getHealthCache: () => null,
+    refreshHealthSnapshot: async () =>
+      ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
+    logHealth: { error: (message) => logGateway.error(message) },
+    logGateway,
+    publishPresence: () => {},
+    getPresenceSnapshot: () => {
+      throw new Error("Presence requires a running Gateway connection.");
+    },
+    broadcast: () => {},
+    broadcastToConnIds: () => {},
+    nodeSendToSession: () => {},
+    nodeSendToAllSubscribed: () => {},
+    nodeSubscribe: () => {},
+    nodeUnsubscribe: () => {},
+    nodeUnsubscribeAll: () => {},
+    hasConnectedTalkNode: async () => false,
+    nodeRegistry: new NodeRegistry(),
+    agentRunSeq: new Map(),
+    chatRunState,
+    addChatRun: chatRunState.registry.add,
+    removeChatRun: chatRunState.registry.remove,
+    subscribeSessionEvents: (connId) => {
+      sessionEvents.add(connId);
+    },
+    unsubscribeSessionEvents: (connId) => {
+      sessionEvents.delete(connId);
+    },
+    forgetConnectionAncestors: () => {},
+    subscribeSessionMessageEvents: () => undefined,
+    unsubscribeSessionMessageEvents: () => {},
+    unsubscribeAllSessionEvents: (connId) => {
+      sessionEvents.delete(connId);
+    },
+    getSessionEventSubscriberConnIds: () => sessionEvents,
+    registerToolEventRecipient: () => {},
+    dedupe: new Map(),
+    wizardSessions: new Map(),
+    systemAgentSessions: new Map(),
+    findRunningWizard: () => null,
+    purgeWizardSession: () => {},
+    getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
+    startChannel: async () => {
+      throw new Error("Channel start is unavailable in local embedded agent gateway context.");
+    },
+    stopChannel: async () => {
+      throw new Error("Channel stop is unavailable in local embedded agent gateway context.");
+    },
+    markChannelLoggedOut: () => {},
+    wizardRunner: async () => {
+      throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
+    },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
+    },
+    broadcastVoiceWakeChanged: () => {},
+    broadcastVoiceWakeRoutingChanged: () => {},
+    unavailableGatewayMethods: new Set(),
+  };
+  let projection: SessionRowProjection | undefined;
+  let initializing: Promise<void> | undefined;
+  bindSessionRowProjection(context, () => projection);
+  context.ensureSessionRowProjection = () => {
+    if (!initializing) {
+      // The same host retains embedded resources used by admitted work after its caller returns.
+      resourceHost.adopt(context, {
+        release: async () => {
+          await initializing?.catch(() => {});
+          projection?.dispose();
+          await projection?.ensureMaterialized();
+        },
+      });
+      initializing = import("./session-row-projection.js").then(
+        async ({ createSessionRowProjection }) => {
+          projection = await createSessionRowProjection({
+            cfg: params.getRuntimeConfig(),
+            getConfig: params.getRuntimeConfig,
+            getModelCatalog: () =>
+              readPreparedServerMethodModelCatalogs(
+                context,
+                listAgentIds(params.getRuntimeConfig()),
+              ),
+            context,
+          });
+        },
+      );
+    }
+    return initializing;
+  };
+  context.createAgentTurnFacade = async (principal) => {
+    const { createInternalAgentTurnFacade } =
+      await import("./agent-turn/internal-facade.runtime.js");
+    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+  };
+  return context;
+}
+
+/** Runs code inside a local gateway request scope unless an outer scope already exists. */
+export async function withLocalGatewayRequestScope<T>(
+  params: LocalGatewayRequestContextParams,
+  run: () => T,
+): Promise<Awaited<T>> {
+  const existing = getPluginRuntimeGatewayRequestScope();
+  if (existing?.context || existing?.resolveGatewayContext) {
+    return await run();
+  }
+  const context = await createLocalGatewayRequestContext(params);
+  // Session admission retains the instance binding after dropping request context.
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, getLegacyPluginSdkResourceHost());
+  return await withPluginRuntimeGatewayRequestScope(
+    {
+      ...existing,
+      context,
+      resolveGatewayContext,
+      isWebchatConnect: existing?.isWebchatConnect ?? (() => false),
+    },
+    run,
+  );
+}

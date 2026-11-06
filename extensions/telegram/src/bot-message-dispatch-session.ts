@@ -1,0 +1,150 @@
+import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  appendAssistantMirrorMessageByIdentity,
+  readLatestAssistantTextByIdentity,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
+import type {
+  CurrentTurnTranscriptFinal,
+  FreshTelegramSessionEntryLoader,
+  TelegramDispatchTurn as Turn,
+  TelegramReasoningLevel,
+  TelegramTranscriptMirrorPayload,
+} from "./bot-message-dispatch.types.js";
+
+export function createFreshTelegramSessionEntryLoader(params: {
+  cfg: OpenClawConfig;
+}): FreshTelegramSessionEntryLoader {
+  const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntryAsync>>();
+  const load = async (agentId: string, sessionKey: string) => {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const cacheKey = `${storePath}\0${sessionKey}`;
+    const cached = entriesByPathAndKey.get(cacheKey);
+    if (cached) {
+      return { storePath, entry: await cached };
+    }
+    const entry = getSessionEntryAsync({
+      storePath,
+      sessionKey,
+      readConsistency: "latest",
+    });
+    entriesByPathAndKey.set(cacheKey, entry);
+    return { storePath, entry: await entry };
+  };
+  return Object.assign(load, { clear: () => entriesByPathAndKey.clear() });
+}
+
+export async function resolveTelegramReasoningLevel(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  agentId: string;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
+}): Promise<TelegramReasoningLevel> {
+  const configDefault =
+    resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
+    params.cfg.agents?.defaults?.reasoningDefault ??
+    "off";
+  if (!params.sessionKey) {
+    return configDefault;
+  }
+  try {
+    const { entry } = await params.loadFreshSessionEntry(params.agentId, params.sessionKey);
+    const level = entry?.reasoningLevel;
+    return level === "on" || level === "stream" || level === "off" ? level : configDefault;
+  } catch {
+    return "off";
+  }
+}
+
+function resolveTelegramMirroredTranscriptText(
+  payload: TelegramTranscriptMirrorPayload,
+): string | null {
+  const mediaUrls = payload.mediaUrls?.filter((url) => url.trim()) ?? [];
+  if (mediaUrls.length > 0) {
+    return mediaUrls
+      .map((url) => {
+        const pathname = url.split("#")[0]?.split("?")[0] ?? url;
+        const base = path.basename(pathname);
+        return base && base !== "." && base !== "/" ? base : "media";
+      })
+      .join(", ");
+  }
+  return payload.text?.trim() || null;
+}
+
+export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn = turn) {
+  const sessionKey = turn.context.ctxPayload.SessionKey;
+  if (!sessionKey) {
+    return undefined;
+  }
+  return async (payload: TelegramTranscriptMirrorPayload) => {
+    const idempotencyKey = `telegram-final:${sessionKey}:${turn.transcriptMirrorTurnId}:${sequenceOwner.transcriptMirrorSequence++}`;
+    const text = resolveTelegramMirroredTranscriptText(payload);
+    if (!text) {
+      return;
+    }
+    const agentId = turn.context.route.agentId;
+    const { entry, storePath } = await turn.loadFreshSessionEntry(agentId, sessionKey);
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
+      return;
+    }
+    const appended = await appendAssistantMirrorMessageByIdentity({
+      agentId,
+      config: turn.cfg,
+      idempotencyKey,
+      ...(turn.transcriptMirrorRunId ? { sourceRunId: turn.transcriptMirrorRunId } : {}),
+      deliveryMirror: { kind: "channel-final", sourceMessageId: idempotencyKey },
+      sessionId,
+      sessionKey,
+      storePath,
+      text,
+    });
+    if (!appended.ok && appended.code !== "session-rebound") {
+      logVerbose(`telegram transcript mirror append failed: ${appended.reason}`);
+    }
+  };
+}
+
+export function createCurrentTurnTranscriptFinalResolver(params: {
+  agentId: string;
+  dispatchStartedAt: number;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
+  sessionKey?: string;
+}): () => Promise<CurrentTurnTranscriptFinal | undefined> {
+  return async () => {
+    if (!params.sessionKey) {
+      return undefined;
+    }
+    try {
+      const { entry, storePath } = await params.loadFreshSessionEntry(
+        params.agentId,
+        params.sessionKey,
+      );
+      if (!entry?.sessionId) {
+        return undefined;
+      }
+      const latest = await readLatestAssistantTextByIdentity({
+        agentId: params.agentId,
+        sessionId: entry.sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      });
+      if (!latest?.timestamp || latest.timestamp < params.dispatchStartedAt) {
+        return undefined;
+      }
+      return {
+        ...(latest.id ? { messageId: latest.id } : {}),
+        text: latest.text,
+        ...(latest.openclawDelivery ? { openclawDelivery: latest.openclawDelivery } : {}),
+      };
+    } catch (err) {
+      logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
+      return undefined;
+    }
+  };
+}

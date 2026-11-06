@@ -1,0 +1,296 @@
+import type { Context } from "grammy";
+import {
+  findCommandByNativeName,
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import type {
+  TelegramNativeCommandCallbackDispatcher,
+  TelegramPluginCommandContinuation,
+} from "./bot-handlers.types.js";
+import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
+import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
+import {
+  buildCappedTelegramMenuCommands,
+  buildPluginTelegramMenuCommands,
+  syncTelegramMenuCommands,
+  type TelegramMenuCommand,
+} from "./bot-native-command-menu.js";
+import type { TelegramUpdateKeyContext } from "./bot-updates.js";
+import {
+  normalizeTelegramCommandName,
+  resolveTelegramCustomCommands,
+  TELEGRAM_COMMAND_NAME_PATTERN,
+} from "./command-config.js";
+
+const loadTelegramBuiltinCommandExecutor = createLazyRuntimeModule(
+  () => import("./bot-native-command-builtins.js"),
+);
+const loadTelegramPluginCommandExecutor = createLazyRuntimeModule(
+  () => import("./bot-native-command-plugins.js"),
+);
+
+type TelegramNativeCommandContext = Context & { match?: string };
+
+type RegisterTelegramNativeCommandsParams = Omit<
+  TelegramCommandExecutorParams,
+  "botUser" | "msg" | "rawText"
+> & {
+  cfg: OpenClawConfig;
+  telegramCfg: TelegramAccountConfig;
+  nativeEnabled: boolean;
+  nativeSkillsEnabled: boolean;
+  shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  continuePluginCommandTurn: TelegramPluginCommandContinuation;
+};
+
+export const registerTelegramNativeCommands = async ({
+  cfg,
+  telegramCfg,
+  nativeEnabled,
+  nativeSkillsEnabled,
+  shouldSkipUpdate,
+  continuePluginCommandTurn,
+  ...executorParams
+}: RegisterTelegramNativeCommandsParams): Promise<{
+  nativeCommandNames: ReadonlyMap<string, string>;
+  nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
+}> => {
+  const { bot, runtime, accountId, opts } = executorParams;
+  const boundRoute =
+    nativeEnabled && nativeSkillsEnabled
+      ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
+      : null;
+  if (nativeEnabled && nativeSkillsEnabled && !boundRoute) {
+    runtime.log?.(
+      "nativeSkillsEnabled is true but no agent route is bound for this Telegram account; skill commands will not appear in the native menu.",
+    );
+  }
+  const skillCommands =
+    nativeEnabled && nativeSkillsEnabled && boundRoute
+      ? await prepareSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      : [];
+  const pluginCommandRuntime = createPluginCommandRuntime();
+  const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
+  // Telegram is the channel here: resolve native names from the loaded registry
+  // only. The bundled fallback would jiti-load this whole plugin from source in
+  // dev/test checkouts (minutes of transpile) to call a hook Telegram never defines.
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, {
+        skillCommands,
+        provider: "telegram",
+        includeBundledChannelFallback: false,
+      })
+    : [];
+  const reservedCommands = new Set(
+    listNativeCommandSpecs({ provider: "telegram", includeBundledChannelFallback: false }).map(
+      (command) => normalizeTelegramCommandName(command.name),
+    ),
+  );
+  for (const command of skillCommands) {
+    reservedCommands.add(normalizeTelegramCommandName(command.name));
+  }
+  const customResolution = resolveTelegramCustomCommands({
+    commands: telegramCfg.customCommands,
+    reservedCommands,
+  });
+  for (const issue of customResolution.issues) {
+    runtime.error?.(danger(issue.message));
+  }
+  const customCommands = customResolution.commands;
+  const pluginCatalog = buildPluginTelegramMenuCommands({
+    specs: pluginCommandSpecs,
+    existingCommands: new Set(reservedCommands),
+  });
+  for (const issue of pluginCatalog.issues) {
+    runtime.error?.(danger(issue));
+  }
+  const builtinCommands = listNativeCommandSpecsForConfig(cfg, {
+    provider: "telegram",
+    includeBundledChannelFallback: false,
+  });
+  const firstSkillCommandIndex = nativeEnabled ? builtinCommands.length : 0;
+  const nativeMenuCommands = nativeCommands
+    .map((command, index): TelegramMenuCommand | null => {
+      const normalized = normalizeTelegramCommandName(command.name);
+      if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
+        runtime.error?.(
+          danger(
+            `Native command "${command.name}" is invalid for Telegram (resolved to "${normalized}"). Skipping.`,
+          ),
+        );
+        return null;
+      }
+      return {
+        command: normalized,
+        description: command.description,
+        ...(command.isAlias ? { isAlias: true } : {}),
+        ...(index >= firstSkillCommandIndex ? { isSkill: true } : {}),
+        ...(command.descriptionLocalizations
+          ? { descriptionLocalizations: command.descriptionLocalizations }
+          : {}),
+      };
+    })
+    .filter((command) => command !== null);
+  const customCommandNames = new Set(customCommands.map((command) => command.command));
+  const fullCommandCatalog = buildCappedTelegramMenuCommands([
+    ...customCommands,
+    ...nativeMenuCommands.filter((command) => !command.isAlias),
+    ...(nativeEnabled
+      ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
+      : []),
+    ...nativeMenuCommands.filter((command) => command.isAlias),
+  ]);
+  if (fullCommandCatalog.skillCommandsOmitted) {
+    runtime.log?.(
+      "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
+    );
+  }
+  const loginCommand = builtinCommands.find(
+    (command) =>
+      findCommandByNativeName(command.name, "telegram", { includeBundledChannelFallback: false })
+        ?.key === "login",
+  );
+  const nativeCommandNames = new Map<string, string>(
+    nativeCommands.map((command) => [normalizeTelegramCommandName(command.name), command.name]),
+  );
+  const {
+    commandsToRegister,
+    totalCommands,
+    maxCommands,
+    overflowCount,
+    maxTotalChars,
+    descriptionTrimmed,
+    textBudgetDropCount,
+  } = fullCommandCatalog;
+  if (overflowCount > 0) {
+    runtime.log?.(
+      `Telegram limits bots to ${maxCommands} commands. ` +
+        `${totalCommands} configured; registering first ${maxCommands}. ` +
+        `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
+    );
+  }
+  if (descriptionTrimmed) {
+    runtime.log?.(
+      `Telegram menu text exceeded the conservative ${maxTotalChars}-character payload budget; shortening descriptions to keep ${commandsToRegister.length} commands visible.`,
+    );
+  }
+  if (textBudgetDropCount > 0) {
+    runtime.log?.(
+      `Telegram menu text still exceeded the conservative ${maxTotalChars}-character payload budget after shortening descriptions; registering first ${commandsToRegister.length} commands.`,
+    );
+  }
+  // Telegram only limits menu entries; hidden commands remain callable.
+  void syncTelegramMenuCommands({
+    bot,
+    runtime,
+    commandsToRegister,
+    accountId,
+    botId: opts.botInfo?.id,
+    botToken: opts.token,
+  });
+
+  const handleNativeCommand = async (
+    commandName: string,
+    botUser: Context["me"],
+    msg: NonNullable<Context["message"]>,
+    rawText: string,
+    shouldSkip?: () => boolean,
+  ): Promise<TelegramBuiltinCommandResult> => {
+    const { executeTelegramBuiltinCommand } = await loadTelegramBuiltinCommandExecutor();
+    return await executeTelegramBuiltinCommand({
+      ...executorParams,
+      botUser,
+      msg,
+      rawText,
+      commandName,
+      shouldSkip,
+    });
+  };
+  for (const command of nativeCommands) {
+    bot.command(normalizeTelegramCommandName(command.name), async (ctx, next) => {
+      if (!ctx.message) {
+        await next();
+        return;
+      }
+      const result = await handleNativeCommand(
+        command.name,
+        ctx.me,
+        ctx.message,
+        typeof ctx.match === "string" ? ctx.match.trim() : "",
+        () => shouldSkipUpdate(ctx),
+      );
+      if (result === "fall-through") {
+        await next();
+      }
+    });
+  }
+
+  for (const pluginCommand of pluginCatalog.selectedCommands) {
+    bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
+      if (shouldSkipUpdate(ctx) || !ctx.message) {
+        return;
+      }
+      const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
+      const message = ctx.message;
+      await executeTelegramPluginCommand({
+        ...executorParams,
+        botUser: ctx.me,
+        msg: message,
+        rawText: ctx.match?.trim() ?? "",
+        commandName: pluginCommand.command,
+        candidate: pluginCommand.spec,
+        continueAgentTurn: (turn) =>
+          continuePluginCommandTurn({
+            ...turn,
+            ctx: { message, update: ctx.update, me: ctx.me, getFile: ctx.getFile.bind(ctx) },
+          }),
+      });
+    });
+  }
+
+  if (!loginCommand) {
+    return { nativeCommandNames };
+  }
+  const nativeCommandCallbackDispatcher: TelegramNativeCommandCallbackDispatcher = async ({
+    botUser,
+    callbackQuery,
+    commandText,
+  }) => {
+    const commandBody = commandText.slice(1).trim();
+    const separatorIndex = commandBody.search(/\s/u);
+    const commandName = (separatorIndex === -1 ? commandBody : commandBody.slice(0, separatorIndex))
+      .split("@", 1)[0]
+      ?.toLowerCase();
+    const commandDefinition = commandName
+      ? findCommandByNativeName(commandName, "telegram", { includeBundledChannelFallback: false })
+      : undefined;
+    if (commandDefinition?.key !== "login") {
+      return { handled: false, clearButtons: false };
+    }
+    const callbackMessage = callbackQuery.message;
+    if (!callbackMessage || callbackMessage.date <= 0 || callbackMessage.chat.type === "channel") {
+      return { handled: true, clearButtons: false };
+    }
+    const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();
+    const result = await handleNativeCommand(
+      loginCommand.name,
+      botUser,
+      {
+        ...callbackMessage,
+        chat: callbackMessage.chat,
+        from: callbackQuery.from,
+        text: commandText,
+      },
+      rawText,
+    );
+    return { handled: true, clearButtons: result === "handled-clear-buttons" };
+  };
+  return { nativeCommandNames, nativeCommandCallbackDispatcher };
+};

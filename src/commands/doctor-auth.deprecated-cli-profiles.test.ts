@@ -1,0 +1,257 @@
+import { beforeEach, expect, it, vi } from "vitest";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { maybeRepairLegacyOAuthProfileIds } from "./doctor-auth-legacy-oauth.js";
+
+const resolvePluginProvidersMock = vi.fn<() => ProviderPlugin[]>(() => []);
+const authProfileStoreMock = vi.hoisted(() => ({
+  store: { version: 1, profiles: {} } as AuthProfileStore,
+}));
+const candidateMocks = vi.hoisted(() => ({
+  candidates: [{ agentDir: undefined, authPath: "/tmp/shared/openclaw-agent.sqlite" }] as Array<{
+    agentDir?: string;
+    authPath: string;
+  }>,
+  stores: new Map<string | undefined, AuthProfileStore>(),
+}));
+const repairMocks = vi.hoisted(() => ({
+  repairOAuthProfileIdMismatch: vi.fn(),
+}));
+const providerPolicyMocks = vi.hoisted(() => ({
+  applyConfigDefaults: vi.fn((params: { config: OpenClawConfig }) => params.config),
+}));
+
+// mock-isolation: Legacy OAuth repair uses fixture callbacks without discovering installed providers.
+vi.mock("../plugins/providers.runtime.js", () => ({
+  withPluginProviders: async <T>(
+    _params: unknown,
+    run: (providers: ProviderPlugin[]) => Promise<T>,
+  ) => run(resolvePluginProvidersMock()),
+}));
+
+vi.mock("../agents/auth-profiles/repair.js", () => ({
+  repairOAuthProfileIdMismatch: repairMocks.repairOAuthProfileIdMismatch,
+}));
+
+vi.mock("../config/provider-policy.js", () => ({
+  applyProviderConfigDefaultsForConfig: providerPolicyMocks.applyConfigDefaults,
+}));
+
+vi.mock("../agents/auth-profiles/persisted.js", () => ({
+  loadPersistedAuthProfileStore: (agentDir?: string) =>
+    candidateMocks.stores.has(agentDir)
+      ? candidateMocks.stores.get(agentDir)
+      : agentDir === undefined
+        ? authProfileStoreMock.store
+        : undefined,
+}));
+
+vi.mock("./doctor-auth-legacy-paths.js", () => ({
+  listAuthProfileRepairCandidates: () => candidateMocks.candidates,
+}));
+
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+  ensureAuthProfileStoreWithoutExternalProfiles: () => authProfileStoreMock.store,
+}));
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
+  note: vi.fn(),
+}));
+
+function oauthProfile(access = "token-a", refresh = "token-r") {
+  return {
+    type: "oauth" as const,
+    provider: "anthropic",
+    access,
+    refresh,
+    expires: Date.now() + 60_000,
+  };
+}
+
+function useProvider(options: Partial<ProviderPlugin>) {
+  resolvePluginProvidersMock.mockReturnValue([
+    { id: "anthropic", label: "Anthropic", auth: [], ...options },
+  ]);
+}
+
+beforeEach(() => {
+  resolvePluginProvidersMock.mockReset();
+  resolvePluginProvidersMock.mockReturnValue([]);
+  authProfileStoreMock.store = { version: 1, profiles: {} };
+  candidateMocks.candidates = [
+    { agentDir: undefined, authPath: "/tmp/shared/openclaw-agent.sqlite" },
+  ];
+  candidateMocks.stores.clear();
+  repairMocks.repairOAuthProfileIdMismatch.mockReset();
+  repairMocks.repairOAuthProfileIdMismatch.mockReturnValue({
+    config: {},
+    changes: [],
+    migrated: false,
+  });
+  providerPolicyMocks.applyConfigDefaults.mockReset();
+  providerPolicyMocks.applyConfigDefaults.mockImplementation(({ config }) => config);
+});
+
+it("skips provider discovery without profile state", async () => {
+  const cfg: OpenClawConfig = {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          models: [],
+        },
+      },
+    },
+  };
+
+  const result = await maybeRepairLegacyOAuthProfileIds(cfg, makePrompter(true, true));
+
+  expect(result.config).toBe(cfg);
+  expect(result.retiredProfileCleanupPlans).toEqual([]);
+  expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  expect(repairMocks.repairOAuthProfileIdMismatch).not.toHaveBeenCalled();
+});
+
+it("removes a provider-declared retired auth profile and config references", async () => {
+  authProfileStoreMock.store = createAuthProfileStoreFixture({
+    "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
+    "anthropic:managed": createApiKeyCredential("anthropic", "managed-key"),
+  });
+  useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
+  providerPolicyMocks.applyConfigDefaults.mockImplementation(({ config }) => ({
+    ...config,
+    agents: {
+      defaults: {
+        ...config.agents?.defaults,
+        models: {
+          "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+        },
+      },
+    },
+  }));
+
+  const result = await maybeRepairLegacyOAuthProfileIds(
+    {
+      auth: {
+        profiles: {
+          "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          "anthropic:managed": { provider: "anthropic", mode: "api_key" },
+        },
+        order: {
+          anthropic: ["anthropic:claude-cli", "anthropic:managed"],
+        },
+      },
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "anthropic:claude-cli",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig,
+    makePrompter(true, true),
+  );
+
+  const next = result.config;
+  expect(next.auth?.profiles).toEqual({
+    "anthropic:managed": { provider: "anthropic", mode: "api_key" },
+  });
+  expect(next.auth?.order?.anthropic).toEqual(["anthropic:managed"]);
+  expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.agentRuntime).toEqual({
+    id: "claude-cli",
+  });
+  expect(providerPolicyMocks.applyConfigDefaults).toHaveBeenCalledOnce();
+  expect(next.models?.providers?.anthropic?.apiKey).toBeUndefined();
+  expect(result.retiredProfileCleanupPlans).toContainEqual({
+    agentDir: undefined,
+    profileIds: ["anthropic:claude-cli"],
+  });
+});
+
+it("removes config-only retired profile references", async () => {
+  const cfg: OpenClawConfig = { auth: { order: { anthropic: ["anthropic:claude-cli"] } } };
+
+  useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
+
+  const prompter = makePrompter(true, true);
+  const { config: next, retiredProfileCleanupPlans } = await maybeRepairLegacyOAuthProfileIds(
+    cfg,
+    prompter,
+  );
+
+  expect(prompter.confirm).toHaveBeenCalledOnce();
+  expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
+  expect(next.auth?.order?.anthropic).toBeUndefined();
+  expect(next.models?.providers?.anthropic?.apiKey).toBeUndefined();
+  expect(retiredProfileCleanupPlans).toEqual([]);
+  expect(providerPolicyMocks.applyConfigDefaults).not.toHaveBeenCalled();
+});
+
+it.each([true, false])(
+  "respects secondary agent cleanup confirmation (accept=%s)",
+  async (accepted) => {
+    const secondaryAgentDir = "/tmp/state/agents/secondary/agent";
+    candidateMocks.candidates = [
+      { agentDir: undefined, authPath: "/tmp/shared/openclaw-agent.sqlite" },
+      { agentDir: secondaryAgentDir, authPath: `${secondaryAgentDir}/openclaw-agent.sqlite` },
+    ];
+    candidateMocks.stores.set(
+      secondaryAgentDir,
+      createAuthProfileStoreFixture({
+        "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
+      }),
+    );
+    useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
+
+    const result = await maybeRepairLegacyOAuthProfileIds({}, makePrompter(accepted, true));
+
+    expect(result.retiredProfileCleanupPlans).toEqual(
+      accepted
+        ? [
+            {
+              agentDir: secondaryAgentDir,
+              profileIds: ["anthropic:claude-cli"],
+            },
+          ]
+        : [],
+    );
+  },
+);
+
+it("strips provider-controlled terminal escapes from repair prompts", async () => {
+  authProfileStoreMock.store = createAuthProfileStoreFixture({
+    "anthropic:user@example.com": { ...oauthProfile(), email: "user@example.com" },
+  });
+  useProvider({
+    label: "\u001b[31mAnthropic\u001b[0m",
+    oauthProfileIdRepairs: [
+      { legacyProfileId: "anthropic:default", promptLabel: "\u001b[2JBad\u0007 Label" },
+    ],
+  });
+  repairMocks.repairOAuthProfileIdMismatch.mockReturnValue({
+    migrated: true,
+    changes: ["Auth: migrate anthropic:default to anthropic:user@example.com"],
+    config: { auth: { profiles: {} } },
+  });
+
+  const prompter = makePrompter(true, true);
+  await maybeRepairLegacyOAuthProfileIds(
+    { auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "oauth" } } } },
+    prompter,
+  );
+
+  expect(prompter.confirm).toHaveBeenCalledWith({
+    message: "Update Bad Label OAuth profile id in config now?",
+    initialValue: true,
+  });
+});

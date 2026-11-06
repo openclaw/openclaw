@@ -1,0 +1,173 @@
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
+import type { ChatType } from "../channels/chat-type.js";
+import type { ReplyToMode } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { McpCurrentConversationOrigin } from "../gateway/mcp-grant-store.js";
+import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+
+// Delivery targets often carry a transport wrapper (e.g. Matrix `room:<id>` or
+// LINE `line:group:<id>`), while route bindings commonly store raw peer ids on
+// `match.peer.id`. Peel wrappers for those lookups, and separately pass the
+// original target as an exact-match alias for channels whose canonical peer ids
+// intentionally include prefixes such as `channel:` or `thread:`.
+const KIND_PREFIX_TO_CHAT_TYPE: ReadonlyMap<string, ChatType> = new Map([
+  ["room:", "channel"],
+  ["channel:", "channel"],
+  ["conversation:", "channel"],
+  ["chat:", "channel"],
+  ["thread:", "channel"],
+  ["topic:", "channel"],
+  ["group:", "group"],
+  ["team:", "group"],
+  ["user:", "direct"],
+  ["dm:", "direct"],
+  ["pm:", "direct"],
+]);
+
+// Matches one leading `<alpha-token>:` wrapper at a time.
+const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
+
+function inferPeerKindFromBareId(value: string): ChatType | undefined {
+  if (value.startsWith("@")) {
+    return "direct";
+  }
+  if (value.startsWith("!") || value.startsWith("#")) {
+    return "channel";
+  }
+  return undefined;
+}
+
+function extractRequesterPeer(
+  channelId: string | undefined,
+  requesterTo: string | undefined,
+): { peerId?: string; peerKind?: ChatType } {
+  if (!requesterTo) {
+    return {};
+  }
+  const raw = requesterTo.trim();
+  if (!raw) {
+    return {};
+  }
+  const normalizedChannel = channelId?.trim().toLowerCase();
+  const channelPrefix = normalizedChannel ? `${normalizedChannel}:` : undefined;
+  let inferredKind: ChatType | undefined;
+  let allowBareIdKindOverride = false;
+  let value = raw;
+  while (true) {
+    const match = GENERIC_PREFIX_PATTERN.exec(value);
+    if (!match) {
+      break;
+    }
+    const prefix = match[0].toLowerCase();
+    const kindFromPrefix = KIND_PREFIX_TO_CHAT_TYPE.get(prefix);
+    if (!kindFromPrefix && prefix !== channelPrefix) {
+      break;
+    }
+    inferredKind ??= kindFromPrefix;
+    allowBareIdKindOverride ||= prefix === channelPrefix || prefix === "room:";
+    value = value.slice(prefix.length).trim();
+  }
+  const bareIdKind = value ? inferPeerKindFromBareId(value) : undefined;
+  if (bareIdKind && (!inferredKind || allowBareIdKindOverride)) {
+    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) are more specific
+    // than transport wrapper text such as Matrix `room:@user`, which is a
+    // direct peer. Explicit kind prefixes like `channel:` still win.
+    inferredKind = bareIdKind;
+  }
+  return { peerId: value || undefined, peerKind: inferredKind };
+}
+
+export function resolveRequesterOriginForChild(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  requesterAgentId: string;
+  requesterChannel?: string;
+  requesterAccountId?: string;
+  requesterTo?: string;
+  requesterThreadId?: string | number;
+  requesterGroupSpace?: string | null;
+  requesterMemberRoleIds?: string[];
+}) {
+  const { peerId: normalizedPeerId, peerKind: inferredPeerKind } = extractRequesterPeer(
+    params.requesterChannel,
+    params.requesterTo,
+  );
+  const rawPeerIdAlias = params.requesterTo?.trim();
+  // Same-agent spawns must keep the caller's active inbound account, not
+  // re-resolve via bindings that may select a different account for the same
+  // agent/channel.
+  const boundAccountId =
+    params.requesterChannel && params.targetAgentId !== params.requesterAgentId
+      ? resolveFirstBoundAccountId({
+          cfg: params.cfg,
+          channelId: params.requesterChannel,
+          agentId: params.targetAgentId,
+          peerId: normalizedPeerId,
+          exactPeerIdAliases:
+            rawPeerIdAlias && rawPeerIdAlias !== normalizedPeerId ? [rawPeerIdAlias] : undefined,
+          peerKind: inferredPeerKind,
+          groupSpace: params.requesterGroupSpace,
+          memberRoleIds: params.requesterMemberRoleIds,
+        })
+      : undefined;
+  return normalizeDeliveryContext({
+    channel: params.requesterChannel,
+    accountId: boundAccountId ?? params.requesterAccountId,
+    to: params.requesterTo,
+    threadId: params.requesterThreadId,
+  });
+}
+
+export type SpawnRequesterConversationSource = {
+  agentTo?: string;
+  agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string | number;
+  currentConversationOrigin?: McpCurrentConversationOrigin;
+};
+
+/** Keep each requester destination paired with its own thread. */
+export function resolveSpawnRequesterConversationTarget(source: SpawnRequesterConversationSource): {
+  to?: string;
+  threadId?: string | number;
+} {
+  const to = normalizeOptionalString(source.agentTo);
+  const threadId = normalizeOptionalThreadValue(source.agentThreadId);
+  if (to || threadId !== undefined) {
+    return { to, threadId };
+  }
+  // Generic MCP bearer headers can guide delivery, but cannot authorize a binding target.
+  if (source.currentConversationOrigin === "caller-token") {
+    return {};
+  }
+  return {
+    to:
+      normalizeOptionalString(source.currentMessagingTarget) ??
+      normalizeOptionalString(source.currentChannelId),
+    threadId: normalizeOptionalThreadValue(source.currentThreadTs),
+  };
+}
+
+/** Thread for delayed requester delivery; a top-level Slack message's reply anchor is not a thread. */
+export function resolveRequesterDeliveryThreadId(source: {
+  agentChannel?: string;
+  agentThreadId?: string | number;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  replyToMode?: ReplyToMode;
+}): string | number | undefined {
+  if (
+    source.agentChannel === "slack" &&
+    source.replyToMode === "off" &&
+    source.currentThreadTs !== undefined &&
+    source.currentThreadTs === source.currentMessageId
+  ) {
+    return undefined;
+  }
+  return source.currentThreadTs ?? source.agentThreadId;
+}

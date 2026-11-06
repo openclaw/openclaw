@@ -1,0 +1,316 @@
+import fs from "node:fs";
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
+import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
+import { resolveOpenClawUserDataDir } from "./chrome.js";
+import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
+import {
+  BrowserProfileNotFoundError,
+  BrowserProfileUnavailableError,
+  BrowserResetUnsupportedError,
+  toBrowserErrorResponse,
+} from "./errors.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
+import { createProfileAvailability } from "./server-context.availability.js";
+import {
+  assertProfileLifecycleContext,
+  beginProfileTransition,
+  getProfileLifecycle,
+  getOrCreateProfileRuntime,
+  isBrowserRuntimeRunning,
+  withProfileOperationLease,
+} from "./server-context.lifecycle.js";
+import { createProfileSelectionOps } from "./server-context.selection.js";
+import { createProfileTabOps } from "./server-context.tab-ops.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+} from "./server-context.types.js";
+import { movePathToTrash } from "./trash.js";
+
+export type {
+  BrowserRouteContext,
+  BrowserServerState,
+  ProfileContext,
+} from "./server-context.types.js";
+
+type ProfileOperationRunner = <T>(
+  signal: AbortSignal | undefined,
+  run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
+  options?: { commit?: (result: T) => void | Promise<void> },
+) => Promise<T>;
+
+const profileOperationRunners = new WeakMap<ProfileContext, ProfileOperationRunner>();
+
+/** Internal actor lease entrypoint; not part of the public Browser runtime API. */
+export function runProfileContextOperation<T>(
+  profileCtx: ProfileContext,
+  signal: AbortSignal | undefined,
+  run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
+  options?: { commit?: (result: T) => void | Promise<void> },
+): Promise<T> {
+  const runner = profileOperationRunners.get(profileCtx);
+  if (!runner) {
+    throw new BrowserProfileUnavailableError("Browser profile context is no longer active.");
+  }
+  return runner(signal, run, options);
+}
+
+/** Preserve custom route contexts while leasing contexts created by this runtime. */
+export function withProfileContextOperation<T>(
+  profileCtx: ProfileContext,
+  signal: AbortSignal | undefined,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const runner = profileOperationRunners.get(profileCtx);
+  if (!runner) {
+    const directSignal = signal ?? new AbortController().signal;
+    return run(directSignal);
+  }
+  return runner(signal, run);
+}
+
+function createProfileContext(
+  opts: ContextOptions,
+  runtimeState: BrowserServerState,
+  profileState: ProfileRuntimeState,
+  profile: ResolvedBrowserProfile,
+): ProfileContext {
+  const state = () => {
+    const current = opts.getState();
+    if (current !== runtimeState || !isBrowserRuntimeRunning(runtimeState)) {
+      throw new BrowserProfileUnavailableError("Browser runtime changed or is stopping.");
+    }
+    return runtimeState;
+  };
+
+  const rawTabOps = createProfileTabOps({
+    profile,
+    state,
+    runtime: profileState,
+  });
+
+  const rawAvailability = createProfileAvailability({
+    opts,
+    profile,
+    state,
+    runtime: profileState,
+  });
+
+  const rawSelection = createProfileSelectionOps({
+    profile,
+    runtime: profileState,
+    getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
+    listTabs: rawTabOps.listTabs,
+    openTab: rawTabOps.openTab,
+  });
+  const capabilities = getBrowserProfileCapabilities(profile);
+
+  const withLease = async <T>(
+    callerSignal: AbortSignal | undefined,
+    run: (signal: AbortSignal, runtime: ProfileRuntimeState) => Promise<T>,
+    options?: { commit?: (result: T) => void | Promise<void> },
+  ): Promise<T> =>
+    await withProfileOperationLease({
+      state: state(),
+      runtime: profileState,
+      signal: callerSignal,
+      run: async (lifecycleSignal) => await run(lifecycleSignal, profileState),
+      commit: options?.commit,
+    });
+
+  const { ensureBrowserAvailable, stopRunningBrowser } = rawAvailability;
+
+  const context: ProfileContext = {
+    profile,
+    ensureBrowserAvailable,
+    ensureTabAvailable: async (targetId, options) => {
+      if (targetId === undefined) {
+        await ensureBrowserAvailable({ signal: options?.signal });
+      }
+      return await withLease(options?.signal, async (signal) => {
+        // Explicit targets can come from history; lookup must not launch or restart a browser.
+        if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
+          );
+        }
+        return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
+      });
+    },
+    isHttpReachable: (timeoutMs, callerSignal) =>
+      withLease(callerSignal, (signal) => rawAvailability.isHttpReachable(timeoutMs, signal)),
+    isTransportAvailable: (timeoutMs, callerSignal, pageProbe) =>
+      withLease(callerSignal, (signal) =>
+        rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
+      ),
+    isReachable: (timeoutMs, options) =>
+      withLease(options?.signal, (signal) =>
+        rawAvailability.isReachable(timeoutMs, { ...options, signal }),
+      ),
+    listTabs: (options) =>
+      withLease(options?.signal, (signal) => rawTabOps.listTabs({ ...options, signal })),
+    openTab: (url, options) =>
+      withLease(options?.signal, (signal) => rawTabOps.openTab(url, { ...options, signal })),
+    labelTab: (targetId, label) =>
+      withLease(undefined, (signal) => rawTabOps.labelTab(targetId, label, { signal })),
+    focusTab: (targetId, options) =>
+      withLease(options?.signal, (signal) =>
+        rawSelection.focusTab(targetId, { ...options, signal }),
+      ),
+    closeTab: (targetId, options) =>
+      withLease(options?.signal, (signal) =>
+        rawSelection.closeTab(targetId, { ...options, signal }),
+      ),
+    stopRunningBrowser,
+    resetProfile: async () => {
+      if (!capabilities.supportsReset) {
+        throw new BrowserResetUnsupportedError(
+          `reset-profile is only supported for local profiles (profile "${profile.name}" is remote).`,
+        );
+      }
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      assertProfileLifecycleContext({ state: state(), runtime: profileState });
+      profileState.managedLaunchFailure = undefined;
+      let result: Awaited<ReturnType<ProfileContext["resetProfile"]>> = {
+        moved: false,
+        from: userDataDir,
+      };
+      await beginProfileTransition({
+        state: state(),
+        runtime: profileState,
+        reason: "profile reset requested",
+        managedChrome: "release-profile-data",
+        afterCleanup: async () => {
+          if (fs.existsSync(userDataDir)) {
+            result = { moved: true, from: userDataDir, to: await movePathToTrash(userDataDir) };
+          }
+        },
+      });
+      return result;
+    },
+  };
+  profileOperationRunners.set(context, withLease);
+  return context;
+}
+
+export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
+  const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
+
+  const state = () => {
+    const current = opts.getState();
+    if (!current) {
+      throw new BrowserProfileUnavailableError("Browser server not started.");
+    }
+    if (!isBrowserRuntimeRunning(current)) {
+      throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
+    }
+    refreshResolvedBrowserConfigFromDisk({ current, refreshConfigFromDisk });
+    return current;
+  };
+
+  const forProfile = (profileName?: string): ProfileContext => {
+    const current = state();
+    const name = profileName ?? current.resolved.defaultProfile;
+    const profile = resolveProfile(current.resolved, name);
+
+    if (!profile) {
+      const available = Object.keys(current.resolved.profiles).join(", ");
+      throw new BrowserProfileNotFoundError(
+        `Profile "${name}" not found. Available profiles: ${available || "(none)"}`,
+      );
+    }
+    const profileState = getOrCreateProfileRuntime(current, profile);
+    return createProfileContext(opts, current, profileState, profile);
+  };
+
+  const listProfiles = async (): Promise<ProfileStatus[]> => {
+    const current = state();
+    const result: ProfileStatus[] = [];
+
+    const names = new Set([...Object.keys(current.resolved.profiles), ...current.profiles.keys()]);
+    for (const name of names) {
+      let profileState = current.profiles.get(name);
+      const profile = resolveProfile(current.resolved, name) ?? profileState?.profile;
+      if (!profile) {
+        continue;
+      }
+      profileState ??= getOrCreateProfileRuntime(current, profile);
+      let statusProfile = profileState.profile;
+      let unavailableReason: string | null = null;
+      let running: boolean;
+      let tabCount: number;
+
+      const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
+      try {
+        const snapshot = await runProfileContextOperation(
+          profileCtx,
+          undefined,
+          async (signal, runtime) => {
+            const activeProfile = runtime.profile;
+            let activeTabCount = 0;
+            const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+              profileIsLoopback: activeProfile.cdpIsLoopback,
+              attachOnly: activeProfile.attachOnly,
+            })
+              ? 200
+              : current.resolved.remoteCdpTimeoutMs;
+            const activeRunning = await profileCtx
+              .isTransportAvailable(probeTimeoutMs, signal, {
+                onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+              })
+              .catch(() => false);
+            signal.throwIfAborted();
+            return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
+          },
+        );
+        statusProfile = snapshot.profile;
+        running = snapshot.running;
+        tabCount = snapshot.tabCount;
+      } catch (err) {
+        statusProfile = profileState.profile;
+        const actor = getProfileLifecycle(profileState);
+        unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
+        if (!unavailableReason && !toBrowserErrorResponse(err)) {
+          throw err;
+        }
+        running = Boolean(profileState.running);
+        tabCount = 0;
+      }
+
+      const capabilities = getBrowserProfileCapabilities(statusProfile);
+      result.push({
+        name,
+        transport: capabilities.usesChromeMcp
+          ? "chrome-mcp"
+          : capabilities.mode === "local-extension"
+            ? "extension"
+            : "cdp",
+        cdpPort: capabilities.usesChromeMcp ? null : statusProfile.cdpPort,
+        cdpUrl: statusProfile.cdpUrl ? (redactCdpUrl(statusProfile.cdpUrl) ?? null) : null,
+        color: statusProfile.color,
+        driver: statusProfile.driver,
+        running,
+        tabCount,
+        isDefault: name === current.resolved.defaultProfile,
+        isRemote: !statusProfile.cdpIsLoopback,
+        missingFromConfig:
+          getOwnBrowserProfile(current.resolved.profiles, name) === undefined || undefined,
+        reconcileReason: unavailableReason,
+      });
+    }
+
+    return result;
+  };
+
+  return {
+    state,
+    forProfile,
+    listProfiles,
+  };
+}

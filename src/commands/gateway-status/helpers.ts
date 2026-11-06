@@ -1,0 +1,278 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveGatewayPort } from "../../config/config.js";
+import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
+import { isLoopbackHost } from "../../gateway/net.js";
+import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
+
+const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
+
+type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
+
+export type GatewayStatusTarget = {
+  id: string;
+  kind: TargetKind;
+  url: string;
+  active: boolean;
+  tunnel?: {
+    kind: "ssh";
+    target: string;
+    localPort: number;
+    remotePort: number;
+    pid: number | null;
+  };
+};
+
+export type GatewayConfigSummary = ReturnType<typeof extractConfigSummary>;
+
+function parseIntOrNull(value: unknown): number | null {
+  const s =
+    typeof value === "string"
+      ? value.trim()
+      : typeof value === "number" || typeof value === "bigint"
+        ? String(value)
+        : "";
+  if (!s) {
+    return null;
+  }
+  return parseStrictInteger(s) ?? null;
+}
+
+function normalizeWsUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    return null;
+  }
+  return trimmed;
+}
+
+export function resolveTargets(
+  cfg: OpenClawConfig,
+  explicitUrl?: string,
+  localPortOverride?: number,
+): GatewayStatusTarget[] {
+  const targets: GatewayStatusTarget[] = [];
+  const add = (t: GatewayStatusTarget) => {
+    if (!targets.some((x) => x.url === t.url)) {
+      targets.push(t);
+    }
+  };
+
+  const explicit = typeof explicitUrl === "string" ? normalizeWsUrl(explicitUrl) : null;
+  if (explicit) {
+    add({ id: "explicit", kind: "explicit", url: explicit, active: true });
+  }
+
+  const port = localPortOverride ?? resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const localLoopbackTarget: GatewayStatusTarget = {
+    id: "localLoopback",
+    kind: "localLoopback",
+    url: `${localScheme}://127.0.0.1:${port}`,
+    active: localPortOverride !== undefined || cfg.gateway?.mode !== "remote",
+  };
+  if (localPortOverride !== undefined && !explicit) {
+    add(localLoopbackTarget);
+    return targets;
+  }
+
+  const remoteUrl =
+    typeof cfg.gateway?.remote?.url === "string" ? normalizeWsUrl(cfg.gateway.remote.url) : null;
+  if (remoteUrl) {
+    add({
+      id: "configRemote",
+      kind: "configRemote",
+      url: remoteUrl,
+      active: cfg.gateway?.mode === "remote",
+    });
+  }
+
+  add(localLoopbackTarget);
+
+  return targets;
+}
+
+export function resolveProbeBudgetMs(
+  overallMs: number,
+  target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
+): number {
+  if (target.kind === "sshTunnel") {
+    return Math.min(2000, overallMs);
+  }
+  if (target.active) {
+    return overallMs;
+  }
+  if (target.kind === "localLoopback") {
+    return Math.min(800, overallMs);
+  }
+  const url = URL.parse(target.url);
+  if (url === null || !isLoopbackHost(url.hostname)) {
+    return Math.min(1500, overallMs);
+  }
+  return overallMs;
+}
+
+/** Normalizes user-entered SSH targets, accepting both raw targets and `ssh host` input. */
+export function sanitizeSshTarget(value: unknown): string | null {
+  return normalizeOptionalString(value)?.replace(/^ssh\s+/, "") ?? null;
+}
+
+export async function resolveAuthForTarget(
+  cfg: OpenClawConfig,
+  target: GatewayStatusTarget,
+  overrides: { token?: string; password?: string },
+): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
+  const tokenOverride = normalizeOptionalString(overrides.token);
+  const passwordOverride = normalizeOptionalString(overrides.password);
+  if (tokenOverride || passwordOverride) {
+    return { token: tokenOverride, password: passwordOverride };
+  }
+
+  const resolved = await resolveGatewayProbeSurfaceAuth({
+    config: cfg,
+    surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
+  });
+  return {
+    token: resolved.token,
+    password: resolved.password,
+    ...(resolved.diagnostics ? { diagnostics: resolved.diagnostics } : {}),
+  };
+}
+
+export function extractConfigSummary(snapshotUnknown: unknown) {
+  const snap = snapshotUnknown as Partial<ConfigFileSnapshot> | null;
+  const path = typeof snap?.path === "string" ? snap.path : null;
+  const exists = Boolean(snap?.exists);
+  const valid = Boolean(snap?.valid);
+  const issuesRaw = Array.isArray(snap?.issues) ? snap.issues : [];
+  const legacyRaw = Array.isArray(snap?.legacyIssues) ? snap.legacyIssues : [];
+  const summarizeIssues = (issues: ConfigFileSnapshot["issues"]) =>
+    issues
+      .filter(
+        (issue): issue is { path: string; message: string } =>
+          issue && typeof issue.path === "string" && typeof issue.message === "string",
+      )
+      .map((issue) => ({ path: issue.path, message: issue.message }));
+
+  const cfg = (snap?.config ?? {}) as Record<string, unknown>;
+  const gateway = (cfg.gateway ?? {}) as Record<string, unknown>;
+  const secrets = (cfg.secrets ?? {}) as Record<string, unknown>;
+  const secretDefaults = (secrets.defaults ?? undefined) as
+    | { env?: string; file?: string; exec?: string }
+    | undefined;
+  const discovery = (cfg.discovery ?? {}) as Record<string, unknown>;
+  const wideArea = (discovery.wideArea ?? {}) as Record<string, unknown>;
+
+  const remote = (gateway.remote ?? {}) as Record<string, unknown>;
+  const auth = (gateway.auth ?? {}) as Record<string, unknown>;
+  const controlUi = (gateway.controlUi ?? {}) as Record<string, unknown>;
+  const tailscale = (gateway.tailscale ?? {}) as Record<string, unknown>;
+
+  const authMode = typeof auth.mode === "string" ? auth.mode : null;
+  const authTokenConfigured = hasConfiguredSecretInput(auth.token, secretDefaults);
+  const authPasswordConfigured = hasConfiguredSecretInput(auth.password, secretDefaults);
+
+  const remoteUrl = typeof remote.url === "string" ? normalizeWsUrl(remote.url) : null;
+  const remoteTokenConfigured = hasConfiguredSecretInput(remote.token, secretDefaults);
+  const remotePasswordConfigured = hasConfiguredSecretInput(remote.password, secretDefaults);
+
+  const wideAreaEnabled =
+    typeof wideArea.domain === "string" ? wideArea.domain.trim().length > 0 : null;
+
+  return {
+    path,
+    exists,
+    valid,
+    issues: summarizeIssues(issuesRaw),
+    legacyIssues: summarizeIssues(legacyRaw),
+    gateway: {
+      mode: typeof gateway.mode === "string" ? gateway.mode : null,
+      bind: typeof gateway.bind === "string" ? gateway.bind : null,
+      port: parseIntOrNull(gateway.port),
+      controlUiEnabled: typeof controlUi.enabled === "boolean" ? controlUi.enabled : null,
+      controlUiBasePath: typeof controlUi.basePath === "string" ? controlUi.basePath : null,
+      authMode,
+      authTokenConfigured,
+      authPasswordConfigured,
+      remoteUrl,
+      remoteTokenConfigured,
+      remotePasswordConfigured,
+      tailscaleMode: typeof tailscale.mode === "string" ? tailscale.mode : null,
+    },
+    discovery: { wideAreaEnabled },
+  };
+}
+
+/** Returns true when auth succeeded enough to connect but lacks the read scope. */
+export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
+  if (probe.ok || !probe.gatewayReached) {
+    return false;
+  }
+  if (probe.missingScopeErrorDetails) {
+    return probe.missingScopeErrorDetails.missingScope === "operator.read";
+  }
+  return LEGACY_MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+}
+
+/** Returns true when the gateway connection was established but a later probe failed. */
+export function isPostConnectProbeFailure(probe: GatewayProbeResult): boolean {
+  return !probe.ok && probe.gatewayReached === true;
+}
+
+/** Returns true when the probe established any gateway connection. */
+export function isProbeReachable(probe: GatewayProbeResult): boolean {
+  return probe.ok || probe.gatewayReached === true;
+}
+
+// Strongest capability first; the same vocabulary owns probe selection and display.
+const gatewayProbeCapabilities = [
+  { capability: "admin_capable", label: "admin-capable", color: "info" },
+  { capability: "write_capable", label: "write-capable", color: "info" },
+  { capability: "read_only", label: "read-only", color: "info" },
+  { capability: "connected_no_operator_scope", label: "connect-only", color: "warn" },
+  { capability: "pairing_pending", label: "pairing pending", color: "warn" },
+] as const;
+
+export function summarizeGatewayProbeCapability(
+  probes: GatewayProbeResult[],
+): GatewayProbeCapability {
+  return (
+    gatewayProbeCapabilities.find(({ capability }) =>
+      probes.some((probe) => probe.auth.capability === capability),
+    )?.capability ?? "unknown"
+  );
+}
+
+export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
+  const display = gatewayProbeCapabilities.find(
+    ({ capability }) => capability === probe.auth.capability,
+  );
+  const capability = colorize(
+    rich,
+    theme[display?.color ?? "muted"],
+    `Capability: ${display?.label ?? "unknown"}`,
+  );
+  const detail = !probe.ok && probe.error ? ` - ${probe.error}` : "";
+  if (probe.ok || (probe.gatewayReached && probe.connectLatencyMs != null)) {
+    const latency =
+      typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
+    const readStatus = probe.ok
+      ? colorize(rich, theme.success, "Read check: ok")
+      : isScopeLimitedProbeFailure(probe)
+        ? colorize(rich, theme.warn, "Read check: limited")
+        : colorize(rich, theme.error, "Read check: failed");
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${readStatus}${detail}`;
+  }
+
+  if (probe.auth.capability === "pairing_pending") {
+    return `${colorize(rich, theme.warn, "Connect: blocked")}${detail} · ${capability}`;
+  }
+
+  return `${colorize(rich, theme.error, "Connect: failed")}${detail} · ${capability}`;
+}

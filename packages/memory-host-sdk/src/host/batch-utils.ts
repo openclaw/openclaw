@@ -1,0 +1,72 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
+
+/** Minimal HTTP client config needed by batch providers. */
+export type BatchHttpClientConfig = {
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+};
+
+/** Normalize batch API base URLs by removing one trailing slash. */
+export function normalizeBatchBaseUrl(client: BatchHttpClientConfig): string {
+  return client.baseUrl?.replace(/\/$/, "") ?? "";
+}
+
+/** Build request headers, preserving caller auth and controlling JSON/form content type. */
+export function buildBatchHeaders(
+  client: Pick<BatchHttpClientConfig, "headers">,
+  params: { json: boolean },
+): Record<string, string> {
+  const headers = client.headers ? { ...client.headers } : {};
+  if (params.json) {
+    if (!headers["Content-Type"] && !headers["content-type"]) {
+      headers["Content-Type"] = "application/json";
+    }
+  } else {
+    delete headers["Content-Type"];
+    delete headers["content-type"];
+  }
+  return headers;
+}
+
+export function splitBatchRequestsByLimits<T>(
+  requests: T[],
+  limits: { maxRequests: number; maxJsonlBytes?: number },
+): T[][] {
+  const maxRequests = floorPositiveFiniteNumber(limits.maxRequests) ?? 1;
+  const maxJsonlBytes = floorPositiveFiniteNumber(limits.maxJsonlBytes);
+  if (requests.length === 0) {
+    return maxJsonlBytes ? [] : [requests];
+  }
+
+  const groups: T[][] = [];
+  let current: T[] = [];
+  let currentBytes = 0;
+  for (const request of requests) {
+    // A normalized zero is still a byte cap; only an absent cap skips sizing.
+    const requestBytes =
+      maxJsonlBytes === undefined ? 0 : Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
+    const separatorBytes = current.length === 0 ? 0 : 1;
+    const wouldExceedRequests = current.length >= maxRequests;
+    const wouldExceedBytes =
+      maxJsonlBytes !== undefined &&
+      current.length > 0 &&
+      currentBytes + separatorBytes + requestBytes > maxJsonlBytes;
+    if (current.length > 0 && (wouldExceedRequests || wouldExceedBytes)) {
+      groups.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+
+    currentBytes += (current.length === 0 ? 0 : 1) + requestBytes;
+    current.push(request);
+  }
+  if (current.length > 0) {
+    groups.push(current);
+  }
+  return groups;
+}

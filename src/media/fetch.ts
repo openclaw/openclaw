@@ -1,0 +1,721 @@
+import { MIMEType } from "node:util";
+import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
+import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  readChunkWithIdleTimeout,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "../infra/http-body.js";
+import {
+  fetchWithSsrFGuard,
+  type GuardedFetchOptions,
+  withStrictGuardedFetchMode,
+  withTrustedExplicitProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { retryAsync, type RetryOptions } from "../infra/retry.js";
+import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { captureChannelReadScope } from "../shared/channel-read-authority.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import { withMediaReadScope } from "./fetch.read-scope.js";
+import { saveMediaStream, type SavedMedia } from "./store.js";
+import { SaveMediaSourceError } from "./store.shared.js";
+
+// Large media endpoints get a generous header-only deadline. The timer is
+// cleared once headers arrive, so healthy streaming bodies keep their own limits.
+const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
+
+type FetchMediaResult = {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+};
+
+export type SavedRemoteMedia = SavedMedia & {
+  fileName?: string;
+};
+
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+
+/** Retry policy applied around the complete guarded fetch and body read/save operation. */
+export type MediaFetchRetryOptions = RetryOptions;
+
+export class MediaFetchError extends Error {
+  readonly code: MediaFetchErrorCode;
+  readonly status?: number;
+
+  constructor(
+    code: MediaFetchErrorCode,
+    message: string,
+    options?: { cause?: unknown; status?: number },
+  ) {
+    super(message, options);
+    this.code = code;
+    this.status = options?.status;
+    this.name = "MediaFetchError";
+  }
+}
+
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
+type FetchDispatcherAttempt = {
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  lookupFn?: LookupFn;
+};
+
+type FetchMediaOptions = {
+  url: string;
+  fetchImpl?: FetchLike;
+  /** Final synchronous check repeated for every media attempt and redirect. */
+  beforeRequest?: GuardedFetchOptions["beforeRequest"];
+  requestInit?: RequestInit;
+  filePathHint?: string;
+  maxBytes?: number;
+  maxRedirects?: number;
+  /** Require HTTPS for the initial URL and every redirect target. */
+  requireHttps?: boolean;
+  /** Abort the complete guarded fetch and body operation after this deadline (ms). */
+  timeoutMs?: number;
+  /** Abort if final response headers have not arrived by this deadline (ms). */
+  responseHeaderTimeoutMs?: number;
+  /** Abort if the response body stops yielding data for this long (ms). */
+  readIdleTimeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  dispatcherAttempts?: FetchDispatcherAttempt[];
+  shouldRetryFetchError?: (error: unknown) => boolean;
+  /**
+   * Retries the complete guarded fetch/read-or-save operation. Dispatcher
+   * attempts still run inside each retry attempt.
+   */
+  retry?: MediaFetchRetryOptions;
+  /**
+   * Allow an operator-configured explicit proxy to resolve target DNS after
+   * hostname-policy checks instead of forcing local pinned-DNS first.
+   */
+  trustExplicitProxyDns?: boolean;
+};
+
+type SaveResponseMediaOptions = {
+  sourceUrl?: string;
+  filePathHint?: string;
+  maxBytes?: number;
+  readIdleTimeoutMs?: number;
+  fallbackContentType?: string;
+  subdir?: string;
+  originalFilename?: string;
+};
+
+type SaveRemoteMediaOptions = FetchMediaOptions & {
+  /** Revalidate caller-owned read authority through transport and file publication. */
+  assertCurrent?: () => void;
+  fallbackContentType?: string;
+  subdir?: string;
+  originalFilename?: string;
+};
+
+type GuardedMediaResponse = {
+  response: Response;
+  finalUrl: string;
+  release: () => Promise<void>;
+  sourceUrl: string;
+};
+
+function decodeRemoteFileNameComponent(value: string): string {
+  try {
+    return decodeURIComponent(value).replace(/[\\/]/g, "_");
+  } catch {
+    return value;
+  }
+}
+
+function decodeExtendedRemoteFileName(value: string): string | undefined {
+  const match = /^([^']*)'[^']*'(.*)$/u.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const charset = match[1]?.toLowerCase();
+  const encoded = match[2] ?? "";
+  try {
+    if (charset === "utf-8") {
+      return decodeURIComponent(encoded).replace(/[\\/]/g, "_");
+    }
+    if (charset === "iso-8859-1") {
+      if (/%(?![\da-f]{2})/iu.test(encoded)) {
+        return undefined;
+      }
+      return encoded
+        .replace(/%([\da-f]{2})/giu, (_match, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        )
+        .replace(/[\\/]/g, "_");
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function* parseContentDispositionParameters(header: string): Generator<{
+  name: string;
+  value: string;
+}> {
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index <= header.length; index += 1) {
+    const character = header[index];
+    if (escaped || (quoted && character === "\\")) {
+      escaped = !escaped;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (index !== header.length && (quoted || character !== ";")) {
+      continue;
+    }
+    const parameter = header.slice(start, index).trim();
+    start = index + 1;
+    const separator = parameter.indexOf("=");
+    if (separator > 0) {
+      yield {
+        name: parameter.slice(0, separator).trim().toLowerCase(),
+        // Apostrophes are token characters, not HTTP quoted-string delimiters.
+        value: parameter
+          .slice(separator + 1)
+          .trim()
+          .replace(/^"|"$/g, ""),
+      };
+    }
+  }
+}
+
+function decodeQuotedRemoteFileName(value: string): string {
+  const windowsDrivePath = /^[a-z]:[\\/]/iu.test(value);
+  const windowsNetworkPath = value.startsWith("\\\\");
+  const mixedWindowsPath = value.includes("/") && value.includes("\\");
+  const relativeWindowsPath =
+    /\\[\p{L}\p{N}]/u.test(value) && /^[^\\/:]+(?:\\[^\\]+)+$/u.test(value);
+  if (!windowsDrivePath && !windowsNetworkPath && !mixedWindowsPath && !relativeWindowsPath) {
+    return value.replace(/\\(.)/gu, "$1");
+  }
+  const lastForwardSeparator = value.lastIndexOf("/");
+  if (lastForwardSeparator >= 0) {
+    const prefix = value.slice(0, lastForwardSeparator + 1);
+    const fileName = value.slice(lastForwardSeparator + 1).replace(/\\([^\p{L}\p{N}])/gu, "$1");
+    return `${prefix}${fileName}`;
+  }
+  const firstBackslash = value.indexOf("\\");
+  if (
+    !windowsDrivePath &&
+    !windowsNetworkPath &&
+    firstBackslash === value.lastIndexOf("\\") &&
+    /\\[^\p{L}\p{N}]/u.test(value)
+  ) {
+    return value.replace(/\\(.)/gu, "$1");
+  }
+  // Backslash-only legacy paths need every separator, including before Unicode or spaces.
+  return value.replace(/\\"/gu, '"');
+}
+
+function parseContentDispositionFileName(header?: string | null): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+  let fallbackFileName: string | undefined;
+  for (const parameter of parseContentDispositionParameters(header)) {
+    if (parameter.name === "filename") {
+      fallbackFileName ??=
+        basenameFromAnyPath(decodeQuotedRemoteFileName(parameter.value)) || undefined;
+      continue;
+    }
+    if (parameter.name !== "filename*") {
+      continue;
+    }
+    // An unusable extended name must not hide a valid plain filename.
+    const fileName = basenameFromAnyPath(decodeExtendedRemoteFileName(parameter.value) ?? "");
+    if (fileName) {
+      return fileName;
+    }
+  }
+  return fallbackFileName;
+}
+
+function createMediaFetchFailure(sourceUrl: string, cause: unknown): MediaFetchError {
+  return new MediaFetchError(
+    "fetch_failed",
+    `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(cause)}`,
+    { cause },
+  );
+}
+
+async function fetchGuardedMediaResponse(
+  options: FetchMediaOptions,
+): Promise<GuardedMediaResponse> {
+  const {
+    url,
+    fetchImpl,
+    beforeRequest,
+    requestInit,
+    maxRedirects,
+    requireHttps,
+    timeoutMs,
+    responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+    ssrfPolicy,
+    lookupFn,
+    dispatcherPolicy,
+    dispatcherAttempts,
+    shouldRetryFetchError,
+    trustExplicitProxyDns,
+  } = options;
+  const sourceUrl = redactSensitiveText(url);
+
+  // Dispatcher attempts are fallback routes inside one logical guarded fetch operation.
+  const attempts =
+    dispatcherAttempts && dispatcherAttempts.length > 0
+      ? dispatcherAttempts
+      : [{ dispatcherPolicy, lookupFn }];
+  const responseHeaderDeadline = buildTimeoutAbortSignal({
+    timeoutMs: responseHeaderTimeoutMs,
+    signal: requestInit?.signal ?? undefined,
+    operation: "media response headers",
+    url,
+  });
+  const requestSignal = responseHeaderDeadline.signal;
+  try {
+    let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const attemptErrors: unknown[] = [];
+    for (const [i, attempt] of attempts.entries()) {
+      try {
+        result = await fetchWithSsrFGuard(
+          (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
+            ? withTrustedExplicitProxyGuardedFetchMode
+            : withStrictGuardedFetchMode)({
+            url,
+            fetchImpl,
+            ...(beforeRequest ? { beforeRequest } : {}),
+            init: requestInit,
+            maxRedirects,
+            ...(requireHttps !== undefined ? { requireHttps } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            ...(requestSignal ? { signal: requestSignal } : {}),
+            policy: ssrfPolicy,
+            lookupFn: attempt.lookupFn ?? lookupFn,
+            dispatcherPolicy: attempt.dispatcherPolicy,
+          }),
+        );
+        break;
+      } catch (err) {
+        if (
+          typeof shouldRetryFetchError !== "function" ||
+          !shouldRetryFetchError(err) ||
+          i === attempts.length - 1
+        ) {
+          if (attemptErrors.length > 0) {
+            throw Object.assign(
+              new Error(`Primary fetch failed and fallback fetch also failed for ${sourceUrl}`, {
+                cause: err,
+              }),
+              { primaryError: attemptErrors[0], attemptErrors: [...attemptErrors, err] },
+            );
+          }
+          throw err;
+        }
+        attemptErrors.push(err);
+      }
+    }
+    return {
+      response: result.response,
+      finalUrl: result.finalUrl,
+      release: result.release,
+      sourceUrl,
+    };
+  } catch (err) {
+    throw createMediaFetchFailure(sourceUrl, err);
+  } finally {
+    // Clear only the header timer; release owns the parent signal during body reads.
+    responseHeaderDeadline.cleanup();
+  }
+}
+
+async function assertMediaResponseOk(params: {
+  res: Response;
+  url: string;
+  finalUrl: string;
+  sourceUrl: string;
+  readIdleTimeoutMs?: number;
+}): Promise<void> {
+  const { res, url, finalUrl, sourceUrl, readIdleTimeoutMs } = params;
+  if (res.ok && res.body) {
+    return;
+  }
+  const statusText = res.statusText ? ` ${res.statusText}` : "";
+  const redirected = finalUrl !== url ? ` (redirected to ${redactSensitiveText(finalUrl)})` : "";
+  let detail = `HTTP ${res.status}${statusText}`;
+  // Failed response bodies may have been deliberately discarded by the caller.
+  if (res.ok) {
+    detail += "; empty response body";
+  } else if (res.body) {
+    const snippet = await readResponseTextSnippet(res, {
+      maxBytes: 8 * 1024,
+      chunkTimeoutMs: readIdleTimeoutMs,
+    }).catch(() => undefined);
+    if (snippet) {
+      detail += `; body: ${snippet}`;
+    }
+  }
+  throw new MediaFetchError(
+    "http_error",
+    `Failed to fetch media from ${sourceUrl}${redirected}: ${redactSensitiveText(detail)}`,
+    { status: res.status },
+  );
+}
+
+// Caller-provided responses may already be partially read; discard their remaining bytes too.
+function assertMediaContentLength(params: {
+  res: Response;
+  sourceUrl: string;
+  maxBytes: number;
+}): void {
+  let length: number | null;
+  try {
+    length = parseMediaContentLength(params.res.headers.get("content-length"));
+  } catch (err) {
+    void params.res.body?.cancel().catch(() => undefined);
+    throw new MediaFetchError(
+      "http_error",
+      `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
+      { cause: err },
+    );
+  }
+  if (length === null) {
+    return;
+  }
+  if (length > params.maxBytes) {
+    void params.res.body?.cancel().catch(() => undefined);
+    throw new MediaFetchError(
+      "max_bytes",
+      `Failed to fetch media from ${params.sourceUrl}: content length ${length} exceeds maxBytes ${params.maxBytes}`,
+    );
+  }
+}
+
+function resolveRemoteFileName(params: {
+  res: Response;
+  finalUrl: string;
+  filePathHint?: string;
+}): string | undefined {
+  const fileName =
+    parseContentDispositionFileName(params.res.headers.get("content-disposition")) ||
+    (params.filePathHint ? basenameFromAnyPath(params.filePathHint) : undefined);
+  if (fileName) {
+    return fileName;
+  }
+  try {
+    const parsed = new URL(params.finalUrl);
+    return decodeRemoteFileNameComponent(basenameFromAnyPath(parsed.pathname)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isGenericResponseContentType(value?: string | null): boolean {
+  const normalized = value?.split(";")[0]?.trim().toLowerCase();
+  return (
+    !normalized ||
+    normalized === "application/octet-stream" ||
+    normalized === "binary/octet-stream" ||
+    normalized === "application/zip"
+  );
+}
+
+function resolveResponseContentType(params: {
+  headerContentType?: string | null;
+  fallbackContentType?: string;
+}): string | undefined {
+  if (!params.fallbackContentType) {
+    return params.headerContentType ?? undefined;
+  }
+  if (isGenericResponseContentType(params.headerContentType)) {
+    return params.fallbackContentType;
+  }
+  const headerContentType = params.headerContentType?.split(";")[0]?.trim().toLowerCase();
+  const fallbackContentType = params.fallbackContentType.split(";")[0]?.trim().toLowerCase();
+  // Some platforms mislabel audio/video container uploads by top-level type.
+  // Preserve the caller hint when only that top-level prefix differs.
+  if (
+    headerContentType?.startsWith("video/") &&
+    fallbackContentType?.startsWith("audio/") &&
+    headerContentType.slice("video/".length) === fallbackContentType.slice("audio/".length)
+  ) {
+    return params.fallbackContentType;
+  }
+  return params.headerContentType ?? params.fallbackContentType;
+}
+
+async function* responseBodyChunks(
+  body: ReadableStream<Uint8Array>,
+  readIdleTimeoutMs?: number,
+): AsyncIterable<Uint8Array> {
+  const readScope = captureChannelReadScope();
+  const reader = body.getReader();
+  let completed = false;
+  try {
+    while (true) {
+      readScope?.assertCurrent();
+      const { done, value } = readIdleTimeoutMs
+        ? await readChunkWithIdleTimeout(reader, readIdleTimeoutMs)
+        : await reader.read();
+      readScope?.assertCurrent();
+      if (done) {
+        completed = true;
+        return;
+      }
+      if (value?.byteLength) {
+        yield value;
+      }
+    }
+  } finally {
+    if (!completed) {
+      // Let the file writer close its handle and the request owner abort any capture tee.
+      void reader.cancel().catch(() => undefined);
+    }
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
+async function saveOkMediaResponse(
+  params: SaveResponseMediaOptions & {
+    res: Response;
+    finalUrl: string;
+    sourceUrl: string;
+    maxBytes: number;
+  },
+): Promise<SavedRemoteMedia> {
+  assertMediaContentLength({
+    res: params.res,
+    sourceUrl: params.sourceUrl,
+    maxBytes: params.maxBytes,
+  });
+  const fileName = resolveRemoteFileName({
+    res: params.res,
+    finalUrl: params.finalUrl,
+    filePathHint: params.filePathHint,
+  });
+  const contentType = resolveResponseContentType({
+    headerContentType: params.res.headers.get("content-type"),
+    fallbackContentType: params.fallbackContentType,
+  });
+  const detectionFilePathHint = isGenericResponseContentType(contentType)
+    ? (params.filePathHint ?? fileName)
+    : undefined;
+  try {
+    const body = expectDefined(params.res.body, "media response body");
+    const saved = await saveMediaStream(
+      responseBodyChunks(body, params.readIdleTimeoutMs),
+      contentType ?? undefined,
+      params.subdir ?? "inbound",
+      params.maxBytes,
+      params.originalFilename,
+      detectionFilePathHint,
+    );
+    // Keep the response decoder hint when staging an attachment for a channel.
+    // MIME sniffing still owns the type; it must not erase the charset.
+    if (contentType && saved.contentType) {
+      try {
+        const headerMime = new MIMEType(contentType);
+        const charset = headerMime.params.get("charset");
+        if (charset !== null) {
+          const storedMime = new MIMEType(saved.contentType);
+          storedMime.params.set("charset", charset);
+          saved.contentType = storedMime.toString();
+        }
+      } catch {
+        // Malformed metadata does not invalidate successfully downloaded media.
+      }
+    }
+    return { ...saved, ...(fileName ? { fileName } : {}) };
+  } catch (err) {
+    if (err instanceof MediaFetchError) {
+      throw err;
+    }
+    if (err instanceof SaveMediaSourceError && err.code === "too-large") {
+      throw new MediaFetchError(
+        "max_bytes",
+        `Failed to fetch media from ${params.sourceUrl}: payload exceeds maxBytes ${params.maxBytes}`,
+        { cause: err },
+      );
+    }
+    throw createMediaFetchFailure(params.sourceUrl, err);
+  }
+}
+
+function shouldRetryMediaFetch(err: unknown): boolean {
+  if (err instanceof MediaFetchError) {
+    if (err.code === "max_bytes") {
+      return false;
+    }
+    if (err.code === "http_error") {
+      return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+    }
+    if (err.code === "fetch_failed") {
+      if (isAbortError(err) || isAbortError(err.cause)) {
+        return false;
+      }
+      return isTransientNetworkError(err.cause ?? err);
+    }
+    return false;
+  }
+  return isTransientNetworkError(err);
+}
+
+/** Validates and saves a caller-provided response without performing a new fetch. */
+export async function saveResponseMedia(
+  res: Response,
+  options: SaveResponseMediaOptions = {},
+): Promise<SavedRemoteMedia> {
+  const sourceUrl = redactSensitiveText((options.sourceUrl ?? res.url) || "response");
+  const finalUrl = options.sourceUrl ?? res.url;
+  await assertMediaResponseOk({
+    res,
+    url: options.sourceUrl ?? finalUrl,
+    finalUrl,
+    sourceUrl,
+    readIdleTimeoutMs: options.readIdleTimeoutMs,
+  });
+  return await saveOkMediaResponse({
+    ...options,
+    res,
+    finalUrl,
+    sourceUrl,
+    maxBytes: options.maxBytes ?? MAX_DOCUMENT_BYTES,
+  });
+}
+
+/** Fetches media through SSRF guards and saves the body into the media store. */
+export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
+  return await withMediaReadScope(options, (scopedOptions) =>
+    withGuardedMediaResponse(scopedOptions, ({ response: res, finalUrl, sourceUrl }) =>
+      saveOkMediaResponse({
+        ...scopedOptions,
+        res,
+        finalUrl,
+        sourceUrl,
+        maxBytes: scopedOptions.maxBytes ?? MAX_DOCUMENT_BYTES,
+      }),
+    ),
+  );
+}
+
+async function withGuardedMediaResponse<T>(
+  options: FetchMediaOptions,
+  consume: (result: GuardedMediaResponse) => Promise<T>,
+): Promise<T> {
+  const run = async () => {
+    const result = await fetchGuardedMediaResponse(options);
+    const { release } = result;
+    try {
+      await assertMediaResponseOk({
+        res: result.response,
+        url: options.url,
+        finalUrl: result.finalUrl,
+        sourceUrl: result.sourceUrl,
+        readIdleTimeoutMs: options.readIdleTimeoutMs,
+      });
+      return await consume(result);
+    } finally {
+      await release();
+    }
+  };
+  const retry = options.retry;
+  if (!retry) {
+    return await run();
+  }
+  return await retryAsync(run, {
+    label: "media:fetch",
+    ...retry,
+    shouldRetry: (err, attempt) =>
+      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    sleep:
+      retry.sleep ??
+      ((delay) =>
+        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
+          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
+        })),
+  });
+}
+
+/** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
+export async function readRemoteMediaBufferWithHeaders(
+  options: FetchMediaOptions,
+): Promise<FetchMediaResult & { headerContentType?: string }> {
+  return await withGuardedMediaResponse(options, async ({ response: res, finalUrl, sourceUrl }) => {
+    const effectiveMaxBytes = options.maxBytes ?? MAX_DOCUMENT_BYTES;
+    assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
+    let buffer: Buffer;
+    try {
+      buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
+        onOverflow: ({ maxBytes, res: resLocal }) =>
+          new MediaFetchError(
+            "max_bytes",
+            `Failed to fetch media from ${redactSensitiveText(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
+          ),
+        chunkTimeoutMs: options.readIdleTimeoutMs,
+      });
+    } catch (err) {
+      if (err instanceof MediaFetchError) {
+        throw err;
+      }
+      throw createMediaFetchFailure(redactSensitiveText(res.url || options.url), err);
+    }
+    let fileName = resolveRemoteFileName({
+      res,
+      finalUrl,
+      filePathHint: options.filePathHint,
+    });
+
+    const fileNameExt = fileName ? extnameFromAnyPath(fileName) : undefined;
+    const filePathForMime = fileNameExt ? fileName : (options.filePathHint ?? finalUrl);
+    const headerContentType = res.headers.get("content-type") ?? undefined;
+    const contentType = await detectMime({
+      buffer,
+      headerMime: headerContentType,
+      filePath: filePathForMime,
+    });
+    if (fileName && !fileNameExt && contentType) {
+      const ext = extensionForMime(contentType);
+      if (ext) {
+        fileName = `${fileName}${ext}`;
+      }
+    }
+
+    return {
+      buffer,
+      contentType: contentType ?? undefined,
+      headerContentType,
+      fileName,
+    };
+  });
+}
+
+/** Preserve the public buffer result while internal text consumers retain decoder metadata. */
+export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
+  const { buffer, contentType, fileName } = await readRemoteMediaBufferWithHeaders(options);
+  return { buffer, contentType, fileName };
+}
+
+/** @deprecated Use `readRemoteMediaBuffer` for buffer reads or `saveRemoteMedia` for URL-to-store. */
+export const fetchRemoteMedia = readRemoteMediaBuffer;

@@ -1,0 +1,710 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createSubsystemLogger,
+  resolveAgentDir,
+  resolveUserPath,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import type {
+  MemorySessionSyncTarget,
+  MemorySource,
+  MemoryWorkspaceFiles,
+  MemorySyncParams,
+  MemorySyncProgressUpdate,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  resolveEmbeddingProviderIndexIdentity,
+  type EmbeddingProvider,
+  type EmbeddingProviderRuntime,
+} from "./embeddings.js";
+import type { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryIndexEntry } from "./manager-index-preparation.js";
+import {
+  resolveMemoryPrimaryProviderRequest,
+  type MemoryProviderLifecycleState,
+} from "./manager-provider-state.js";
+import {
+  resolveConfiguredScopeHash,
+  resolveConfiguredSourcesForMeta,
+  resolveMemoryIndexProviderIdentities,
+  resolveMemoryIndexIdentityState,
+  type MemoryIndexIdentityState,
+  type MemoryIndexMeta,
+  type MemoryIndexProviderIdentity,
+} from "./manager-reindex-state.js";
+import { MemoryBackgroundRebuildInterruptedError } from "./manager-sync-control.js";
+import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
+import { buildMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
+
+export type MemorySyncProgressState = {
+  completed: number;
+  total: number;
+  label?: string;
+  report: (update: MemorySyncProgressUpdate) => void;
+};
+
+export type MemoryEmbeddingBatchConfig = {
+  enabled: boolean;
+  wait: boolean;
+  concurrency: number;
+  pollIntervalMs: number;
+  timeoutMs: number;
+};
+
+export type MemoryIndexWorkItem = {
+  entry: MemoryIndexEntry;
+  source: MemorySource;
+};
+
+export type MemorySourceSyncPlan = {
+  indexItems: MemoryIndexWorkItem[];
+  finalize: () => Promise<void> | void;
+};
+
+type MemorySyncProviderGenerationBase = {
+  database: MemoryIndexDatabase;
+  cacheWritesInvalidated: boolean;
+  providerKey: string;
+  identities: MemoryIndexProviderIdentity[];
+};
+
+export type MemorySyncProviderGeneration =
+  | (MemorySyncProviderGenerationBase & { kind: "fts-only"; provider: null })
+  | (MemorySyncProviderGenerationBase & {
+      kind: "semantic";
+      embeddingDimensions?: number;
+      provider: EmbeddingProvider;
+      runtime?: EmbeddingProviderRuntime;
+    });
+
+export type MemorySemanticProviderGeneration = Extract<
+  MemorySyncProviderGeneration,
+  { kind: "semantic" }
+>;
+
+export type MemoryReindexProgress = {
+  memoryComplete: boolean;
+  cachePrunePending?: boolean;
+  memoryPlan?: MemorySourceSyncPlan;
+  completedSessionFiles: Set<string>;
+  changedSessionFiles: Set<string>;
+  changedSessionTargets: Map<string, MemorySessionSyncTarget>;
+  corpusEntries?: readonly SessionTranscriptCorpusEntry[];
+  yielded: boolean;
+};
+
+export type MemoryReindexRetryState = {
+  dirty: boolean;
+  memoryFullRetryDirty: boolean;
+  fullReindexRetryBackoff: MemoryFullReindexRetryBackoff;
+  sessionsDirty: boolean;
+  sessionsFullRetryDirty: boolean;
+  sessionsReconcileDirty: boolean;
+  sessionsDirtyFiles: Set<string>;
+};
+
+type MemoryFullReindexRetryBackoff = {
+  attempts: number;
+  retryAt: number;
+  failedWithEmbeddings: boolean;
+};
+
+const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const FULL_REINDEX_RETRY_INITIAL_DELAY_MS = 30_000;
+const FULL_REINDEX_RETRY_MAX_DELAY_MS = 30 * 60_000;
+const log = createSubsystemLogger("memory");
+
+// Public operations never inherit the private rebuild's database.
+const reindexDatabase = new AsyncLocalStorage<{
+  manager: MemoryManagerSyncBase;
+  database: MemoryIndexDatabase;
+}>();
+
+export abstract class MemoryManagerSyncBase {
+  protected abstract publishedDatabase: MemoryIndexDatabase;
+  protected closed = false;
+  protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
+
+  protected assertDatabaseMutationCurrent(database: MemoryIndexDatabase): void {
+    if (this.closed || !database.isOpen || this.database !== database) {
+      throw new Error("Memory database owner closed or changed before write admission");
+    }
+    if (database.readOnly) {
+      throw new Error("Memory status managers are read-only");
+    }
+  }
+
+  protected get database(): MemoryIndexDatabase {
+    const context = reindexDatabase.getStore();
+    const shadow = context?.manager === this ? context.database : undefined;
+    if (shadow?.closed) {
+      throw new Error("Memory reindex database context is closed");
+    }
+    return shadow ?? this.publishedDatabase;
+  }
+
+  protected get db(): DatabaseSync {
+    return this.database.db;
+  }
+
+  protected get vector() {
+    return this.database.vector;
+  }
+
+  protected get fts() {
+    return this.database.fts;
+  }
+
+  protected withPublishedDatabase<T>(run: () => T): T {
+    // Public calls can originate in reindex progress/provider callbacks. They
+    // must never inherit the temporary writer or outlive its connection.
+    return reindexDatabase.exit(run);
+  }
+
+  protected async withReindexDatabase<T>(
+    database: MemoryIndexDatabase,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    return await reindexDatabase.run({ manager: this, database }, run);
+  }
+
+  protected readonly memoryFiles?: MemoryWorkspaceFiles;
+  protected memoryWatchSubscription?: AbortController;
+  protected memoryWatchUnavailable = false;
+  protected closing = false;
+  protected activeManagerOperations = 0;
+  protected managerIdleWaiters = new Set<() => void>();
+  protected readonly acquireLocalService?: AcquireConfiguredProviderLocalService;
+  protected abstract readonly runInBackgroundContext: NonNullable<
+    MemoryCoreRuntimeHost["runInBackgroundContext"]
+  >;
+  protected abstract readonly cfg: OpenClawConfig;
+  protected abstract readonly agentId: string;
+  protected abstract readonly workspaceDir: string;
+  protected abstract readonly settings: ResolvedMemorySearchConfig;
+  protected provider: EmbeddingProvider | null = null;
+  protected fallbackFrom?: string;
+  protected abstract providerUnavailableReason?: string;
+  protected abstract providerLifecycle: MemoryProviderLifecycleState;
+  protected providerRuntime?: EmbeddingProviderRuntime;
+  protected abstract batch: MemoryEmbeddingBatchConfig;
+  protected readonly sources: Set<MemorySource> = new Set();
+  protected readonly sourceInspections = new Map<
+    MemorySource,
+    { eligible: number | null; issues: string[] }
+  >();
+  protected providerKey: string | null = null;
+  protected sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected sessionUnsubscribe: (() => void) | null = null;
+  protected fallbackReason?: string;
+  protected dirty = false;
+  protected memoryWatchGeneration = 0;
+  // A success clears only the failure visible when it started. This keeps a
+  // concurrent failure visible even when older or no-op work settles later.
+  protected readonly syncOutcomes = new MemorySyncOutcomeLedger();
+  protected memorySourceProvenanceRepairPending = false;
+  // Failed full memory reindexes must retry as full rebuilds, not incremental
+  // dirty syncs that can skip unchanged files against the still-live index.
+  protected memoryFullRetryDirty = false;
+  // Search maintenance hands this object to a transient manager. Keeping the
+  // state shared lets a failed detached rebuild update its serving owner.
+  protected fullReindexRetryBackoff: MemoryFullReindexRetryBackoff = {
+    attempts: 0,
+    retryAt: 0,
+    failedWithEmbeddings: false,
+  };
+  protected sessionsDirty = false;
+  // Failed full reindexes can start with no per-file dirty set. Keep a
+  // one-shot all-sessions retry marker so the next non-force sync cannot skip.
+  protected sessionsFullRetryDirty = false;
+  // A corpus reconciliation deletes stale indexed paths while leaving unchanged
+  // live sessions untouched. Keep it distinct from a failed full reindex retry.
+  protected sessionsReconcileDirty = false;
+  protected sessionsDirtyFiles = new Set<string>();
+  protected sessionPendingFiles = new Set<string>();
+  protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
+  protected sessionAgentBusy = false;
+  protected sessionBackgroundIndexing = false;
+  protected syncIsBackground = false;
+  protected abstract readonly reindexProgress: MemoryReindexProgress | undefined;
+
+  protected shouldYieldSessionIndexing(): boolean {
+    const interrupted =
+      this.syncIsBackground && (this.sessionAgentBusy || this.closing || this.closed);
+    if (interrupted && this.database !== this.publishedDatabase) {
+      if (!this.database.supportsReindexSuspension) {
+        throw new MemoryBackgroundRebuildInterruptedError();
+      }
+      this.reindexProgress!.yielded = true;
+    }
+    return interrupted;
+  }
+
+  protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
+  protected abstract computeProviderKey(): string;
+  protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
+  protected abstract sync(params?: MemorySyncParams): Promise<void>;
+  protected abstract syncBackground(params: MemorySyncParams): Promise<void>;
+  protected abstract withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T>;
+  protected abstract getIndexConcurrency(): number;
+  protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
+  protected abstract resetProviderInitializationForRetry(): void;
+  protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
+  protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
+  protected abstract syncMemoryFiles(params: {
+    needsFullReindex: boolean;
+    progress?: MemorySyncProgressState;
+    deferIndex?: boolean;
+  }): Promise<MemorySourceSyncPlan | undefined>;
+  protected abstract syncArchiveFiles(params: {
+    needsFullReindex: boolean;
+    targetArchiveFiles?: string[];
+    progress?: MemorySyncProgressState;
+    prefixIndexItems?: MemoryIndexWorkItem[];
+  }): Promise<void>;
+
+  protected markMemoryWatchDirty(): void {
+    this.memoryWatchGeneration += 1;
+    this.dirty = true;
+  }
+
+  protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
+    this.memoryFiles?.assertCurrent();
+    if (this.closing || this.closed) {
+      throw new Error("Memory index manager is closed");
+    }
+    this.activeManagerOperations += 1;
+    try {
+      const result = await this.withPublishedDatabase(run);
+      this.memoryFiles?.assertCurrent();
+      return result;
+    } finally {
+      this.activeManagerOperations -= 1;
+      if (this.activeManagerOperations === 0) {
+        const waiters = Array.from(this.managerIdleWaiters);
+        this.managerIdleWaiters.clear();
+        for (const resolve of waiters) {
+          resolve();
+        }
+      }
+    }
+  }
+
+  protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<MemoryIndexWorkItem[]>;
+
+  protected snapshotReindexRetryState(): MemoryReindexRetryState {
+    return {
+      dirty: this.dirty,
+      memoryFullRetryDirty: this.memoryFullRetryDirty,
+      fullReindexRetryBackoff: this.fullReindexRetryBackoff,
+      sessionsDirty: this.sessionsDirty,
+      sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+      sessionsReconcileDirty: this.sessionsReconcileDirty,
+      sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
+    };
+  }
+
+  takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
+    const snapshot = this.snapshotReindexRetryState();
+    // The detached generation owns only the state observed here. New watcher or
+    // session events remain dirty on this manager and trigger a later generation.
+    this.clearMemoryRetryState();
+    this.clearSessionRetryState();
+    return snapshot;
+  }
+
+  adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
+    this.dirty = snapshot.dirty || this.dirty;
+    this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
+    // The later cooldown wins: a transient maintenance manager must not shorten
+    // the backoff its serving owner already recorded for the same failure.
+    if (snapshot.fullReindexRetryBackoff.retryAt >= this.fullReindexRetryBackoff.retryAt) {
+      this.fullReindexRetryBackoff = snapshot.fullReindexRetryBackoff;
+    }
+    this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
+    this.sessionsReconcileDirty = snapshot.sessionsReconcileDirty || this.sessionsReconcileDirty;
+    this.sessionsDirtyFiles = new Set([...snapshot.sessionsDirtyFiles, ...this.sessionsDirtyFiles]);
+    this.sessionsDirty =
+      snapshot.sessionsDirty ||
+      this.sessionsDirty ||
+      this.sessionsFullRetryDirty ||
+      this.sessionsReconcileDirty ||
+      this.sessionsDirtyFiles.size > 0;
+  }
+
+  protected markFailedFullReindexRetry(params: { memory: boolean; sessions: boolean }): void {
+    if (params.memory) {
+      this.dirty = true;
+      this.memoryFullRetryDirty = true;
+    }
+    if (params.sessions) {
+      this.sessionsDirty = true;
+      this.sessionsFullRetryDirty = true;
+    }
+  }
+
+  protected recordFullReindexFailure(withEmbeddings: boolean): void {
+    this.fullReindexRetryBackoff.attempts += 1;
+    this.fullReindexRetryBackoff.failedWithEmbeddings = withEmbeddings;
+    const delay = Math.min(
+      FULL_REINDEX_RETRY_INITIAL_DELAY_MS *
+        2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
+      FULL_REINDEX_RETRY_MAX_DELAY_MS,
+    );
+    this.fullReindexRetryBackoff.retryAt = performance.now() + delay;
+  }
+
+  protected clearFullReindexRetryBackoff(): void {
+    this.fullReindexRetryBackoff.attempts = 0;
+    this.fullReindexRetryBackoff.retryAt = 0;
+    this.fullReindexRetryBackoff.failedWithEmbeddings = false;
+  }
+
+  protected clearSessionRetryState(): void {
+    this.sessionsDirty = false;
+    this.sessionsFullRetryDirty = false;
+    this.sessionsReconcileDirty = false;
+    this.sessionsDirtyFiles.clear();
+  }
+
+  protected clearMemoryRetryState(): void {
+    this.dirty = false;
+    this.memoryFullRetryDirty = false;
+  }
+
+  protected refreshSessionDirtyFlag(): void {
+    this.sessionsDirty =
+      this.sessionsFullRetryDirty ||
+      this.sessionsReconcileDirty ||
+      this.sessionsDirtyFiles.size > 0;
+  }
+
+  protected abstract shouldDeferSourceWideBatch(): boolean;
+
+  protected advanceSyncProgress(progress: MemorySyncProgressState | undefined, count = 1): void {
+    if (!progress) {
+      return;
+    }
+    progress.completed += count;
+    progress.report({ completed: progress.completed, total: progress.total });
+  }
+
+  protected async indexQueuedFiles(
+    items: MemoryIndexWorkItem[],
+    progress?: MemorySyncProgressState,
+    label?: string,
+  ): Promise<MemoryIndexWorkItem[]> {
+    if (items.length === 0) {
+      return [];
+    }
+    if (progress && label) {
+      progress.report({
+        completed: progress.completed,
+        total: progress.total,
+        label,
+      });
+    }
+    const remaining = await this.indexFiles(items);
+    if (this.reindexProgress) {
+      const pending = new Set(remaining);
+      for (const item of items) {
+        if (item.source === "sessions" && !pending.has(item)) {
+          this.reindexProgress.completedSessionFiles.add(item.entry.absPath);
+        }
+      }
+    }
+    this.advanceSyncProgress(progress, items.length - remaining.length);
+    return remaining;
+  }
+
+  protected async executeSourceSync(params: {
+    shouldSyncMemory: boolean;
+    shouldSyncSessions: boolean;
+    needsFullReindex: boolean;
+    needsFullSessionReindex?: boolean;
+    targetArchiveFiles?: string[];
+    progress?: MemorySyncProgressState;
+  }): Promise<void> {
+    const deferIndex = this.shouldDeferSourceWideBatch();
+    const reindexProgress = this.reindexProgress;
+    const memoryPlan = params.shouldSyncMemory
+      ? ((deferIndex && !this.dirty ? reindexProgress?.memoryPlan : undefined) ??
+        (await this.syncMemoryFiles({
+          needsFullReindex: params.needsFullReindex,
+          progress: params.progress,
+          ...(deferIndex ? { deferIndex: true } : {}),
+        })))
+      : undefined;
+    if (params.shouldSyncMemory && !deferIndex && reindexProgress) {
+      reindexProgress.memoryComplete = true;
+    }
+    if (params.shouldSyncSessions) {
+      await this.syncArchiveFiles({
+        needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
+        targetArchiveFiles: params.targetArchiveFiles,
+        progress: params.progress,
+        ...(deferIndex ? { prefixIndexItems: memoryPlan?.indexItems } : {}),
+      });
+      if (memoryPlan && !this.dirty) {
+        // Session batches mark memory dirty if any memory items remain unindexed.
+        memoryPlan.indexItems = [];
+      }
+    } else if (deferIndex) {
+      const remaining = await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
+      if (memoryPlan) {
+        memoryPlan.indexItems = remaining;
+      }
+    }
+    if (reindexProgress?.yielded) {
+      reindexProgress.memoryPlan = this.dirty ? undefined : memoryPlan;
+      return;
+    }
+    if (deferIndex) {
+      await memoryPlan?.finalize();
+      if (params.shouldSyncMemory && reindexProgress) {
+        reindexProgress.memoryPlan = undefined;
+        reindexProgress.memoryComplete = true;
+      }
+    }
+    if (params.shouldSyncSessions) {
+      this.clearSessionRetryState();
+    } else {
+      this.refreshSessionDirtyFlag();
+    }
+  }
+
+  protected resolveConfiguredMemoryScopeHash(): string {
+    return resolveConfiguredScopeHash({
+      workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
+      multimodal: this.settings.multimodal,
+    });
+  }
+
+  protected resolveConfiguredIndexIdentity() {
+    if (this.settings.provider === "none") {
+      return undefined;
+    }
+    return resolveEmbeddingProviderIndexIdentity({
+      config: this.cfg,
+      agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+    });
+  }
+
+  protected resolveCurrentIndexIdentityState(params: {
+    meta?: MemoryIndexMeta | null;
+    provider?: { id: string; model: string } | null;
+    providerKeyKnown?: boolean;
+    vectorReady?: boolean;
+    hasIndexedChunks?: boolean;
+  }): MemoryIndexIdentityState {
+    const hasProviderOverride = params.provider !== undefined;
+    const configuredIndexIdentity =
+      !hasProviderOverride && !this.provider && this.settings.provider !== "none"
+        ? this.resolveConfiguredIndexIdentity()
+        : undefined;
+    // Dynamic defaults stay unknown until provider initialization. Plain status
+    // must not reinterpret an undiscovered semantic model as keyword-only.
+    const configuredProvider =
+      this.settings.provider === "none"
+        ? null
+        : {
+            id: configuredIndexIdentity?.provider.id ?? this.settings.provider,
+            model:
+              (configuredIndexIdentity?.provider.model ?? this.settings.model.trim()) || undefined,
+          };
+    const provider = hasProviderOverride
+      ? params.provider!
+      : this.provider
+        ? { id: this.provider.id, model: this.provider.model }
+        : configuredProvider;
+    const vectorReady = params.vectorReady ?? this.vector.available === true;
+    const initializedProviderIdentities =
+      provider &&
+      this.provider &&
+      provider.id === this.provider.id &&
+      provider.model === this.provider.model
+        ? this.resolveProviderIndexIdentities()
+        : [];
+    const configuredProviderIdentities = configuredIndexIdentity?.cacheKeyData
+      ? resolveMemoryIndexProviderIdentities({
+          provider: configuredIndexIdentity.provider,
+          cacheKeyData: configuredIndexIdentity.cacheKeyData,
+          aliases: configuredIndexIdentity.aliases,
+          documentPrefix: this.settings.inputFormat?.document,
+        })
+      : [];
+    const providerIdentities =
+      initializedProviderIdentities.length > 0
+        ? initializedProviderIdentities
+        : configuredProviderIdentities;
+    const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
+    return resolveMemoryIndexIdentityState({
+      meta: params.meta === undefined ? this.database.facts.meta : params.meta,
+      provider,
+      providerKey: configuredProviderKeyKnown
+        ? providerIdentities[0]?.providerKey
+        : params.providerKeyKnown === false
+          ? undefined
+          : (this.providerKey ?? undefined),
+      providerAliases: providerIdentities.slice(1),
+      providerKeyKnown: configuredProviderKeyKnown ? true : params.providerKeyKnown,
+      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+      configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+      vectorReady,
+      hasIndexedChunks: params.hasIndexedChunks ?? this.database.facts.hasIndexedChunks,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+    });
+  }
+
+  protected resetVectorState(vectorIndexComplete: boolean): void {
+    // Shadow publication replaces index rows, not the worker's loaded extension.
+    const extensionLoaded = vectorIndexComplete && this.vector.available === true;
+    this.database.vectorReady = extensionLoaded ? Promise.resolve(true) : null;
+    if (!extensionLoaded) {
+      this.vector.available = null;
+      this.vector.loadError = undefined;
+    }
+    this.database.ensuredVectorDimensions = undefined;
+    this.vector.semanticAvailable = undefined;
+    this.vector.dims = undefined;
+    this.database.vectorDegradedWriteWarningShown = false;
+  }
+
+  protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
+    if (!this.vector.enabled) {
+      return false;
+    }
+    if (!this.database.vectorReady) {
+      const database = this.database;
+      // The timeout-facing promise may settle first. Private admission retains
+      // the actual setup so late native extension work cannot race writes/close.
+      const setup = database.isShadow
+        ? database.withPrivateAccess(() => this.loadVectorExtension(), { reentrant: true })
+        : this.loadVectorExtension();
+      database.vectorReady = this.withTimeout(
+        setup,
+        VECTOR_LOAD_TIMEOUT_MS,
+        `sqlite-vec load timed out after ${Math.round(VECTOR_LOAD_TIMEOUT_MS / 1000)}s`,
+      );
+    }
+    let ready;
+    try {
+      ready = (await this.database.vectorReady) || false;
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      this.vector.available = false;
+      this.vector.loadError = message;
+      this.database.vectorReady = null;
+      log.warn(`sqlite-vec unavailable: ${message}`);
+      return false;
+    }
+    if (
+      ready &&
+      typeof dimensions === "number" &&
+      dimensions > 0 &&
+      this.database.ensuredVectorDimensions !== dimensions
+    ) {
+      const database = this.database;
+      await database.updateIndexStructure(
+        {
+          type: "vector.ensure",
+          input: {
+            dimensions,
+            currentDimensions: this.vector.dims,
+            state: {
+              vector: this.vector,
+              fts: this.fts,
+              extensionPath: this.vector.extensionPath,
+            },
+          },
+        },
+        () => this.assertDatabaseMutationCurrent(database),
+      );
+      database.ensuredVectorDimensions = dimensions;
+      this.vector.dims = dimensions;
+    }
+    return ready;
+  }
+
+  private async loadVectorExtension(): Promise<boolean> {
+    if (this.vector.available === false) {
+      return false;
+    }
+    if (!this.vector.enabled) {
+      this.vector.available = false;
+      return false;
+    }
+    try {
+      const resolvedPath = this.vector.extensionPath?.trim()
+        ? resolveUserPath(this.vector.extensionPath)
+        : undefined;
+      const database = this.database;
+      const loaded = await database.prepareVector(resolvedPath, () => {
+        if (this.closed || !database.isOpen) {
+          throw new Error("Memory database owner closed before vector preparation");
+        }
+      });
+      if (!loaded) {
+        throw new Error("Memory vector preparation did not complete");
+      }
+      this.vector.extensionPath = loaded.extensionPath;
+      this.vector.available = true;
+      if (["incomplete", "unverified"].includes(database.facts.vectorState.state)) {
+        // A skipped vector write/delete can leave both missing and extra rows.
+        // Refuse partial KNN results and let the normal shadow reindex rebuild all
+        // configured sources before this manager treats vectors as ready.
+        this.markConfiguredSourcesForFullReindex();
+        return false;
+      }
+      if (loaded.retiredLegacy) {
+        // A broad dirty sync can skip unchanged files whose source hashes were
+        // migrated. Force the next sync to republish the derived vector rows.
+        this.dirty = true;
+        this.memoryFullRetryDirty = true;
+      }
+      return true;
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      this.vector.available = false;
+      this.vector.loadError = message;
+      log.warn(`sqlite-vec unavailable: ${message}`);
+      return false;
+    }
+  }
+
+  protected markConfiguredSourcesForFullReindex(): void {
+    // This flag selects the shadow-reindex path even for a sessions-only index;
+    // the rebuild itself still filters work through the configured sources.
+    this.memoryFullRetryDirty = true;
+    if (this.sources.has("memory")) {
+      this.dirty = true;
+    }
+    if (this.sources.has("sessions")) {
+      this.sessionsDirty = true;
+      this.sessionsFullRetryDirty = true;
+    }
+  }
+
+  protected buildSourceFilter(
+    alias?: string,
+    sourcesOverride?: MemorySource[],
+    excludedSessionPaths?: readonly string[],
+  ): MemorySourceFilter {
+    const sources = sourcesOverride ?? Array.from(this.sources);
+    return buildMemorySourceFilter(alias, sources, excludedSessionPaths);
+  }
+}

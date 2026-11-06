@@ -1,0 +1,58 @@
+import { withResolvedRoomAction } from "./client.js";
+import { fetchEventSummary, readPinnedEvents } from "./summary.js";
+import {
+  EventType,
+  type MatrixActionClientOpts,
+  type MatrixMessageSummary,
+  type RoomPinnedEventsEventContent,
+} from "./types.js";
+
+async function updateMatrixPins(
+  roomId: string,
+  opts: MatrixActionClientOpts,
+  update: (current: string[]) => string[],
+): Promise<{ pinned: string[] }> {
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    const current = await readPinnedEvents(client, resolvedRoom);
+    const next = update(current);
+    const payload: RoomPinnedEventsEventContent = { pinned: next };
+    await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
+    return { pinned: next };
+  });
+}
+
+export async function pinMatrixMessage(
+  roomId: string,
+  messageId: string,
+  opts: MatrixActionClientOpts = {},
+): Promise<{ pinned: string[] }> {
+  return await updateMatrixPins(roomId, opts, (current) =>
+    current.includes(messageId) ? current : [...current, messageId],
+  );
+}
+
+export async function unpinMatrixMessage(
+  roomId: string,
+  messageId: string,
+  opts: MatrixActionClientOpts = {},
+): Promise<{ pinned: string[] }> {
+  return await updateMatrixPins(roomId, opts, (current) =>
+    current.filter((id) => id !== messageId),
+  );
+}
+
+export async function listMatrixPins(
+  roomId: string,
+  opts: MatrixActionClientOpts & { limit?: number } = {},
+): Promise<{ pinned: string[]; events: MatrixMessageSummary[] }> {
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    const pinned = await readPinnedEvents(client, resolvedRoom);
+    if (opts.limit !== undefined && pinned.length > opts.limit) {
+      pinned.length = opts.limit;
+    }
+    const events = (
+      await Promise.all(pinned.map((eventId) => fetchEventSummary(client, resolvedRoom, eventId)))
+    ).filter((event): event is MatrixMessageSummary => Boolean(event));
+    return { pinned, events };
+  });
+}
