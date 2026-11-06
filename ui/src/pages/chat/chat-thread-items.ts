@@ -471,6 +471,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
   return buildLocalUserMessage({
     text: item.text,
     workContext: item.workContext,
+    appContext: item.appContext,
     mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,

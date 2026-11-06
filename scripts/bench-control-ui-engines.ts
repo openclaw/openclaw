@@ -72,6 +72,11 @@ import {
   type InteractionEvidence,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
+  createControlUiLayerAudit,
+  type ControlUiLayerAudit,
+} from "./lib/control-ui-layer-audit.ts";
+import { summarizeControlUiNativeTrace } from "./lib/control-ui-native-trace.ts";
+import {
   finishControlUiPageObserver,
   installControlUiPageObserver,
   readControlUiPageObserver,
@@ -104,6 +109,7 @@ const { values } = parseArgs({
     "observer-origins": { type: "boolean", default: false },
     "cpu-only": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "native-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
@@ -163,6 +169,12 @@ if (values.trace && values["cpu-only"]) {
 }
 if (values["cpu-profile"] && (values.trace || values["cpu-only"] || engines.includes("webkit"))) {
   throw new Error("--cpu-profile requires Chromium and a separate run from --trace/--cpu-only");
+}
+if (
+  values["native-audit"] &&
+  (engines.includes("webkit") || values.trace || values["cpu-only"] || values["cpu-profile"])
+) {
+  throw new Error("--native-audit requires Chromium and a separate run from other profiling modes");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
 const viewports = [
@@ -263,6 +275,9 @@ type Observation = {
   hostLoadAverage: number[];
   metrics?: EngineMetrics;
   pageMetrics?: ControlUiPageObservation;
+  native?: ReturnType<typeof summarizeControlUiNativeTrace>;
+  computedTheme?: Record<string, string>;
+  layers?: ControlUiLayerAudit;
   requests?: Record<string, number>;
   evidence?: InteractionEvidence;
   navigationPreloads?: InteractionNavigationPreloads;
@@ -378,6 +393,8 @@ try {
         [
           "./bench-control-ui-engines.ts",
           "./lib/control-ui-engine-metrics.ts",
+          "./lib/control-ui-layer-audit.ts",
+          "./lib/control-ui-native-trace.ts",
           "./lib/control-ui-cold-load-trace.ts",
           "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
@@ -430,15 +447,18 @@ try {
     observerOrigins: values["observer-origins"],
     cpuOnly: values["cpu-only"],
     cpuProfile: values["cpu-profile"],
+    nativeAudit: values["native-audit"],
     cpuThrottle,
     memorySoakRounds,
-    collection: values["cpu-profile"]
-      ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
-      : values.trace
-        ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-        : values["cpu-only"]
-          ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
-          : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+    collection: values["native-audit"]
+      ? "Chromium native timeline, V8 samples and LayerTree; diagnostic instrumentation, not timing proof"
+      : values["cpu-profile"]
+        ? "V8 sampled self-time census; diagnostic attribution, not timing proof"
+        : values.trace
+          ? "Playwright tracing and engine Inspector/Profiler; overhead included"
+          : values["cpu-only"]
+            ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
+            : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
       "Serial network profile and engine order alternates each pair; bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
@@ -528,6 +548,7 @@ try {
             let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
+            let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
             try {
@@ -669,10 +690,15 @@ try {
                 !scenario.navigation && !scenario.memory
                   ? await page.evaluateHandle(createEngineActionTiming, traceAction)
                   : undefined;
+              if (values["native-audit"]) {
+                layerAudit = await createControlUiLayerAudit(page);
+                await layerAudit.capture();
+              }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
                 cpuOnly: values["cpu-only"],
                 cpuProfile: values["cpu-profile"],
+                nativeAudit: values["native-audit"],
               });
               phase = "measurement";
               const start = performance.now();
@@ -757,6 +783,24 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (values["native-audit"]) {
+                await writeJson(`${artifactPrefix}.native.json`, captured);
+                observation.native = summarizeControlUiNativeTrace(
+                  captured.timeline ?? [],
+                  captured.profile,
+                );
+                observation.layers = await layerAudit!.finish();
+              }
+              if (values["native-audit"] || scenario.id === "theme-switch-cycles") {
+                observation.computedTheme = await page.evaluate(() => {
+                  const styles = getComputedStyle(document.documentElement);
+                  return Object.fromEntries(
+                    Array.from(styles)
+                      .filter((name) => name.startsWith("--"))
+                      .map((name) => [name, styles.getPropertyValue(name).trim()]),
+                  );
+                });
+              }
               if (values["cpu-profile"]) {
                 // SAFETY: This mode is Chromium-only; Profiler.stop returns V8's
                 // Profile shape, whose sample intervals the census validates.
@@ -809,6 +853,7 @@ try {
               phase = "capture";
               observation.errorEvents = errors;
               try {
+                await layerAudit?.dispose();
                 await memory?.dispose();
                 if (values.trace || values["observer-origins"]) {
                   const resizeErrors: unknown[] = await page.evaluate(() =>
