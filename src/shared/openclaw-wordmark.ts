@@ -1,5 +1,5 @@
 /**
- * The crisp OpenClaw horizontal wordmark (ui/src/assets/brand/openclaw-horizontal-*-text.svg),
+ * The OpenClaw horizontal wordmark (ui/src/assets/brand/openclaw-horizontal-*-text.svg),
  * inlined for documents the Gateway serves without the Control UI bundle. The letters use
  * `currentColor`, so one copy follows the page's light or dark text color.
  */

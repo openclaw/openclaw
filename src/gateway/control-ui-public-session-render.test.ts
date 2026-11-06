@@ -226,12 +226,34 @@ describe("public session document", () => {
     expect(unavailableMain.hasAttribute("data-public-unavailable")).toBe(true);
     const readerMain = JSDOM.fragment(html).querySelector("main")!;
     expect(readerMain.hasAttribute("data-public-unavailable")).toBe(false);
-    // The crisp wordmark is inline and theme-aware, never the small mark beside text.
+    // The wordmark is inline and theme-aware, never the small mark beside text.
     for (const main of [readerMain, unavailableMain]) {
       const brand = main.querySelector(".topbar .brand")!;
       expect(brand.querySelector("svg.wordmark")?.getAttribute("aria-label")).toBe("OpenClaw");
       expect(brand.querySelector(".mark")).toBeNull();
     }
+  });
+  it("decorates only the access check with an inert Control UI shell skeleton", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const pending = render([], { entryUrl, title: "Conversation unavailable", unavailable: true });
+    const pendingMain = JSDOM.fragment(pending).querySelector("main")!;
+    expect(pendingMain.hasAttribute("data-entry-pending")).toBe(true);
+    const skeleton = pendingMain.querySelector(".app-skeleton")!;
+    expect(skeleton.getAttribute("aria-hidden")).toBe("true");
+    expect(skeleton.textContent).toBe("");
+    expect(skeleton.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    expect(skeleton.querySelectorAll(".list-row")).toHaveLength(4);
+    expect(pending.match(/<script/g)).toHaveLength(1);
+    expect(pending).toContain(
+      "[data-entry-pending] .app-skeleton{display:none}</style></noscript>",
+    );
+    // The wordmark stays in the top bar beside the skeleton.
+    expect(pendingMain.querySelector(".topbar .brand svg.wordmark")).not.toBeNull();
+    // Readers and settled unavailable pages are not entering the app.
+    expect(render([], { entryUrl })).not.toContain('class="app-skeleton"');
+    expect(render([], { title: "Conversation unavailable", unavailable: true })).not.toContain(
+      'class="app-skeleton"',
+    );
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const token = `sk-${"a".repeat(48)}`;
