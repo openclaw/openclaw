@@ -2180,6 +2180,7 @@ describe("frozen admission workflow barriers", () => {
       "release_execution_plan",
       "release_decision",
       "diagnostic_drain",
+      "cleanup_boat_release_runners",
     ]);
     const outputs = new Proxy(
       {
@@ -2225,6 +2226,7 @@ describe("frozen admission workflow barriers", () => {
               runInNewContext(expression, {
                 inputs: { ...inputs, shared_image_policy: policy },
                 github: { ref: "refs/heads/main", run_attempt: 1 },
+                vars: { OPENCLAW_CI_RUNNER_BACKEND: "boat" },
                 needs: Object.fromEntries(
                   Object.keys(jobs).map((key) => [
                     key,
@@ -9308,6 +9310,7 @@ test "$package_manager" = "pnpm@12.1.0"
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
     const terminalNeeds = [
+      "boat_release_runners",
       "resolve_target",
       "prepare_npm_package",
       "qualify_npm_package",
@@ -9317,8 +9320,10 @@ test "$package_manager" = "pnpm@12.1.0"
     ];
     expect(decision.needs).toEqual(terminalNeeds);
     expect(drain.needs).toEqual(terminalNeeds);
-    expect(decision.if).toBe("always()");
-    expect(drain.if).toBe("always()");
+    const waiterCondition =
+      "always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')";
+    expect(decision.if).toBe(waiterCondition);
+    expect(drain.if).toBe(waiterCondition);
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",

@@ -99,7 +99,13 @@ type Flags<K extends string> = Partial<Record<K, boolean>>;
 type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
   Strings<"dispatchId" | "headRepository" | "headSha" | "job" | "ref" | "sha"> &
   Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
-  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<
+    | "boatReleaseRunnerGroup"
+    | "releaseRunnerGroup"
+    | "releasePublishRunId"
+    | "releasePriorityRun"
+    | "runnerGroup"
+  > &
   Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
   Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
   Strings<"windowsCiReplay" | "workspace"> &
@@ -137,7 +143,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson" | "boat";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
@@ -306,6 +312,7 @@ export function evaluateWorkflowExpression(
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
       OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
+      BOAT_RELEASE_RUNNER_GROUP: context.boatReleaseRunnerGroup ?? "",
       OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
       OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },

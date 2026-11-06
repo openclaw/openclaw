@@ -2617,8 +2617,8 @@ jobs:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
-  release_decision:
-    name: Release Decision
+  boat_release_runners:
+    name: Provision Boat release runners
     needs:
       [
         resolve_target,
@@ -2628,12 +2628,73 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always()
-    runs-on: &linux_runner_small >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&
-      'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
-      && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      decision_vm: ${{ steps.decision.outputs.vm }}
+      decision_runner: ${{ steps.decision.outputs.runner }}
+      decision_label: ${{ steps.decision.outputs.label }}
+      drain_vm: ${{ steps.drain.outputs.vm }}
+      drain_runner: ${{ steps.drain.outputs.runner }}
+      drain_label: ${{ steps.drain.outputs.label }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Provision decision runner
+        id: decision
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: provision
+          role: decision
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+      - name: Provision drain runner
+        id: drain
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: provision
+          role: drain
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+
+  release_decision:
+    name: Release Decision
+    needs:
+      [
+        boat_release_runners,
+        resolve_target,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
+        release_execution_plan,
+      ]
+    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
+      toJSON(needs.boat_release_runners.outputs.decision_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     env:
       RELEASE_STATE_SCRIPT: &release_state_script ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
@@ -2707,6 +2768,7 @@ jobs:
     name: Diagnostic Drain
     needs:
       [
+        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2714,8 +2776,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always()
-    runs-on: *linux_runner_small
+    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
+      toJSON(needs.boat_release_runners.outputs.drain_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     env:
       RELEASE_STATE_SCRIPT: *release_state_script
@@ -3099,3 +3164,55 @@ jobs:
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
           overwrite: true
+
+  cleanup_boat_release_runners:
+    name: Remove Boat release runners
+    needs: [boat_release_runners, release_decision, diagnostic_drain]
+    if: always() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Cleanup decision runner
+        id: decision
+        if: always()
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: cleanup
+          role: decision
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+          vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
+          runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
+      - name: Cleanup drain runner
+        id: drain
+        if: always()
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: cleanup
+          role: drain
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+          vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
+          runner: ${{ needs.boat_release_runners.outputs.drain_runner }}

@@ -389,8 +389,32 @@ reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
 Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their existing runner selection and 720-minute
-budgets; standard hosted runners cannot preserve that lifetime.
+and the nightly watcher keep their 720-minute budgets. When
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
+and register ephemeral organization runners for those three jobs. Native Boat
+CI has a six-hour limit, so these watchers use regular VMs instead.
+
+This route requires the repository secrets `BOAT_API_KEY` and
+`BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,
+`BOAT_RELEASE_RUNNER_GROUP`, and `BOAT_RUNNER_APP_ID`. Use a dedicated Boat runner
+GitHub App with organization self-hosted runner write access and a dedicated
+runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
+hosted runners. App token creation must succeed before a VM is provisioned;
+a missing app ID or private key stops provisioning.
+The runner group must admit the nightly workflow on `main` and Full Release
+Validation on each immutable `release-ci/` transport ref. Install a Crabbox release supporting
+`actions register --receipt` and `actions unregister --receipt` before enabling
+the backend. The provisioning preflight rejects older clients before creating
+a VM.
+
+Each VM requests four CPUs, 8 GB RAM, and a 24-hour lifetime. Provisioning checks
+the granted deadline before registering a runner. Same-run job outputs carry
+only the VM creation identity and exact runner registration, without SSH keys or
+private Crabbox claims. Cleanup attempts deregistration and VM deletion
+independently, including after failed provisioning. A hard interruption before
+outputs reach GitHub can prevent automated cleanup; the provider expiry limits
+compute lifetime, but does not prove data deletion. An unconfirmed deletion
+reports its operation ID for reconciliation with `boat deletion status`.
 
 Mantis Discord and web UI actor authorization, request resolution, and ref
 validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime

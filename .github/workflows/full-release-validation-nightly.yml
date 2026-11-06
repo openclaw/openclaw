@@ -19,11 +19,53 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  boat_nightly_runner:
+    name: Provision Boat nightly runner
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      nightly_vm: ${{ steps.nightly.outputs.vm }}
+      nightly_runner: ${{ steps.nightly.outputs.runner }}
+      nightly_label: ${{ steps.nightly.outputs.label }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Provision nightly runner
+        id: nightly
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: provision
+          role: nightly
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+
   validate:
-    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+    needs: [boat_nightly_runner]
+    if: "!cancelled() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_nightly_runner.result == 'success') && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'"
     # The helper watches the parent for up to 720 minutes, like the parent's own
     # release_decision waiter, so this job uses that job's runner and budget.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
+      toJSON(needs.boat_nightly_runner.outputs.nightly_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     permissions:
       # Dispatch the parent and read its runs and evidence artifacts.
@@ -74,3 +116,41 @@ jobs:
           path: .artifacts/full-release-validation/
           if-no-files-found: ignore
           retention-days: 30
+
+  cleanup_boat_nightly_runner:
+    name: Remove Boat nightly runner
+    needs: [boat_nightly_runner, validate]
+    if: always() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Cleanup nightly runner
+        id: nightly
+        if: always()
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: cleanup
+          role: nightly
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+          vm: ${{ needs.boat_nightly_runner.outputs.nightly_vm }}
+          runner: ${{ needs.boat_nightly_runner.outputs.nightly_runner }}
