@@ -1,5 +1,5 @@
 ---
-summary: "Invite people to this claw, approve their requests, and see and remove members."
+summary: "Choose who can reach this claw remotely: invite people, approve their requests, and see and remove members."
 read_when:
   - You are installing, configuring, or auditing the openclaw-id-access plugin
 title: "Openclaw Id Access plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Invite people to this claw, approve their requests, and see and remove members.
+Choose who can reach this claw remotely: invite people, approve their requests, and see and remove members.
 
 ## Distribution
 

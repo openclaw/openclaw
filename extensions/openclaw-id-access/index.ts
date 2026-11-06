@@ -1,7 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 /**
- * OpenClaw ID People page. The plugin only ships a Control UI page;
+ * OpenClaw ID Access page. The plugin only ships a Control UI page;
  * invites, approvals and removals are owner-signed statements it sends to the
  * Gateway's own openclawId.* methods, so it registers nothing on the Gateway.
  */

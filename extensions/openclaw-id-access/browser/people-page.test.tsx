@@ -133,7 +133,7 @@ async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
   }
   await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
   const [page] = registerPage.mock.calls[0]!;
-  expect(page).toMatchObject({ id: "people", label: "People" });
+  expect(page).toMatchObject({ id: "access", label: "Remote access" });
   const container = document.createElement("div");
   document.body.append(container);
   const view = page.mount(container, {
@@ -150,7 +150,7 @@ async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
 const button = (container: HTMLElement, label: string) =>
   [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
 
-describe("People page", () => {
+describe("Access page", () => {
   afterEach(() => {
     disposers
       .splice(0)
@@ -221,9 +221,10 @@ describe("People page", () => {
     expect(container.querySelector("details")?.textContent).toContain(
       "OpenClaw ID provided this email and approximate location. Device details are unavailable.",
     );
-    expect(container.querySelector("header")?.textContent?.trim()).toBe("People");
+    expect(container.querySelector("header")?.textContent?.trim()).toBe("Remote access");
+    expect(container.querySelector("#ocid-access-people")?.textContent).toBe("People");
     expect(button(container, "Refresh")).toBeUndefined();
-    // Owner devices live in the account menu, not on People.
+    // Owner devices live in the account menu, not on the Access page.
     expect(container.textContent).not.toContain("Old laptop");
   });
 
@@ -375,9 +376,9 @@ describe("People page", () => {
   it("registers only owner Pages navigation, and removes it on disconnect", async () => {
     const harness = await mountPage([linked()]);
     expect(harness.registerNavigation).toHaveBeenCalledWith({
-      id: "people",
-      label: "People",
-      page: { id: "people" },
+      id: "access",
+      label: "Access",
+      page: { id: "access" },
       icon: "users",
       defaultVisible: false,
     });

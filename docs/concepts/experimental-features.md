@@ -328,9 +328,12 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
   OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
   and **Sign out of OpenClaw ID**, depending on your connection and setup state.
-- **People**, under **Pages**: a page from the bundled `openclaw-id-access` plugin
-  (enabled by default) to invite someone, approve or deny their request, and
-  remove members. Use an approved owner browser to change access.
+- **Access**, under **Pages**: the **Remote access** page from the bundled
+  `openclaw-id-access` plugin (enabled by default). It shows who may reach this
+  claw through OpenClaw ID; its **People** section lets you invite someone,
+  approve or deny their request, and remove members. Use an approved owner
+  browser to change access. Devices paired with this Gateway are in
+  **Settings → Devices**.
 - **Your devices**, in the account menu: view approved owner browsers and choose
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner

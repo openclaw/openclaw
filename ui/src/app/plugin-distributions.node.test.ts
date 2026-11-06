@@ -266,7 +266,7 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
   expect(JSON.parse(await readText(pluginRoot, "package.json")).name).toBe("@openclaw/workboard");
 });
 
-it("leaves the Labs-owned People island to the flag-gated Gateway catalog", async () => {
+it("leaves the Labs-owned Access island to the flag-gated Gateway catalog", async () => {
   const { pluginRoot, generation } = await fixture();
   await fs.writeFile(
     path.join(pluginRoot, "openclaw.plugin.json"),

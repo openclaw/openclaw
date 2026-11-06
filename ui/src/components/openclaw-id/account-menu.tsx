@@ -108,7 +108,7 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
-/** Status and actions for the single OpenClaw ID section; People lives in Pages. */
+/** Status and actions for the single OpenClaw ID section; Access lives in Pages. */
 export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];

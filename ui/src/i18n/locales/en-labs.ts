@@ -77,7 +77,7 @@ const enLabs = {
     openclawId: {
       title: "OpenClaw ID remote access",
       description:
-        "Open this claw from your other devices and invite people. To get started, sign in from the account menu and choose Turn on remote access. Manage invitations in People. While off, this feature does not contact OpenClaw ID.",
+        "Open this claw from your other devices and invite people. To get started, sign in from the account menu and choose Turn on remote access. Manage who has access on the Access page. While off, this feature does not contact OpenClaw ID.",
     },
     workerDesktop: {
       title: "Cloud device desktop",
