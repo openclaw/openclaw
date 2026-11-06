@@ -167,6 +167,7 @@ describe("selected boundary setup sharing", () => {
           createSelectedNodeTestShardBundles(files, {
             runnerBackend: "hybrid",
           }),
+          "selected tooling plan",
         );
         const packed = packChangedNodeBoundary([
           ...selected.map((job) => ({ ...job, configs: [] })),
@@ -1255,7 +1256,7 @@ describe("CI changed Node test plan", () => {
       }
       expect(
         selected
-          .flatMap((shard) => shard.groups ?? [shard])
+          .flatMap((shard) => [...(shard.groups ?? [shard])])
           .filter((group) => group.configs.includes("test/vitest/vitest.boundary.config.ts")),
       ).toEqual([
         expect.objectContaining({
