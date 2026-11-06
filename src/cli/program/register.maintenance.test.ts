@@ -6,7 +6,6 @@ import { parseReleasedDoctorLintReport } from "../../infra/test-fixtures/update-
 import { ExitError } from "../../runtime.js";
 import { UpdateSchemaRefusalError } from "../../state/openclaw-update-schema-refusal.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
-import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { expectNoCalls } from "./program.test-helpers.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
@@ -98,6 +97,7 @@ afterEach(() => {
 
 describe("registered maintenance commands", () => {
   it("bounds a leaked handle only for the executable's Doctor", async () => {
+    const { withCliProcessScope } = await import("../runtime-cleanup-scope.js");
     await runCli("doctor --fix --non-interactive");
     expectNoCalls(mocks.requestOneShotSettledExitWatchdog);
     await withCliProcessScope(() => runCli("doctor --fix --non-interactive"));
