@@ -3,6 +3,7 @@ import { Errored, Loading, Show, createMemo } from "solid-js";
 import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -16,8 +17,8 @@ import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../li
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import "./custom-elements.ts";
+import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -213,9 +214,7 @@ function PluginNotices(props: DetailProps) {
       {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
       <PluginInspectionStatus {...props} />
       {plugin()?.error ? (
-        <div class="callout danger oc-banner oc-banner-error" role="alert">
-          {formatUiExternalText(plugin()!.error!)}
-        </div>
+        <InlineAlert tone="danger">{formatUiExternalText(plugin()!.error!)}</InlineAlert>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
     </>

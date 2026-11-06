@@ -26,6 +26,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
@@ -91,18 +92,22 @@ export function ListView(props: CronProps) {
       <SettingsPage wide>
         <Errored
           fallback={(error, reset) => (
-            <div class="cron-error-banner" role="alert">
+            <InlineAlert
+              tone="danger"
+              action={
+                <button
+                  class="btn btn--sm"
+                  onClick={() => {
+                    void props.onRefresh();
+                    reset();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              }
+            >
               {formatUiError(error())}
-              <button
-                class="btn btn--sm"
-                onClick={() => {
-                  void props.onRefresh();
-                  reset();
-                }}
-              >
-                {t("common.retry")}
-              </button>
-            </div>
+            </InlineAlert>
           )}
         >
           <Reveal order="natural">
@@ -160,10 +165,13 @@ function SchedulerStatus(props: CronProps) {
   return (
     <>
       {status() && !status()?.enabled ? (
-        <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
-          <strong>{t("cron.list.schedulerOff")}</strong>
+        <InlineAlert
+          tone="warning"
+          data-test-id="cron-scheduler-banner"
+          title={t("cron.list.schedulerOff")}
+        >
           {t("cron.runNotStarted.stopped")}
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );

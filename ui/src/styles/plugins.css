@@ -296,8 +296,7 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-.plugin-catalog-section__header,
-.plugins-settings-error {
+.plugin-catalog-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
