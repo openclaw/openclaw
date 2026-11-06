@@ -18,9 +18,9 @@ images, then [recreate the affected sandboxes](/cli/sandbox#openclaw-sandbox-rec
 <Note>
 **Source checkout vs npm install**
 
-The npm package includes `scripts/sandbox-setup.sh`, its build helpers, and the
-default Dockerfile. `openclaw doctor --fix` locates this builder in the installed
-package, so you can run it from any directory with Docker available.
+The npm package includes the standalone `scripts/sandbox-image-build.sh` builder
+and the default Dockerfile. `openclaw doctor --fix` locates this builder in the
+installed package, so you can run it from any directory with Docker available.
 
 The common and browser image builders still require a [source checkout](https://github.com/openclaw/openclaw)
 or the manual build instructions below.

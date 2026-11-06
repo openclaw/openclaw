@@ -272,7 +272,7 @@ async function handleMissingSandboxImage(
   }
 
   const buildHint =
-    params.buildScript === "scripts/sandbox-setup.sh"
+    params.buildScript === "scripts/sandbox-image-build.sh"
       ? `Run ${formatCliCommand("openclaw doctor --fix")} to build it with ${params.buildScript}.`
       : params.buildScript
         ? `Build it with ${params.buildScript}.`
@@ -348,7 +348,7 @@ export async function maybeRepairSandboxImages(
           : dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
             ? "scripts/sandbox-common-setup.sh"
             : dockerImage === DEFAULT_SANDBOX_IMAGE
-              ? "scripts/sandbox-setup.sh"
+              ? "scripts/sandbox-image-build.sh"
               : undefined,
     },
     runtime,

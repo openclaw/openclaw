@@ -244,7 +244,7 @@ describe("sandbox health", () => {
 
   describe("sandbox setup script execution", () => {
     const dirs = useAutoCleanupTempDirTracker(afterEach);
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
+    const scriptRel = path.join("scripts", "sandbox-image-build.sh");
 
     beforeEach(() => {
       runExec.mockImplementation(async (command: string, args: string[]) => {
@@ -307,7 +307,7 @@ describe("sandbox health", () => {
         expect(warnings).toHaveLength(1);
         expect(runCommandWithTimeout).not.toHaveBeenCalled();
         expect(note).toHaveBeenCalledWith(
-          "Unable to locate scripts/sandbox-setup.sh. Run it from the repo root.",
+          "Unable to locate scripts/sandbox-image-build.sh. Run it from the repo root.",
           "Sandbox",
         );
         expect(mockRuntime.log).not.toHaveBeenCalled();
@@ -318,8 +318,8 @@ describe("sandbox health", () => {
           { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
         );
         expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
-          ["Running scripts/sandbox-setup.sh..."],
-          ["Completed scripts/sandbox-setup.sh."],
+          ["Running scripts/sandbox-image-build.sh..."],
+          ["Completed scripts/sandbox-image-build.sh."],
         ]);
       }
       expect(mockRuntime.error).not.toHaveBeenCalled();
