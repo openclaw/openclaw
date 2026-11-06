@@ -6,8 +6,8 @@ read_when:
   - Configuring Google managed research
 ---
 
-Deep Research is a bundled, opt-in plugin with a lazy `deep_research` tool.
-Enable `plugins.entries.deep-research.enabled` and allow `deep_research` through tool policy. Startup scans bounded local job state and reconstructs due wakes. An empty
+Deep Research is a bundled, default-enabled plugin with a lazy `deep_research`
+tool. Startup scans bounded local job state and reconstructs due wakes. An empty
 startup does not resolve research credentials or make research network requests. Existing plugin allowlists and agent tool policy
 still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
 

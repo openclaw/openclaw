@@ -307,6 +307,12 @@ paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
+Numeric test-budget records retain full guard coverage without widening an
+otherwise scoped source/test compiler and lint selection.
+
+Selected singleton compiler rows share setup in pairs within the existing
+two-compiler limit. Full stripes and rows carrying root partitions stay unchanged.
+
 Scoped PR plans inspect the four root-test partitions separately and select every
 partition that consumes a changed input, including type-only imports. A change
 used only by tooling tests checks that partition; shared setup can select all
@@ -424,6 +430,9 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Compatible selected serial jobs share setup after singleton worker limits are
+fixed. Combined jobs retain the shortest contributing timeout and the existing
+test-work budget; complete and scheduled plans keep their original layout.
 Known indivisible-file costs remain a floor when selected subsets are priced;
 older complete-group measurements cannot cap those costs. Process-heavy worktree
 and updater suites carry explicit case-cost weights so they do not share a row
