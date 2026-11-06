@@ -95,6 +95,7 @@ export function createCliModelRequestGate(params: {
     const result = await params.hookRunner.runBeforeModelRequest(
       {
         runtime: "cli",
+        requestKind: "turn",
         payload: requestPayload,
         provider: params.provider,
         model: params.model,

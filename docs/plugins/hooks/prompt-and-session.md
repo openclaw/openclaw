@@ -398,9 +398,16 @@ turn dispatch (including each recovery retry), and once per input steered into
 a live CLI turn. It runs after history reseeding, resume context, and plugin
 input text transforms, before image paths are attached.
 
-The event is `{ runtime, payload, provider, model, messages }`:
+Embedded compaction runs the same gate. Summary requests and server-side compaction
+requests over older history pass through it with `requestKind: "compaction"`, after the
+same provider and config `onPayload` transforms as a turn.
+
+The event is `{ runtime, requestKind, payload, provider, model, messages }`:
 
 - `runtime` is `"embedded"` or `"cli"`.
+- `requestKind` is `"turn"` for an agent turn (including steered CLI input) or
+  `"compaction"` for an embedded compaction request. More kinds may be added; treat an
+  unknown kind like `"turn"`.
 - On embedded runs, `payload` is the provider-specific request body. Return
   `{ payload }` to replace it, or return nothing to send it unchanged. Handlers
   run in priority order and each one sees the previous replacement.
@@ -461,9 +468,15 @@ access and prompt modification, like `before_prompt_build`. It still runs for in
 hooks do; `llm_input` and `llm_output` observations stay suppressed there. With
 no handler registered, messages are not copied and nothing is awaited.
 
-Scope: embedded agent attempts and CLI-backed agent turns. External harnesses
-such as Codex, compaction summary calls, CLI side questions, isolated
-completions, and control operations such as compaction, tool results a CLI
+This hook changes only the outgoing request. It does not rewrite stored history:
+`messages` is a copy, and a value redacted in `payload` stays in the transcript, so it
+reaches every later request that is not gated. To keep a value out of history, redact it
+when it is written with `tool_result_persist` or `before_message_write`, and use this hook
+as the last gate on what leaves.
+
+Scope: embedded agent attempts, embedded compaction, and CLI-backed agent turns.
+External harnesses such as Codex, compaction a CLI runtime runs itself, CLI side
+questions, isolated completions, other control operations, tool results a CLI
 reads inside its own loop, custom provider
 transports that bypass both `onPayload` and host encoding, and provider-hosted
 tool results that never return to the client are not intercepted.

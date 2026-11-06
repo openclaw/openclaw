@@ -4,6 +4,7 @@ import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
 const event = {
   runtime: "embedded" as const,
+  requestKind: "turn" as const,
   payload: { input: "source" },
   provider: "fixture",
   model: "fixture",

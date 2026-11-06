@@ -1,4 +1,5 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { buildEmbeddedAgentHookContext } from "./run/agent-hook-context.js";
@@ -30,7 +31,10 @@ function readProtectedFields(payload: unknown): string {
 }
 
 /** Policy sees final provider bytes and a detached copy of host message provenance. */
-export function createModelRequestTransformer(hookContext: PluginHookAgentContext) {
+export function createModelRequestTransformer(
+  hookContext: PluginHookAgentContext,
+  requestKind: PluginHookModelRequestKind = "turn",
+) {
   return async (payload: unknown, model: Model, context: Context): Promise<unknown> => {
     const hooks = getGlobalHookRunner();
     if (!hooks?.hasHooks("before_model_request")) {
@@ -41,6 +45,7 @@ export function createModelRequestTransformer(hookContext: PluginHookAgentContex
     const result = await hooks.runBeforeModelRequest(
       {
         runtime: "embedded",
+        requestKind,
         payload,
         provider: model.provider,
         model: model.id,

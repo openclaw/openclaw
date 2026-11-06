@@ -35,6 +35,22 @@ it("dispatches final payload with detached provenance and the correct session", 
   expect(await transform({ input: "outside" }, model, context)).toEqual({ input: "withheld" });
   expect(source.content).toBe("outside");
 });
+it("names the request kind, defaulting to a turn", async () => {
+  const kinds: unknown[] = [];
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_model_request",
+        handler: async (raw) => {
+          kinds.push((raw as { requestKind: unknown }).requestKind);
+        },
+      },
+    ]),
+  );
+  await createModelRequestTransformer({})({ input: "a" }, model, { messages: [] });
+  await createModelRequestTransformer({}, "compaction")({ input: "b" }, model, { messages: [] });
+  expect(kinds).toEqual(["turn", "compaction"]);
+});
 it("leaves the request intact when the plugin is absent", async () => {
   const payload = { input: "owner" };
   expect(await createModelRequestTransformer({})(payload, model, { messages: [] })).toBe(payload);

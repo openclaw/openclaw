@@ -1,6 +1,7 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
@@ -9,6 +10,8 @@ import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
+import { createModelRequestTransformer } from "./model-request-hook.js";
+import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -33,6 +36,9 @@ export async function prepareCompactionSessionAgent(params: {
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
   modelCallUrgency?: ModelCallUrgency;
+  /** Agent hook context for the compaction's `before_model_request` gate. */
+  modelRequestHookContext: PluginHookAgentContext;
+  contextTokenBudget: number;
 }) {
   const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
@@ -47,6 +53,14 @@ export async function prepareCompactionSessionAgent(params: {
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
   }).streamFn;
+  // Summaries resend older history, so they pass the same final request gate as turns,
+  // at the same depth: provider/config payload wrappers applied below run first.
+  params.session.agent.streamFn = wrapStreamFnWithProviderPromptState({
+    streamFn: params.session.agent.streamFn,
+    state: {},
+    effectiveContextTokenBudget: params.contextTokenBudget,
+    transformPayload: createModelRequestTransformer(params.modelRequestHookContext, "compaction"),
+  });
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,

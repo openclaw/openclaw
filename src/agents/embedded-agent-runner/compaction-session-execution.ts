@@ -290,6 +290,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           thinkLevel,
           modelCallUrgency:
             params.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
+          contextTokenBudget,
+          modelRequestHookContext: {
+            agentId: sessionAgentId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            sessionId: params.sessionId,
+            workspaceDir: effectiveWorkspace,
+            modelProviderId: provider,
+            modelId,
+            messageProvider: resolvedMessageProvider,
+            trigger,
+            contextTokenBudget,
+          },
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,

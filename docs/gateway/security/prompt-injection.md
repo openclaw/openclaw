@@ -113,7 +113,7 @@ export default definePluginEntry({
 });
 ```
 
-Pattern matching catches common credential formats, not every secret; keep secrets out of the agent's reachable filesystem and environment as the first layer. The hook covers embedded agent runs and CLI-backed agent turns; on CLI runtimes it sees the turn and steered prompt text (`{ prompt, prependContext?, appendContext? }`), not the tool results the CLI reads inside its own loop. External harnesses such as Codex and compaction summary calls are not intercepted. See [Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy) for the full contract.
+Pattern matching catches common credential formats, not every secret; keep secrets out of the agent's reachable filesystem and environment as the first layer. The hook covers embedded agent runs and CLI-backed agent turns; on CLI runtimes it sees the turn and steered prompt text (`{ prompt, prependContext?, appendContext? }`), not the tool results the CLI reads inside its own loop. Embedded compaction requests pass through the same hook (`requestKind: "compaction"`); compaction a CLI runtime runs itself and external harnesses such as Codex are not intercepted. The hook redacts only the outgoing request, not stored history: to keep a secret out of the transcript, and so out of every later request, also redact tool results when they are written with `tool_result_persist`. See [Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy) for the full contract.
 
 ### Bypass flags (keep off in production)
 
