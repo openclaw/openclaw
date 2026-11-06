@@ -20,6 +20,7 @@ import {
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
 import { bindLlmOperatorAuthority } from "./runtime-llm-operator-authority.js";
+import type { LlmCompleteParams, LlmCompleteResult } from "./runtime-llm.types.js";
 import { writeRuntimeLog } from "./runtime-logging.js";
 import {
   assertAllowedAuthProfileOverride,
@@ -34,12 +35,7 @@ import {
   type RuntimeLlmAuthority,
 } from "./runtime-model-policy.js";
 import { finalizePluginModelUsage } from "./runtime-model-usage.js";
-import type {
-  LlmCompleteParams,
-  LlmCompleteResult,
-  PluginRuntimeCore,
-  RuntimeLogger,
-} from "./types-core.js";
+import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLlmAuthority } from "./runtime-model-policy.js";
 

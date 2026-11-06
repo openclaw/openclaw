@@ -13,7 +13,7 @@
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isScalar, parseDocument } from "yaml";
+import { isMap, isScalar, LineCounter, parseDocument } from "yaml";
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -77,8 +77,37 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   if (closeIndex === -1) {
     return null;
   }
+  const frontmatter = lines.slice(1, closeIndex);
+  const lineCounter = new LineCounter();
+  // Keep the final newline so YAML owns multiline folding and chomping.
+  const doc = parseDocument(frontmatter.join("\n") + "\n", {
+    prettyErrors: false,
+    lineCounter,
+  });
   const entries: FrontmatterEntry[] = [];
-  for (const [offset, line] of lines.slice(1, closeIndex).entries()) {
+  if (doc.errors.length === 0 && isMap(doc.contents)) {
+    for (const { key, value } of doc.contents.items) {
+      if (!isScalar(key) || !key.range) {
+        continue;
+      }
+      const keyLine = lineCounter.linePos(key.range[0]).line;
+      const source = expectDefined(frontmatter.at(keyLine - 1), "frontmatter key source line");
+      const match = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(source);
+      if (match !== null) {
+        entries.push({
+          key: expectDefined(match[1], "frontmatter key capture"),
+          value:
+            isScalar(value) && typeof value.value === "string"
+              ? value.value
+              : unquote(expectDefined(match[2], "frontmatter value capture").trim()),
+          line: keyLine + 1,
+        });
+      }
+    }
+    return { entries, endLine: closeIndex };
+  }
+  // Malformed, hand-authored frontmatter retains the tolerant line reader.
+  for (const [offset, line] of frontmatter.entries()) {
     const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m !== null) {
       const key = expectDefined(m[1], "frontmatter key capture");
@@ -90,20 +119,16 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
 }
 
 function unquote(value: string): string {
+  const doc = parseDocument(value, { prettyErrors: false });
+  if (doc.errors.length === 0 && isScalar(doc.contents) && typeof doc.contents.value === "string") {
+    return doc.contents.value;
+  }
   if (value.length >= 2) {
     const f = value.charCodeAt(0);
     const l = value.charCodeAt(value.length - 1);
-    if (f === l && (f === 34 || f === 39)) {
-      const doc = parseDocument(value, { prettyErrors: false });
-      if (
-        doc.errors.length === 0 &&
-        isScalar(doc.contents) &&
-        typeof doc.contents.value === "string"
-      ) {
-        return doc.contents.value;
-      }
+    if (f === 34 || f === 39) {
       // Preserve the tolerant handling of malformed, hand-authored quoted values.
-      return value.slice(1, -1);
+      return f === l ? value.slice(1, -1) : value;
     }
   }
   return value;

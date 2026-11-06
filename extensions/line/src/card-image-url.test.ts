@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createActionCard, createImageCard } from "./flex-templates/basic-cards.js";
 import { renderLineCard } from "./rich-messages.js";
 import { pushMessagesLine, replyMessageLine } from "./send.js";
@@ -491,16 +492,9 @@ describe("LINE card shape on the actual push and reply wire", () => {
   });
 
   beforeAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("No loopback TCP address");
-    }
+    const port = await listenOnLoopback(server);
     realFetch = globalThis.fetch;
-    localOrigin = `http://127.0.0.1:${address.port}`;
+    localOrigin = `http://127.0.0.1:${port}`;
   });
 
   beforeEach(() => {

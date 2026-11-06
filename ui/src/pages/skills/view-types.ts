@@ -47,6 +47,8 @@ export type SkillsProps = {
   state: SkillsState & SkillsPresentation;
   mutationSkills: SkillStatusEntry[];
   saving: boolean;
+  toggleSavingSkillKey?: string;
+  toggleDisabled?: boolean;
   readClawHubDetail: () => ClawHubSkillDetail | null;
   readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
   readClawHubSearch: () => boolean;
@@ -55,6 +57,7 @@ export type SkillsProps = {
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
   library?: JSX.Element;
+  pageMenu?: () => JSX.Element;
   showInventory?: boolean;
   canUpdate: boolean;
   canInstall: boolean;

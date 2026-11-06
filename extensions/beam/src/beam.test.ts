@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import {
   createBeamTestCatalog,
@@ -10,7 +11,7 @@ import {
 } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
-import { BEAM_MAX_BODY_BYTES, BEAM_RETENTION_MS, parseBeamUpload } from "./types.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_RETENTION_MS, type BeamStoredSession } from "./types.js";
 
 function postUpload(endpoint: string, body = sampleUpload()) {
   return fetch(endpoint, {
@@ -23,32 +24,23 @@ function postUpload(endpoint: string, body = sampleUpload()) {
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
 const catalogParams = { agentId: "main", hostId: "gateway", threadId: sampleUpload().beamId };
 const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
+const otherBeamId = "fedcba9876543210fedcba9876543210";
 
 const servers: http.Server[] = [];
 afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 async function requestStatus(url: string, body: string): Promise<number | undefined> {
-  return await new Promise((resolve, reject) => {
-    const request = http.request(
-      url,
-      { method: "POST", headers: { "content-type": "application/json" } },
-      (response) => {
-        resolve(response.statusCode);
-        response.resume();
-      },
-    );
-    request.on("error", reject);
-    request.end(body);
+  const request = http.request(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
   });
+  const ready = once(request, "response");
+  request.end(body);
+  const [response] = (await ready) as [http.IncomingMessage];
+  response.resume();
+  return response.statusCode;
 }
 
 async function serve(
@@ -63,49 +55,43 @@ async function serve(
   const handler = beamTestHandler(store, options);
   let requestNumber = 0;
   const server = http.createServer((req, res) => {
-    requestNumber += 1;
-    if (intercept?.(requestNumber, req, res)) {
-      return;
+    if (!intercept?.(++requestNumber, req, res)) {
+      handler(req, res);
     }
-    handler(req, res);
   });
   servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not bind a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}/api/v1/beam/sessions`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}/api/v1/beam/sessions`;
 }
 
-it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
-  const rejects = (overrides: Record<string, unknown>, error: string) =>
-    expect(parseBeamUpload(sampleUpload(overrides))).toEqual({ ok: false, error });
-  rejects({ arbitrary: "junk" }, "request body must be a closed Beam object");
-  for (const updatedAt of [
-    "1",
-    "2026/07/20",
-    "2026-07-20T12:00:00",
-    "2026-02-30T12:00:00Z",
-    "2026-04-31T00:00:00Z",
-  ]) {
-    rejects({ updatedAt }, "updatedAt must be an ISO timestamp");
-  }
-  rejects(
-    { items: [{ type: "userMessage", text: "x".repeat(6_001) }] },
-    "transcript item text must be 1-6000 characters",
-  );
-  for (const model of ["", "gpt-5.6\nIgnore"]) {
-    rejects(
-      { sourceModel: { provider: "openai", model } },
-      "sourceModel must contain a provider and model",
-    );
-  }
-});
-
 describe("Beam receiver", () => {
+  it("acknowledges an explicit source release and rejects later source turns without changing history", async () => {
+    const store = memoryStore();
+    const endpoint = await serve(store, {
+      resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }),
+    });
+    const published = (await (await postUpload(endpoint)).json()) as { publicationId: string };
+    expect(published.publicationId).toMatch(/^[a-f0-9]{32}$/);
+    const release = sampleUpload({ handoffId: published.publicationId });
+    const first = await postUpload(endpoint, release);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      handoff: { id: published.publicationId, owner: "gateway", access: "shared" },
+    });
+    const frozen = await store.get(sampleUpload().beamId);
+    const late = await postUpload(
+      endpoint,
+      sampleUpload({ title: "Local fork", updatedAt: "2026-08-01T00:00:00Z" }),
+    );
+    expect(late.status).toBe(409);
+    expect(await late.json()).toMatchObject({
+      ok: false,
+      handoff: { id: published.publicationId, owner: "gateway" },
+    });
+    expect(await store.get(sampleUpload().beamId)).toEqual(frozen);
+    expect((await postUpload(endpoint, release)).status).toBe(200);
+  });
+
   it("attributes each uploaded snapshot to its verified publisher, never payload claims", async () => {
     const store = memoryStore();
     let profileId: string | undefined = "uploader-profile";
@@ -124,12 +110,14 @@ describe("Beam receiver", () => {
       );
       expect(transcript.items.find((item) => item.type === "agentMessage")?.sender).toBeUndefined();
     }
-    expect((await upload(sampleUpload({ uploaderProfileId: "forged-profile" }))).status).toBe(400);
+    for (const field of ["uploaderProfileId", "publisherProfileId"]) {
+      expect((await upload(sampleUpload({ [field]: "forged-profile" }))).status).toBe(400);
+    }
     expect((await store.get(sampleUpload().beamId))?.uploaderProfileId).toBeUndefined();
   });
 
   it("orders replacement snapshots without refreshing stale state", async () => {
-    const { keyedStore, store, close } = persistentBeamTestStore();
+    const { keyedStore, store, close } = await persistentBeamTestStore();
     let receivedAt = 100;
     let profileId = "terminal-publisher";
     const endpoint = await serve(store, {
@@ -137,136 +125,116 @@ describe("Beam receiver", () => {
       resolveClient: () => ({ ...writeClient(), profileId }),
     });
     const updatedAt = "2026-07-20T12:00:00.000100Z";
-    const storageWindow = { before: 0, after: 0 };
-    const upload = async (
-      overrides: Record<string, unknown>,
-      options: { receivedAt: number; profileId?: string },
-      createdAt?: number,
-    ) => {
-      receivedAt = options.receivedAt;
-      profileId = options.profileId ?? profileId;
-      const body = sampleUpload(overrides);
-      storageWindow.before = Date.now();
-      expect((await postUpload(endpoint, body)).status).toBe(200);
-      storageWindow.after = Date.now();
-      const stored = await store.get(body.beamId);
-      if (createdAt !== undefined) {
-        expect(stored).toMatchObject({
-          ...body,
-          createdAt,
-          receivedAt,
-          uploaderProfileId: profileId,
-        });
-        const entry = await entryFor(body.beamId);
-        if (!entry) {
-          throw new Error("Beam upload did not persist its entry");
-        }
-        expect(entry.createdAt).toBeGreaterThanOrEqual(storageWindow.before);
-        expect(entry.createdAt).toBeLessThanOrEqual(storageWindow.after);
-        expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
-      }
-      return stored;
-    };
     const entryFor = async (beamId: string) =>
       (await keyedStore.entries()).find((entry) => entry.key === beamId);
-
+    let expected: BeamStoredSession | undefined;
     try {
-      const terminal = await upload(
-        {
-          updatedAt,
-          completed: true,
-          title: "Terminal snapshot",
-          sourceModel,
-          items: [{ type: "userMessage", text: "terminal request" }],
-        },
-        { receivedAt: 100 },
-        100,
-      );
-      const terminalEntry = await entryFor(sampleUpload().beamId);
-
-      for (const [candidateUpdatedAt, title, completed, candidateReceivedAt] of [
-        ["2026-07-20T11:59:59.999Z", "Stale snapshot", false, 200],
-        ["2026-07-20T12:00:00.000050Z", "Sub-millisecond stale snapshot", true, 250],
-        ["2026-07-20T08:00:00.000100-04:00", "Equal live snapshot", false, 300],
+      // Initial, stale, sub-ms stale, equal live, refreshed terminal, reopened, second, completed.
+      for (const [time, revision, completed, accepted, second] of [
+        [100, updatedAt, true, true, false],
+        [200, "2026-07-20T11:59:59.999Z", false, false, false],
+        [250, "2026-07-20T12:00:00.000050Z", true, false, false],
+        [300, "2026-07-20T08:00:00.000100-04:00", false, false, false],
+        [400, updatedAt, true, true, false],
+        [500, "2026-07-20T12:00:00.000200Z", false, true, false],
+        [600, updatedAt, false, true, true],
+        [700, updatedAt, true, true, true],
       ] as const) {
-        await upload(
-          {
-            updatedAt: candidateUpdatedAt,
-            title,
-            completed,
-            items: [{ type: "agentMessage", text: title }],
-          },
-          { receivedAt: candidateReceivedAt, profileId: "stale-publisher" },
-        );
-        expect(await store.get(sampleUpload().beamId)).toEqual(terminal);
-        expect(await entryFor(sampleUpload().beamId)).toEqual(terminalEntry);
+        receivedAt = time;
+        profileId = `publisher-${time}`;
+        const body = sampleUpload({
+          beamId: second ? otherBeamId : sampleUpload().beamId,
+          updatedAt: revision,
+          completed,
+          title: `snapshot-${time}`,
+          sourceModel:
+            time === 400 ? { provider: "anthropic", model: "claude-opus-4-1" } : sourceModel,
+          items: [{ type: "userMessage", text: `request-${time}` }],
+        });
+        const previousEntry = await entryFor(body.beamId);
+        const before = Date.now();
+        const response = await postUpload(endpoint, body);
+        expect(response.status).toBe(200);
+        const { publicationId } = await response.json();
+        expect(publicationId).toMatch(/^[a-f0-9]{32}$/);
+        if (previousEntry) {
+          expect(publicationId).toBe(previousEntry.value.publicationId);
+        }
+        const after = Date.now();
+        if (accepted) {
+          expected = {
+            ...body,
+            publicationId,
+            receivedAt,
+            createdAt: second ? 600 : 100,
+            uploaderProfileId: profileId,
+            publisherProfileId: second ? "publisher-600" : "publisher-100",
+          };
+        }
+        expect(await store.get(body.beamId)).toEqual(expected);
+        const entry = await entryFor(body.beamId);
+        if (accepted) {
+          assert(entry, "Beam upload did not persist its entry");
+          expect(entry.createdAt).toBeGreaterThanOrEqual(before);
+          expect(entry.createdAt).toBeLessThanOrEqual(after);
+          expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
+        } else {
+          expect(entry).toEqual(previousEntry);
+        }
       }
-
-      const catalog = createBeamSessionCatalog(store);
-      await expect(catalog.copyToGatewaySession?.(catalogParams)).resolves.toEqual({
-        displayName: "Terminal snapshot",
-        preferredModel: "openai/gpt-5.6-sol",
-      });
-      await expect(catalog.read(catalogParams)).resolves.toMatchObject({
-        label: "Terminal snapshot",
-        items: [
-          expect.objectContaining({
-            type: "userMessage",
-            text: "terminal request",
-            sender: { identity: { type: "profile", id: "terminal-publisher" } },
-          }),
-        ],
-      });
-
-      await upload(
-        {
-          updatedAt,
-          completed: true,
-          title: "Refreshed terminal snapshot",
-          sourceModel: { provider: "anthropic", model: "claude-opus-4-1" },
-          items: [{ type: "agentMessage", text: "refreshed terminal" }],
-        },
-        { receivedAt: 400, profileId: "terminal-refresh-publisher" },
-        100,
-      );
-
-      await upload(
-        {
-          updatedAt: "2026-07-20T12:00:00.000200Z",
-          title: "Reopened snapshot",
-          sourceModel,
-          items: [{ type: "agentMessage", text: "reopened" }],
-        },
-        { receivedAt: 500, profileId: "reopen-publisher" },
-        100,
-      );
-
-      const secondBeamId = "fedcba9876543210fedcba9876543210";
-      await upload({ beamId: secondBeamId, updatedAt }, { receivedAt: 600 }, 600);
-      await upload(
-        {
-          beamId: secondBeamId,
-          updatedAt,
-          completed: true,
-          title: "Equal completed snapshot",
-        },
-        { receivedAt: 700, profileId: "completion-publisher" },
-        600,
-      );
     } finally {
       await close();
     }
   });
 
-  it("requires operator.write before reading the upload body", async () => {
+  it("accepts a verified restricted Visitor publisher over HTTP", async () => {
+    const store = memoryStore();
+    let profileId = "guest-publisher";
+    const endpoint = await serve(store, {
+      resolveClient: () => ({
+        clientIp: "127.0.0.1",
+        scopes: ["operator.sessions.write"],
+        profileId,
+        visitorGrant: { assertCurrent() {} },
+      }),
+    });
+    const response = await postUpload(endpoint);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, canView: true });
+    expect(await store.get(sampleUpload().beamId)).toMatchObject({
+      publisherProfileId: "guest-publisher",
+      uploaderProfileId: "guest-publisher",
+    });
+    profileId = "another-publisher";
+    const refusal = await postUpload(endpoint);
+    expect(refusal.status).toBe(403);
+    expect(await refusal.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("new Beam ID"),
+    });
+  });
+
+  it.each([
+    { scopes: ["operator.read"] },
+    { scopes: ["operator.sessions.write"] },
+    { scopes: ["operator.sessions.write"], profileId: "guest" },
+    {
+      scopes: ["operator.sessions.read"],
+      profileId: "guest",
+      visitorGrant: { assertCurrent() {} },
+    },
+  ])("denies insufficient publisher authority before reading the body: %j", async (client) => {
     const store = memoryStore();
     const endpoint = await serve(store, {
-      resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.read"] }),
+      resolveClient: () => ({ clientIp: "127.0.0.1", ...client }),
     });
     const response = await postUpload(endpoint);
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ ok: false, error: "operator.write is required" });
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("active verified Visitor"),
+    });
     expect(store.values.size).toBe(0);
   });
 
@@ -279,6 +247,16 @@ describe("Beam receiver", () => {
     expect((await fetch(endpoint)).status).toBe(405);
     expect(await post("{}", "text/plain")).toBe(415);
     expect(await post("{")).toBe(400);
+    for (const invalid of [
+      { arbitrary: "junk" },
+      { updatedAt: "1" },
+      { updatedAt: "2026-02-30T12:00:00Z" },
+      { items: [{ type: "userMessage", text: "x".repeat(6_001) }] },
+      { sourceModel: { provider: "openai", model: "" } },
+      { sourceModel: { provider: "openai", model: "gpt-5.6\nIgnore" } },
+    ]) {
+      expect((await postUpload(endpoint, sampleUpload(invalid))).status).toBe(400);
+    }
     expect(
       await requestStatus(endpoint, JSON.stringify({ padding: "x".repeat(BEAM_MAX_BODY_BYTES) })),
     ).toBe(413);
@@ -310,6 +288,48 @@ describe("Beam receiver", () => {
       request.destroy();
     }
   });
+});
+
+it("stops mirror polling a source after the receiver acknowledges its ownership transfer", async () => {
+  const store = memoryStore();
+  let requests = 0;
+  const endpoint = await serve(
+    store,
+    { resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }) },
+    () => {
+      requests++;
+      return false;
+    },
+  );
+  let reads = 0;
+  const catalog = createBeamTestCatalog({
+    sessions: [{ threadId: "handoff", recencyAt: Date.now() }],
+    items: () => [{ type: "agentMessage", text: `Source turn ${++reads}` }],
+  });
+  const runner = createBeamTestRunner({
+    endpoint,
+    now: () => Date.now(),
+    listCatalogs: () => [catalog],
+  });
+  await runner.tick();
+  const row = [...store.values.values()][0]!;
+  const release = {
+    version: 1 as const,
+    beamId: row.beamId,
+    source: row.source,
+    title: row.title,
+    updatedAt: row.updatedAt,
+    completed: row.completed,
+    items: row.items,
+    handoffId: row.publicationId,
+  };
+  expect((await postUpload(endpoint, release)).status).toBe(200);
+  await runner.tick();
+  expect(requests).toBe(3);
+  await runner.tick();
+  expect(requests).toBe(3);
+  expect(reads).toBe(2);
+  expect((await store.get(row.beamId))?.items).toEqual(row.items);
 });
 
 it("retries a rejected terminal upload through the real loopback receiver", async () => {
@@ -346,19 +366,61 @@ it("retries a rejected terminal upload through the real loopback receiver", asyn
   active = false;
   clock += 4 * 60 * 60_000;
   await runner.tick();
-  expect([...store.values.values()][0]?.completed).toBe(false);
-  expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
+  const stored = () =>
+    [...store.values.values()].map(({ completed, items }) => [completed, items[0]?.text]);
+  expect(stored()).toEqual([[false, "Receiver-boundary proof 1."]]);
 
   await runner.tick();
 
   expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-  expect([...store.values.values()][0]?.completed).toBe(true);
-  expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
+  expect(stored()).toEqual([[true, "Receiver-boundary proof 3."]]);
 });
 
 describe("Beam session catalog", () => {
+  it.each([
+    { language: "German", titles: ["München", "Mu\u0308nchen"] },
+    { language: "Korean", titles: ["한국어", "\u1112\u1161\u11ab\u1100\u116e\u11a8\u110b\u1165"] },
+  ])(
+    "finds canonically equivalent $language titles without rewriting snapshots",
+    async ({ titles }) => {
+      const { keyedStore, store, close } = await persistentBeamTestStore();
+      const endpoint = await serve(store);
+      const catalog = createBeamSessionCatalog(store);
+      const uploads = titles.map((title, index) =>
+        sampleUpload({ beamId: index === 0 ? catalogParams.threadId : otherBeamId, title }),
+      );
+
+      try {
+        for (const upload of uploads) {
+          expect((await postUpload(endpoint, upload)).status).toBe(200);
+        }
+        const expected = uploads.map(({ beamId, title }) => ({ threadId: beamId, name: title }));
+        for (const query of [...titles, " ClAuDe "]) {
+          const [host] = await catalog.list({ agentId: "main", search: query });
+          expect(host?.sessions).toHaveLength(2);
+          expect(host?.sessions).toEqual(
+            expect.arrayContaining(expected.map((session) => expect.objectContaining(session))),
+          );
+        }
+        const [absent] = await catalog.list({ agentId: "main", search: "missing title" });
+        expect(absent?.sessions).toEqual([]);
+
+        const entries = await keyedStore.entries();
+        expect(entries).toHaveLength(2);
+        for (const upload of uploads) {
+          expect(entries.find(({ key }) => key === upload.beamId)?.value).toMatchObject(upload);
+          await expect(
+            catalog.read({ ...catalogParams, threadId: upload.beamId }),
+          ).resolves.toMatchObject({ threadId: upload.beamId, label: upload.title });
+        }
+      } finally {
+        await close();
+      }
+    },
+  );
+
   it("permanently deletes only known gateway sessions and allows re-upload", async () => {
-    const { store, close } = persistentBeamTestStore();
+    const { store, close } = await persistentBeamTestStore();
     const endpoint = await serve(store);
     const catalog = createBeamSessionCatalog(store);
     const params = { ...catalogParams, confirmNoOtherRunner: true as const };
@@ -369,7 +431,6 @@ describe("Beam session catalog", () => {
       await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
         "unknown Beam host: other-host",
       );
-      await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
       await expect(catalog.archive?.({ ...params, threadId: "missing" })).rejects.toThrow(
         "unknown Beam session: missing",
       );
@@ -393,7 +454,7 @@ describe("Beam session catalog", () => {
     const ids = [
       "0123456789ab00000000000000000000",
       "0123456789abffffffffffffffffffff",
-      "fedcba9876543210fedcba9876543210",
+      otherBeamId,
     ] as const;
     for (const [index, beamId] of ids.entries()) {
       store.values.set(beamId, {
@@ -420,70 +481,60 @@ describe("Beam session catalog", () => {
       ...sampleUpload({
         truncated: true,
         sourceModel,
-        items: [
-          ...sampleUpload().items,
-          { type: "userMessage", text: "Did the upload keep the conversation order?" },
-          { type: "agentMessage", text: "Yes, the question still precedes its answer." },
-        ],
+        handoffId: "a".repeat(32),
+        publicationId: "a".repeat(32),
       }),
+      publisherProfileId: "source-publisher",
       createdAt: 100,
       receivedAt: 200,
     };
+    current.items.push({ type: "userMessage", text: "Latest" });
+    const itemsBeforeRead = structuredClone(current.items);
     store.values.set(current.beamId, current);
-    store.values.set("fedcba9876543210fedcba9876543210", {
-      ...sampleUpload({
-        beamId: "fedcba9876543210fedcba9876543210",
-      }),
+    store.handoffValues.set(current.beamId, current);
+    store.values.set(otherBeamId, {
+      ...sampleUpload({ beamId: otherBeamId }),
       createdAt: 50,
       receivedAt: 100,
     });
     const catalog = createBeamSessionCatalog(store);
 
     const [host] = await catalog.list({ agentId: "main", limitPerHost: 1 });
-    expect(host).toMatchObject({
-      sessions: [
-        {
-          threadId: catalogParams.threadId,
-          status: "live",
-          source: "claude",
-          canContinue: true,
-          canArchive: true,
-        },
-      ],
-      nextCursor: "1",
-    });
+    expect(host?.nextCursor).toBe("1");
+    expect(
+      host?.sessions.map(({ threadId, status, source, canContinue, canArchive }) => [
+        threadId,
+        status,
+        source,
+        canContinue,
+        canArchive,
+      ]),
+    ).toEqual([[catalogParams.threadId, "live", "claude", true, true]]);
     expect(catalog.audience).toBe("gateway-operators");
 
-    await expect(catalog.copyToGatewaySession?.(catalogParams)).resolves.toEqual({
+    await expect(
+      catalog.copyToGatewaySession?.({ ...catalogParams, agentId: "main", assertCurrent() {} }),
+    ).resolves.toMatchObject({
+      continuation: { agentId: "main", reservedNow: true },
       displayName: "Fix the upload flow",
       preferredModel: "openai/gpt-5.6-sol",
     });
 
     const read = (cursor?: string, limit = 2) => catalog.read({ ...catalogParams, limit, cursor });
     const transcript = await read();
-    expect(transcript.items).toMatchObject([
-      {
-        id: "0123456789abcdef0123456789abcdef:3",
-        type: "agentMessage",
-        text: "Yes, the question still precedes its answer.",
-      },
-      {
-        id: "0123456789abcdef0123456789abcdef:2",
-        type: "userMessage",
-        text: "Did the upload keep the conversation order?",
-      },
+    expect(transcript.items.map(({ id, type, text }) => [id, type, text])).toEqual([
+      [`${current.beamId}:2`, "userMessage", "Latest"],
+      [`${current.beamId}:1`, "agentMessage", "Implemented and tested."],
     ]);
     expect(transcript.items[0]).not.toHaveProperty("truncated");
-    expect(transcript.nextCursor).toEqual(expect.any(String));
 
     const older = await read(transcript.nextCursor);
     expect(older.items).toMatchObject([
-      { type: "agentMessage", text: "Implemented and tested." },
       { type: "userMessage", text: "Please fix the upload flow." },
     ]);
     expect(older.nextCursor).toBeUndefined();
 
-    expect(store.values.get(current.beamId)?.items.slice(0, 2)).toEqual(sampleUpload().items);
+    expect(store.values.get(current.beamId)?.items).toEqual(itemsBeforeRead);
     store.values.set(current.beamId, {
       ...current,
       items: [
@@ -498,6 +549,5 @@ describe("Beam session catalog", () => {
         "stale Beam transcript cursor",
       );
     }
-    expect(catalog.openTerminal).toBeUndefined();
   });
 });

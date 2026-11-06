@@ -6,10 +6,6 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { RequestClient } from "./internal/rest.js";
 
 export class DiscordSendError extends Error {
-  kind?: "missing-permissions" | "dm-blocked";
-  channelId?: string;
-  missingPermissions?: string[];
-  discordCode?: number;
   status?: number;
 
   constructor(message: string, opts?: Partial<DiscordSendError>) {
@@ -55,7 +51,13 @@ export type DiscordReactOpts = {
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
+  /** Client/account lifetime; aborting it also stops an issued request's transport. */
   signal?: AbortSignal;
+  /**
+   * Originating invocation cancellation. Drops queued REST work that was never
+   * issued and stops retry waits; already-dispatched requests settle normally.
+   */
+  callerSignal?: AbortSignal;
   timeoutMs?: number;
 };
 

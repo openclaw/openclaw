@@ -1,3 +1,4 @@
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -15,12 +16,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 
 export type RenderMessageGroupOptions = Omit<
   GroupedMessageOptions,
-  | "isStreaming"
-  | "duplicateCount"
-  | "assistantMessageDisclosure"
-  | "messageActions"
-  | "entryId"
-  | "replyLine"
+  "isStreaming" | "assistantMessageDisclosure" | "messageActions" | "entryId" | "replyLine"
 > &
   ChatSendStatusActions &
   ForwardedAvatarOptions & {
@@ -53,9 +49,11 @@ export type RenderMessageGroupOptions = Omit<
     /** Only this run may supply live copy for an activity disclosure. */
     activityRunId?: string | null;
     activityGroupKey?: string;
+    bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
+    pendingSteer?: (message: unknown) => ChatPendingInputsPage["items"][number] | undefined;
   } & MessageReactionOptions;

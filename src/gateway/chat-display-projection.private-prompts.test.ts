@@ -36,3 +36,39 @@ it.each(["history", "live", "delta"] as const)(
     expect(message).toEqual(canonical);
   },
 );
+
+it.each(["history", "live", "delta"] as const)(
+  "omits provider input replay from %s without changing durable messages or tool arguments",
+  (surface) => {
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Visible answer." },
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "example",
+          arguments: { openclawResponsesInputReplay: "user-supplied argument" },
+        },
+      ],
+      openclawResponsesInputReplay: {
+        afterResponseId: "synthetic-response",
+        before: ["synthetic-input-fingerprint"],
+        after: [],
+      },
+    };
+    const canonical = structuredClone(message);
+    const display =
+      surface === "history"
+        ? projectChatDisplayMessages([message])[0]
+        : projectSessionMessagePayload({
+            sessionKey: "agent:main:input-replay",
+            message,
+            historyDelta: surface === "delta",
+          }).payload?.message;
+
+    expect(display).not.toHaveProperty("openclawResponsesInputReplay");
+    expect(display).toMatchObject({ role: "assistant", content: message.content });
+    expect(message).toEqual(canonical);
+  },
+);

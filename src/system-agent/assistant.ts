@@ -2,12 +2,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
@@ -27,6 +24,7 @@ import {
   systemAgentTerminalFailureGuidance,
 } from "./inference-run-errors.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { isLocalSystemAgentRoute } from "./route-locality.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   type SystemAgentVerifiedInferenceBinding,
@@ -120,33 +118,9 @@ async function runConfiguredSystemAgentText(params: {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
     const timeoutMs =
       params.timeoutMs ??
-      (() => {
-        try {
-          const workspaceDir = resolveAgentWorkspaceDir(route.runConfig, route.agentId);
-          const snapshot = resolvePluginMetadataSnapshot({
-            config: route.runConfig,
-            workspaceDir,
-            env: process.env,
-            allowWorkspaceScopedCurrent: true,
-          });
-          const plugins = snapshot.plugins;
-          const providers = new Set([
-            normalizeProviderId(route.provider),
-            normalizeProviderId(route.modelLabel.split("/", 1)[0] ?? ""),
-          ]);
-          const isLocal = plugins.some((plugin) =>
-            Object.entries(plugin.modelPricing?.providers ?? {}).some(
-              ([provider, pricing]) =>
-                providers.has(normalizeProviderId(provider)) && pricing.external === false,
-            ),
-          );
-          return isLocal
-            ? SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS
-            : SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
-        } catch {
-          return SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
-        }
-      })();
+      (isLocalSystemAgentRoute(route)
+        ? SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS
+        : SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS);
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,
@@ -155,7 +129,6 @@ async function runConfiguredSystemAgentText(params: {
     );
     const shared = {
       sessionId: `${runId}-session`,
-      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
       agentId: route.agentId,
       trigger: "manual" as const,
       sessionFile: `in-memory:${runId}`,
@@ -176,6 +149,7 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
+      bootstrapContextMode: "lightweight" as const,
       ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };

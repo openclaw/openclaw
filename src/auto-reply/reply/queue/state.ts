@@ -12,7 +12,6 @@ import {
   getExistingSessionControllerMailbox,
   sessionControllerMailboxes,
   clearSessionControllerMailbox,
-  retireSessionControllerInput,
   type SessionControllerMailbox,
 } from "../../../sessions/session-controller.mailbox.js";
 import {
@@ -34,12 +33,16 @@ export const followupSourceRunners = new WeakMap<
 >();
 
 export function* followupQueueSources(
-  queue: Pick<SessionControllerMailbox, "items" | "summarySources" | "summaryElisions">,
+  queue: Pick<SessionControllerMailbox, "items" | "summaryEntries" | "summaryElisions">,
 ): Generator<FollowupRun> {
   yield* queue.items;
-  yield* queue.summarySources;
+  for (const entry of queue.summaryEntries) {
+    yield entry.source;
+  }
   for (const entry of queue.summaryElisions) {
-    yield* entry.sources;
+    for (const summary of entry.entries) {
+      yield summary.source;
+    }
   }
 }
 
@@ -94,21 +97,19 @@ type SummaryElisionCapState = Pick<
 export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
   let sourceCount = queue.summaryElisions.reduce(
     (count, entry) =>
-      count + entry.sources.filter((source) => !queue.activeSummarySources.has(source)).length,
+      count + entry.entries.filter(({ source }) => !queue.activeSummarySources.has(source)).length,
     0,
   );
   while (sourceCount > queue.cap) {
     let evicted = false;
     for (const [entryIndex, entry] of queue.summaryElisions.entries()) {
-      const sourceIndex = entry.sources.findIndex(
-        (source) => !queue.activeSummarySources.has(source),
+      const sourceIndex = entry.entries.findIndex(
+        ({ source }) => !queue.activeSummarySources.has(source),
       );
       if (sourceIndex < 0) {
         continue;
       }
-      const [source] = entry.sources.splice(sourceIndex, 1);
-      entry.summaryLines.splice(sourceIndex, 1);
-      entry.count = entry.sources.length;
+      const source = entry.entries.splice(sourceIndex, 1)[0]!.source;
       queue.droppedCount = Math.max(0, queue.droppedCount - 1);
       for (const [original, compact] of entry.sourceRefs) {
         if (compact === source) {
@@ -116,14 +117,13 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
         }
       }
       sourceCount -= 1;
-      if (source) {
-        source.onQueueDisposition?.("queue-cap-old");
-        // Eviction closes selection synchronously; callback completion is asynchronous.
-        if (source.controllerInput) {
-          retireSessionControllerInput(source.controllerInput);
-        }
+      if (source.controllerInput) {
+        source.controllerInput.payload = "unbound";
       }
-      if (entry.sources.length === 0) {
+      source.onQueueDisposition?.("queue-cap-old");
+      // Selection closes now; source custody lasts through the durable drop receipt.
+      completeFollowupRunLifecycle(source, { kind: "dropped", reason: "queue-cap-old" });
+      if (entry.entries.length === 0) {
         queue.summaryElisions.splice(entryIndex, 1);
       }
       evicted = true;
@@ -201,6 +201,7 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextCyberAccessProgram?: FollowupRun["run"]["cyberAccessProgram"] | null;
   nextThinking?: {
     level?: string;
     catalog?: ModelCatalogEntry[];
@@ -222,6 +223,7 @@ export function refreshQueuedFollowupSession(params: {
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource") ||
+    params.nextCyberAccessProgram !== undefined ||
     params.nextThinking !== undefined;
   if (!shouldRewriteSession && !shouldRewriteSelection) {
     return;
@@ -272,6 +274,9 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+      if (params.nextCyberAccessProgram !== undefined) {
+        run.cyberAccessProgram = params.nextCyberAccessProgram ?? undefined;
       }
       if (params.nextThinking) {
         run.thinkingCatalog = params.nextThinking.catalog;

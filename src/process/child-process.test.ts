@@ -3,7 +3,10 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { execa, type ResultPromise } from "execa";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { releaseChildProcessOutputAfterExit } from "./child-process.js";
+import {
+  createChildProcessOutputRelease,
+  releaseChildProcessOutputAfterExit,
+} from "./child-process.js";
 
 function startDrain(alreadyExited = false) {
   vi.useFakeTimers();
@@ -41,6 +44,18 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
     }
     runningChild = undefined;
     vi.useRealTimers();
+  });
+
+  it("ignores late output and exit after the drain owner is disposed", async () => {
+    vi.useFakeTimers();
+    const released = vi.fn();
+    const drain = createChildProcessOutputRelease(released);
+    drain.onExit();
+    drain.dispose();
+    drain.onData();
+    drain.onExit();
+    await vi.runAllTimersAsync();
+    expect(released).not.toHaveBeenCalled();
   });
 
   it.each([0, 250, 1_250])("drains inherited pipes (stall=%ims)", async (stallMs) => {

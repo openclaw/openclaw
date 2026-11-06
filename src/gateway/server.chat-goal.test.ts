@@ -11,6 +11,8 @@ import {
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import { registerAgentHarness, getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import * as runtimePlugins from "../agents/runtime-plugins.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import * as goalOperationReads from "../config/sessions/goals-operations-read.js";
@@ -45,8 +47,10 @@ import type {
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
+import { registerGoalReplacementCases } from "./server.chat-goal-replacement.test-support.js";
 import { registerWorkerGoalChatCases } from "./server.chat-goal-workers.test-support.js";
 import {
+  goalAgentResult,
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
   installReplyDispatchHook,
@@ -54,6 +58,7 @@ import {
   registerGoalChatRestartSettlementCase,
   registerGoalChatOperationCollisionCases,
 } from "./server.chat-goal.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -69,6 +74,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -82,13 +88,7 @@ const sessionKey = "agent:main:main";
 const sessionId = "goal-chat-session";
 const client: GatewayClient = {
   connId: "goal-chat-ui",
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-  },
+  connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
 };
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let context: GatewayRequestContext;
@@ -128,18 +128,7 @@ beforeEach(async () => {
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve(undefined);
     await modelRelease;
-    return {
-      payloads: [{ text: "Goal work continued." }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: params.sessionId,
-          provider: "test",
-          model: "test",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    };
+    return goalAgentResult(params.sessionId, "Goal work continued.");
   });
 });
 
@@ -182,7 +171,13 @@ async function useFreshSessionStore() {
 }
 
 async function rpc(
-  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.abort" | "sessions.goal.update",
+  method:
+    | "chat.send"
+    | "chat.history"
+    | "chat.abort"
+    | "sessions.abort"
+    | "sessions.goal.update"
+    | "users.setRole",
   params: Record<string, unknown>,
   onResponse?: RespondFn,
   requestClient: GatewayClient = client,
@@ -226,7 +221,7 @@ async function withHeldModel(run: () => Promise<void>) {
 function profileClient(profileId: string): GatewayClient {
   return {
     ...client,
-    authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
+    authenticatedUserProfile: gatewayProfile(profileId),
   };
 }
 
@@ -311,6 +306,7 @@ function holdGoalReceipt() {
 
 describe("Goal chat admission and continuation", () => {
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+  registerGoalReplacementCases(scope, runEmbeddedAgent, rpc, goalStart, () => context, client);
 
   registerGoalChatRestartSettlementCase({
     scope,
@@ -369,8 +365,6 @@ describe("Goal chat admission and continuation", () => {
         const acknowledgedEvents = await eventsAtAck;
         expect(entryAtAck, "fresh Goal commits its own local incarnation").toMatchObject({
           sessionId: expect.any(String),
-          restartRecoveryDeliveryRunId: request.idempotencyKey,
-          restartRecoveryDeliverySourceRunId: request.idempotencyKey,
           goal: { objective: request.message, status: "active" },
         });
         expect(entryAtAck?.status).toBeUndefined();
@@ -435,6 +429,7 @@ describe("Goal chat admission and continuation", () => {
     expect(response.mock.calls[0]?.[2]).toMatchObject({
       code: "INVALID_REQUEST",
       message: expect.stringContaining("recoverable history"),
+      details: { reason: "goal-invalid" },
     });
     expect(loadSessionEntry(scope())).toBeUndefined();
     await expectNoDispatch();
@@ -703,7 +698,7 @@ describe("Goal chat admission and continuation", () => {
     });
   });
 
-  it("keeps a receipt miss retryable when an identical request completes during lookup", async () => {
+  it("replays an identical Goal request committed during its first receipt lookup", async () => {
     const request = goalStart("Replay the Goal committed while this lookup was pending");
     const { entered, release, spy } = holdGoalReceipt();
     const pending = rpc("chat.send", request);
@@ -724,11 +719,12 @@ describe("Goal chat admission and continuation", () => {
       });
       release.resolve();
       const stale = await pending;
-      expect(stale).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-      );
+      expect(stale.mock.calls[0]?.[0]).toBe(true);
+      expect(stale.mock.calls[0]?.[1]).toMatchObject({
+        replayed: true,
+        runId: request.idempotencyKey,
+        goalId: loadSessionEntry(scope())?.goal?.id,
+      });
       const replay = await rpc("chat.send", request);
       expect(replay.mock.calls[0]?.[1]).toMatchObject({
         replayed: true,
@@ -811,109 +807,178 @@ describe("Goal chat admission and continuation", () => {
     }
   });
 
-  it("resumes completed Goals once", async () => {
-    const objective = "Finish the release checklist";
-    const profile = ensureProfileForEmail("goal-participant@example.test");
-    const requestClient = profileClient(profile.id);
-    requestClient.internal = {
-      authenticatedOperator: true,
-      controlUiAdmin: true,
-      operatorAccessAuthority: null,
-    };
-    requestClient.authPolicy = captureGatewayAuthPolicy(context.getRuntimeConfig(), {
-      role: "operator",
-      authMethod: "token",
-    });
-    const startRequest = goalStart(objective);
-    const started = await rpc("chat.send", startRequest, undefined, requestClient);
-    expect(started.mock.calls[0]?.[0]).toBe(true);
-    await waitForModelRun();
-    await waitForDispatchEnd();
-    const startReplay = await rpc("chat.send", startRequest, undefined, requestClient);
-    expect(startReplay.mock.calls[0]?.[1]).toMatchObject({ replayed: true });
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    const goal = loadSessionEntry(scope())?.goal;
-    expect(goal).toBeDefined();
-    await patchSessionEntryCore(scope(), (entry) => ({
-      status: "done",
-      agentHarnessId: "openclaw",
-      goal: entry.goal ? { ...entry.goal, status: "complete", completedAt: Date.now() } : undefined,
-    }));
-    expect(loadSessionEntry(scope())?.agentHarnessId).toBe("openclaw");
-    const request = {
-      sessionKey,
-      sessionId,
-      goalId: goal?.id,
-      action: "resume",
-      note: "Prioritize the changelog; keep /stop as quoted text.",
-      operationId: randomUUID(),
-      issuedAtMs: Date.now(),
-    };
-    modelStarted = createDeferred();
-    const emit = sessionChangeEvents.emitSessionsChanged;
-    const notification = vi
-      .spyOn(sessionChangeEvents, "emitSessionsChanged")
-      .mockImplementation((ctx, payload, options) => {
-        emit(ctx, payload, options);
-        if (payload.reason === "goal") {
-          throw new Error("Synthetic Goal notification failure after commit");
-        }
+  it.each(["openclaw", "codex", "codex-unrecorded"] as const)(
+    "resumes the same completed Goal once with %s",
+    async (harnessId) => {
+      const objective = "Finish the release checklist";
+      const profile = ensureProfileForEmail("goal-participant@example.test");
+      const requestClient = profileClient(profile.id);
+      requestClient.internal = {
+        authenticatedOperator: true,
+        controlUiAdmin: true,
+        operatorAccessAuthority: null,
+      };
+      requestClient.authPolicy = captureGatewayAuthPolicy(context.getRuntimeConfig(), {
+        role: "operator",
+        authMethod: "token",
       });
-    let resumed: Awaited<ReturnType<typeof rpc>>;
-    let resumeEntryAtAck: InternalSessionEntry | undefined;
-    try {
-      resumed = await rpc(
-        "sessions.goal.update",
-        request,
-        (ok) => {
-          if (ok) {
-            resumeEntryAtAck = loadSessionEntry(scope());
-          }
-        },
-        requestClient,
-      );
-    } finally {
-      notification.mockRestore();
-    }
-    expect(resumed).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "started", runId: request.operationId, goalId: goal?.id }),
-      undefined,
-      expect.anything(),
-    );
-    expect(resumeEntryAtAck?.restartRecoveryOperatorSource).toMatchObject({
-      sourceRunId: request.operationId,
-      sessionId,
-      snapshot: { profileId: profile.id },
-    });
-    await waitForModelRun(2);
-    await waitForDispatchEnd();
-    expect(loadSessionEntry(scope())?.goal).toMatchObject({
-      id: goal?.id,
-      status: "active",
-      createdAt: goal?.createdAt,
-    });
-    expect(loadSessionEntry(scope())?.goal?.completedAt).toBeUndefined();
-    expect(userMessages()).toEqual([
-      expect.objectContaining({ content: objective }),
-      expect.objectContaining({
-        display: false,
-        provenance: expect.objectContaining({ kind: "internal_system" }),
-      }),
-    ]);
-    expect(runEmbeddedAgent.mock.calls[1]?.[0].currentInboundContext?.text).toContain(objective);
-    expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain(request.note);
-    const history = await rpc("chat.history", { sessionKey });
-    expect(history.mock.calls[0]?.[0]).toBe(true);
-    const result = history.mock.calls[0]?.[1] as {
-      messages?: Array<{ role?: string; content?: unknown }>;
-    };
-    expect(result.messages?.filter((message) => message.role === "user")).toEqual([
-      expect.objectContaining({ content: objective }),
-    ]);
-    const replay = await rpc("sessions.goal.update", request, undefined, requestClient);
-    expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: request.operationId });
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-    expect(userMessages()).toHaveLength(2);
-  });
+      const startRequest = goalStart(objective);
+      const started = await rpc("chat.send", startRequest, undefined, requestClient);
+      expect(started.mock.calls[0]?.[0]).toBe(true);
+      await waitForModelRun();
+      await waitForDispatchEnd();
+      const startReplay = await rpc("chat.send", startRequest, undefined, requestClient);
+      expect(startReplay.mock.calls[0]?.[1]).toMatchObject({ replayed: true });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      const goal = loadSessionEntry(scope())?.goal;
+      expect(goal).toBeDefined();
+      const runtimeSpies: Array<{ mockRestore(): void }> = [];
+      if (harnessId !== "openclaw") {
+        registerAgentHarness({
+          id: "codex",
+          label: "Local Codex fixture",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: async () => {
+            throw new Error("provider transport is simulated");
+          },
+        });
+        getTestPluginRegistry().agentHarnesses.push({
+          pluginId: "codex",
+          source: "fixture",
+          harness: getRegisteredAgentHarness("codex")!.harness,
+        });
+        runtimeSpies.push(
+          vi
+            .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle")
+            .mockReturnValue(getTestPluginRegistry()),
+          vi
+            .spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandleAsync")
+            .mockResolvedValue(getTestPluginRegistry()),
+        );
+        const config: OpenClawConfig = structuredClone(getRuntimeConfig());
+        config.plugins ??= {};
+        config.plugins.entries = { ...config.plugins.entries, codex: { enabled: true } };
+        config.agents ??= {};
+        config.agents.entries = {
+          ...config.agents.entries,
+          main: { ...config.agents.entries?.main, nativeRuntimeConsent: ["codex"] },
+        };
+        await prepareGatewayReplyRuntimeForTest({ force: true, config });
+        runEmbeddedAgent.mockImplementation(async (params) => {
+          await params.userTurnTranscriptRecorder?.persistApproved();
+          expect(loadSessionEntry(scope())?.goal).toMatchObject({
+            id: goal?.id,
+            objective,
+            status: "active",
+          });
+          modelStarted.resolve(undefined);
+          return goalAgentResult(params.sessionId, "Goal work continued.");
+        });
+      }
+      try {
+        await patchSessionEntryCore(scope(), (entry) => ({
+          status: "done",
+          agentHarnessId: harnessId === "codex-unrecorded" ? undefined : harnessId,
+          agentRuntimeOverride: harnessId === "codex-unrecorded" ? "codex" : undefined,
+          modelSelectionLocked: harnessId === "codex",
+          goal: entry.goal
+            ? { ...entry.goal, status: "complete", completedAt: Date.now() }
+            : undefined,
+        }));
+        expect(loadSessionEntry(scope())?.agentHarnessId).toBe(
+          harnessId === "codex-unrecorded" ? undefined : harnessId,
+        );
+        const request = {
+          sessionKey,
+          sessionId,
+          goalId: goal?.id,
+          action: "resume",
+          note: "Prioritize the changelog; keep /stop as quoted text.",
+          operationId: randomUUID(),
+          issuedAtMs: Date.now(),
+        };
+        modelStarted = createDeferred();
+        const emit = sessionChangeEvents.emitSessionsChanged;
+        const notification = vi
+          .spyOn(sessionChangeEvents, "emitSessionsChanged")
+          .mockImplementation((ctx, payload, options) => {
+            emit(ctx, payload, options);
+            if (payload.reason === "goal") {
+              throw new Error("Synthetic Goal notification failure after commit");
+            }
+          });
+        let resumed: Awaited<ReturnType<typeof rpc>>;
+        let resumeEntryAtAck: InternalSessionEntry | undefined;
+        try {
+          resumed = await rpc(
+            "sessions.goal.update",
+            request,
+            (ok) => {
+              if (ok) {
+                resumeEntryAtAck = loadSessionEntry(scope());
+              }
+            },
+            requestClient,
+          );
+        } finally {
+          notification.mockRestore();
+        }
+        expect(resumed).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            status: "started",
+            runId: request.operationId,
+            goalId: goal?.id,
+          }),
+          undefined,
+          expect.anything(),
+        );
+        expect(resumeEntryAtAck?.goal).toMatchObject({
+          id: goal?.id,
+          status: "active",
+        });
+        await waitForModelRun(2);
+        await waitForDispatchEnd();
+        expect(loadSessionEntry(scope())?.goal).toMatchObject({
+          id: goal?.id,
+          status: "active",
+          createdAt: goal?.createdAt,
+        });
+        expect(loadSessionEntry(scope())?.goal?.completedAt).toBeUndefined();
+        expect(userMessages()).toEqual([
+          expect.objectContaining({ content: objective }),
+          expect.objectContaining({
+            display: false,
+            provenance: expect.objectContaining({ kind: "internal_system" }),
+          }),
+        ]);
+        if (harnessId === "openclaw") {
+          expect(runEmbeddedAgent.mock.calls[1]?.[0].currentInboundContext?.text).toContain(
+            objective,
+          );
+        }
+        expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain(request.note);
+        expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("call get_goal");
+        const history = await rpc("chat.history", { sessionKey });
+        expect(history.mock.calls[0]?.[0]).toBe(true);
+        const result = history.mock.calls[0]?.[1] as {
+          messages?: Array<{ role?: string; content?: unknown }>;
+        };
+        expect(result.messages?.filter((message) => message.role === "user")).toEqual([
+          expect.objectContaining({ content: objective }),
+        ]);
+        const replay = await rpc("sessions.goal.update", request, undefined, requestClient);
+        expect(replay.mock.calls[0]?.[1]).toMatchObject({
+          replayed: true,
+          runId: request.operationId,
+        });
+        expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+        expect(userMessages()).toHaveLength(2);
+      } finally {
+        for (const spy of runtimeSpies) {
+          spy.mockRestore();
+        }
+      }
+    },
+  );
 });

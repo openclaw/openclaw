@@ -5,7 +5,12 @@ import {
   type SemVer,
   valid as validSemver,
 } from "semver";
-import { compareOpenClawSemver, isOpenClawCorrectionSemver } from "./semver.js";
+import {
+  compareOpenClawSemver,
+  compareValidSemver,
+  isOpenClawCorrectionSemver,
+  normalizeLegacyDotBetaVersion,
+} from "./semver.js";
 
 export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 
@@ -156,6 +161,19 @@ export function compareOpenClawReleaseVersions(left: string, right: string): num
   const parsedLeft = parseOpenClawReleaseVersion(left);
   const parsedRight = parseOpenClawReleaseVersion(right);
   return parsedLeft && parsedRight ? compareOpenClawSemver(parsedLeft, parsedRight) : null;
+}
+
+/** Compares update versions, preserving monthly corrections and legacy dot-beta tags. */
+export function compareSemverStrings(a: string | null, b: string | null): number | null {
+  if (a && b) {
+    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
+    if (openClawReleaseCmp != null) {
+      return openClawReleaseCmp;
+    }
+  }
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 /** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */

@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 // Install the native service fixtures before loading the maintenance owner.
 import "./update-command-service-maintenance.test-support.js";
-import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -16,7 +16,10 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
+import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
+import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -109,6 +112,54 @@ it("reports observed service facts without inferring a manual launch when inspec
     expect(verdict.message).toContain("openclaw update repair");
     expect(verdict.message).not.toContain("manually");
   }));
+
+it.each(["update", "doctor"] as const)(
+  "rechecks the parent deadline after async service preparation and before stopping: %s",
+  (entrypoint) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      let wallNow = 1_000;
+      let elapsedMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const deadlineAtMs = 1_500;
+      vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+      const remaining = createDoctorServiceInspectionBudget(deadlineAtMs);
+      const service = mockMaintenanceService(home);
+      mocks.prepareStop.mockImplementationOnce(async () => {
+        wallNow = deadlineAtMs + 1;
+        elapsedMs = 501;
+        return { kind: "unchanged" as const };
+      });
+      const expectedService = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart: true,
+        jsonMode: true,
+        phase: "inspect",
+      });
+      vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
+      const stop =
+        entrypoint === "doctor"
+          ? beginDoctorMaintenance({
+              root: process.cwd(),
+              options: { repair: true },
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+              serviceInspectionDeadlineAtMs: deadlineAtMs,
+            })
+          : maybeStopManagedServiceBeforeMutableUpdate({
+              root: process.cwd(),
+              updateInstallKind: "package",
+              shouldRestart: true,
+              jsonMode: true,
+              expectedService,
+              timeoutMs: deadlineAtMs - wallNow,
+              assertDeadline: () => remaining(),
+            });
+
+      await expect(stop).rejects.toThrow("Doctor service-inspection deadline has expired.");
+      expect(service.stop).not.toHaveBeenCalled();
+    }),
+);
 
 it.each(["authority-lost", "ordinary"] as const)(
   "preserves Doctor stop guidance through native preparation failure: %s",
@@ -641,5 +692,38 @@ it.each(["before stop", "after stop"] as const)(
       } finally {
         await closeStateDatabaseForTest();
       }
+    }),
+);
+
+it.each(["respawning", "unloaded", "disabled"] as const)(
+  "candidate Doctor preserves native stop/recovery ownership with no Gateway lease: %s",
+  (state) =>
+    withServiceHome(async (home) => {
+      // Create private persistent fixtures using the real host filesystem policy.
+      const env = { ...process.env };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      // Clean shutdown removed the predecessor lease, not the KeepAlive job.
+      expect(readGatewayOwnerLease({ env, current: true })).toBeUndefined();
+      mockProcessPlatform("darwin");
+      let loaded = state !== "unloaded";
+      const service = mockMaintenanceService(home, {
+        isLoaded: async () => loaded,
+        isEnabled: async () => state !== "disabled",
+        readRuntime: async () => ({ status: "stopped" }),
+        stop: vi.fn(async () => {
+          loaded = false;
+        }),
+      });
+      const stopped = await stopSupervisedPredecessorGateway(
+        { runId: run.runId, repair: true },
+        { root: process.cwd(), assertCurrent: () => {}, warn: vi.fn() },
+      );
+      expect(stopped).toBe(state === "respawning");
+      expect(loaded).toBe(state === "disabled");
+      const receipts = getUpdateRun(run.runId, { env })?.steps.filter((step) =>
+        step.step.startsWith("finalize:predecessor-stop:"),
+      );
+      expect(receipts).toHaveLength(state === "respawning" ? 1 : 0);
+      expect(service.restart).not.toHaveBeenCalled();
     }),
 );

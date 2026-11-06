@@ -8,11 +8,9 @@ import {
   type ReadableSpan,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
-import { clearOtelGlobals, snapshotOtelEnv } from "./service.test-helpers.js";
-
-installRealOtelSdkTestHarness();
+import { clearOtelGlobals } from "./service.test-helpers.js";
 
 const ENV_KEYS = [
   "OTEL_ATTRIBUTE_COUNT_LIMIT",
@@ -27,15 +25,8 @@ const ENV_KEYS = [
   "OTEL_TRACES_SAMPLER_ARG",
 ] as const;
 
-let restoreEnv: () => void;
-beforeEach(() => {
-  restoreEnv = snapshotOtelEnv(ENV_KEYS);
-  clearOtelGlobals();
-  for (const key of ENV_KEYS) {
-    delete process.env[key];
-  }
-});
-afterEach(() => restoreEnv());
+installRealOtelSdkTestHarness({ env: ENV_KEYS });
+beforeEach(() => clearOtelGlobals());
 
 async function capturePrivateProviderSpans(emit: (tracer: Tracer) => void) {
   const exporter = new InMemorySpanExporter();

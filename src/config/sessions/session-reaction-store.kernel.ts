@@ -3,7 +3,6 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import {
   SessionReactionLimitError,
@@ -14,6 +13,7 @@ import type {
   SessionReactionWrite,
   SetSessionReactionParams,
 } from "./session-reaction-store.types.js";
+import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 export function setSessionReactionInDatabase(
   database: OpenClawAgentDatabase,
@@ -58,33 +58,35 @@ export function setSessionReactionInDatabase(
     );
     rows.splice(index, 1);
   } else {
-    const count =
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_reactions")
-          .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("session_key", "=", sessionKey)
-          .where("session_id", "=", params.expectedSessionId),
-      )?.count ?? 0;
+    const quota = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_reactions")
+        .select((eb) => [
+          eb.fn.countAll<number>().as("count"),
+          eb
+            .exists(
+              db
+                .selectFrom("transcript_event_identities")
+                .select("event_id")
+                .where("session_id", "=", params.expectedSessionId)
+                .where("event_id", "=", params.messageId),
+            )
+            .as("message_exists"),
+        ])
+        .where("session_key", "=", sessionKey)
+        .where("session_id", "=", params.expectedSessionId),
+    );
     if (
-      count >= 5_000 ||
+      (quota?.count ?? 0) >= 5_000 ||
       rows.filter((row) => row.identity_id === params.identityId).length >= 20
     ) {
       throw new SessionReactionLimitError();
     }
     // The caller looked the message up asynchronously; a transcript rewrite can
-    // have deleted it (and pruned its reactions) since, so re-check inside the
-    // transaction rather than insert a reaction for a message that is gone.
-    const identity = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities")
-        .select("event_id")
-        .where("session_id", "=", params.expectedSessionId)
-        .where("event_id", "=", params.messageId),
-    );
-    if (!identity) {
+    // have deleted it since. The quota read carries its current existence;
+    // quota rejection still takes precedence over a missing message.
+    if (!quota?.message_exists) {
       throw new SessionReactionMessageMissingError();
     }
     const inserted = executeSqliteQueryTakeFirstSync(

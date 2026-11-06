@@ -14,6 +14,7 @@ const boundary = vi.hoisted(() => ({
   before: () => {},
   after: () => {},
   nativeLaunches: 0,
+  retainedLaunchAttempted: false,
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,14 +33,31 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 vi.mock("../process/spawn-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/spawn-utils.js")>();
-  return {
-    ...actual,
-    spawnAndWait: trackLaunch(actual.spawnAndWait),
-  };
+  return { ...actual, spawnAndWait: trackLaunch(actual.spawnAndWait) };
 });
 vi.mock("../process/terminal-pty.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/terminal-pty.js")>();
   return { ...actual, spawnTerminalPty: trackLaunch(actual.spawnTerminalPty) };
+});
+vi.mock("../process/spawn-broker/relay-integration.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../process/spawn-broker/relay-integration.js")>();
+  return {
+    ...actual,
+    createServiceChildControlSender: (
+      ...params: Parameters<typeof actual.createServiceChildControlSender>
+    ) => {
+      const send = actual.createServiceChildControlSender(...params);
+      const launch = trackLaunch(send);
+      return (...args: Parameters<typeof send>) => {
+        if (args[0].type !== "launch") {
+          return send(...args);
+        }
+        boundary.retainedLaunchAttempted = true;
+        return launch(...args);
+      };
+    },
+  };
 });
 
 describe.runIf(process.platform !== "win32")("launch policy and construction authority", () => {
@@ -62,24 +80,30 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
     boundary.before = () => {};
     boundary.after = () => {};
     boundary.nativeLaunches = 0;
+    boundary.retainedLaunchAttempted = false;
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
     vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
     vi.stubEnv("SHELL", "/bin/bash");
   });
   afterEach(async () => {
-    await supervisor.shutdown();
-    resetProcessRegistryForTests();
-    vi.unstubAllEnvs();
+    try {
+      // A refusal before native launch must not leave cleanup uncertified at close.
+      await supervisor.shutdown();
+    } finally {
+      resetProcessRegistryForTests();
+      vi.unstubAllEnvs();
+    }
   });
 
-  it.each([
-    ["Gateway child", "before"],
-    ["Gateway child", "after"],
-    ["Gateway PTY", "before"],
-    ["Gateway PTY", "after"],
-    ["Claude node", "before"],
-    ["Claude node", "after"],
-  ] as const)("applies %s policy revocation %s native launch", async (route, timing) => {
+  const routes = ["Gateway child", "Gateway retained child", "Gateway PTY", "Claude node"];
+  it.each(
+    routes.flatMap((route) =>
+      (["before", "after"] as const).map((timing) => [route, timing] as const),
+    ),
+  )("applies %s policy revocation %s native launch", async (route, timing) => {
+    if (route === "Gateway retained child") {
+      vi.stubEnv("OPENCLAW_SERVICE_MARKER", "launch-policy-fixture");
+    }
     let allowed = true;
     boundary[timing] = () => {
       allowed = false;
@@ -124,7 +148,13 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
       const command = `'${process.execPath}' '${script}'`;
       const pending = exec(command, route === "Gateway PTY", assertCurrent);
       if (timing === "before") {
-        await expect(pending).rejects.toThrow("exec approval changed before execution");
+        await expect(pending).rejects.toThrow(/^exec approval changed before execution$/);
+        if (route === "Gateway retained child") {
+          // The retained relay refuses at its launch frame; its anchor's startup-error
+          // receipt certifies cleanup, so the shutdown join in afterEach stays clean.
+          // Other routes reach the relay only where the host owns their process tree.
+          expect(boundary.retainedLaunchAttempted).toBe(true);
+        }
       } else {
         const handle = await pending;
         const result = await handle.promise;
@@ -136,9 +166,16 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
     expect(fs.existsSync(marker)).toBe(timing === "after");
   });
 
-  it.each([false, true])(
-    "still rejects retired source authority after native launch (PTY=%s)",
-    async (usePty) => {
+  it.each([
+    { usePty: false, retained: false },
+    { usePty: false, retained: true },
+    { usePty: true, retained: false },
+  ])(
+    "still rejects retired source authority after native launch (PTY=$usePty, retained=$retained)",
+    async ({ usePty, retained }) => {
+      if (retained) {
+        vi.stubEnv("OPENCLAW_SERVICE_MARKER", "launch-policy-fixture");
+      }
       let current = true;
       boundary.after = () => {
         current = false;

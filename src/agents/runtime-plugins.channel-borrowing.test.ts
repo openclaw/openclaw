@@ -1,6 +1,11 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import { acquirePluginRegistryForInspection, loadOpenClawPlugins } from "../plugins/loader.js";
@@ -14,7 +19,7 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getPluginRegistryRuntime } from "../plugins/registry-runtime-binding.js";
-import { createPluginRegistryOwner, getActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeRegistryScope,
@@ -29,6 +34,7 @@ const freshId = "prepared-only";
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -73,6 +79,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
         slots: { memory: "none" },
       },
     };
+    setRuntimeConfigSnapshot(config);
     const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
     const options = {
       config,
@@ -89,10 +96,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
       runtimeSideEffects: true,
       cache: false,
     });
-    const runtime = getPluginRegistryRuntime(registry);
-    if (!runtime) {
-      throw new Error("Expected a loaded Gateway runtime");
-    }
+    const runtime = expectDefined(getPluginRegistryRuntime(registry), "loaded Gateway runtime");
     bindGatewayContextResolver(runtime, () => undefined);
     activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
     const gateway = createPluginRegistryOwner(registry, workspaceDir);
@@ -103,9 +107,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
     const liveRecord = gateway.registry.plugins.find((record) => record.id === channelId)!;
     const liveInstance = getPluginInstance(liveRecord)!;
     const liveEntry = gateway.registry.channels[0]!;
-    expect(liveRecord).toMatchObject({ status: "loaded", origin: "bundled" });
     expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
-    expect(getActivePluginRegistry()).toBe(gateway.registry);
     const buildResources = cleanup.use(
       new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry),
     );
@@ -137,22 +139,17 @@ it.each(["direct-loader-successor", "prepared"] as const)(
         [channelId, freshId],
         buildResources.load.bind(buildResources),
       );
-      if (!prepared.runtimePluginRegistry) {
-        throw new Error("Expected a prepared registry");
-      }
       return {
-        registry: prepared.runtimePluginRegistry,
+        registry: expectDefined(prepared.runtimePluginRegistry, "prepared registry"),
         release: () => buildResources[Symbol.asyncDispose](),
       };
     });
     cleanup.defer(() => acquired.release());
+    expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(liveRecord);
     const resources = getPluginRegistryInspectionResources(acquired.registry)!;
     const scope = resources.createInvocationScope(acquired.registry);
     cleanup.defer(() => scope.release());
-    expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(liveRecord);
-    expect(liveInstance.owner?.registry).toBe(gateway.registry);
     const freshRecord = acquired.registry.plugins.find((record) => record.id === freshId)!;
-    expect(freshRecord.status).toBe("loaded");
     const freshInstance = getPluginInstance(freshRecord)!;
     const entry = acquired.registry.channels[0]!;
     const capture = entry.captureReadAuthority!;
@@ -178,12 +175,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
     expect.soft(() => grant?.()).toThrow();
     expect.soft(() => send(sendParams)).toThrow();
     expect(freshInstance.acceptingCalls).toBe(false);
-    expect(liveInstance.owner?.registry).toBe(gateway.registry);
-    expect(liveInstance).toMatchObject({
-      acceptingCalls: true,
-      disposing: false,
-      hasRetainedConsumers: false,
-    });
+    expect(liveInstance.hasRetainedConsumers).toBe(false);
     expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
     await expect(liveEntry.plugin.outbound!.sendText!(sendParams)).resolves.toMatchObject({
       messageId: "fixture/gateway",

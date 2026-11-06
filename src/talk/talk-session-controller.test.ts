@@ -10,43 +10,25 @@ const TEST_TALK_CONTEXT = {
   transport: "gateway-relay",
 } as const;
 
+function createController() {
+  return createTalkSessionController(TEST_TALK_CONTEXT);
+}
+
+// Envelope serialization is covered by talk-events.test.ts; this owner selects lifecycle fields.
 function event(
   seq: number,
   type: TalkEvent["type"],
   turnId: string,
   payload: unknown,
   final?: boolean,
-): TalkEvent {
-  return {
-    ...TEST_TALK_CONTEXT,
-    callId: undefined,
-    captureId: undefined,
-    final,
-    id: `talk-session:${seq}`,
-    itemId: undefined,
-    parentId: undefined,
-    payload,
-    seq,
-    timestamp: "2026-05-05T00:00:00.000Z",
-    turnId,
-    type,
-  };
-}
-
-function createController() {
-  return createTalkSessionController(
-    { ...TEST_TALK_CONTEXT, maxRecentEvents: 3 },
-    { now: () => "2026-05-05T00:00:00.000Z" },
-  );
+) {
+  return expect.objectContaining({ seq, type, turnId, payload, final });
 }
 
 it("rejects stale turn completion before clearing the active turn", () => {
   const talk = createController();
   talk.ensureTurn({ turnId: "turn-old" });
-  expect(talk.endTurn({ turnId: "turn-other" })).toEqual({
-    ok: false,
-    reason: "stale_turn",
-  });
+  expect(talk.endTurn({ turnId: "turn-other" })).toEqual({ ok: false, reason: "stale_turn" });
   expect(talk.activeTurnId).toBe("turn-old");
 
   const ended = talk.endTurn({ turnId: "turn-old", payload: { reason: "done" } });
@@ -66,11 +48,9 @@ it("tracks output audio lifecycle without duplicate started events", () => {
   const second = talk.startOutputAudio({ payload: { callId: "call-1" } });
   const done = talk.finishOutputAudio({ payload: { reason: "mark" } });
 
-  expect(first.event).toStrictEqual(
-    event(2, "output.audio.started", "turn-1", { callId: "call-1" }),
-  );
+  expect(first.event).toEqual(event(2, "output.audio.started", "turn-1", { callId: "call-1" }));
   expect(second).toEqual({ turnId: "turn-1" });
-  expect(done).toStrictEqual(event(3, "output.audio.done", "turn-1", { reason: "mark" }, true));
+  expect(done).toEqual(event(3, "output.audio.done", "turn-1", { reason: "mark" }, true));
   expect(talk.outputAudioActive).toBe(false);
 });
 

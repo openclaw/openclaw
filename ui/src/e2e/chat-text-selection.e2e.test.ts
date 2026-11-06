@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { captureUiProofEnabled, chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -19,13 +20,79 @@ const first = "Select this message without painting its image or surrounding spa
 const last = "Selection ends here, with only the conversation text highlighted.";
 
 suite.define(() => {
+  it("keeps double-click drags inside the source message", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const prompt = "Fix the spacing on the alert row, then capture before and after proof.";
+      const reply = "I will align that row and verify the change.";
+      const gateway = await installMockGateway(page, {
+        historyMessages: [chatMessage("user", prompt), chatMessage("assistant", reply)],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const user = page.getByText(prompt, { exact: true });
+      const assistant = page.getByText(reply, { exact: true });
+      await user.waitFor();
+      await assistant.waitFor();
+      const selection = () => page.evaluate(() => window.getSelection()?.toString());
+      await user.dblclick({ position: { x: 5, y: 10 } });
+      expect(await selection()).toBe("Fix");
+      for (const [source, destination, expected] of [
+        [user, assistant, prompt],
+        [assistant, user, reply],
+      ] as const) {
+        const from = await source.boundingBox();
+        const to = await destination.boundingBox();
+        if (!from || !to) {
+          throw new Error("Selection messages have no visible bounds");
+        }
+        const backwards = source === assistant;
+        const x = from.x + (backwards ? from.width - 5 : 5);
+        const endX = to.x + (backwards ? 5 : to.width - 5);
+        await page.mouse.click(x, from.y + 10);
+        await page.mouse.down({ clickCount: 2 });
+        await page.mouse.move(endX, to.y + 10, { steps: 8 });
+        await page.mouse.up({ clickCount: 2 });
+        if (captureUiProofEnabled && !backwards) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".chat-thread"),
+            [user, assistant],
+            { animations: "disabled", elements: [page.locator(".chat-thread")] },
+          );
+          await writeFile(
+            path.join(suite.artifactDir, "double-click-selection.png"),
+            frame.elements[0]!.png,
+          );
+        }
+        expect(await selection()).toBe(expected);
+        await page.getByRole("toolbar", { name: "Selection actions" }).waitFor();
+        await page.keyboard.press("Escape");
+      }
+      const thread = page.locator(".chat-thread");
+      await thread.focus();
+      await page.keyboard.press("ControlOrMeta+A");
+      const allText = await selection();
+      await thread.dblclick({ position: { x: 100, y: 400 } });
+      expect.soft(await selection(), "blank double-click preserves the native range").toBe(allText);
+      const from = await user.boundingBox();
+      const outside = await page.locator(".agent-chat__composer-combobox textarea").boundingBox();
+      if (!from || !outside) {
+        throw new Error("No outside-release geometry");
+      }
+      await page.mouse.click(from.x + 5, from.y + 10);
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.move(outside.x + 5, outside.y + 10, { steps: 8 });
+      await page.mouse.up({ clickCount: 2 });
+      expect.soft(await selection(), "release outside the transcript stays bounded").toBe(prompt);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
   it.each(["dark", "light"] as const)("paints only text in %s mode", async (colorScheme) => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            { role: "assistant", content: [{ type: "text", text: first }] },
+            chatMessage("assistant", first),
             {
               role: "user",
               content: [
@@ -38,21 +105,15 @@ suite.define(() => {
                 },
               ],
             },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text:
-                    "A paragraph with **bold text**, a [link](https://example.com), and selectable code.\n\n- A selectable list item\n\n" +
-                    last,
-                },
-              ],
-            },
+            chatMessage(
+              "assistant",
+              "A paragraph with **bold text**, a [link](https://example.com), and selectable code.\n\n- A selectable list item\n\n" +
+                last,
+            ),
           ],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const thread = page.locator(".chat-thread");
         const start = page.getByText(first, { exact: true });
         const end = page.getByText(last, { exact: true });
@@ -93,9 +154,6 @@ suite.define(() => {
         expect(allText).toContain(first);
         expect(allText).toContain(last);
         const selected = await capture();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          writeFileSync(path.join(suite.artifactDir, colorScheme + "-selected.png"), selected.png);
-        }
         const beforeImage = photon.PhotonImage.new_from_byteslice(unselected.elements[0]!.png);
         const afterImage = photon.PhotonImage.new_from_byteslice(selected.elements[0]!.png);
         try {
@@ -165,7 +223,7 @@ suite.define(() => {
           sessions: [{ key: sessionKey, kind: "direct", reasoningLevel: "on" }],
           historyMessages: [
             { role: "assistant", content: [{ type: "thinking", thinking: reasoningText }] },
-            { role: "assistant", content: [{ type: "text", text: answerText }] },
+            chatMessage("assistant", answerText),
           ],
         });
         await page.route("**/control-ui-config.json", (route) =>
@@ -205,12 +263,6 @@ suite.define(() => {
         expect(selection).toContain(reasoningText);
         expect(selection).toContain(answerText);
         expect(selection).not.toContain("Just now");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && bubbles) {
-          const frame = await takeControlUiScreenshotFrame(page, pane, [reasoning, answer], {
-            animations: "disabled",
-          });
-          writeFileSync(path.join(suite.artifactDir, "reasoning-bubbles-selected.png"), frame.png);
-        }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },
     );

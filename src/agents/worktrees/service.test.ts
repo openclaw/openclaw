@@ -17,8 +17,13 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
+import { isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
+import { copyProvisionedPaths } from "./provisioned-copy.js";
 import * as worktreeRegistry from "./registry.js";
 import {
   getRegistryWorktreeProvisionedPaths,
@@ -31,22 +36,12 @@ import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
+  git,
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
-
-function isWorktreeAdd(argv: readonly string[]): boolean {
-  if (argv[0] !== "git") {
-    return false;
-  }
-  let command = 1;
-  while (argv[command] === "-c" || argv[command] === "-C") {
-    command += 2;
-  }
-  return argv[command] === "worktree" && argv[command + 1] === "add";
-}
 
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
@@ -68,13 +63,6 @@ function expectCheckoutTimeouts(
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
   ).toEqual(new Set([120_000, ...networkTimeouts]));
-}
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    encoding: "utf8",
-  });
-  return stdout.trim();
 }
 
 async function gitWithInput(cwd: string, args: string[], input: string): Promise<string> {
@@ -317,14 +305,35 @@ describe("ManagedWorktreeService", () => {
     expect(reused.ownerId).toBe("agent:main:dashboard:one");
   });
 
-  it("refuses an unavailable remote default instead of silently using local HEAD", async () => {
-    await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
-    await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
-    await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
-      "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
-    );
-    expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
-  });
+  it.each(["unavailable", "empty", "helper", "push-only"])(
+    "refuses an %s remote default instead of silently using local HEAD",
+    async (destination) => {
+      if (destination === "helper" || destination === "push-only") {
+        await git(repo, "config", "--unset-all", "remote.origin.url");
+        await git(
+          repo,
+          "config",
+          destination === "helper" ? "remote.origin.vcs" : "remote.origin.pushurl",
+          "unavailable-worktree-fixture",
+        );
+      } else {
+        await git(
+          repo,
+          "remote",
+          "set-url",
+          "origin",
+          destination === "empty" ? "" : path.join(root, "missing.git"),
+        );
+      }
+      await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(
+        () => undefined,
+      );
+      await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
+        "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
+      );
+      expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
+    },
+  );
 
   it.each(["aborted", "closed"] as const)(
     "handles stale remote checkout with %s admission",
@@ -422,8 +431,6 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rejects an included file replaced by a symlink after inspection", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
     const source = path.join(repo, "settings.local");
     await fs.writeFile(source, "included bytes\n");
     const outside = path.join(root, "outside.txt");
@@ -440,15 +447,13 @@ describe("ManagedWorktreeService", () => {
       return observed;
     });
 
-    await expect(
-      service.create({ repoRoot: repo, name: "swapped-source", baseRef: "HEAD" }),
-    ).rejects.toThrow();
+    const destination = path.join(root, "copy-destination");
+    await fs.mkdir(destination);
+    // Inject at the copy owner, which now runs in the filesystem worker.
+    await expect(copyProvisionedPaths(repo, destination, ["settings.local"], {})).rejects.toThrow();
 
     expect(replaced).toBe(true);
-    expect(listRegistryWorktrees(env)).toEqual([]);
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(
-      "refs/heads/openclaw/swapped-source",
-    );
+    expect(await fs.readdir(destination)).toEqual([]);
     expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
   });
 
@@ -1029,16 +1034,9 @@ describe("ManagedWorktreeService", () => {
 
       useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: disk.type,
-        files: disk.files,
-        frsize: disk.frsize,
-        ffree: disk.ffree,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: (100 * 1024 ** 3) / 4096,
-        bfree: (100 * 1024 ** 3) / 4096,
-      });
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+      );
       const created = await service.create({
         repoRoot: repo,
         name: "submodules",

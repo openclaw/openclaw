@@ -3,19 +3,25 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../../lib/cron/inventory-connection.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
+  canPresentGatewayMethod,
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -80,7 +86,8 @@ export function createAgentsPageState(
   const presentation = createAgentsPageLifetime();
   const [skillsFilter, setSkillsFilter] = createSignal("");
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
-  const channels = projectOwner(context.channels, (source) => source.state);
+  const channelCapability = context.acquireChannels(createChannelCapability);
+  const channels = projectOwner(channelCapability, (source) => source.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const observation = observeState<AgentsPageData>({
@@ -140,7 +147,11 @@ export function createAgentsPageState(
   const cron = createAgentCronPresenter({
     currentState: () => state.cron,
     readState: () => readData().cron,
-    canCall: (method, scope) => active && canCall(method, scope),
+    canCall: (method, scope) =>
+      active &&
+      state.agentsPanel === "cron" &&
+      document.visibilityState !== "hidden" &&
+      canCall(method, scope),
     publish,
   });
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
@@ -148,7 +159,6 @@ export function createAgentsPageState(
   const identity = createAgentIdentityEditor(context, state, {
     snapshot: () => gateway.snapshot,
     saves: () => identitySaves,
-    retired: presentation.retired,
     canCall: (method) => canCall(method, "operator.admin"),
     isCurrent: isCurrentRequest,
     onSaved: syncAgentState,
@@ -177,7 +187,7 @@ export function createAgentsPageState(
     canUpdate: (agentId: string) =>
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
     getReport: () => state.agentSkillsReport,
-    onPrimaryChanged: () => refreshEffectiveToolsForCurrentSession(),
+    onPrimaryChanged: () => effectiveTools.ensure(true),
   });
   const githubIdentity = createGitHubIdentityView({
     runExternalMutation: (task, options) =>
@@ -199,6 +209,12 @@ export function createAgentsPageState(
       identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.catalog", "operator.read")) {
+        toolsCatalog.reset();
+      }
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.effective", "operator.read")) {
+        effectiveTools.reset();
+      }
       if (becameConnected && Object.values(state.identityDraft).some((value) => value !== null)) {
         identity.schedule();
       }
@@ -208,16 +224,23 @@ export function createAgentsPageState(
       }
     },
     ensureInitialData: () => ensureInitialData(),
+    onPageActivation: () => effectiveTools.ensure(),
   });
   const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
     isCurrentRequest(client, generation, agentId, {});
   const toolsCatalog = createAgentToolsCatalog({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
     isCurrent: isCurrentToolsRead,
   });
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read"),
     isCurrent: isCurrentToolsRead,
+    isSessionAgent: (agentId) => agentId === chatAgentId(),
+    isPresented: () => state.agentsPanel === "tools",
     key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
     changed: publish,
   });
@@ -335,14 +358,12 @@ export function createAgentsPageState(
     if (!state.connected || !state.client || !routeDataInitialized || !routeData) {
       return;
     }
-    if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
-      void context.runtimeConfig.ensureLoaded();
-    }
+    void context.runtimeConfig.ensureLoaded();
     if (!state.agentsList && !context.agents.state.agentsLoading) {
       void refreshAgents("ensure");
       return;
     }
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     loadActivePanelData();
   }
 
@@ -363,10 +384,8 @@ export function createAgentsPageState(
     );
   }
 
-  function ensureAgentIdentities() {
-    void context.agentIdentity.ensure(
-      listSelectableAgents(state.agentsList?.agents ?? []).map((entry) => entry.id),
-    );
+  function ensureSelectedIdentity() {
+    void context.agentIdentity.ensure([state.agentsSelectedId]);
   }
 
   function loadActivePanelData() {
@@ -393,12 +412,12 @@ export function createAgentsPageState(
     if (state.agentsPanel === "tools") {
       syncGitHubIdentity(agentId);
       toolsCatalog.ensure(agentId);
-      loadEffectiveToolsForAgent(agentId);
+      effectiveTools.ensure();
       githubIdentity.ensureVerified();
       return;
     }
-    if (state.agentsPanel === "channels" && !context.channels.state.channelsSnapshot) {
-      void context.channels.refresh(false);
+    if (state.agentsPanel === "channels" && !channelCapability.state.channelsSnapshot) {
+      void channelCapability.refresh(false);
       return;
     }
     if (state.agentsPanel === "cron") {
@@ -464,41 +483,20 @@ export function createAgentsPageState(
     });
   }
 
-  function loadEffectiveToolsForAgent(agentId: string, refresh = false) {
-    if (agentId !== chatAgentId()) {
-      effectiveTools.reset();
-      return;
-    }
-    effectiveTools.ensure(agentId, state.sessionKey, refresh);
-  }
-
-  function refreshEffectiveToolsForCurrentSession() {
-    const agentId = state.agentsSelectedId;
-    if (state.agentsPanel === "tools" && agentId) {
-      loadEffectiveToolsForAgent(agentId, true);
-    }
-  }
-
-  async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
+  async function refreshAgents(mode: "ensure" | "refresh" = "refresh") {
     const client = state.client;
-    if (!client || (mode === "save" && !canCall("config.set", "operator.admin"))) {
+    if (!client) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
-    if (mode === "save" && !(await context.runtimeConfig.save())) {
-      return;
-    }
     await (mode === "ensure" ? agents.ensureList() : agents.refreshList());
     if (!isCurrentRequest(client, generation, undefined, { agents })) {
       return;
     }
-    if (mode === "save") {
-      effectiveTools.reset();
-    }
     syncAgentState(agents);
-    if (mode !== "refresh") {
-      ensureAgentIdentities();
+    if (mode === "ensure") {
+      ensureSelectedIdentity();
     }
     loadActivePanelData();
   }
@@ -545,7 +543,7 @@ export function createAgentsPageState(
       memoryTarget,
       config: configState,
       channels: {
-        onRefresh: () => void context.channels.refresh(false),
+        onRefresh: () => void channelCapability.refresh(false),
       },
       cron: {
         read: cron.read,
@@ -572,7 +570,9 @@ export function createAgentsPageState(
         onModelCatalogOpen: () => modelCatalog.ensure({ refresh: true }),
       },
       agentSkills: {
-        filter: skillsFilter(),
+        get filter() {
+          return skillsFilter();
+        },
         onFilterChange: (next: string) => {
           setSkillsFilter(next);
         },
@@ -604,7 +604,11 @@ export function createAgentsPageState(
       },
       pinnedAgentIds: navigation.read().pinnedAgentIds,
       onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
-      onRefresh: () => void refreshAgents(),
+      // Refresh is this page's one way to pick up edits made outside it, config included.
+      onRefresh: () => {
+        void refreshAgents();
+        void context.runtimeConfig.refresh({ background: true });
+      },
       onCreateAgent: () => {
         if (canCall("openclaw.chat", "operator.admin")) {
           context.navigate("custodian", { search: "?intent=new-agent" });
@@ -612,8 +616,7 @@ export function createAgentsPageState(
       },
       onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),
-      onConfigReload: () => context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onConfigSave: () => refreshAgents("save"),
+      onConfigRetry: () => void context.runtimeConfig.refresh(),
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
@@ -628,16 +631,31 @@ export function createAgentsPageState(
   onSettled(() => {
     gateway.connect();
     syncAgentState();
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
+      context.gateway.subscribeEvents((event) => {
+        if (hasCronInventoryEvents(context.gateway.snapshot)) {
+          if (isCronInventoryInvalidation(event, context.gateway.snapshot)) {
+            cron.onRefresh(false);
+          } else if (event.event === "cron") {
+            cron.onRuntime(event.payload);
+          }
+        }
+      }),
+      listen(document, "visibilitychange", () => {
+        if (document.visibilityState !== "hidden") {
+          cron.onRefresh(false);
+        }
+      }),
       // Selection receipts transfer draft custody and retire prior-agent work synchronously.
       selection.subscribe(() => {
         const explicitSelection = selection.intentRevision !== intentRevision;
         intentRevision = selection.intentRevision;
         const previousId = state.agentsSelectedId;
         syncSettingsSelection();
+        ensureSelectedIdentity();
         const agentId = state.agentsSelectedId;
         const route = context.router.getState();
         if (
@@ -657,7 +675,7 @@ export function createAgentsPageState(
       // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
-        ensureAgentIdentities();
+        ensureSelectedIdentity();
         loadActivePanelData();
         publish();
       }),
@@ -666,11 +684,12 @@ export function createAgentsPageState(
         syncGitHubIdentity(state.agentsSelectedId);
         publish();
       }),
-      // Session model receipts replace the tools.effective request key before older results settle.
+      // Local model receipts change the request key; unrelated roster publications reuse it.
       context.sessions.subscribe(() => {
-        refreshEffectiveToolsForCurrentSession();
+        effectiveTools.ensure();
         publish();
       }),
+      effectiveTools.subscribe(context.gateway),
     ];
     applyRoute();
     return () => {
@@ -688,7 +707,6 @@ export function createAgentsPageState(
     };
   });
   return {
-    identitySavePending: () => identity.saving() || readData().identitySaving,
     read() {
       observation.read();
       return viewProps();

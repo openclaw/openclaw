@@ -13,6 +13,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
@@ -82,10 +83,11 @@ export function useAgentDeletionFixture() {
       deletion: Pick<AgentDeletionOperation, "runDatabaseCleanup">,
       config: OpenClawConfig = cfg,
     ) =>
-      purgeAgentSessionStoreEntries(config, "worker", {
-        env,
-        runDatabaseCleanup: deletion.runDatabaseCleanup,
-      });
+      withEnvAsync(env, () =>
+        purgeAgentSessionStoreEntries(config, "worker", {
+          runDatabaseCleanup: deletion.runDatabaseCleanup,
+        }),
+      );
     return {
       root,
       env,

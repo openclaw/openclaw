@@ -6,7 +6,7 @@ import {
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -18,7 +18,7 @@ import { updateRecoverySchema } from "./update-recovery.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
-export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
+type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
 export type RestartSentinelPayload = SchemaContract<
   Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">

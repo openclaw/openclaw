@@ -176,6 +176,27 @@ it("reports malformed frontmatter by file and keeps loading sibling skills", asy
   expectScanWarning(tempDir, brokenFile, "invalid frontmatter: BAD_INDENT");
 });
 
+it.each([
+  "a[1]",
+  "a]1",
+  "a{1}",
+  "#a",
+  "!a",
+  ...(process.platform === "win32" ? [] : ["a*", "a?", "a\\1"]),
+])("honors nested ignore rules in literal directory %s", async (name) => {
+  const root = tempDirs.make("openclaw-skill-literal-ignore-");
+  const nested = path.join(root, name);
+  await writeRawSkill(nested, "---\nname: direct\ndescription: Ignored direct skill\n---\n");
+  await fs.writeFile(path.join(nested, ".gitignore"), "SKILL.md\n!keep/SKILL.md\n");
+  await writeNamedSkill(nested, "hidden", "Ignored nested skill");
+  await writeNamedSkill(nested, "keep", "Explicit exception");
+  await writeNamedSkill(root, "a1", "Unaffected sibling");
+
+  const result = loadSkillsFromPath(root);
+  expect(result.skills.map((skill) => skill.name).toSorted()).toEqual(["a1", "keep"]);
+  expect(result.diagnostics).toEqual([]);
+});
+
 it.each(["nonregular", "cyclic-symlink"] as const)(
   "reports %s ignore rules without loading that subtree or losing siblings",
   async (kind) => {

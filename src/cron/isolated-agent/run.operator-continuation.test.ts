@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
@@ -5,12 +6,6 @@ import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import { markRestartAbortedMainSessions } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
-import { recoverStore } from "../../agents/main-session-recovery/main-session-restart-recovery-store.js";
-import {
-  createRestartRecoveryRequesterSource,
-  readRestartRecoveryRequesterSource,
-} from "../../agents/requester-run-recovery-source.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import {
@@ -20,15 +15,13 @@ import {
 } from "../../agents/tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
-import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
-import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   admission,
@@ -41,14 +34,9 @@ import {
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
-import { createMockGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime.test-support.js";
-import { prepareGatewayRunShutdown } from "../../gateway/server-run-shutdown.js";
-import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
-import {
-  getAgentEventLifecycleGeneration,
-  rotateAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -56,15 +44,6 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import {
-  getCurrentSessionControllerOwner,
-  isSessionControllerWorkActive,
-} from "../../sessions/session-controller.lifecycle.js";
-import {
-  beginReplyMessageInjectionTarget,
-  captureReplyMessageInjectionTarget,
-} from "../../sessions/session-controller.message-injection.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
@@ -76,13 +55,24 @@ import { onTimer } from "../service/timer.test-support.js";
 import { saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { updateCronRuntimeRow } from "../store/row-codec.js";
-import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
   publication,
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
+import {
+  prepareContinuationClient,
+  PRINCIPAL_POLICY_CASES,
+  isPrincipalPolicyScenario,
+  preparePrincipalPolicyChange,
+  principalGatewayPolicy,
+  captureRealIngressOperator,
+  expectRetryableOriginalOneShot,
+  principalRecoveryFixture,
+  registerScheduledPrincipalFixture,
+  prepareRestartBeforeScheduling,
+} from "./run.operator-restart.test-support.js";
 import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
@@ -110,10 +100,11 @@ const session = await vi.importActual<typeof import("./session.js")>("./session.
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
 );
-const transcriptReaders = await vi.importActual<
-  typeof import("../../gateway/session-transcript-readers.js")
->("../../gateway/session-transcript-readers.js");
-installRequesterCronAuthorityTestHooks();
+installRequesterCronAuthorityTestHooks(() => ({
+  type: "human",
+  source: "profile",
+  id: ensureProfileForEmail("scheduled-operator@example.test").id,
+}));
 
 const toolConstructionPlan = {
   includeBaseCodingTools: false,
@@ -140,13 +131,24 @@ afterEach(() => {
 // Exercise custody transfer through durable reload, scheduled admission and the real action owner.
 it.each([
   "operator",
+  "write-scoped operator",
+  "cron-scoped operator",
   "self removal",
   "self removal then role revoked during merge",
   "self removal then session replaced during merge",
   "paused force run",
   "restart",
-  "restart with prior operator source",
-  "restart with prior operator source and steering",
+  "principal reload",
+  ...PRINCIPAL_POLICY_CASES,
+  "principal owner unavailable",
+  "principal store unavailable",
+  "restart before scheduling",
+  "restart before scheduling revoked ingress",
+  "restart before scheduling without source",
+  "principal ingress revoked",
+  "principal ingress replaced",
+  "principal role revoked",
+  "principal access revoked",
   "guest",
   "legacy attribution",
   "foreign target",
@@ -154,21 +156,33 @@ it.each([
   "role revoked",
   "role revoked during merge",
   "session replaced",
-  "active recovery",
   "queued owner payload edit",
   "queued manager rename",
   "owner capture races manager payload",
   "recurring trigger reload",
 ] as const)("scheduled continuation preserves the %s boundary", async (scenario) => {
-  const restarting = scenario.startsWith("restart");
+  const restartBeforeScheduling = scenario.startsWith("restart before scheduling");
+  const principalSource = scenario.startsWith("principal") || restartBeforeScheduling;
+  const unavailableSource =
+    scenario === "principal owner unavailable" || scenario === "principal store unavailable";
+  const personPolicySource = isPrincipalPolicyScenario(scenario);
+  const personPolicyRemoved = personPolicySource && scenario !== "principal allowlist allowed";
+  const realPrincipal = principalSource;
+  let restoreIngressOwner: (() => void) | undefined;
+  let releaseIngressOwner: (() => void) | undefined;
+  const roleRevoked = scenario === "role revoked" || scenario === "principal role revoked";
+  const restarting = scenario === "restart";
   const ownerEdit = scenario === "queued owner payload edit";
   const managerRename = scenario === "queued manager rename";
   const captureRace = scenario === "owner capture races manager payload";
   const queuedEdit = ownerEdit || managerRename || captureRace;
   const recurring = scenario === "recurring trigger reload";
   const selfRemoving = scenario.startsWith("self removal");
+  const scopedOperator =
+    scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
+    ...(realPrincipal ? { gateway: principalGatewayPolicy(personPolicySource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
   const fixture = createCronFixture(undefined, config);
@@ -176,32 +190,56 @@ it.each([
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
-  const recovery = await createOperatorRecoveryFixture({
-    stateDir,
-    context,
+  if (realPrincipal) {
+    await setCanonicalUserProfileRole(profile.id, "writer");
+  }
+  const { client, revokePersonPolicy } = prepareContinuationClient({
     config,
+    context,
     profileId: profile.id,
+    scenario,
+  });
+  const target = {
+    agentId: "main",
     sessionKey: SESSION,
     sessionId: SESSION_ID,
-    scopes: scenario === "guest" ? ["operator.sessions.write"] : ["operator.admin"],
-  });
-  if (scenario !== "active recovery") {
-    // Ordinary admission retires a completed predecessor; an active claim keeps custody.
-    recovery.entry.status = "done";
-    recovery.entry.abortedLastRun = false;
-    await accessor.replaceSessionEntry(recovery.target, recovery.entry);
+    storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+  };
+  const entry: InternalSessionEntry = {
+    sessionId: SESSION_ID,
+    updatedAt: 1,
+    lifecycleRevision: "original-lifecycle",
+    parentSessionKey: "agent:main:main",
+    spawnDepth: 0,
+    createdActor: { type: "human", source: "profile", id: profile.id },
+    status: "done",
+    abortedLastRun: false,
+  };
+  await accessor.replaceSessionEntry(target, entry);
+  if (restartBeforeScheduling) {
+    expect((await readSessionEntryReadOnlyInWorker(target))?.createdActor?.id).toBe(profile.id);
   }
   const captureAuthority = async () =>
     expectDefined(
       await captureGatewayOperatorRunAuthority({
-        client: recovery.client,
+        client,
         context,
         sourceAuthority: null,
       }),
       "fresh authenticated operator source",
     );
-  // Legacy attribution is not admission; other cases capture fresh authority, not recovery's.
-  const original = scenario === "legacy attribution" ? undefined : await captureAuthority();
+  // Legacy attribution is not admission; other cases capture a fresh authenticated source.
+  const original =
+    scenario === "legacy attribution"
+      ? undefined
+      : realPrincipal
+        ? await captureRealIngressOperator({
+            context,
+            config,
+            profileId: profile.id,
+            scopes: client.connect.scopes ?? [],
+          })
+        : await captureAuthority();
   const foreignKey = "agent:main:dashboard:foreign-continuation";
   if (scenario === "foreign target") {
     replaceSessionEntrySync(
@@ -234,7 +272,31 @@ it.each([
   const updateCreator = createDeferredCore();
   const creatorUpdated = createDeferredCore();
   const releaseCreator = createDeferredCore();
+  if (scenario === "principal access revoked" && original) {
+    original.authority = principalRecoveryFixture(
+      original.authority,
+      scenario === "principal access revoked",
+    );
+  }
+  if (restartBeforeScheduling) {
+    expect(config.gateway?.roles).toBeDefined();
+    const proceed = await prepareRestartBeforeScheduling({
+      original: expectDefined(original, "initiating authenticated turn"),
+      target,
+      context,
+      profile,
+      readJobs: fixture.read,
+      revoked: scenario === "restart before scheduling revoked ingress",
+      sourceLess: scenario === "restart before scheduling without source",
+    });
+    if (!proceed) {
+      creatorCron.stop();
+      await creatorCron.waitForIdle();
+      return;
+    }
+  }
   let creation: Promise<unknown> | undefined;
+  let releaseAccessPolicy: (() => void) | undefined;
   const managerUpdate = async (patch: Record<string, unknown>) => {
     const stored = expectDefined((await fixture.read())[0], "manager target");
     const respond = vi.fn();
@@ -255,7 +317,7 @@ it.each([
     const createRun = () =>
       inRun(
         "operator-creates-continuation",
-        original ? admission("operator-creates-continuation", recovery.client) : undefined,
+        original ? admission("operator-creates-continuation", client) : undefined,
         async (_identity, admitted, creator) => {
           bindGatewayContextResolver(admitted, () => context);
           try {
@@ -274,7 +336,7 @@ it.each([
                   toolConstructionPlan: { ...toolConstructionPlan },
                   runId: "operator-creates-continuation",
                   operationalRunInstance: admitted.operationalRunInstance,
-                  senderIsOwner: true,
+                  senderIsOwner: !scopedOperator,
                   cronCreatorToolAllowlistRef: capturedTools,
                   cronCreatorToolAllowlistCaptureRef: capture,
                 });
@@ -294,7 +356,7 @@ it.each([
                     name: "Finish authorized landing",
                     enabled: scenario !== "paused force run",
                     schedule:
-                      recurring || scenario === "role revoked"
+                      recurring || roleRevoked
                         ? { kind: "every", everyMs: 180_000 }
                         : {
                             kind: "at",
@@ -346,12 +408,11 @@ it.each([
         },
         original?.authority,
       );
-    const create = () =>
-      queuedEdit ? withSessionTurn(recovery.target, () => createRun()) : createRun();
+    const create = () => (queuedEdit ? withSessionTurn(target, () => createRun()) : createRun());
     if (original) {
       creation = withPluginRuntimeGatewayRequestScope(
         {
-          client: recovery.client,
+          client,
           context,
           isWebchatConnect: () => false,
         },
@@ -377,30 +438,46 @@ it.each([
       await creatorCron.waitForIdle();
     }
   }
-  if (scenario === "restart") {
-    // The other restart cases retain the fixture's earlier operator source.
-    const entry = { ...recovery.entry };
-    delete entry.restartRecoveryDeliveryRunId;
-    delete entry.restartRecoveryDeliverySourceRunId;
-    delete entry.restartRecoverySourceIngress;
-    delete entry.restartRecoveryOperatorSource;
-    await accessor.replaceSessionEntry(recovery.target, entry);
-  } else if (restarting) {
-    // A prior human admission can leave requester facts beside its operator source.
-    await accessor.replaceSessionEntry(recovery.target, {
-      ...recovery.entry,
-      restartRecoveryRequesterSource: expectDefined(
-        createRestartRecoveryRequesterSource({
-          ...recovery.target,
-          entry: recovery.entry,
-          requesterOrigin: { sessionKey: SESSION, operatorProfileId: profile.id },
-        }),
-        "prior human requester source",
-      ),
+  if (principalSource) {
+    if (scenario === "principal access revoked") {
+      const registry = expectDefined(
+        getPluginRegistryState()?.activeRegistry,
+        "live access policy registry",
+      );
+      const previousPolicies = [...registry.gatewayAccessPolicies];
+      releaseAccessPolicy = () => {
+        registry.gatewayAccessPolicies = previousPolicies;
+      };
+      registry.gatewayAccessPolicies.push({
+        pluginId: "principal-access",
+        source: "test",
+        policy: { authorize: () => undefined, resume: () => undefined },
+      });
+    }
+    const recovery = registerScheduledPrincipalFixture({
+      context,
+      profileId: profile.id,
+      scopes: client.connect.scopes ?? [],
+      state:
+        scenario === "principal owner unavailable"
+          ? "owner-unavailable"
+          : scenario === "principal store unavailable"
+            ? "store-unavailable"
+            : scenario === "principal ingress revoked"
+              ? "revoked"
+              : scenario === "principal ingress replaced"
+                ? "replaced"
+                : "current",
     });
+    restoreIngressOwner = recovery.restore;
+    releaseIngressOwner = recovery.release;
   }
+  await preparePrincipalPolicyChange(scenario, revokePersonPolicy);
   // No operator request, original admitted run or human follow-up survives this point.
   const job = expectDefined((await fixture.read())[0], "durably stored continuation");
+  if (scopedOperator) {
+    expect(job.operatorSource?.source.snapshot.scopes).toEqual(client.connect.scopes);
+  }
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
@@ -410,13 +487,13 @@ it.each([
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);
-  } else if (scenario === "role revoked") {
+  } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
   } else if (scenario === "session replaced") {
     replaceSessionEntrySync(
       { sessionKey: SESSION },
       {
-        ...recovery.entry,
+        ...entry,
         sessionId: "replacement-session",
         lifecycleRevision: "replacement",
       },
@@ -463,8 +540,8 @@ it.each([
           ) {
             await setCanonicalUserProfileRole(profile.id, "blocked");
           } else if (scenario === "self removal then session replaced during merge") {
-            await accessor.replaceSessionEntry(recovery.target, {
-              ...expectDefined(accessor.loadSessionEntry(recovery.target), "active session"),
+            await accessor.replaceSessionEntry(target, {
+              ...expectDefined(accessor.loadSessionEntry(target), "active session"),
               sessionId: "replacement-session",
               lifecycleRevision: "replacement",
             });
@@ -475,8 +552,6 @@ it.each([
     });
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
-  let shutdownReleased: Promise<void> | undefined;
-  let interruptedRunId: string | undefined;
   let entered = 0;
   let offered: unknown;
   let admittedOperator = false;
@@ -508,65 +583,6 @@ it.each([
       expect(params.toolsAllow).toEqual(["github_publish"]);
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "cron transcript owner");
       expect(await recorder.persistApproved()).toBeDefined();
-      interruptedRunId = params.runId;
-      await persistGatewaySessionLifecycleEvent({
-        agentId: "main",
-        sessionKey: SESSION,
-        event: {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          lifecycleGeneration,
-          ts: Date.now(),
-          data: { phase: "start" },
-        },
-      });
-      if (scenario === "restart with prior operator source and steering") {
-        const steeringAuthority = await captureAuthority();
-        try {
-          const steering = createUserTurnTranscriptRecorder({
-            input: { text: "Continue the scheduled task", provenance: { kind: "external_user" } },
-            target: () => ({
-              ...recovery.target,
-              sessionEntry: accessor.loadSessionEntry(recovery.target),
-              config,
-            }),
-            assertOriginalInputCommit: steeringAuthority.authority.assertCurrent,
-          });
-          const operation = expectDefined(getCurrentSessionControllerOwner(), "cron owner");
-          operation.setPhase("running");
-          operation.attachBackend({
-            kind: "embedded",
-            runId: params.runId,
-            toolAuthorityFingerprint: "scheduled-tools",
-            cancel() {},
-            messageInjectionV2: {
-              version: 2,
-              isAvailable: () => true,
-              queueMessage: async (_text, options, assertCurrent) => {
-                assertCurrent();
-                expect(await options?.userTurnTranscriptRecorder?.persistApproved()).toBeDefined();
-              },
-            },
-          });
-          const attempt = await beginReplyMessageInjectionTarget(
-            expectDefined(captureReplyMessageInjectionTarget(operation), "running cron target"),
-            "Continue the scheduled task",
-            {
-              isInboundUserMessage: true,
-              toolAuthorityFingerprint: "scheduled-tools",
-              assertCurrent: steeringAuthority.authority.assertCurrent,
-              waitForTranscriptCommit: true,
-              userTurnTranscriptRecorder: steering,
-            },
-          );
-          expect(await attempt.outcome).toEqual({ status: "accepted" });
-          expect(steering.getPersistedMessage?.()?.["__openclaw"]?.steerTargetRunId).toBe(
-            params.runId,
-          );
-        } finally {
-          steeringAuthority.release();
-        }
-      }
       restartEntered.resolve();
       await restartContinue.promise;
       throw createAgentRunRestartAbortError();
@@ -579,7 +595,7 @@ it.each([
         sessionId: params.sessionId,
       },
       async () => {
-        // Schema projection reads session control authority from this admitted caller.
+        // Stable schemas list actions; execution checks this admitted caller's authority.
         expectDefined(getGatewayToolCallerIdentity(), "scheduled caller");
         const tools = applyEmbeddedAttemptToolsAllow(
           await createOpenClawCodingToolsAsync({
@@ -615,7 +631,11 @@ it.each([
             ),
           ).toBe(nextCheckDefinition);
         }
-        admittedOperator = readAdmittedRunOperatorAuthority(admitted) !== undefined;
+        const scheduledOperator = readAdmittedRunOperatorAuthority(admitted);
+        admittedOperator = scheduledOperator !== undefined;
+        if (scopedOperator) {
+          expect(scheduledOperator?.scopes).toEqual(client.connect.scopes);
+        }
         if (selfRemoving) {
           const automations = expectDefined(
             tools.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME),
@@ -627,24 +647,28 @@ it.each([
         }
         const publish = tools.find((tool) => tool.name === "github_publish");
         offered = publish?.parameters;
-        if (publish && JSON.stringify(offered).includes('"inspect"')) {
-          try {
-            results.push(await publish.execute("scheduled-inspect", { action: "inspect" }));
-            results.push(
-              await publish.execute("scheduled-merge", {
-                action: "merge",
-                requestId: publication.requestId,
-                expectedHeadCommit: publication.headCommit,
-                mergeMethod: "merge",
-              }),
-            );
-          } catch (error) {
-            rejected = String(error);
-            if (
-              scenario === "role revoked during merge" ||
-              scenario === "self removal then role revoked during merge"
-            ) {
-              expect(params.abortSignal?.aborted).toBe(true);
+        if (publish) {
+          expect(JSON.stringify(offered)).toContain('"inspect"');
+          expect(JSON.stringify(offered)).toContain("merge");
+          for (const args of [
+            { action: "inspect" },
+            {
+              action: "merge",
+              requestId: publication.requestId,
+              expectedHeadCommit: publication.headCommit,
+              mergeMethod: "merge",
+            },
+          ]) {
+            try {
+              results.push(await publish.execute(`scheduled-${args.action}`, args));
+            } catch (error) {
+              rejected = String(error);
+              if (
+                scenario === "role revoked during merge" ||
+                scenario === "self removal then role revoked during merge"
+              ) {
+                expect(params.abortSignal?.aborted).toBe(true);
+              }
             }
           }
         }
@@ -737,50 +761,15 @@ it.each([
         await creatorCron.waitForIdle();
       }
       if (restarting) {
-        await restartEntered.promise;
-        const harness = createAgentEventTestHarness();
-        try {
-          const shutdown = await prepareGatewayRunShutdown({
-            resolveGatewayContext,
-            timeoutMs: 0,
-            warnings: [],
-            getPendingReplyCount: () => 0,
-            chatRunState: harness.chatRunState,
-            agentRunSeq: harness.agentRunSeq,
-            removeChatRun: () => undefined,
-            broadcast: harness.broadcast,
-            nodeSendToSession: harness.nodeSendToSession,
-            markMainSessionsAbortedForRestart: (params) =>
-              markRestartAbortedMainSessions({ ...params, cfg: config, stateDir }).then(
-                () => undefined,
-              ),
-          });
-          shutdownReleased = shutdown.released;
-          const interrupted = expectDefined(
-            accessor.loadSessionEntry(recovery.target),
-            "interrupted cron parent",
-          );
-          expect(interrupted).toMatchObject({
-            status: "interrupted",
-            mainRestartRecovery: { cycleId: expect.any(String) },
-            restartRecoveryDeliverySourceRunId: interruptedRunId,
-          });
-          if (scenario !== "restart") {
-            expect(interrupted.restartRecoveryTerminalRunIds).toContain(
-              recovery.target.sourceRunId,
+        await Promise.race([
+          restartEntered.promise,
+          tick.then(() => {
+            throw new Error(
+              `Continuation failed before restart: ${execution.getJob(job.id)?.state.lastError}`,
             );
-            expect(
-              readRestartRecoveryRequesterSource({ ...recovery.target, entry: interrupted }),
-            ).toBeUndefined();
-          }
-          expect(interrupted.restartRecoveryRuns).toContainEqual({
-            runId: interruptedRunId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          });
-        } finally {
-          restartContinue.resolve();
-          await harness.handler.dispose();
-        }
+          }),
+        ]);
+        restartContinue.resolve();
       }
       await tick;
     }
@@ -806,14 +795,32 @@ it.each([
       expect(rejected).toBeUndefined();
       expect(merged).toBe(true);
       expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-      const completed = expectDefined(
-        accessor.loadSessionEntry(recovery.target),
-        "completed session",
-      );
+      const completed = expectDefined(accessor.loadSessionEntry(target), "completed session");
       expect(completed.status).not.toBe("killed");
       return;
     }
+    if (unavailableSource) {
+      const pending = expectDefined(execution.getJob(job.id), "same retryable one-shot");
+      const next = expectRetryableOriginalOneShot(pending, job.id, clock.clock.now());
+      expect(entered).toBe(0);
+      expect(writes).toEqual([]);
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
+      expectDefined(restoreIngressOwner, "restored original owner")();
+      clock.setTime(next);
+      await onTimer(schedulerState);
+      await execution.waitForIdle();
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
+    }
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
+    if (personPolicyRemoved) {
+      expect(reads, "Current person policy must fence protected RPC reads").toBe(0);
+      expect(writes).toEqual([]);
+      expect(rejected ?? finishedEvent?.error).toMatch(
+        /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
+      );
+      expect(entered).toBe(0);
+      return;
+    }
     if (managerRename || captureRace) {
       expect(admittedOperator).toBe(false);
       expect((await fixture.read())[0]?.operatorSource).toBeUndefined();
@@ -830,44 +837,12 @@ it.each([
       ).toBe(nextCheckDefinition);
     }
     if (restarting) {
-      await shutdownReleased;
       expect(state.lastRunStatus, state.lastError).toBe("error");
       expect(execution.getJob(job.id)?.enabled).toBe(true);
       expect(state.nextRunAtMs).toEqual(expect.any(Number));
       expect(entered).toBe(1);
       expect(writes).toEqual([]);
       expect(job.operatorSource).toBeDefined();
-      rotateAgentEventLifecycleGeneration();
-      readSessionMessagesAsyncMock.mockImplementation(transcriptReaders.readSessionMessagesAsync);
-      const gatewayRuntime = createMockGatewayRecoveryRuntime();
-      vi.mocked(gatewayRuntime.dispatchAgent).mockResolvedValue({
-        runId: "unexpected-cron-recovery",
-        status: "ok",
-      });
-      const recover = () =>
-        recoverStore({
-          cfg: config,
-          storePath: recovery.target.storePath,
-          stateDir,
-          expectedTarget: { sessionKey: SESSION, sessionId: SESSION_ID },
-          handledSessionKeys: new Set(),
-          gatewayRuntime,
-        });
-      await recover();
-      await recover();
-      expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
-      const saved = expectDefined(
-        accessor.loadSessionEntry(recovery.target),
-        "settled cron parent",
-      );
-      expect(saved).toMatchObject({ abortedLastRun: false, status: "interrupted" });
-      expect(saved.lifecycleRunId).toBeUndefined();
-      expect(saved.activeWriterRunId).toBeUndefined();
-      expect(hasMainSessionRecoveryClaim(saved)).toBe(false);
-      expect(resolveSessionWorkStartBlock(SESSION, saved)).toBeUndefined();
-      expect(isSessionControllerWorkActive(recovery.target.storePath, [SESSION, SESSION_ID])).toBe(
-        false,
-      );
       execution.stop();
       await execution.waitForIdle();
       await execution.start();
@@ -886,20 +861,20 @@ it.each([
       return;
     }
     if (
-      scenario === "role revoked" ||
+      roleRevoked ||
       scenario === "session replaced" ||
-      scenario === "active recovery"
+      scenario === "principal ingress revoked" ||
+      scenario === "principal ingress replaced" ||
+      scenario === "principal access revoked"
     ) {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
       expect(state.lastError).toMatch(
-        scenario === "active recovery"
-          ? /abandoned before execution/
-          : scenario === "role revoked"
-            ? /operator identity changed/i
-            : /authority|source|conversation|session|role/i,
+        roleRevoked
+          ? /operator identity changed/i
+          : /authority|source|conversation|session|role|ingress/i,
       );
-      if (scenario === "role revoked") {
+      if (roleRevoked) {
         expect(execution.getJob(job.id)?.enabled).toBe(false);
         expect(state.nextRunAtMs).toBeUndefined();
         expect(state.consecutiveErrors).toBe(1);
@@ -908,21 +883,22 @@ it.each([
         await execution.waitForIdle();
         expect(execution.getJob(job.id)?.state.consecutiveErrors).toBe(1);
       }
-      if (scenario === "active recovery") {
-        expect(accessor.loadSessionEntry(recovery.target)).toMatchObject({
-          restartRecoveryDeliveryRunId: recovery.target.recoveryRunId,
-          restartRecoveryDeliverySourceRunId: recovery.target.sourceRunId,
-          restartRecoveryOperatorSource: recovery.entry.restartRecoveryOperatorSource,
-        });
-      }
     } else {
       expect(state.lastRunStatus, state.lastError).toBe(
         scenario === "role revoked during merge" ? "error" : "ok",
       );
       expect(entered).toBe(1);
-      if (scenario === "operator" || scenario === "paused force run" || ownerEdit || recurring) {
-        expect(JSON.stringify(offered)).toContain('"inspect"');
-        expect(JSON.stringify(offered)).toContain("merge");
+      if (
+        unavailableSource ||
+        scenario === "restart before scheduling" ||
+        scenario === "principal allowlist allowed" ||
+        scenario === "principal reload" ||
+        scenario === "operator" ||
+        scenario === "write-scoped operator" ||
+        scenario === "paused force run" ||
+        ownerEdit ||
+        recurring
+      ) {
         expect(rejected).toBeUndefined();
         expect(results).toMatchObject([
           {
@@ -947,13 +923,22 @@ it.each([
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
-        expect(JSON.stringify(offered)).not.toContain('"inspect"');
-        expect(JSON.stringify(offered)).not.toContain("merge");
+        expect(admittedOperator).toBe(scenario === "cron-scoped operator");
+        expect(rejected).toContain(
+          scopedOperator
+            ? "missing scope: operator.write"
+            : "require full operator write permission",
+        );
         expect(results).toEqual([]);
       }
     }
     if (
+      !unavailableSource &&
+      scenario !== "restart before scheduling" &&
+      scenario !== "principal reload" &&
+      scenario !== "principal allowlist allowed" &&
       scenario !== "operator" &&
+      scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
       !ownerEdit &&
       !recurring &&
@@ -1011,5 +996,7 @@ it.each([
     restartContinue.resolve();
     execution.stop();
     await execution.waitForIdle();
+    releaseAccessPolicy?.();
+    releaseIngressOwner?.();
   }
 });

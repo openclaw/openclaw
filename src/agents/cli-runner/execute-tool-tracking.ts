@@ -40,6 +40,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { closeCliLiveSession } from "./cli-live-session-registry.js";
 import {
@@ -54,7 +55,6 @@ import {
   extractCliMessagingContent,
   extractCliMessagingTarget,
 } from "./execute-messaging.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
@@ -455,12 +455,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           : cliLoopbackCalls.filter((candidate) =>
               matchesCliLoopbackCall(call.toolName, call.args, candidate.current),
             );
+        const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         if (candidates.length === 1 && candidates[0]) {
-          candidates[0].outcome = terminalOutcome;
+          const candidate = candidates[0];
+          candidate.outcome = terminalOutcome;
+          candidate.browserTab =
+            !candidate.ambiguous && toolName === "browser" && call.outcome === "completed"
+              ? readToolResultDetails(call.result)?.browserTab
+              : undefined;
         } else if (candidates.length > 1) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
-        const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         const acceptedSessionSpawn =
           toolName === "sessions_spawn" && call.outcome === "completed"
             ? normalizeAcceptedSessionSpawnResult(call.result)
@@ -685,6 +690,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     handleCliToolUseStart,
     handleCliToolResult,
     resolveCliLoopbackTerminalOutcome,
+    resolveCliLoopbackBrowserTab(toolCallId: string): unknown {
+      const activeTool = activeCliTools.get(toolCallId);
+      const call = activeTool?.loopbackCall;
+      return activeTool?.loopbackAmbiguous || call?.ambiguous ? undefined : call?.browserTab;
+    },
     finishDeliveryTracking,
     finalizeCapture,
     withExecutionEvidence(output: CliOutput): CliOutput {

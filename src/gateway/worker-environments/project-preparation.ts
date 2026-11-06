@@ -6,6 +6,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type { WorkerRecipePreparation } from "../../plugins/capability-provider.types.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { resolveEnvironmentRecipe, type EnvironmentRecipe } from "./environment-recipe.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
@@ -33,6 +34,17 @@ const RecipePreparation = z.object({
   note: z.string().optional(),
   phaseDurationsMs: z
     .object({
+      retainedGit: z.number().int().nonnegative().optional(),
+      retainedManifest: z.number().int().nonnegative().optional(),
+      inspection: z.number().int().nonnegative().optional(),
+      seedPreparation: z.number().int().nonnegative().optional(),
+      seedTransfer: z.number().int().nonnegative().optional(),
+      seedVerification: z.number().int().nonnegative().optional(),
+      seedCheckout: z.number().int().nonnegative().optional(),
+      seedManifest: z.number().int().nonnegative().optional(),
+      gitUpdate: z.number().int().nonnegative().optional(),
+      toolchainPreparation: z.number().int().nonnegative().optional(),
+      preparedManifest: z.number().int().nonnegative().optional(),
       onCreate: z.number().int().nonnegative().optional(),
       updateContent: z.number().int().nonnegative().optional(),
       detectedInstall: z.number().int().nonnegative().optional(),
@@ -148,6 +160,23 @@ export function createWorkerProjectPreparation(params: {
   // The serialized pre-enrollment producer invalidates completion before mutation.
   // Reuse verification only within this operation; replay starts with a fresh scan.
   let verifiedRetained: PreparedProjectVerification | null | undefined;
+  const phaseDurationsMs: Record<string, number> = {};
+  const collectPhases = (value: unknown) => {
+    for (const [phase, duration] of Object.entries(
+      RecipePreparation.shape.phaseDurationsMs.parse(value) ?? {},
+    )) {
+      phaseDurationsMs[phase] = (phaseDurationsMs[phase] ?? 0) + duration;
+    }
+  };
+  const readRecipePreparation = (value?: unknown) => {
+    const recipe = RecipePreparation.parse(
+      value ?? {
+        source: preparation?.recipe?.source ?? (preparation?.setupRecipe ? "script" : "none"),
+      },
+    );
+    collectPhases(recipe.phaseDurationsMs);
+    return { ...recipe, phaseDurationsMs };
+  };
   const requireCurrent = () => {
     signal.throwIfAborted();
     try {
@@ -211,6 +240,7 @@ export function createWorkerProjectPreparation(params: {
     if (!isRecord(inspection) || typeof inspection.ready !== "boolean") {
       throw new Error("Project preparation returned invalid seed status");
     }
+    collectPhases(inspection.phaseDurationsMs);
     if (preparation) {
       const retained = inspection.retainedWorkspace;
       if (retained === null) {
@@ -236,6 +266,7 @@ export function createWorkerProjectPreparation(params: {
       return {
         seedKey,
         cacheHit: true,
+        recipePreparation: readRecipePreparation(),
         ...(inspection.preparedWorkspace !== undefined
           ? { preparedWorkspace: readPreparedWorkspace(inspection.preparedWorkspace) }
           : {}),
@@ -315,9 +346,11 @@ export function createWorkerProjectPreparation(params: {
       if (!isRecord(installed) || installed.ready !== true) {
         throw new Error("Project checkout was not verified before capture");
       }
+      collectPhases(installed.phaseDurationsMs);
       return {
         seedKey,
         cacheHit: false,
+        recipePreparation: readRecipePreparation(),
         ...(installed.preparedWorkspace !== undefined
           ? {
               preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
@@ -325,9 +358,10 @@ export function createWorkerProjectPreparation(params: {
               ...(isRecord(installed.preparedWorkspace) &&
               installed.preparedWorkspace.recipePreparation
                 ? {
-                    recipePreparation: RecipePreparation.parse(
-                      installed.preparedWorkspace.recipePreparation,
-                    ),
+                    recipePreparation: {
+                      ...RecipePreparation.parse(installed.preparedWorkspace.recipePreparation),
+                      phaseDurationsMs,
+                    },
                   }
                 : {}),
             }
@@ -353,9 +387,13 @@ export function createWorkerProjectPreparation(params: {
     const result = await prepareSeed(transport);
     requireCurrent();
     if (!preparationInput) {
+      await transport.recordRecipePreparation?.(result.recipePreparation!);
+      requireCurrent();
       return result;
     }
     if (result.preparedWorkspace) {
+      await transport.recordRecipePreparation?.(result.recipePreparation!);
+      requireCurrent();
       preparedWorkspace = result.preparedWorkspace;
       return result;
     }
@@ -378,7 +416,7 @@ export function createWorkerProjectPreparation(params: {
     if (!isRecord(prepared)) {
       throw new Error("Prepared project returned invalid setup status");
     }
-    const recipePreparation = RecipePreparation.parse(prepared.recipePreparation);
+    const recipePreparation = readRecipePreparation(prepared.recipePreparation);
     await transport.recordRecipePreparation?.(recipePreparation);
     requireCurrent();
     if (typeof prepared.setupFailure === "string") {
@@ -414,6 +452,7 @@ export function createWorkerProjectPreparation(params: {
             },
             inspectPreparedWorkspace: async (transport: {
               runScript: (script: string, signal: AbortSignal) => Promise<string>;
+              recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
             }) => {
               requireCurrent();
               const inspected: unknown = JSON.parse(
@@ -427,6 +466,10 @@ export function createWorkerProjectPreparation(params: {
                 throw new Error("Enrolled project has no matching completed workspace");
               }
               preparedWorkspace = readPreparedWorkspace(inspected);
+              await transport.recordRecipePreparation?.(
+                readRecipePreparation(inspected.recipePreparation),
+              );
+              requireCurrent();
             },
           }
         : {}),
@@ -440,4 +483,18 @@ export function createWorkerProjectPreparation(params: {
     close: () =>
       abort.abort(new DOMException("Project preparation operation is closed", "AbortError")),
   };
+}
+
+export function projectReplayIdentity(project: unknown): unknown {
+  if (!isRecord(project)) {
+    return project;
+  }
+  // Display metadata can change without changing the admitted preparation.
+  const identity = { ...project };
+  delete identity.label;
+  // Local keys bind shared Git storage; a checkout path is only its transport location.
+  if (!Object.hasOwn(identity, "source")) {
+    delete identity.root;
+  }
+  return identity;
 }

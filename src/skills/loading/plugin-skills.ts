@@ -14,11 +14,10 @@ import {
 } from "../../plugins/plugin-cache-files.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotRequiredRuntime } from "../../plugins/plugin-metadata-snapshot-required.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import { readPluginSkillBundle } from "./plugin-skill-bundle.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { resolvePluginSkillsDir } from "./skill-paths.js";
 import { loadSkillRootRecords } from "./skill-root-loader.js";
@@ -56,7 +55,7 @@ export function resolvePluginSkillRoots(params: {
     publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshotRequiredRuntime({
     workspaceDir,
     config: params.config,
     env: process.env,
@@ -112,6 +111,37 @@ export function capturePluginSkillContributions(params: {
     bundleFormat: record.bundleFormat,
     roots,
   }));
+}
+
+/** Folder names of active plugins' per-agent learned skills; each agent's state folder anchors them. */
+export function capturePluginAgentSkillsDirs(params: {
+  config?: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+}): string[] {
+  const contributions = iteratePluginRootContributions({
+    metadataSnapshot: params.metadataSnapshot,
+    config: params.config ?? {},
+    contribution: "agentSkillsDir",
+  });
+  return [...new Set([...contributions].flatMap(({ roots }) => roots))];
+}
+
+export function resolvePluginAgentSkillsDirs(params: {
+  workspaceDir: string | undefined;
+  config?: OpenClawConfig;
+}): string[] {
+  const workspaceDir = (params.workspaceDir ?? "").trim();
+  if (!workspaceDir || params.config?.plugins?.enabled === false) {
+    return [];
+  }
+  return capturePluginAgentSkillsDirs({
+    config: params.config,
+    metadataSnapshot: resolvePluginMetadataSnapshotRequiredRuntime({
+      workspaceDir,
+      config: params.config,
+      env: process.env,
+    }),
+  });
 }
 
 /** Validate and publish selected roots on the filesystem-owning thread. */
@@ -235,6 +265,7 @@ export async function readPluginSkill(
   if (!pluginRoot) {
     throw new Error("Installed plugin root not found.");
   }
+  const { readPluginSkillBundle } = await import("./plugin-skill-bundle.js");
   const result = await readPluginSkillBundle({
     pluginRoot,
     rootPath: path.relative(pluginRoot, matches[0]!.skill.baseDir).split(path.sep).join("/") || ".",

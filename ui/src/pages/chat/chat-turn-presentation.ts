@@ -29,6 +29,7 @@ export type StreamRunRenderItem = {
   boundaryId?: string;
   replyToSender?: MessageGroup["replyToSender"];
   replyToMessage?: MessageGroup["replyToMessage"];
+  replyPreviousMessageId?: string;
   parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
@@ -46,6 +47,7 @@ export function coalesceStreamRuns(
         parts: run,
         replyToSender: run.find((part) => part.kind === "stream")?.replyToSender,
         replyToMessage: run.find((part) => part.kind === "stream")?.replyToMessage,
+        replyPreviousMessageId: run.find((part) => part.kind === "stream")?.replyPreviousMessageId,
         ...(runId ? { runId } : {}),
         ...(boundaryId ? { boundaryId } : {}),
       });
@@ -75,6 +77,8 @@ export type WorkGroupRenderItem = {
   groups: MessageGroup[];
   /** Terminal reply owning this rollup’s presentation, not its nested execution identities. */
   replyRunId?: string;
+  /** No visible reply owns this rollup; nested execution identities must not frame it. */
+  ownerless?: true;
   /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
   previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
@@ -264,7 +268,26 @@ export function collapseCompletedTurnWork(
     }
     // Independent reply-less runs retain their own activity rollup, rather than
     // becoming work for an earlier answer merely because no user spoke between them.
-    const replyRunIds = runIdsWithVisibleReplies(turn);
+    // Completed work may include activity after an answer only when that activity
+    // belongs to a run with a visible reply, not an independent background wake.
+    const replyRunIds = new Set<string>();
+    for (const item of turn) {
+      if (item.kind === "stream-run") {
+        if (item.runId) {
+          replyRunIds.add(item.runId);
+        }
+        continue;
+      }
+      if (item.kind !== "group" || item.runId === undefined) {
+        continue;
+      }
+      // Tool-group text is the tool's own output shown inside the card, never a
+      // reply; assistant/user text is the run's visible response.
+      const includeText = item.role.toLowerCase() !== "tool";
+      if (item.isStreaming || groupHasVisibleReplyContent(item, includeText)) {
+        replyRunIds.add(item.runId);
+      }
+    }
     while (segmentEnd + 1 < turn.length) {
       const next = turn[segmentEnd + 1]!;
       if (!isTurnOutputGroup(next) || (next.runId && !replyRunIds.has(next.runId))) {
@@ -272,10 +295,33 @@ export function collapseCompletedTurnWork(
       }
       segmentEnd += 1;
     }
+    // The last-visible-reply policy applies per run. A later run in the same
+    // turn, such as a subagent completion the agent answered without new user
+    // input, must not demote an earlier run's reply to work. A run that ended
+    // in failure has no reply; the later answer recovers it.
+    const earlierRunReplies = new Set<MessageGroup>();
+    if (terminalReply.runId !== undefined) {
+      const answeredRuns = new Set([terminalReply.runId]);
+      for (let index = finalReplyIndex - 1; index >= segmentStart; index -= 1) {
+        const item = turn[index]!;
+        if (item.kind !== "group" || !item.runId || answeredRuns.has(item.runId)) {
+          continue;
+        }
+        if (groupEndsRunInFailure(item)) {
+          answeredRuns.add(item.runId);
+        } else if (isFinalReplyGroup(item)) {
+          answeredRuns.add(item.runId);
+          earlierRunReplies.add(item);
+        }
+      }
+    }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
     const previewAfterGroup = new Map<string, string>();
     let precedingAnswerKey: string | undefined;
+    // CLI runtimes import tool rows and interim text without a run id; only the
+    // persisted reply that follows them carries it. Such rows belong to that run.
+    const workRunIds = new Set<string | undefined>();
     for (let index = segmentStart; index <= segmentEnd; index += 1) {
       const item = turn[index]!;
       // Only a later answer can put a failed result inside completed work.
@@ -283,9 +329,18 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
-        (index < finalReplyIndex || !groupHasFailedResult(item))
+        !earlierRunReplies.has(item) &&
+        (index < finalReplyIndex || (!groupHasFailedResult(item) && !groupEndsRunInFailure(item)))
       ) {
         groups.push(item);
+        if (earlierRunReplies.size > 0) {
+          let runId = item.runId;
+          for (let next = index + 1; runId === undefined && next <= segmentEnd; next += 1) {
+            const later = turn[next]!;
+            runId = later.kind === "group" ? later.runId : undefined;
+          }
+          workRunIds.add(runId);
+        }
         if (precedingAnswerKey) {
           previewAfterGroup.set(item.key, precedingAnswerKey);
         }
@@ -298,35 +353,47 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
+    // A completed rollup may span automatic resumptions. Its reply owns the
+    // display only when earlier answers belong to that same run. When earlier
+    // runs keep their replies, the rollup sits above the first of them; that
+    // reply owns it only when all of the work belongs to its run. Work across
+    // several runs stays outside any run frame.
+    const firstAnswer = answers.find((answer): answer is MessageGroup => answer.kind === "group");
+    const ownerReply =
+      earlierRunReplies.size === 0
+        ? terminalReply
+        : workRunIds.size === 1 && firstAnswer && workRunIds.has(firstAnswer.runId)
+          ? firstAnswer
+          : undefined;
     // Message timestamps describe creation, not completion of the final model
     // request. Only the lifecycle owner can supply elapsed time for this run.
-    // Older history without matching lifecycle facts keeps an untimed disclosure.
+    // Older history without matching lifecycle facts, and work spanning several
+    // runs, keep an untimed disclosure.
     const session = opts.session;
     const runtimeMs = session?.runtimeMs;
     const durationMs =
       session?.key === opts.sessionKey &&
-      terminalReply.runId !== undefined &&
-      session.lastRunId === terminalReply.runId &&
+      ownerReply?.runId !== undefined &&
+      session.lastRunId === ownerReply.runId &&
       TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
       typeof runtimeMs === "number" &&
       Number.isFinite(runtimeMs) &&
       runtimeMs >= 0
         ? runtimeMs
         : null;
-    // A completed rollup may span automatic resumptions. Its reply owns the
-    // display only when earlier answers belong to that same run.
     const replyRunId =
-      !hasForwardedSource(terminalReply) &&
+      ownerReply &&
+      !hasForwardedSource(ownerReply) &&
       !groups.some(hasForwardedSource) &&
       answers
-        .slice(0, answers.indexOf(terminalReply))
+        .slice(0, answers.indexOf(ownerReply))
         .every(
           (answer) =>
             answer.kind === "group" &&
             !hasForwardedSource(answer) &&
-            answer.runId === terminalReply.runId,
+            answer.runId === ownerReply.runId,
         )
-        ? terminalReply.runId
+        ? ownerReply.runId
         : undefined;
     result.push(...turn.slice(0, segmentStart));
     result.push({
@@ -335,6 +402,9 @@ export function collapseCompletedTurnWork(
       key: `work:${terminalReply.key}`,
       groups,
       ...(replyRunId ? { replyRunId } : {}),
+      // Above several runs' replies, work owned by none of them stays unframed
+      // even when its rows share one run.
+      ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
       ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
@@ -344,30 +414,6 @@ export function collapseCompletedTurnWork(
 }
 
 export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
-
-// Completed work may include activity after an answer only when that activity
-// belongs to a run with a visible reply, not an independent background wake.
-function runIdsWithVisibleReplies(items: CompletedTurnRenderItem[]): Set<string> {
-  const replyRunIds = new Set<string>();
-  for (const item of items) {
-    if (item.kind === "stream-run") {
-      if (item.runId) {
-        replyRunIds.add(item.runId);
-      }
-      continue;
-    }
-    if (item.kind !== "group" || item.runId === undefined) {
-      continue;
-    }
-    // Tool-group text is the tool's own output shown inside the card, never a
-    // reply; assistant/user text is the run's visible response.
-    const includeText = item.role.toLowerCase() !== "tool";
-    if (item.isStreaming || groupHasVisibleReplyContent(item, includeText)) {
-      replyRunIds.add(item.runId);
-    }
-  }
-  return replyRunIds;
-}
 
 // Adjacent activity is one disclosure even when automatic continuations use
 // new run IDs. Visible content, not other output elsewhere in those runs,

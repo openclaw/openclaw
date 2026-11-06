@@ -19,7 +19,12 @@ import {
 } from "./webhook-targets.js";
 
 function createRequest(method: string, url: string): IncomingMessage {
-  return Object.assign(new EventEmitter(), { method, url, headers: {} }) as IncomingMessage;
+  return Object.assign(new EventEmitter(), {
+    method,
+    url,
+    headers: {},
+    socket: { remoteAddress: "127.0.0.1" },
+  }) as IncomingMessage;
 }
 
 function createResponse() {
@@ -30,7 +35,7 @@ function createResponse() {
 
 function pipeline(options: Partial<Parameters<typeof withResolvedWebhookRequestPipeline>[0]> = {}) {
   return withResolvedWebhookRequestPipeline({
-    req: createPipelineRequest("/hook"),
+    req: createRequest("POST", "/hook"),
     res: createResponse().res,
     targetsByPath: new Map([["/hook", [{ id: "A" }]]]),
     allowMethods: ["POST"],
@@ -49,14 +54,6 @@ const route = {
 const targetMap = () => new Map<string, Array<{ path: string; id: string }>>();
 const registerRoute = (targetsByPath: ReturnType<typeof targetMap>, path: string, id: string) =>
   registerWebhookTargetWithPluginRoute({ targetsByPath, target: { path, id }, route });
-
-function createPipelineRequest(url: string): IncomingMessage {
-  const req = createRequest("POST", url);
-  (req as unknown as { socket: { remoteAddress: string } }).socket = {
-    remoteAddress: "127.0.0.1",
-  };
-  return req;
-}
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -144,11 +141,12 @@ describe("registerWebhookTargetWithPluginRoute", () => {
     const second = registerRoute(targets, "/hooks/zalo/media", "B");
 
     const path = "/hooks/zalo/media";
-    const expectedTargets = [
-      { path, id: "A" },
-      { path, id: "B" },
-    ];
+    const expectedTargets = ["A", "B"].map((id) => ({ path, id }));
     expect(targets).toEqual(new Map([[path, expectedTargets]]));
+    expect(resolveWebhookTargets(createRequest("POST", "/Hooks//Zalo/Media/"), targets)).toEqual({
+      path,
+      targets: expectedTargets,
+    });
     expect(registry.httpRoutes).toHaveLength(1);
 
     second.unregister();
@@ -158,21 +156,9 @@ describe("registerWebhookTargetWithPluginRoute", () => {
   });
 });
 
-it("resolves a canonical alias after an exact-key miss", () => {
-  const targets = new Map([["/hooks/zalo/media", [{ id: "A" }]]]);
-  expect(resolveWebhookTargets(createRequest("POST", "/Hooks//Zalo/Media/"), targets)).toEqual({
-    path: "/hooks/zalo/media",
-    targets: [{ id: "A" }],
-  });
-});
-
 describe("withResolvedWebhookRequestPipeline", () => {
   it("returns false when request path has no registered targets", async () => {
-    const handled = await pipeline({
-      req: createRequest("POST", "/missing"),
-      targetsByPath: new Map<string, Array<{ id: string }>>(),
-    });
-    expect(handled).toBe(false);
+    expect(await pipeline({ req: createRequest("POST", "/missing") })).toBe(false);
   });
 
   it("runs handler when targets resolve and method passes", async () => {
@@ -200,25 +186,19 @@ describe("withResolvedWebhookRequestPipeline", () => {
 it("sets 405 for non-POST requests", () => {
   const { res, setHeader, end } = createResponse();
 
-  const rejected = rejectNonPostWebhookRequest(createRequest("GET", "/hook"), res);
-
-  expect(rejected).toBe(true);
+  expect(rejectNonPostWebhookRequest(createRequest("GET", "/hook"), res)).toBe(true);
   expect(res.statusCode).toBe(405);
   expect(setHeader).toHaveBeenCalledWith("Allow", "POST");
   expect(end).toHaveBeenCalledWith("Method Not Allowed");
 });
 
-it("retains a matching falsy target and detects a second match", async () => {
+it.each([
+  ["sync", (targets: undefined[]) => resolveSingleWebhookTarget(targets, () => true)],
+  ["async", (targets: undefined[]) => resolveSingleWebhookTargetAsync(targets, async () => true)],
+] as const)("%s matching retains a falsy target and detects a second match", async (_, resolve) => {
   const target = undefined;
-  expect(resolveSingleWebhookTarget([target], () => true)).toEqual({ kind: "single", target });
-  await expect(resolveSingleWebhookTargetAsync([target], async () => true)).resolves.toEqual({
-    kind: "single",
-    target,
-  });
-  expect(resolveSingleWebhookTarget([target, target], () => true)).toEqual({ kind: "ambiguous" });
-  await expect(
-    resolveSingleWebhookTargetAsync([target, target], async () => true),
-  ).resolves.toEqual({ kind: "ambiguous" });
+  expect(await resolve([target])).toEqual({ kind: "single", target });
+  expect(await resolve([target, target])).toEqual({ kind: "ambiguous" });
 });
 
 it.each([

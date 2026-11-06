@@ -14,6 +14,8 @@ import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
+  /** Prepared metadata owner; null means the engine has no unambiguous permitted owner. */
+  contextEngineOwnerId?: string | null;
   enabled: boolean;
   allow: string[];
   deny: string[];
@@ -79,7 +81,7 @@ function normalizePluginHooks(value: unknown): NormalizedPluginEntry["hooks"] {
     return undefined;
   }
   const hooks: NonNullable<NormalizedPluginEntry["hooks"]> = {};
-  for (const key of ["allowPromptInjection", "allowConversationAccess"] as const) {
+  for (const key of ["allowPromptModification", "allowConversationAccess"] as const) {
     if (typeof value[key] === "boolean") {
       hooks[key] = value[key];
     }

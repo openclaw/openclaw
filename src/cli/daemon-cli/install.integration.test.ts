@@ -21,6 +21,7 @@ import { readConfigMachineState } from "../../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureFullEnv, withEnvAsync } from "../../test-utils/env.js";
+import { expectText } from "../../test-utils/text-assertions.js";
 import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
 import { nativeResult } from "../update-cli/update-command-service-fixtures.test-support.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
@@ -29,15 +30,6 @@ import type { DaemonInstallOptions } from "./types.js";
 const tokenConfig = (token?: string) => ({
   gateway: { auth: { mode: "token", ...(token ? { token } : {}) } },
 });
-
-function expectText(output: string, included: string[], excluded: string[] = []) {
-  for (const text of included) {
-    expect(output).toContain(text);
-  }
-  for (const text of excluded) {
-    expect(output).not.toContain(text);
-  }
-}
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } = await vi.hoisted(
   async () => {

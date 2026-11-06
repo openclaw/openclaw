@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
@@ -12,6 +13,7 @@ import {
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
 import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
+import { projectImportedMessageForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -20,12 +22,90 @@ import {
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
-import { getMediaFileExtension } from "../media-file-extension.ts";
-import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
-import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
+import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
+import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
+import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
-import { normalizeImageContentBlock } from "./message-normalizer-images.ts";
-import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
+import {
+  resolveMessageSender,
+  resolveMessageSenderLabel,
+  type SenderIdentity,
+} from "./sender-label.ts";
+
+function imageDataUrl(data: unknown, mimeType: unknown): string | undefined {
+  return typeof data === "string"
+    ? data.startsWith("data:")
+      ? data
+      : `data:${typeof mimeType === "string" ? mimeType : "image/png"};base64,${data}`
+    : undefined;
+}
+
+function normalizeImageContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "image" }> | undefined {
+  const source = asOptionalRecord(item.source);
+  if (item.type === "image") {
+    const base64Source = source?.type === "base64" && typeof source.data === "string";
+    const image: MessageImageSource = {
+      url: normalizeOptionalString(item.url) ?? normalizeOptionalString(source?.url),
+      dataUrl: imageDataUrl(
+        base64Source ? source.data : item.data,
+        base64Source ? source.media_type : item.mimeType,
+      ),
+      preferData: true,
+      mimeType: readStringField(item, "mimeType") ?? readStringField(source, "media_type"),
+    };
+    for (const key of ["artifactId", "fileName", "openUrl", "alt"] as const) {
+      const value = readStringField(item, key);
+      if (value !== undefined) {
+        image[key] = value;
+      }
+    }
+    for (const key of ["sizeBytes", "width", "height"] as const) {
+      const value = asFiniteNumber(item[key]);
+      if (value !== undefined) {
+        image[key] = value;
+      }
+    }
+    return { type: "image", sources: [image], inlineSlot: true };
+  }
+  if (item.type === "image_url") {
+    return {
+      type: "image",
+      sources: [{ url: normalizeOptionalString(asOptionalRecord(item.image_url)?.url) }],
+    };
+  }
+  if (item.type === "input_image") {
+    return {
+      type: "image",
+      sources: [
+        {
+          url:
+            normalizeOptionalString(item.image_url) ??
+            normalizeOptionalString(asOptionalRecord(item.image_url)?.url),
+        },
+        {
+          url: normalizeOptionalString(source?.url),
+          dataUrl: imageDataUrl(source?.data, source?.media_type),
+          mimeType: readStringField(source, "media_type"),
+        },
+      ],
+    };
+  }
+  if (item.type === "openclaw_pairing_qr") {
+    return {
+      type: "image",
+      sources: [
+        {
+          url: normalizeOptionalString(item.image_url),
+          alt: readStringField(item, "alt"),
+        },
+      ],
+      expiresAtMs: asFiniteNumber(item.expiresAtMs),
+    };
+  }
+  return undefined;
+}
 
 type CanvasPreview = Extract<MessageContentItem, { type: "canvas" }>["preview"];
 type MessageDelivery = { audioAsVoice?: true; replyToCurrent?: true; replyToId?: string };
@@ -55,6 +135,25 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
   };
 }
 
+// Session creation records its agent-written opening as inter-session
+// provenance; the transcript sender stays an opaque id without an identity.
+/** Identifies the agent that wrote a session's opening message. */
+function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIdentity | null {
+  const provenance = asOptionalRecord(message.provenance);
+  const sourceTool = provenance?.sourceTool;
+  if (
+    message.role !== "user" ||
+    provenance?.kind !== "inter_session" ||
+    (sourceTool !== "sessions_create" && sourceTool !== "sessions_spawn")
+  ) {
+    return null;
+  }
+  const agentId = parseAgentSessionKeyParts(
+    readStringField(provenance, "sourceSessionKey") ?? "",
+  )?.agentId;
+  return agentId ? { identity: { type: "agent", id: agentId } } : null;
+}
+
 export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
   const source = asOptionalRecord(value);
   if (!source) {
@@ -70,27 +169,6 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
         ...(label ? { label } : {}),
       }
     : undefined;
-}
-
-function normalizeOmittedMediaContentBlock(
-  item: Record<string, unknown>,
-): Extract<MessageContentItem, { type: "omitted_media" }> | null {
-  if (
-    item.type !== "image" ||
-    item.omitted !== true ||
-    normalizeOptionalString(item.artifactId) !== undefined ||
-    normalizeOptionalString(item.url) !== undefined
-  ) {
-    return null;
-  }
-  const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
-  return {
-    type: "omitted_media",
-    media: {
-      kind: "image",
-      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-    },
-  };
 }
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -218,38 +296,6 @@ const MIME_BY_EXT: Record<string, string> = {
   zip: "application/zip",
 };
 
-function mimeTypeFromUrl(url: string): string | undefined {
-  const ext = getMediaFileExtension(url);
-  return ext ? MIME_BY_EXT[ext] : undefined;
-}
-
-function inferAttachmentKind(url: string): {
-  kind: Extract<MessageContentItem, { type: "attachment" }>["attachment"]["kind"];
-  mimeType?: string;
-  label: string;
-} {
-  const mimeType = mimeTypeFromUrl(url);
-  const inferredKind = mediaKindFromMime(mimeType);
-  const kind =
-    !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
-      ? "document"
-      : inferredKind;
-  const label = (() => {
-    try {
-      if (/^https?:\/\//i.test(url)) {
-        const parsed = new URL(url);
-        const name = parsed.pathname.split("/").pop()?.trim();
-        return name || parsed.hostname || url;
-      }
-    } catch {
-      // Malformed URLs still get a filename label from the original path below.
-    }
-    const name = url.split(/[\\/]/).pop()?.trim();
-    return name || url;
-  })();
-  return { kind, mimeType, label };
-}
-
 function coerceMediaContentBlock(
   item: Record<string, unknown>,
 ): Extract<MessageContentItem, { type: "attachment" }> | null {
@@ -350,59 +396,6 @@ function resolveDeliveryReplyTarget(
       : null;
 }
 
-function expandTextContent(
-  text: string,
-  delivery: MessageDelivery | undefined,
-  projectedCanvasPreviews: readonly CanvasPreview[],
-): MessageContentItem[] {
-  const extracted = extractCanvasShortcodes(text);
-  const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
-  const parts: MessageContentItem[] = [];
-  const audioAsVoice = delivery?.audioAsVoice === true;
-  const replyTarget = resolveDeliveryReplyTarget(delivery);
-  const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
-
-  for (const segment of segments) {
-    if (segment.type === "media") {
-      const inferred = inferAttachmentKind(segment.url);
-      parts.push({
-        type: "attachment",
-        attachment: {
-          url: segment.url,
-          ...inferred,
-          ...(inferred.kind === "audio" && audioAsVoice ? { isVoiceNote: true } : {}),
-        },
-      });
-      continue;
-    }
-
-    if (segment.text) {
-      parts.push({ type: "text", text: segment.text });
-    }
-  }
-  for (const preview of extracted.previews) {
-    if (
-      preview.surface !== "assistant_message" ||
-      projectedCanvasPreviews.some((projected) => canvasPreviewsMatch(preview, projected))
-    ) {
-      continue;
-    }
-    parts.push({
-      type: "canvas",
-      preview: { ...preview, surface: "assistant_message" },
-      rawText: null,
-    });
-  }
-
-  const content = mergeAdjacentTextItems(parts);
-
-  return content.length > 0
-    ? content
-    : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-      ? [{ type: "text", text: parsed.text }]
-      : [];
-}
-
 const normalizedMessages = new WeakMap<object, NormalizedMessage>();
 
 export function normalizeMessage(message: unknown): NormalizedMessage {
@@ -435,30 +428,100 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   let audioAsVoice = false;
   let replyTarget = resolveDeliveryReplyTarget(delivery);
   const normalizeText = (text: string, block = false): MessageContentItem[] => {
-    if (!isAssistantMessage) {
+    if (!isAssistantMessage || asOptionalRecord(m["__openclaw"])?.catalogSource === true) {
       return [{ type: "text", text, ...(block ? { name: undefined, args: undefined } : {}) }];
     }
     audioAsVoice = delivery?.audioAsVoice === true;
-    return expandTextContent(text, delivery, projectedCanvasPreviews);
+    const extracted = extractCanvasShortcodes(text);
+    const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
+    const parts: MessageContentItem[] = [];
+    const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
+
+    for (const segment of segments) {
+      if (segment.type === "media") {
+        const url = segment.url;
+        const ext = getMediaFileExtension(url);
+        const mimeType = ext ? MIME_BY_EXT[ext] : undefined;
+        const inferredKind = mediaKindFromMime(mimeType);
+        const kind =
+          !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+            ? "document"
+            : inferredKind;
+        const label = labelForMediaPath(url);
+        parts.push({
+          type: "attachment",
+          attachment: {
+            url: segment.url,
+            kind,
+            mimeType,
+            label,
+            ...(kind === "audio" && audioAsVoice ? { isVoiceNote: true } : {}),
+          },
+        });
+        continue;
+      }
+
+      if (segment.text) {
+        parts.push({ type: "text", text: segment.text });
+      }
+    }
+    for (const preview of extracted.previews) {
+      if (
+        preview.surface !== "assistant_message" ||
+        projectedCanvasPreviews.some((projected) => canvasPreviewsMatch(preview, projected))
+      ) {
+        continue;
+      }
+      parts.push({
+        type: "canvas",
+        preview: { ...preview, surface: "assistant_message" },
+        rawText: null,
+      });
+    }
+
+    const expandedContent = mergeAdjacentTextItems(parts);
+
+    return expandedContent.length > 0
+      ? expandedContent
+      : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+        ? [{ type: "text", text: parsed.text }]
+        : [];
   };
 
   if (typeof contentRaw === "string") {
     content = normalizeText(contentRaw);
   } else if (contentItems) {
-    content = contentItems.flatMap((value) => {
+    content = contentItems.flatMap((value): MessageContentItem[] => {
       const item = asOptionalRecord(value);
       if (!item) {
         return [];
       }
-      const omittedMedia = normalizeOmittedMediaContentBlock(item);
-      if (omittedMedia) {
-        return [omittedMedia];
+      if (
+        item.type === "image" &&
+        item.omitted === true &&
+        normalizeOptionalString(item.artifactId) === undefined &&
+        normalizeOptionalString(item.url) === undefined
+      ) {
+        const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
+        return [
+          {
+            type: "omitted_media",
+            media: {
+              kind: "image",
+              ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+            },
+          },
+        ];
       }
       const image = normalizeImageContentBlock(item);
       if (image) {
         return [image];
       }
       const type = item.type;
+      if (type === "plugin_view") {
+        const inline = isAssistantMessage ? readPluginInlineViewBlock(item) : undefined;
+        return inline ? [inline] : [];
+      }
       if (type === "clawhub") {
         const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;
         return recommendation ? [recommendation] : [];
@@ -495,10 +558,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (
         text !== undefined &&
         (type === "text" ||
-          (role === "user" && type === "input_text") ||
-          (role === "assistant" && (type === "input_text" || type === "output_text")))
+          (type === "input_text" && (role === "user" || isAssistantMessage)) ||
+          (type === "output_text" && isAssistantMessage))
       ) {
-        return normalizeText(text, true);
+        return isAssistantMessage && item.openclawFallback === true
+          ? []
+          : normalizeText(text, true);
       }
       return [
         {
@@ -525,7 +590,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
-  const metaSender = resolveMessageSender(openClawMeta);
+  const metaSender = resolveAgentOpeningSender(m) ?? resolveMessageSender(openClawMeta);
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];

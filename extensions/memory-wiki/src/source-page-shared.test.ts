@@ -1,24 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createMemoryWikiTestHarness();
-
-const { fsRootMock } = vi.hoisted(() => ({ fsRootMock: vi.fn() }));
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    root: (...args: Parameters<typeof actual.root>) => {
-      fsRootMock(args[0]);
-      return actual.root(...args);
-    },
-  };
-});
+let fsRootMock = vi.spyOn(securityRuntime, "root");
 
 describe("writeImportedSourcePage", () => {
   let suiteRoot: string;
@@ -47,32 +36,29 @@ describe("writeImportedSourcePage", () => {
   }
 
   beforeEach(async () => {
+    fsRootMock = vi.spyOn(securityRuntime, "root");
     suiteRoot = await createTempDir("memory-wiki-source-page-");
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    fsRootMock.mockClear();
+    fsRootMock.mockRestore();
   });
 
   it("falls back when the source mtime is outside the Date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
     const params = importParams({
-      syncKey: "unsafe:source",
       sourceUpdatedAtMs: 8_700_000_000_000_000,
       sourceSize: 11,
-      pagePath: "pages/source.md",
-      group: "unsafe-local",
       buildRendered: (raw, updatedAt) => `updatedAt: ${updatedAt}\n${raw}`,
     });
     await fs.writeFile(params.sourcePath, "source body", "utf8");
     const result = await writeImportedSourcePage(params);
-
-    await expect(fs.readFile(path.join(suiteRoot, "pages/source.md"), "utf8")).resolves.toBe(
+    await expect(fs.readFile(path.join(suiteRoot, params.pagePath), "utf8")).resolves.toBe(
       "updatedAt: 2026-05-01T12:00:00.000Z\nsource body",
     );
-    expect(result).toEqual({ pagePath: "pages/source.md", changed: true, created: true });
+    expect(result).toEqual({ pagePath: params.pagePath, changed: true, created: true });
     expect(params.state.entries[params.syncKey]?.sourceUpdatedAtMs).toBe(8_700_000_000_000_000);
   });
 
@@ -102,7 +88,6 @@ describe("writeImportedSourcePage", () => {
     await fs.rm(path.join(suiteRoot, pagePath));
     fsRootMock.mockClear();
     const result = await writeImportedSourcePage(params);
-
     expect(result).toEqual({ pagePath, changed: true, created: true });
     expect(fsRootMock).toHaveBeenCalledTimes(1);
     await expect(fs.readFile(path.join(suiteRoot, pagePath), "utf8")).resolves.toBe(
@@ -110,71 +95,54 @@ describe("writeImportedSourcePage", () => {
     );
   });
 
-  it.each([
-    { group: "bridge" as const, missingMarker: "opening" as const },
-    { group: "unsafe-local" as const, missingMarker: "closing" as const },
-  ])(
-    "preserves a $group page and tracked state when its human Notes $missingMarker marker is missing",
-    async ({ group, missingMarker }) => {
-      const params = await createPage("first imported body", { group });
-      const { state, sourcePath, pagePath } = params;
-
-      const absPage = path.join(suiteRoot, pagePath);
-      const userNote = `DURABLE ${group.toUpperCase()} ANNOTATION`;
-      const malformedNotes =
-        missingMarker === "opening"
-          ? `${userNote}\n<!-- openclaw:human:end -->`
-          : `<!-- openclaw:human:start -->\n${userNote}`;
-      const existing = (await fs.readFile(absPage, "utf8")).replace(
-        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-        malformedNotes,
-      );
-      await fs.writeFile(absPage, existing, "utf8");
-      const previousState = structuredClone(state);
-      const secondSource = "second imported body must not overwrite human Notes";
-      await fs.writeFile(sourcePath, secondSource, "utf8");
-
-      await expect(
-        writeImportedSourcePage({
-          ...params,
-          sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
-          sourceSize: Buffer.byteLength(secondSource),
-          renderFingerprint: "fp-2",
-        }),
-      ).rejects.toThrow(/human Notes.*missing|missing.*human Notes|openclaw:human:(start|end)/i);
-
-      await expect(fs.readFile(absPage, "utf8")).resolves.toBe(existing);
-      expect(state).toEqual(previousState);
-    },
-  );
-
-  it.each(["bridge", "unsafe-local"] as const)(
-    "preserves a %s page and tracked state when source bytes are malformed UTF-8",
-    async (group) => {
+  it.each(["opening", "closing", "UTF-8"] as const)(
+    "preserves the page and tracked state after invalid %s input",
+    async (invalid) => {
       const original = "Café 🤖 � original";
-      const params = await createPage(original, { sourceUpdatedAtMs: 123, group });
+      const params = await createPage(original, {
+        sourceUpdatedAtMs: 123,
+        group: invalid === "closing" ? "unsafe-local" : "bridge",
+      });
       const { state, sourcePath, pagePath } = params;
-      const pageBefore = await fs.readFile(path.join(suiteRoot, pagePath));
-      expect(pageBefore.toString("utf8")).toContain(original);
-      const stateBefore = structuredClone(state);
-      const malformed = Buffer.from([0xff, 0x0a]);
-      await fs.writeFile(sourcePath, malformed);
+      const target = path.join(suiteRoot, pagePath);
+      let existing = await fs.readFile(target, "utf8");
+      expect(existing).toContain(original);
+      if (invalid !== "UTF-8") {
+        const note = "DURABLE HUMAN ANNOTATION";
+        existing = existing.replace(
+          "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+          invalid === "opening"
+            ? `${note}\n<!-- openclaw:human:end -->`
+            : `<!-- openclaw:human:start -->\n${note}`,
+        );
+        await fs.writeFile(target, existing, "utf8");
+      }
+      const previousState = structuredClone(state);
+      const source =
+        invalid === "UTF-8"
+          ? Buffer.from([0xff, 0x0a])
+          : Buffer.from("second imported body must not overwrite human Notes");
+      await fs.writeFile(sourcePath, source);
       const buildRendered = vi.fn(buildSourcePage);
-
       await expect(
         writeImportedSourcePage({
           ...params,
           sourceUpdatedAtMs: 124,
-          sourceSize: malformed.length,
+          sourceSize: source.length,
+          renderFingerprint: "fp-2",
           buildRendered,
         }),
       ).rejects.toThrow(
-        `Imported source file must be valid UTF-8: ${sourcePath}. Restore the source as valid UTF-8 and retry the sync.`,
+        invalid === "UTF-8"
+          ? `Imported source file must be valid UTF-8: ${sourcePath}. Restore the source as valid UTF-8 and retry the sync.`
+          : /human Notes.*missing|missing.*human Notes|openclaw:human:(start|end)/i,
       );
-      expect(buildRendered).not.toHaveBeenCalled();
-      await expect(fs.readFile(path.join(suiteRoot, pagePath))).resolves.toEqual(pageBefore);
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(malformed);
-      expect(state).toEqual(stateBefore);
+      if (invalid === "UTF-8") {
+        expect(buildRendered).not.toHaveBeenCalled();
+      }
+      await expect(fs.readFile(target)).resolves.toEqual(Buffer.from(existing));
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(source);
+      expect(state).toEqual(previousState);
     },
   );
 });

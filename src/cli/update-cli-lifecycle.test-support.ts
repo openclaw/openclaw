@@ -13,6 +13,7 @@ import {
 import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import * as sqliteHeaderProbe from "../infra/sqlite-header-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
@@ -29,6 +30,7 @@ import { createCommandResult as commandResult } from "../test-utils/npm-spec-ins
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { setupConfigMutationWithRetryMock } from "./update-cli-assertions.test-support.js";
+import { createGitUpdateAfterMutationFixture } from "./update-cli-invocation.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import {
@@ -73,7 +75,6 @@ type UpdateCliLifecycleFixture = {
   baseSnapshot: ConfigFileSnapshot;
   fixtureRoot: string;
   globalNpmConfig: string;
-  initializeExistingUpdateProfile: () => void;
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
   reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
@@ -165,7 +166,12 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         createFileSync(file, { mode: 0o600 }),
       );
     }
-    // Native-service platform simulations do not change the actual SQLite VFS.
+    // Service-platform doubles do not change host SQLite helpers or their Node resolution.
+    const probeSqliteHeaders = sqliteHeaderProbe.probeSqliteDatabaseHeaders;
+    vi.spyOn(sqliteHeaderProbe, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
+      using _ = selectHostPlatform();
+      return probeSqliteHeaders(...args);
+    });
     vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
       mocks.existingHostUri(file, mocks.sqliteHostPlatform),
     );
@@ -346,10 +352,11 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
     mocks.confirm.mockResolvedValue(false);
     mocks.select.mockResolvedValue("stable");
-    vi.mocked(update.updateGitCheckout).mockResolvedValue(update.makeOkUpdateResult());
+    vi.mocked(update.updateGitCheckout).mockImplementation(
+      createGitUpdateAfterMutationFixture().run,
+    );
     fixture.setTty(false);
     fixture.setStdoutTty(false);
-    fixture.initializeExistingUpdateProfile();
     // Keep guard reads on the fixture connection instead of booting snapshots per read.
     openOpenClawStateDatabase();
   });

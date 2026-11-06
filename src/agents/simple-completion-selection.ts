@@ -22,14 +22,9 @@ export type SimpleCompletionSelectionParams = {
     | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
 };
 
-type SimpleCompletionSelectionRequest = {
-  selection: AgentSimpleCompletionSelection;
-  shorthandModelId?: string;
-};
-
 export function resolveSimpleCompletionSelectionRequest(
   params: SimpleCompletionSelectionParams,
-): SimpleCompletionSelectionRequest | null {
+): { selection: AgentSimpleCompletionSelection; shorthandModelId?: string } | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -44,6 +39,7 @@ export function resolveSimpleCompletionSelectionRequest(
           cfg: params.cfg,
           agentId: params.agentId,
           primaryProvider: fallbackRef.provider,
+          primaryModelId: fallbackRef.model,
           ...(params.manifestPlugins
             ? {
                 metadataSnapshot:

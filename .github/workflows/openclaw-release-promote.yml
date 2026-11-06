@@ -342,17 +342,17 @@ jobs:
           path: ${{ runner.temp }}/linux-dispatch.json
           if-no-files-found: warn
 
-  request_windows_gateway_store:
-    name: Request Gateway Microsoft Store publication after activation
+  request_windows_gateway_release:
+    name: Request Gateway MSIX publication after activation
     needs: [publish, finalize]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && needs.publish.outputs.npm_dist_tag == 'latest' && !contains(needs.publish.outputs.release_tag, '-beta.') }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && ((needs.publish.outputs.npm_dist_tag == 'latest' && !contains(needs.publish.outputs.release_tag, '-beta.')) || (needs.publish.outputs.npm_dist_tag == 'beta' && contains(needs.publish.outputs.release_tag, '-beta.'))) }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - name: Checkout exact Gateway Store request tooling
+      - name: Checkout exact Gateway release request tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
@@ -363,8 +363,8 @@ jobs:
         with:
           node-version: "24.22.1"
           package-manager-cache: false
-      - name: Create Gateway Store request token
-        id: store_request_token
+      - name: Create Gateway release request token
+        id: gateway_request_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
@@ -373,19 +373,19 @@ jobs:
           repositories: openclaw
           permission-actions: write
           permission-contents: read
-      - name: Dispatch detached Gateway Store request
+      - name: Dispatch detached Gateway release request
         env:
-          GH_TOKEN: ${{ steps.store_request_token.outputs.token }}
+          GH_TOKEN: ${{ steps.gateway_request_token.outputs.token }}
           RELEASE_TAG: ${{ needs.publish.outputs.release_tag }}
           RELEASE_SHA: ${{ needs.publish.outputs.source_sha }}
-          WINDOWS_GATEWAY_STORE_EVIDENCE: ${{ runner.temp }}/windows-gateway-store.json
-        run: node scripts/windows-gateway-store-release.mjs request
-      - name: Retain Gateway Store dispatch evidence
+          WINDOWS_GATEWAY_RELEASE_EVIDENCE: ${{ runner.temp }}/windows-gateway-release.json
+        run: node scripts/windows-gateway-release.mjs request
+      - name: Retain Gateway release dispatch evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-gateway-store-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/windows-gateway-store.json
+          name: windows-gateway-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-gateway-release.json
           if-no-files-found: warn
 
   publish_windows:
@@ -420,6 +420,9 @@ jobs:
           RELEASE_TAG="$(jq -er '.inputs.tag' <<< "$RELEASE_REQUEST")"
           TARGET_SHA="$(jq -er '.sourceSha' <<< "$RELEASE_REQUEST")"
           PARENT_WORKFLOW_SHA="$(jq -er '.tooling.sha' <<< "$RELEASE_REQUEST")"
+          PARENT_WORKFLOW_FULL_REF="$(jq -er '.tooling.fullRef' <<< "$RELEASE_REQUEST")"
+          RELEASE_PUBLISH_RUN_ID="$(jq -er '.releaseRunId' <<< "$RELEASE_REQUEST")"
+          RELEASE_PUBLISH_RUN_ATTEMPT="$(jq -er '.releaseRunAttempt' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_TAG="$(jq -r '.inputs.windows_node_tag // ""' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_INSTALLER_DIGESTS="$(jq -r '.inputs.windows_node_installer_digests // ""' <<< "$RELEASE_REQUEST")"
           RELEASE_NPM_DIST_TAG="$(jq -er '.inputs.npm_dist_tag' <<< "$RELEASE_REQUEST")"
@@ -429,7 +432,7 @@ jobs:
             '{tag: $tag, sourceTag: $source, installerDigests: $digests, state: "dispatch-failed"}' \
             > "$RUNNER_TEMP/windows-dispatch.json"
           verify_release_tag_target
-          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "$GITHUB_REF")"
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "$PARENT_WORKFLOW_FULL_REF")"
           promote_windows_release_assets
           jq --arg runId "${windows_node_run_id}" '. + {state: "dispatched", childRunId: $runId}' \
             "$RUNNER_TEMP/windows-dispatch.json" > "$RUNNER_TEMP/windows-dispatch.next.json"

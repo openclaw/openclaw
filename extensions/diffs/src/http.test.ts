@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import {
   createDiffStoreHarness,
   ensureCuratedViewerRuntimeForTests,
@@ -25,14 +26,8 @@ beforeAll(async () => {
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP server address");
-  }
-  base = `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  base = `http://127.0.0.1:${port}`;
 });
 
 afterAll(async () => {

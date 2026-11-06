@@ -442,6 +442,19 @@ export async function runNonInteractiveLocalSetup(params: {
   }
 
   if (authChoice !== "skip") {
+    // Setup owns legacy recovery; runtime credential reads remain SQLite-only.
+    const { repairAuthProfileMigration } = await import("../doctor/auth-profile-repair.js");
+    const migration = await repairAuthProfileMigration({
+      cfg: nextConfig,
+      prompter: { shouldRepair: true, confirmAutoFix: async () => true },
+    });
+    nextConfig = migration.config;
+    for (const change of [...migration.storeChanges, ...migration.changes]) {
+      runtime.log(change);
+    }
+    for (const warning of migration.warnings) {
+      runtime.error(`Warning: ${warning}`);
+    }
     // Auth-choice handling is loaded only when needed so skip-only onboarding
     // avoids provider plugin discovery and credential helper imports.
     const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");

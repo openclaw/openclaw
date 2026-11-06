@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -83,7 +83,7 @@ it.each([
       personId ? "[data-activity-identity]" : ".activity-pulse",
     )!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
-      "32px",
+      width <= 640 ? "38px" : "32px",
     );
     const top = content.getBoundingClientRect().top;
     expect(content.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -134,11 +134,13 @@ it.each([
       expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
       expect(retryButton()?.disabled).toBe(true);
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
-      pending.reject(new Error("Retry failed"));
+      const report = vi.spyOn(console, "error").mockImplementation(() => {});
+      onTestFinished(() => report.mockRestore());
+      pending.reject(new TypeError("Cannot read properties of undefined (reading 'map')"));
       await retryCompletion;
-      expect(controller.error).toBe("Retry failed");
+      expect(controller.error).toBe("Request failed");
       expect(retryButton()?.disabled).toBe(false);
-      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry failed");
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Request failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const recovered = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(recovered.promise);

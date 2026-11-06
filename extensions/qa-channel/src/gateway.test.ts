@@ -1,9 +1,10 @@
-import { createServer } from "node:http";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
+import { pollQaBus } from "./bus-client.js";
 import { startQaGatewayAccount } from "./gateway.js";
+import { jsonServer as json } from "./http.test-support.js";
 import { handleQaInbound } from "./inbound.js";
 import type { ResolvedQaChannelAccount } from "./types.js";
 
@@ -37,87 +38,60 @@ function startGateway(
   });
 }
 
-async function startJsonServer(
-  handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
-) {
-  const server = createServer((req, res) => {
-    const response = handler({ url: req.url });
-    res.writeHead(response.statusCode ?? 200, {
-      "content-type": "application/json; charset=utf-8",
-    });
-    res.end(response.body);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server failed to bind");
-  }
-
+function createInboundMessage(text: string, index = 0) {
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    async stop() {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    id: `msg-${index + 1}`,
+    accountId: "default",
+    direction: "inbound" as const,
+    conversation: { id: "alice", kind: "direct" as const },
+    senderId: "alice",
+    text,
+    timestamp: Date.now(),
+    reactions: [],
+    ...(text === "/stop" ? { nativeCommand: { name: "stop" } } : {}),
   };
 }
 
 describe("qa-channel gateway", () => {
-  const stops: Array<() => Promise<void>> = [];
+  function serveMessages(...texts: string[]) {
+    return json(() => ({
+      body: JSON.stringify({
+        cursor: texts.length,
+        events: texts.map((text, index) => ({
+          cursor: index + 1,
+          kind: "inbound-message",
+          accountId: "default",
+          message: createInboundMessage(text, index),
+        })),
+      }),
+    }));
+  }
+  async function busWithMessages(...texts: string[]) {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    onTestFinished(() => bus.stop());
+    const messages = texts.map((text) =>
+      state.addInboundMessage({
+        accountId: "default",
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        text,
+        ...(text === "/stop" ? { nativeCommand: { name: "stop" } } : {}),
+      }),
+    );
+    return { state, bus, messages };
+  }
+  const handledTexts = () =>
+    vi.mocked(handleQaInbound).mock.calls.map(([params]) => params.message.text);
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.mocked(handleQaInbound).mockReset().mockResolvedValue(undefined);
-    await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
   it("lets native commands bypass the ordered inbound queue", async () => {
     const controller = new AbortController();
-    const message = {
-      id: "msg-1",
-      accountId: "default",
-      direction: "inbound" as const,
-      conversation: { id: "alice", kind: "direct" as const },
-      senderId: "alice",
-      text: "hello",
-      timestamp: Date.now(),
-      reactions: [],
-    };
-    const server = await startJsonServer(() => ({
-      body: JSON.stringify({
-        cursor: 3,
-        events: [
-          { cursor: 1, kind: "inbound-message", accountId: "default", message },
-          {
-            cursor: 2,
-            kind: "inbound-message",
-            accountId: "default",
-            message: { ...message, id: "msg-2", text: "follow-up" },
-          },
-          {
-            cursor: 3,
-            kind: "inbound-message",
-            accountId: "default",
-            message: {
-              ...message,
-              id: "msg-3",
-              text: "/stop",
-              nativeCommand: { name: "stop" },
-            },
-          },
-        ],
-      }),
-    }));
-    stops.push(() => server.stop());
-    let releaseFirst: (() => void) | undefined;
-    const firstPending = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const baseUrl = await serveMessages("hello", "follow-up", "/stop");
+    const { promise: firstPending, resolve: releaseFirst } = Promise.withResolvers<void>();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message: inbound }) => {
       if (inbound.text === "hello") {
         await firstPending;
@@ -127,36 +101,35 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    const gateway = startGateway(server.baseUrl, { abortSignal: controller.signal });
+    const gateway = startGateway(baseUrl, { abortSignal: controller.signal });
 
     await vi.waitFor(() => {
-      const handled = vi.mocked(handleQaInbound).mock.calls.map(([params]) => params.message.text);
+      const handled = handledTexts();
       expect(handled).toContain("hello");
       expect(handled).toContain("/stop");
       expect(handled).not.toContain("follow-up");
     });
     releaseFirst?.();
     await gateway;
-    const handled = vi.mocked(handleQaInbound).mock.calls.map(([params]) => params.message.text);
+    const handled = handledTexts();
     expect(handled).toHaveLength(3);
     expect(handled).toContain("/stop");
     expect(handled.indexOf("hello")).toBeLessThan(handled.indexOf("follow-up"));
   });
 
   it("clears running status when polling fails", async () => {
-    const server = await startJsonServer(() => ({
+    const baseUrl = await json(() => ({
       statusCode: 500,
       body: JSON.stringify({ error: "qa bus unavailable" }),
     }));
-    stops.push(() => server.stop());
     const setStatus = vi.fn();
 
-    await expect(startGateway(server.baseUrl, { setStatus })).rejects.toThrow("qa bus unavailable");
+    await expect(startGateway(baseUrl, { setStatus })).rejects.toThrow("qa bus unavailable");
 
     expect(setStatus.mock.calls.map(([status]) => status)).toEqual([
       {
         accountId: "default",
-        baseUrl: server.baseUrl,
+        baseUrl,
         configured: true,
         enabled: true,
         running: true,
@@ -177,15 +150,57 @@ describe("qa-channel gateway", () => {
     ]);
   });
 
+  it("joins followup tasks created while ordered intake drains after abort", async () => {
+    const controller = new AbortController();
+    const baseUrl = await serveMessages("first", "second");
+    const firstStarted = Promise.withResolvers<void>();
+    const first = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    vi.mocked(handleQaInbound).mockImplementation(
+      async ({ message, onFollowupQueued, turnAdoptionLifecycle }) => {
+        if (message.text === "first") {
+          firstStarted.resolve();
+          await first.promise;
+        } else {
+          onFollowupQueued?.();
+          secondStarted.resolve();
+          await second.promise;
+        }
+        expect(turnAdoptionLifecycle?.abortSignal?.aborted).toBe(false);
+      },
+    );
+    const gateway = startGateway(baseUrl, { abortSignal: controller.signal });
+    try {
+      await firstStarted.promise;
+      controller.abort();
+      first.resolve();
+      await secondStarted.promise;
+      expect(
+        await Promise.race([
+          gateway.then(() => "stopped"),
+          new Promise((resolve) => {
+            setImmediate(() => resolve("waiting"));
+          }),
+        ]),
+      ).toBe("waiting");
+    } finally {
+      first.resolve();
+      second.resolve();
+      controller.abort();
+      await gateway;
+    }
+    expect(handledTexts()).toEqual(["first", "second"]);
+  });
+
   it("publishes ready after the first successful poll", async () => {
     const controller = new AbortController();
-    const server = await startJsonServer(() => ({
+    const baseUrl = await json(() => ({
       body: JSON.stringify({ cursor: 0, events: [] }),
     }));
-    stops.push(() => server.stop());
     const setStatus = vi.fn();
 
-    const run = startGateway(server.baseUrl, { abortSignal: controller.signal, setStatus });
+    const run = startGateway(baseUrl, { abortSignal: controller.signal, setStatus });
 
     await vi.waitFor(() =>
       expect(setStatus).toHaveBeenCalledWith({
@@ -204,67 +219,20 @@ describe("qa-channel gateway", () => {
 
   it("stops the ordered inbound queue after the first dispatch failure", async () => {
     const controller = new AbortController();
-    const message = {
-      id: "msg-1",
-      accountId: "default",
-      direction: "inbound" as const,
-      conversation: { id: "alice", kind: "direct" as const },
-      senderId: "alice",
-      text: "first",
-      timestamp: Date.now(),
-      reactions: [],
-    };
-    const server = await startJsonServer(() => ({
-      body: JSON.stringify({
-        cursor: 2,
-        events: [
-          { cursor: 1, kind: "inbound-message", accountId: "default", message },
-          {
-            cursor: 2,
-            kind: "inbound-message",
-            accountId: "default",
-            message: { ...message, id: "msg-2", text: "second" },
-          },
-        ],
-      }),
-    }));
-    stops.push(() => server.stop());
+    const baseUrl = await serveMessages("first", "second");
     vi.mocked(handleQaInbound).mockImplementationOnce(async () => {
       controller.abort();
       throw new Error("inbound failed");
     });
 
-    await expect(startGateway(server.baseUrl, { abortSignal: controller.signal })).rejects.toThrow(
+    await expect(startGateway(baseUrl, { abortSignal: controller.signal })).rejects.toThrow(
       "inbound failed",
     );
     expect(handleQaInbound).toHaveBeenCalledTimes(1);
   });
 
-  it("acknowledges only the contiguous prefix when dispatches finish out of order", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
-    const messages = [
-      state.addInboundMessage({
-        accountId: "default",
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        text: "first",
-      }),
-      state.addInboundMessage({
-        accountId: "default",
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        text: "second",
-      }),
-      state.addInboundMessage({
-        accountId: "default",
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-        text: "/stop",
-        nativeCommand: { name: "stop" },
-      }),
-    ];
+  it("replays only unfinished input after out-of-order completion", async () => {
+    const { state, bus, messages } = await busWithMessages("first", "second", "/stop");
     let pollCount = 0;
     bus.server.on("request", (request) => {
       if (request.url === "/v1/poll") {
@@ -272,10 +240,7 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    let rejectSecond = (_error: Error) => {};
-    const secondAttempt = new Promise<void>((_resolve, reject) => {
-      rejectSecond = reject;
-    });
+    const { promise: secondAttempt, reject: rejectSecond } = Promise.withResolvers<void>();
     let restarting = false;
     const recoveredMessageIds: string[] = [];
     const restartedController = new AbortController();
@@ -285,7 +250,7 @@ describe("qa-channel gateway", () => {
       }
       if (restarting) {
         recoveredMessageIds.push(message.id);
-        if (recoveredMessageIds.length === messages.length - 1) {
+        if (recoveredMessageIds.length === 1) {
           restartedController.abort();
         }
       }
@@ -303,7 +268,11 @@ describe("qa-channel gateway", () => {
     });
     rejectSecond(new Error("inbound failed"));
     await expect(firstGateway).rejects.toThrow("inbound failed");
-    expect(state.getAcknowledgedPollCursor("default")).toBe(1);
+    expect(state.hasCompletedInboundEvent("default", 1)).toBe(true);
+
+    expect(state.hasCompletedInboundEvent("default", 2)).toBe(false);
+    expect(state.hasCompletedInboundEvent("default", 3)).toBe(true);
+    expect(state.poll().events.map((event) => event.cursor)).toEqual([2]);
 
     restarting = true;
     const restartedGateway = startGateway(bus.baseUrl, {
@@ -312,9 +281,7 @@ describe("qa-channel gateway", () => {
     });
     try {
       await vi.waitFor(() => {
-        expect(new Set(recoveredMessageIds)).toEqual(
-          new Set(messages.slice(1).map((message) => message.id)),
-        );
+        expect(new Set(recoveredMessageIds)).toEqual(new Set([messages[1]!.id]));
       });
     } finally {
       restartedController.abort();
@@ -323,24 +290,173 @@ describe("qa-channel gateway", () => {
   });
 
   it("records a final successful dispatch before the gateway stops", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
-    const message = state.addInboundMessage({
-      accountId: "default",
-      conversation: { id: "alice", kind: "direct" },
-      senderId: "alice",
-      text: "stop after delivery",
-    });
+    const { state, bus, messages } = await busWithMessages("stop after delivery");
     const controller = new AbortController();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message: inbound }) => {
-      if (inbound.id === message.id) {
+      if (inbound.id === messages[0]?.id) {
         controller.abort();
       }
     });
 
     await startGateway(bus.baseUrl, { abortSignal: controller.signal, pollTimeoutMs: 10 });
 
-    expect(state.getAcknowledgedPollCursor("default")).toBe(1);
+    expect(state.hasCompletedInboundEvent("default", 1)).toBe(true);
+  });
+
+  it("confirms adopted input at the bus before its handler completes", async () => {
+    const { state, bus } = await busWithMessages("long-running input");
+    const controller = new AbortController();
+    const adopted = Promise.withResolvers<void>();
+    const handler = Promise.withResolvers<void>();
+    let handlerCompleted = false;
+    vi.mocked(handleQaInbound).mockImplementation(async ({ turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onAdopted();
+      adopted.resolve();
+      await handler.promise;
+      handlerCompleted = true;
+    });
+    const gateway = startGateway(bus.baseUrl, {
+      abortSignal: controller.signal,
+      pollTimeoutMs: 10,
+    });
+    try {
+      await adopted.promise;
+      const restartedPoll = await pollQaBus({
+        baseUrl: bus.baseUrl,
+        accountId: "default",
+        cursor: 0,
+        timeoutMs: 0,
+      });
+      expect(restartedPoll.events).toEqual([]);
+      expect(state.hasCompletedInboundEvent("default", 1)).toBe(false);
+      expect(handlerCompleted).toBe(false);
+    } finally {
+      handler.resolve();
+      controller.abort();
+      await gateway;
+    }
+    expect(state.hasCompletedInboundEvent("default", 1)).toBe(true);
+  });
+
+  it("does not replay an adopted native control behind an unadopted input", async () => {
+    const { state, bus } = await busWithMessages("deferred", "/stop");
+    const controller = new AbortController();
+    const controlAdopted = Promise.withResolvers<void>();
+    const control = Promise.withResolvers<void>();
+    const input = Promise.withResolvers<void>();
+    vi.mocked(handleQaInbound).mockImplementation(async ({ message, turnAdoptionLifecycle }) => {
+      if (!turnAdoptionLifecycle) {
+        throw new Error("missing input adoption lifecycle");
+      }
+      if (message.text === "deferred") {
+        await input.promise;
+        return;
+      }
+      await turnAdoptionLifecycle.onAdopted();
+      controlAdopted.resolve();
+      await control.promise;
+    });
+    const gateway = startGateway(bus.baseUrl, {
+      abortSignal: controller.signal,
+      pollTimeoutMs: 10,
+    });
+    const stopped = gateway.catch((error: unknown) => error);
+    const interrupt = () => {
+      controller.abort();
+      input.reject(new Error("interrupted"));
+      control.reject(new Error("interrupted"));
+    };
+    try {
+      await controlAdopted.promise;
+      const restartedPoll = await pollQaBus({
+        baseUrl: bus.baseUrl,
+        accountId: "default",
+        cursor: 0,
+        timeoutMs: 0,
+      });
+      expect(restartedPoll.events.map((event) => event.cursor)).toEqual([1]);
+      expect([1, 2].map((cursor) => state.hasCompletedInboundEvent("default", cursor))).toEqual([
+        false,
+        false,
+      ]);
+      interrupt();
+      expect(await stopped).toEqual(new Error("interrupted"));
+
+      const restartedController = new AbortController();
+      const recoveredTexts: string[] = [];
+      vi.mocked(handleQaInbound).mockImplementation(async ({ message }) => {
+        recoveredTexts.push(message.text);
+        restartedController.abort();
+      });
+      await startGateway(bus.baseUrl, {
+        abortSignal: restartedController.signal,
+        pollTimeoutMs: 10,
+      });
+      expect(recoveredTexts).toEqual(["deferred"]);
+    } finally {
+      interrupt();
+      await stopped;
+    }
+  });
+
+  it.each([
+    { failure: "after adoption", replayed: false, error: "inbound failed" },
+    { failure: "abandoned input", replayed: true, error: "QA input abandoned before adoption" },
+  ])("preserves transport custody: $failure", async ({ failure, replayed, error }) => {
+    const { state, bus } = await busWithMessages("failing input");
+    vi.mocked(handleQaInbound).mockImplementation(async ({ turnAdoptionLifecycle }) => {
+      if (failure === "abandoned input") {
+        await turnAdoptionLifecycle?.onAbandoned?.();
+        return;
+      }
+      if (failure === "after adoption") {
+        await turnAdoptionLifecycle?.onAdopted();
+      }
+      throw new Error("inbound failed");
+    });
+
+    await expect(startGateway(bus.baseUrl)).rejects.toThrow(error);
+    expect(state.poll().events.map((event) => event.cursor)).toEqual(replayed ? [1] : []);
+    expect(state.hasCompletedInboundEvent("default", 1)).toBe(false);
+  });
+
+  it("rejects adoption when the bus cannot confirm acknowledgement", async () => {
+    let unavailable = false;
+    const baseUrl = await json(() =>
+      unavailable
+        ? {
+            statusCode: 503,
+            body: JSON.stringify({ error: "acknowledgement unavailable" }),
+          }
+        : {
+            body: JSON.stringify({
+              cursor: 1,
+              events: [
+                {
+                  cursor: 1,
+                  kind: "inbound-message",
+                  accountId: "default",
+                  message: createInboundMessage("failing acknowledgement"),
+                },
+              ],
+            }),
+          },
+    );
+    let adopted = false;
+    let adoptionError: unknown;
+    vi.mocked(handleQaInbound).mockImplementation(async ({ turnAdoptionLifecycle }) => {
+      unavailable = true;
+      try {
+        await turnAdoptionLifecycle?.onAdopted();
+        adopted = true;
+      } catch (error) {
+        adoptionError = error;
+        throw error;
+      }
+    });
+
+    await expect(startGateway(baseUrl)).rejects.toThrow("acknowledgement unavailable");
+    expect(adoptionError).toEqual(new Error("acknowledgement unavailable"));
+    expect(adopted).toBe(false);
   });
 });

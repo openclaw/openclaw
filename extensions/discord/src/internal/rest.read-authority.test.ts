@@ -26,6 +26,7 @@ function authority(kind: AuthorityKind = "read") {
   const method = kind === "read" ? "get" : "put";
   const path = kind === "read" ? "/channels/100/messages" : "/channels/100/pins/200";
   return {
+    signal: source.signal,
     revoke: () => source.abort(new Error(`${kind} authority revoked`)),
     run,
     request: (client: RequestClient) => run(() => client[method](path)),
@@ -128,7 +129,7 @@ it("settles an already-dispatched PUT after source authority closes", async () =
     dispatched.resolve();
     return response.promise;
   });
-  const client = new RequestClient(token, { fetch });
+  const client = new RequestClient(token, { fetch, callerSignal: caller.signal });
   const pending = caller.request(client);
   try {
     await Promise.race([dispatched.promise, pending]);

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
 } from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
+import { workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -235,7 +236,7 @@ test "$PWD" = "$OPENCLAW_SOURCE_TREE_PATH"
 test "$PWD" = "$OPENCLAW_WORKTREE_PATH"
 mkdir build
 printf '%s\\n' "$HOME" > build/home
-printf '#!/bin/sh\\ncat %s/input.txt\\n' "$PWD" > build/read-source
+printf '#!/bin/sh\\ncat "%s/input.txt"\\n' "$PWD" > build/read-source
 chmod +x build/read-source
 printf 'setup\\n' >> "$HOME/count"
 `,
@@ -276,28 +277,9 @@ printf 'setup\\n' >> "$HOME/count"
     expect(manifest.entries.some((entry) => entry.path.startsWith("build/"))).toBe(false);
     const second = await f.preparedOperation();
     f.runScript.mockClear();
-    const slowVerification = vi.fn<Parameters<typeof runProjectScriptWithGitProbe>[2]>(
-      (args, options) => {
-        if (args[2] === "fsck" && (options.timeout ?? Infinity) < 45_000) {
-          return {
-            pid: 0,
-            output: [],
-            stdout: "",
-            stderr: "",
-            status: null,
-            signal: "SIGTERM" as const,
-            error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
-          };
-        }
-        return undefined;
-      },
-    );
-    f.runScript.mockImplementationOnce((script) =>
-      runProjectScriptWithGitProbe(script, f.home, slowVerification),
-    );
     expect(result.captureRequired).toBe(true);
     const reused = await second.project.prepare(f);
-    expect(reused).toEqual({
+    expect(reused).toMatchObject({
       seedKey: result.seedKey,
       preparedWorkspace: result.preparedWorkspace,
       cacheHit: true,
@@ -305,7 +287,6 @@ printf 'setup\\n' >> "$HOME/count"
     expect(reused.captureRequired).toBeUndefined();
     second.close();
     expect(f.runScript).toHaveBeenCalledTimes(1);
-    expect(slowVerification.mock.calls.some(([args]) => args[2] === "fsck")).toBe(true);
     expect(await readText(prepared.homeDir, "count")).toBe("setup\n");
     expect(f.upload).toHaveBeenCalledTimes(1);
     await fs.writeFile(path.join(prepared.workspaceDir, "linked-input"), "session edit\n");
@@ -331,7 +312,7 @@ printf 'setup\\n' >> "$HOME/count"
       const operation = await f.preparedOperation();
       f.runScript.mockImplementationOnce((script) =>
         runProjectScriptWithGitProbe(script, f.home, (args) =>
-          args[2] === "fsck"
+          args[2] === "rev-parse"
             ? {
                 pid: 0,
                 output: [],
@@ -345,7 +326,7 @@ printf 'setup\\n' >> "$HOME/count"
         ),
       );
       await expect(operation.project.prepare(f)).rejects.toThrow(
-        new Error(`Prepared project Git verification failed (git fsck: ${detail})`),
+        new Error(`Prepared project Git verification failed (git rev-parse: ${detail})`),
       );
       expect(operation.getPreparedWorkspace()).toBeUndefined();
       operation.close();
@@ -358,7 +339,16 @@ printf 'setup\\n' >> "$HOME/count"
     const completed = (await prepare(f)).preparedWorkspace!;
     const replay = await f.preparedOperation();
     f.runScript.mockClear();
-    await replay.project.inspectPreparedWorkspace!({ runScript: f.runScript });
+    const recordRecipePreparation = vi.fn();
+    await replay.project.inspectPreparedWorkspace!({
+      runScript: f.runScript,
+      recordRecipePreparation,
+    });
+    expect(recordRecipePreparation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseDurationsMs: expect.objectContaining({ retainedManifest: expect.any(Number) }),
+      }),
+    );
     expect(replay.getPreparedWorkspace()).toEqual(completed);
     expect(f.runScript).toHaveBeenCalledTimes(1);
     expect(f.upload).toHaveBeenCalledTimes(1);
@@ -442,6 +432,10 @@ cat input.txt >> "$HOME/count"
     await requireGit(f.repository, ["commit", "--quiet", "-m", "bulk A"]);
     const a = await snapshot(f.repository);
     const preparedA = (await prepare(f, { project: a })).preparedWorkspace!;
+    // The copied index must match the copied files, or the next forced checkout rewrites all of them.
+    await requireGit(preparedA.workspaceDir, ["diff-files", "--quiet"]);
+    const unchangedFile = path.join(preparedA.workspaceDir, "bulk.bin");
+    const unchangedIdentity = await fs.stat(unchangedFile);
     await fs.writeFile(path.join(preparedA.workspaceDir, "build/retained"), "retained-build-A");
     await fs.writeFile(path.join(preparedA.homeDir, "cached"), "retained-home-A");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
@@ -459,7 +453,7 @@ cat input.txt >> "$HOME/count"
       }),
     );
     const preparedB = (await prepare(f, { project: b, key: "b".repeat(64) })).preparedWorkspace!;
-    expect(retainedChecks).toEqual([a.baseCommit]);
+    expect(retainedChecks).toEqual([]);
     expect(preparedB).toMatchObject({
       workspaceDir: preparedA.workspaceDir,
       homeDir: preparedA.homeDir,
@@ -468,6 +462,7 @@ cat input.txt >> "$HOME/count"
     expect(preparedB.preparationKey).not.toBe(preparedA.preparationKey);
     expect(preparedB.sourceManifestRef).not.toBe(preparedA.sourceManifestRef);
     expect(await requireGit(preparedB.workspaceDir, ["rev-parse", "HEAD"])).toBe(b.baseCommit);
+    expect((await fs.stat(unchangedFile)).ino).toBe(unchangedIdentity.ino);
     expect(await readText(preparedB.workspaceDir, "input.txt")).toBe("changed B\n");
     expect(await readText(preparedB.workspaceDir, "generated")).toBe("tracked B\n");
     expect(await readText(preparedB.workspaceDir, "build/retained")).toBe("retained-build-A");
@@ -481,7 +476,7 @@ cat input.txt >> "$HOME/count"
     expect(await readText(coldB.workspaceDir, "generated")).toBe("tracked B\n");
     expect(await readText(coldB.homeDir, "count")).toBe("changed B\n");
     expect((await prepare(f, { project: a })).preparedWorkspace).toEqual(preparedA);
-    expect(retainedChecks).toEqual([a.baseCommit, b.baseCommit]);
+    expect(retainedChecks).toEqual([]);
     expect(f.uploadBytes).toHaveLength(2);
     expect(await readText(preparedA.homeDir, "count")).toBe(
       "prepared base\nchanged B\nprepared base\n",
@@ -564,6 +559,21 @@ cat input.txt >> "$HOME/count"
     expect(completed.entries.some((entry) => entry.path === "generated/result")).toBe(true);
     expect(await readText(f.seed, "input.txt")).toBe("prepared base\n");
     expect(await readText(a.workspaceDir, "input.txt")).toBe("prepared base\nbuilt\n");
+    const savedHashes = JSON.parse(
+      await readText(
+        a.homeDir,
+        ".openclaw-worker",
+        "manifests",
+        `${a.preparedManifestRef.slice(7)}.memo`,
+      ),
+    );
+    expect(savedHashes).toContainEqual([
+      workspaceStatIdentity(
+        "worker",
+        await fs.stat(path.join(a.workspaceDir, "input.txt"), { bigint: true }),
+      ),
+      createHash("sha256").update("prepared base\nbuilt\n").digest("hex"),
+    ]);
     expect((await prepare(f)).preparedWorkspace).toEqual(a);
     expect(await readText(a.homeDir, "count")).toBe("prepared base\nbuilt\n");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
@@ -598,7 +608,7 @@ cat input.txt >> "$HOME/count"
   });
 
   it.each(["missing", "corrupt"])(
-    "refuses a %s retained object store before transferring B",
+    "refuses a %s retained Git head before transferring B",
     async (damage) => {
       const f = await fixture();
       const prepared = (await prepare(f)).preparedWorkspace!;
@@ -614,7 +624,7 @@ cat input.txt >> "$HOME/count"
         await fs.rm(pack);
       } else {
         const bytes = await fs.readFile(pack);
-        bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 1, bytes.length - 1);
+        bytes.writeUInt8(bytes.readUInt8(0) ^ 1, 0);
         await fs.chmod(pack, 0o600);
         await fs.writeFile(pack, bytes);
       }

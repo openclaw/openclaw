@@ -1,12 +1,5 @@
 import { bucketRelativeTimeMs } from "@openclaw/normalization-core";
 
-type FormatTimeAgoOptions = {
-  /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
-  suffix?: boolean;
-  /** Return value for invalid/null/negative input. Default: "unknown" */
-  fallback?: string;
-};
-
 /**
  * Format a duration (in ms) as a human-readable relative time.
  *
@@ -17,7 +10,12 @@ type FormatTimeAgoOptions = {
  */
 export function formatTimeAgo(
   durationMs: number | null | undefined,
-  options?: FormatTimeAgoOptions,
+  options?: {
+    /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
+    suffix?: boolean;
+    /** Return value for invalid/null/negative input. Default: "unknown" */
+    fallback?: string;
+  },
 ): string {
   const suffix = options?.suffix !== false;
   const fallback = options?.fallback ?? "unknown";
@@ -26,15 +24,14 @@ export function formatTimeAgo(
     return fallback;
   }
 
-  const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.round(totalSeconds / 60);
+  const minutes = Math.round(durationMs / 60_000);
 
   if (minutes < 1) {
-    return suffix ? "just now" : `${totalSeconds}s`;
+    return suffix ? "just now" : `${Math.round(durationMs / 1000)}s`;
   }
-  const hours = Math.round(minutes / 60);
-  const label =
-    minutes < 60 ? `${minutes}m` : hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+  const { value, unit } = bucketRelativeTimeMs(durationMs);
+  // CLI ages promote to minutes before the localized timestamp's sub-minute cutoff.
+  const label = unit === "second" ? `${minutes}m` : `${value}${unit[0]}`;
   return suffix ? `${label} ago` : label;
 }
 

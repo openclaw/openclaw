@@ -21,6 +21,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readNextTranscriptSeq } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
+  TRANSCRIPT_PAYLOAD_COLUMNS,
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
   transcriptEventWithoutCustomDataBytesSql,
@@ -137,22 +138,7 @@ export function copyRetainedTranscriptPayload(
         database.db,
         db
           .insertInto("transcript_events")
-          .columns([
-            "session_id",
-            "seq",
-            "event_json",
-            "event_zstd",
-            "event_utf8_bytes",
-            "navigation_json",
-            "navigation_type",
-            "navigation_custom_type",
-            "navigation_display",
-            "message_role",
-            "navigation_last_type",
-            "navigation_last_custom_type",
-            "navigation_valid",
-            "created_at",
-          ])
+          .columns(TRANSCRIPT_PAYLOAD_COLUMNS)
           .expression(
             db
               .selectFrom("transcript_events")

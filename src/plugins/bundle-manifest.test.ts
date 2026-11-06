@@ -1,7 +1,7 @@
 /** Tests bundle manifest parsing for Agent, Codex, Claude, Cursor, and OpenClaw formats. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -27,10 +27,7 @@ function expectLoadedManifest(
   bundleFormat: "agent" | "codex" | "claude" | "cursor",
 ) {
   const result = loadBundleManifest({ rootDir, bundleFormat });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("expected bundle manifest to load");
-  }
+  assert(result.ok);
   return result.manifest;
 }
 
@@ -243,27 +240,17 @@ describe("bundle manifest parsing", () => {
   });
 
   it.each([
-    {
-      name: "wrong schema falls through to native entry detection",
-      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
-      files: { "index.ts": "export default {}" },
-      expected: null,
-    },
-    {
-      name: "missing schema falls through to manifestless Claude markers",
-      manifest: { name: "not-agent" },
-      files: { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
-      expected: "claude",
-    },
-    {
-      name: "wrong schema without fallback markers is not a bundle",
-      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
-      files: {},
-      expected: null,
-    },
-  ])("$name", ({ manifest, files, expected }) => {
+    ["native entry", "wrong", { "index.ts": "export default {}" }, null],
+    [
+      "Claude markers",
+      undefined,
+      { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
+      "claude",
+    ],
+    ["no markers", "wrong", {}, null],
+  ] as const)("falls through invalid Agent schema to %s", (_name, $schema, files, expected) => {
     const rootDir = fixture({
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: manifest,
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "not-agent", $schema },
       ...files,
     });
 
@@ -358,4 +345,47 @@ describe("OpenAI packaged onboarding skill", () => {
       );
     }
   });
+});
+
+describe("bundle recommended prompt presentation", () => {
+  it.each(["codex", "agent"] as const)(
+    "normalizes %s author prompts without loading runtime",
+    (bundleFormat) => {
+      const presentation = {
+        interface: {
+          defaultPrompt: ["  Plan  my week.\nPrioritize.  ", "Compare.", "😀".repeat(128)],
+        },
+      };
+      const rootDir = fixture({
+        [bundleFormat === "codex"
+          ? CODEX_BUNDLE_MANIFEST_RELATIVE_PATH
+          : AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "community-planner",
+          ...(bundleFormat === "agent"
+            ? { $schema: AGENT_BUNDLE_MANIFEST_SCHEMA, extensions: { "com.openai": presentation } }
+            : presentation),
+        },
+      });
+      const expected = ["Plan my week. Prioritize.", "Compare.", "😀".repeat(128)];
+      expect(expectLoadedManifest(rootDir, bundleFormat).recommendedPrompts).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["  Plan  my week.  ", ["Plan my week."]],
+    [["one", "two", "three", "four"], undefined],
+    [["valid", " "], undefined],
+    [["valid", "😀".repeat(129)], undefined],
+  ])(
+    "adapts legacy Codex prompt strings and ignores invalid lists whole: %j",
+    (defaultPrompt, expected) => {
+      const rootDir = fixture({
+        [CODEX_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          name: "community-planner",
+          interface: { defaultPrompt },
+        },
+      });
+      expect(expectLoadedManifest(rootDir, "codex").recommendedPrompts).toEqual(expected);
+    },
+  );
 });

@@ -45,10 +45,7 @@ beforeEach(() => {
 it("provisions explicit main through createAgent on a fresh install", async () => {
   const model = "openai/gpt-5.5";
   const result = await ensureAgent({
-    config: {
-      agents: { defaults: { model } },
-      gateway: { mode: "local" },
-    },
+    config: { agents: { defaults: { model } }, gateway: { mode: "local" } },
   });
 
   expect(mocks.createAgent.mock.calls[0]?.[0]).toMatchObject({
@@ -68,15 +65,15 @@ it("provisions explicit main through createAgent on a fresh install", async () =
 });
 
 it("preserves an explicit imported candidate roster", async () => {
-  const config = mainConfig;
-
-  await expect(ensureAgent({ config, preserveCandidateRoster: true })).resolves.toEqual({
-    config,
-    configBase: config,
-    agentId: "main",
-    bootstrapPending: false,
-    createdAgent: false,
-  });
+  await expect(ensureAgent({ config: mainConfig, preserveCandidateRoster: true })).resolves.toEqual(
+    {
+      config: mainConfig,
+      configBase: mainConfig,
+      agentId: "main",
+      bootstrapPending: false,
+      createdAgent: false,
+    },
+  );
   expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
   expect(mocks.createAgent).not.toHaveBeenCalled();
 });

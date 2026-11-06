@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../../../config/sessions/internal-session-key.js";
@@ -22,6 +21,7 @@ import {
 import { assertAgentSessionWriteAdmission } from "../../../sessions/session-agent-work-admission.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { AsyncContext } from "../../../shared/async-context.js";
 import {
   resolveExplicitIncognitoAgentSqliteTarget,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -45,7 +45,7 @@ type PersistedSessionCapabilityEntry = Pick<
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;
-};
+} & { clientCapabilities?: string[] };
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {
@@ -208,14 +208,30 @@ class SessionCapabilityReadRequired extends Error {
   }
 }
 
-const preparedReads = new AsyncLocalStorage<{
+class SessionCapabilityRefreshRequired extends SessionCapabilityReadRequired {
+  constructor(query: SessionCapabilityRead, cause: Error) {
+    super(query);
+    this.name = "SessionCapabilityMetadataChangedError";
+    this.message = "Session capability metadata changed";
+    this.cause = cause;
+  }
+}
+
+class SessionCapabilityMetadataChangedError extends Error {
+  constructor(message: string, cause: Error) {
+    super(message, { cause });
+    this.name = "SessionCapabilityMetadataChangedError";
+  }
+}
+
+const preparedReads = new AsyncContext<{
   entries: Map<string, () => SessionCapabilityEntry | undefined>;
   retain: boolean;
   onRead?: (snapshot: SessionCapabilitySnapshot) => void;
-}>();
-const legacyReader = new AsyncLocalStorage<
+}>(Symbol("preparedSessionCapabilityReads"));
+const legacyReader = new AsyncContext<
   (query: SessionCapabilityRead) => SessionCapabilityEntry | undefined
->();
+>(Symbol("legacySessionCapabilityReader"));
 const readKey = (query: SessionCapabilityRead) => JSON.stringify(query);
 
 /** Only deprecated synchronous SDK adapters may install their compatibility reader. */
@@ -254,6 +270,7 @@ async function prepareCapabilityReads<T>(
   const entries = new Map(!retain || inherited?.retain ? inherited?.entries : undefined);
   const scope = { entries, retain, onRead: onRead ?? inherited?.onRead };
   const releases: Array<() => void> = [];
+  const refreshed = new Set<string>();
   let active = true;
   const release = () => {
     active = false;
@@ -269,7 +286,10 @@ async function prepareCapabilityReads<T>(
       return preparedReads.run(scope, read);
     } catch (error) {
       if (error instanceof SessionCapabilityReadRequired) {
-        throw new Error("Session capability metadata changed; prepare it again", { cause: error });
+        throw new SessionCapabilityMetadataChangedError(
+          "Session capability metadata changed; prepare it again",
+          error,
+        );
       }
       throw error;
     }
@@ -285,6 +305,15 @@ async function prepareCapabilityReads<T>(
         const { withSessionEntriesFromStoreInWorker } =
           await import("../../../config/sessions/session-entry-read-runtime.js");
         const query = error.query;
+        if (error instanceof SessionCapabilityRefreshRequired) {
+          const key = readKey(query);
+          if (refreshed.has(key)) {
+            throw error;
+          }
+          // Only async preparation can replace inherited facts. Synchronous
+          // retained replays remain fenced, and a busy writer gets one refresh.
+          refreshed.add(key);
+        }
         let missingCurrent = true;
         if (retain) {
           releases.push(
@@ -326,7 +355,7 @@ async function prepareCapabilityReads<T>(
               return () => {
                 assertAgentSessionWriteAdmission(database, query.agentId);
                 if (!missingCurrent) {
-                  throw new Error("Session capability metadata changed", { cause: error });
+                  throw new SessionCapabilityRefreshRequired(query, error);
                 }
                 return undefined;
               };
@@ -359,7 +388,7 @@ async function prepareCapabilityReads<T>(
             return () => {
               assertAgentSessionWriteAdmission(database, query.agentId);
               if (!predicate.isCurrent() || !idCurrent) {
-                throw new Error("Session capability metadata changed", { cause: error });
+                throw new SessionCapabilityRefreshRequired(query, error);
               }
               return entry;
             };

@@ -1,6 +1,6 @@
 import type { SystemChangeEntry } from "@openclaw/gateway-protocol";
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
-import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import { RetryAction, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -136,16 +136,13 @@ export function CustodianChangeHistory(props: {
           fallback={(error, reset) => (
             <div class="custodian__history-error" role="alert">
               <span>{formatUiError(error())}</span>
-              <button
-                class="btn btn--sm"
+              <RetryAction
                 type="button"
-                onClick={() => {
+                onRetry={() => {
                   props.onLoad(true);
                   reset();
                 }}
-              >
-                {t("common.retry")}
-              </button>
+              />
             </div>
           )}
         >

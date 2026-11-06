@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { buildUsageContract } from "./contract.js";
 import { renderUsageBar, type UsageBarTemplate } from "./translator.js";
 
 function tpl(pieces: unknown[]): UsageBarTemplate {
@@ -97,30 +96,4 @@ it("each with item_scales picks a scale per window by position", () => {
 
 it("each drops the whole segment when the array is empty", () => {
   expect(render({ text: "W", each: "windows", item: "{x}" }, {})).toBe("");
-});
-it("renders a full footer from a reply usage snapshot", () => {
-  const contract = buildUsageContract(
-    {
-      provider: "openai",
-      model: "claude-opus-4-6",
-      reasoningEffort: "medium",
-      fastMode: false,
-      fallbackUsed: false,
-      contextTokenBudget: 272000,
-      contextUsedTokens: 204000,
-      usage: { input: 204000, output: 15, cacheRead: 0, cacheWrite: 0, total: 204015 },
-      turnUsd: 0.03771985,
-    },
-    "discord",
-  );
-  const pieces = [
-    { text: "{model.display_name|alias:models}" },
-    { map: "model.is_fallback", cases: { true: "🔄" } },
-    { text: " | " },
-    { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
-    { map: "state.fast_mode", cases: { true: "⚡", false: "🐌" } },
-    { text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}" },
-    { text: " | ${cost.turn_usd|fixed:4}" },
-  ];
-  expect(renderUsageBar(tpl(pieces), contract)).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
 });

@@ -56,6 +56,16 @@ export default definePluginEntry({
             prompt: req.prompt,
           },
         });
+        for (const key of ["no_verbatim", "tag_audio_events", "diarize"]) {
+          const value = req.query?.[key];
+          if (
+            typeof value === "string" ||
+            typeof value === "number" ||
+            typeof value === "boolean"
+          ) {
+            form.set(key, String(value));
+          }
+        }
         const { response, release } = await postTranscriptionRequest({
           url: `${baseUrl}/v1/speech-to-text`,
           headers,

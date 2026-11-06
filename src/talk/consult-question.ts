@@ -33,20 +33,6 @@ const DEFAULT_REALTIME_VOICE_CONSULT_QUESTION_KEYS = ["question", "prompt", "que
 const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS = ["text", "result", "output", "error"];
 const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_MAX_CHARS = 1_800;
 
-export type RealtimeVoiceConsultQuestionMatchOptions = {
-  /** Minimum overlap ratio against the smaller token set for fuzzy matches. */
-  minTokenOverlapRatio?: number;
-  /** Minimum number of non-stopword tokens that must overlap. */
-  minTokenOverlapCount?: number;
-};
-
-export type RealtimeVoiceSpeakableToolResultOptions = {
-  /** Candidate result keys to read from object-shaped tool output. */
-  keys?: readonly string[];
-  /** Maximum spoken result length before appending a truncation marker. */
-  maxChars?: number;
-};
-
 /** Read the consult question from a raw string or selected object keys. */
 export function readRealtimeVoiceConsultQuestion(
   args: unknown,
@@ -66,7 +52,6 @@ function normalizeRealtimeVoiceConsultQuestion(value: string | undefined): strin
     value
       ?.toLowerCase()
       .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .replace(/\s+/gu, " ")
       .trim() || undefined
   );
 }
@@ -74,7 +59,12 @@ function normalizeRealtimeVoiceConsultQuestion(value: string | undefined): strin
 export function matchRealtimeVoiceConsultQuestions(
   left: string | undefined,
   right: string | undefined,
-  options: RealtimeVoiceConsultQuestionMatchOptions = {},
+  options: {
+    /** Minimum overlap ratio against the smaller token set for fuzzy matches. */
+    minTokenOverlapRatio?: number;
+    /** Minimum number of non-stopword tokens that must overlap. */
+    minTokenOverlapCount?: number;
+  } = {},
 ): boolean {
   const normalizedLeft = normalizeRealtimeVoiceConsultQuestion(left);
   const normalizedRight = normalizeRealtimeVoiceConsultQuestion(right);
@@ -112,7 +102,12 @@ export function matchRealtimeVoiceConsultQuestions(
 /** Extract a bounded speakable string from a tool result payload. */
 export function readSpeakableRealtimeVoiceToolResult(
   result: unknown,
-  options: RealtimeVoiceSpeakableToolResultOptions = {},
+  options: {
+    /** Candidate result keys to read from object-shaped tool output. */
+    keys?: readonly string[];
+    /** Maximum spoken result length before appending a truncation marker. */
+    maxChars?: number;
+  } = {},
 ): string | undefined {
   if (typeof result === "string") {
     return limitSpeakableRealtimeVoiceToolResult(result, options.maxChars);

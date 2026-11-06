@@ -211,9 +211,21 @@ function* warm(
     progress.readBytes = io.readBytes - initial.readBytes;
     progress.diskBytes = io.diskBytes - initial.diskBytes;
     progress.elapsedMs = performance.now() - started;
-    return { ...progress };
+    return progress;
   };
   try {
+    if (
+      input.kind === "state" &&
+      progress.residency &&
+      progress.residency.sizeBytes > input.maxBytes
+    ) {
+      // A partial sequential scan repeats the same prefix without warming the whole store.
+      // Leave that I/O budget for the remaining databases instead.
+      progress.complete = true;
+      progress.limited = true;
+      yield { ...update() };
+      return;
+    }
     if (input.kind === "agent") {
       db = openNodeSqliteDatabase(pathname, { readOnly: true, timeout: 0 });
       db.exec("PRAGMA cache_size = -1024; PRAGMA mmap_size = 0;"); // sqlite-allow-raw -- Bound the private cache and account for pread bytes.
@@ -231,21 +243,27 @@ function* warm(
       };
       progress.queryBeforeMs = measureQuery();
     }
-    yield update();
+    yield { ...update() };
     if ((progress.residency?.residentRatio ?? 1) < 0.8 || (progress.queryBeforeMs ?? 0) > 10) {
       const pages = db ? agentHotPages(db, input.now) : sharedPages(pathname);
+      let reportedBytes = Math.max(progress.readBytes, progress.diskBytes);
       try {
         for (const chunk of pages) {
           if (chunk) {
             progress.payloadBytes += chunk.payloadBytes;
             progress.payloadMessages += chunk.payloadMessages;
           }
-          const current = update();
-          if (Math.max(progress.readBytes, progress.diskBytes) >= input.maxBytes) {
+          update();
+          const bytes = Math.max(progress.readBytes, progress.diskBytes);
+          if (bytes >= input.maxBytes) {
             progress.limited = true;
             break;
           }
-          yield current;
+          // Pace bytes, not sessions: small index reads need no individual IPC round trip.
+          if (bytes - reportedBytes >= CHUNK_BYTES) {
+            reportedBytes = bytes;
+            yield { ...progress };
+          }
         }
       } finally {
         pages.return();
@@ -254,7 +272,7 @@ function* warm(
       progress.residencyAfter = readSqlitePageCacheResidency(pathname);
     }
     progress.complete = true;
-    yield update();
+    yield { ...update() };
   } finally {
     db?.close();
   }

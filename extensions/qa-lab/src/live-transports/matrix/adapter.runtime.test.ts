@@ -36,7 +36,6 @@ describe("Matrix QA adapter observer recovery", () => {
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
         roomId: "!room:matrix.test",
-        timeoutMs: 1_000,
       }),
     ).resolves.toEqual({ matched: false, since: "s1" });
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(2);
@@ -54,7 +53,6 @@ describe("Matrix QA adapter observer recovery", () => {
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
         roomId: "!room:matrix.test",
-        timeoutMs: 1_000,
       }),
     ).rejects.toBe(failure);
     expect(waitForOptionalRoomEvent).toHaveBeenCalledOnce();
@@ -77,7 +75,6 @@ describe("Matrix QA adapter observer recovery", () => {
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
         roomId: "!room:matrix.test",
-        timeoutMs: 1_000,
       }),
     ).resolves.toEqual({ matched: false, since: "s2" });
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(2);

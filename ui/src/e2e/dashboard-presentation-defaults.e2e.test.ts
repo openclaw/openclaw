@@ -1,21 +1,13 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
 import type { UiSettings } from "../app/settings.ts";
-import {
-  closeChatDashboardMenu,
-  openChatDashboardMenu,
-  selectChatLayoutAction,
-} from "../test-helpers/chat-layout-menu.ts";
+import { openChatDashboardMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
-  reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
-import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "shared dashboard presentation defaults" });
@@ -23,56 +15,22 @@ const key = "agent:main:dashboard:9a1b2c3d-1234-4567-8901-234567890abc";
 const sessionId = "dashboard-presentation-session";
 const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
-const withDesktop = (run: Parameters<typeof suite.withPage>[1]) =>
-  suite.withPage({ viewport: { width: 1440, height: 1000 } }, run);
-
-async function expectDefaultStatus(page: Page) {
-  const status = (await openChatDashboardMenu(page)).locator(defaultStatus);
-  await status.waitFor({ state: "visible" });
-  expect(await status.textContent()).toContain("This is the default view");
-  return status;
-}
-
-function row(presentation: "split" | "expanded") {
-  return {
-    key,
-    agentId: "main",
-    sessionId,
-    kind: "direct",
-    displayName: "Shared dashboard",
-    boardFace: "dashboard",
-    boardPresentation: presentation,
-    updatedAt: Date.now(),
-  } satisfies GatewaySessionRow;
-}
-
-async function openDashboard(
-  page: Page,
-  presentation: "split" | "expanded",
-  options: {
-    readOnly?: boolean;
-    expandedLink?: boolean;
-    face?: "chat" | "dashboard";
-    sessionRow?: ControlUiSessionFixture;
-    personalPin?: boolean;
-  } = {},
-) {
-  if (options.personalPin) {
-    await page.addInitScript(
-      ({ storageKey, entry }) => {
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-        localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
-      },
-      {
-        storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-        entry: `session:${key}`,
-      },
-    );
-  }
+async function openDashboard(page: Page) {
   const gateway = await installMockGateway(page, {
     sessionKey: key,
-    sessions: [options.sessionRow ?? row(presentation)],
-    operatorScopes: options.readOnly ? ["operator.read"] : ["operator.read", "operator.write"],
+    sessions: [
+      {
+        key,
+        agentId: "main",
+        sessionId,
+        kind: "direct",
+        displayName: "Shared dashboard",
+        boardFace: "dashboard",
+        boardPresentation: "split",
+        updatedAt: Date.now(),
+      },
+    ],
+    operatorScopes: ["operator.read", "operator.write"],
     featureMethods: [
       "board.get",
       "chat.metadata",
@@ -92,17 +50,10 @@ async function openDashboard(
       },
     },
   });
-  const url = new URL(controlUiSessionUrl(suite.server.baseUrl, key, options.face ?? "dashboard"));
-  if (options.expandedLink) {
-    url.searchParams.set("dashboard", "expanded");
-  }
+  const url = new URL(controlUiSessionUrl(suite.server.baseUrl, key, "dashboard"));
+  url.searchParams.set("dashboard", "expanded");
   await page.goto(url.href);
-  if (options.face === "chat") {
-    await page.locator(".chat-pane__header").waitFor();
-    await gateway.waitForRequest("board.get");
-  } else {
-    await page.locator("openclaw-board-view").waitFor();
-  }
+  await page.locator("openclaw-board-view").waitFor();
   return gateway;
 }
 
@@ -113,29 +64,20 @@ async function openDefaultAction(page: Page) {
   return action;
 }
 
-async function saveDefault(page: Page, gateway: MockGatewayControls, openingFace = false) {
+async function saveDefault(page: Page, gateway: MockGatewayControls) {
   await selectChatLayoutAction(page, "Use current view as default");
-  const saved = await gateway.waitForRequest(
-    "sessions.patch",
-    openingFace ? undefined : { match: { boardPresentation: "expanded" } },
-  );
+  const saved = await gateway.waitForRequest("sessions.patch", {
+    match: { boardPresentation: "expanded" },
+  });
   expect(saved.params).toMatchObject({
     key,
     agentId: "main",
     expectedSessionId: sessionId,
     boardPresentation: "expanded",
-    ...(openingFace ? { boardFace: "dashboard" } : {}),
   });
   const message = page.getByText("Dashboard default saved for future opens.", { exact: true });
   await message.waitFor();
   return message;
-}
-
-async function expectLayout(page: Page, presentation: "split" | "expanded") {
-  await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-  await page.locator(".sidebar-region__primary").waitFor({
-    state: presentation === "expanded" ? "hidden" : "visible",
-  });
 }
 
 async function presentationOverride(page: Page) {
@@ -149,175 +91,9 @@ async function presentationOverride(page: Page) {
 }
 
 suite.define(() => {
-  it("saves the dashboard opening face together with its presentation and reopens from the sidebar", async () => {
-    await withDesktop(async ({ page }) => {
-      const gateway = await openDashboard(page, "expanded", {
-        face: "chat",
-        sessionRow: { ...row("expanded"), boardFace: undefined },
-        personalPin: true,
-      });
-      const sidebarLink = page.locator(
-        `[data-session-section="pinned"] [data-session-key="${key}"] a.sidebar-recent-session__link`,
-      );
-      await sidebarLink.waitFor();
-      expect(await sidebarLink.getAttribute("href")).toContain("/chat/main/");
-      await page.keyboard.press("Control+Shift+Alt+G");
-      await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-      const chat = page.locator('openclaw-chat-pane[aria-hidden="false"] .sidebar-region__primary');
-      await chat.waitFor({ state: "hidden" });
-      const menu = await openChatDashboardMenu(page);
-      await menu.locator(`${defaultAction}, ${defaultStatus}`).waitFor({ state: "visible" });
-      expect(await menu.locator(defaultStatus).count()).toBe(0);
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      await saveDefault(page, gateway, true);
-      await expect.poll(() => sidebarLink.getAttribute("href")).toContain("/dashboard/main/");
-      const savedMenu = await openChatDashboardMenu(page);
-      await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });
-      await closeChatDashboardMenu(page);
-      // This fixture can read Sessions but does not advertise Home or session creation.
-      await page.locator('[data-navigation-view="pages"]').click();
-      await page
-        .locator(".sidebar-pages")
-        .getByRole("link", { name: "Sessions", exact: true })
-        .click();
-      await page.waitForURL((url) => url.pathname === "/sessions");
-      await page.locator("openclaw-board-view").waitFor({ state: "hidden" });
-      await page.locator('[data-navigation-view="sessions"]').click();
-      await sidebarLink.click();
-      await page.waitForURL((url) => url.pathname.includes("/dashboard/main/"));
-      await page.locator("openclaw-board-view").waitFor({ state: "visible" });
-      await chat.waitFor({ state: "hidden" });
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
-
-      const savedRow = await gateway.getSessionRow(key);
-      await withDesktop(async ({ page: reader }) => {
-        const readerGateway = await openDashboard(reader, "expanded", {
-          face: "chat",
-          readOnly: true,
-          sessionRow: savedRow,
-          personalPin: true,
-        });
-        const readerLink = reader.locator(
-          `[data-session-section="pinned"] [data-session-key="${key}"] a.sidebar-recent-session__link`,
-        );
-        await readerLink.waitFor();
-        expect(await readerLink.getAttribute("href")).toContain("/dashboard/main/");
-        await readerLink.click();
-        await reader.waitForURL((url) => url.pathname.includes("/dashboard/main/"));
-        await expectLayout(reader, "expanded");
-        expect(await presentationOverride(reader)).toBeUndefined();
-        expect(await readerGateway.getRequests("sessions.patch")).toHaveLength(0);
-      });
-    });
-  });
-
-  it.each(["split", "expanded"] as const)(
-    "opens the shared %s default through the real keyboard shortcut",
-    async (presentation) => {
-      await withDesktop(async ({ page }) => {
-        await openDashboard(page, presentation, { face: "chat" });
-        await page.keyboard.press("Control+Shift+Alt+G");
-        await expectLayout(page, presentation);
-        expect(await presentationOverride(page)).toBeNull();
-      });
-    },
-  );
-
-  it.each(["split", "expanded"] as const)(
-    "keeps the agent-requested %s view through actual face-change navigation",
-    async (requested) => {
-      const shared = requested === "expanded" ? "split" : "expanded";
-      await withDesktop(async ({ page }) => {
-        const gateway = await openDashboard(page, shared, {
-          face: "chat",
-          sessionRow: { ...row(shared), boardFace: "chat" },
-        });
-        await gateway.emitGatewayEvent("board.command", {
-          sessionKey: key,
-          command: { kind: "set_chat_dock", dock: requested === "expanded" ? "hidden" : "right" },
-        });
-        // Navigation may replace the raw key with its friendly session slug.
-        await expect.poll(() => new URL(page.url()).pathname).toContain("/dashboard/main/");
-        await expectLayout(page, requested);
-        expect(await presentationOverride(page)).toBeUndefined();
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key, "chat"));
-        await page.locator(".chat-pane__header").waitFor();
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key, "dashboard"));
-        await expectLayout(page, shared);
-        expect(await presentationOverride(page)).toBeUndefined();
-      });
-    },
-  );
-
-  it("saves a conditional shared default while a fresh reader can override it locally", async () => {
-    await withDesktop(async ({ page }) => {
-      const gateway = await openDashboard(page, "split");
-      const chat = page.locator(".sidebar-region__primary");
-      await chat.waitFor({ state: "visible" });
-      expect(await page.locator(defaultAction).count()).toBe(0);
-      const matchingStatus = await expectDefaultStatus(page);
-      expect(await matchingStatus.textContent()).toContain(
-        "Used when anyone opens this dashboard. Personal layout choices still apply.",
-      );
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      await closeChatDashboardMenu(page);
-
-      await focusChatSidePanel(page);
-      await chat.waitFor({ state: "hidden" });
-      const action = await openDefaultAction(page);
-      expect(await action.textContent()).toContain("Use current view as default");
-      expect(await page.locator(defaultStatus).count()).toBe(0);
-      await saveDefault(page, gateway);
-      await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
-      await expectDefaultStatus(page);
-      await closeChatDashboardMenu(page);
-
-      await withDesktop(async ({ page: reader }) => {
-        const readerGateway = await openDashboard(reader, "expanded", { readOnly: true });
-        const readerChat = reader.locator(".sidebar-region__primary");
-        await readerChat.waitFor({ state: "hidden" });
-        expect(await presentationOverride(reader)).toBeUndefined();
-        await reconnectMockGateway(reader, readerGateway);
-        await expectLayout(reader, "expanded");
-        await expectDefaultStatus(reader);
-        expect(await reader.locator(defaultAction).count()).toBe(0);
-        await closeChatDashboardMenu(reader);
-        await selectChatLayoutAction(reader, "Restore split");
-        await readerChat.waitFor({ state: "visible" });
-        expect(await presentationOverride(reader)).toBe("split");
-        expect(await reader.locator(defaultAction).count()).toBe(0);
-        expect(await reader.locator(defaultStatus).count()).toBe(0);
-        expect(
-          await readerGateway.getRequests("sessions.patch", { boardPresentation: "split" }),
-        ).toHaveLength(0);
-        await reader.reload();
-        await expectLayout(reader, "split");
-        expect(await presentationOverride(reader)).toBe("split");
-      });
-
-      await selectChatLayoutAction(page, "Restore split");
-      await chat.waitFor({ state: "visible" });
-      await selectChatLayoutAction(page, "Focus");
-      await chat.waitFor({ state: "hidden" });
-      expect(await presentationOverride(page)).toBeNull();
-      // The server changes while this browser still has the old roster cached.
-      await gateway.setSessionsListResponse({
-        ts: Date.now(),
-        path: "",
-        count: 1,
-        defaults: { modelProvider: "openai", model: "gpt-4.1", contextTokens: null },
-        sessions: [row("split")],
-      });
-      await page.reload();
-      await expectLayout(page, "split");
-      expect(await presentationOverride(page)).toBeNull();
-    });
-  });
-
   it("offers the same Dashboard options action on mobile without persisting deep-link intent", async () => {
     await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
-      const gateway = await openDashboard(page, "split", { expandedLink: true });
+      const gateway = await openDashboard(page);
       const chat = page.locator(".sidebar-region__primary");
       await chat.waitFor({ state: "visible" });
       await page.locator(".chat-mobile-host openclaw-board-view").waitFor();

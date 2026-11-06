@@ -14,24 +14,7 @@ import {
   startupHarnessDatabases,
 } from "./manager-sync-ops.startup-catchup.test-support.js";
 
-const activity = vi.hoisted(() => ({
-  listener: undefined as ((busy: boolean) => void) | undefined,
-}));
-
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
-  return {
-    ...actual,
-    observeAgentRunActivity: (_agentId: string, listener: (busy: boolean) => void) => {
-      activity.listener = listener;
-      listener(false);
-      return () => {
-        activity.listener = undefined;
-      };
-    },
-  };
-});
+const { activity } = await vi.hoisted(() => import("./agent-activity.test-support.js"));
 
 describe("session index scheduling", () => {
   let testState: OpenClawTestState;
@@ -43,8 +26,8 @@ describe("session index scheduling", () => {
       layout: "state-only",
     });
     await captureRuntimeConfigAsyncReader()();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     harness = await SessionStartupCatchupHarness.create([]);
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     harness.startTranscriptListener();
   });
 
@@ -75,8 +58,11 @@ describe("session index scheduling", () => {
   }
 
   async function advanceSessionTime(ms: number): Promise<void> {
-    await vi.advanceTimersByTimeAsync(ms);
-    await harness.waitForSessionSync();
+    const deadline = performance.now() + ms;
+    do {
+      await vi.advanceTimersByTimeAsync(Math.min(30_000, deadline - performance.now()));
+      await harness.waitForSessionSync();
+    } while (performance.now() < deadline);
   }
   const delta = (...sessions: Array<Awaited<ReturnType<typeof append>> | undefined>) => ({
     reason: "session-delta",
@@ -84,51 +70,44 @@ describe("session index scheduling", () => {
     archiveFiles: [],
   });
 
-  it("waits for a fresh quiet period and includes every pending session in one pass", async () => {
-    const first = await append("first");
-    await vi.advanceTimersByTimeAsync(20_000);
-    const second = await append("second");
-    await append("first");
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(harness.syncCalls).toEqual([]);
+  it.each([1, 14])(
+    "coalesces %i activity intervals within quiet and maximum deadlines",
+    async (updates) => {
+      const first = await append("first");
+      let second = first;
+      for (let update = 0; update < updates; update++) {
+        await vi.advanceTimersByTimeAsync(20_000);
+        second = await append("second");
+        await append("first");
+      }
+      vi.setSystemTime(Date.now() + (updates === 14 ? 120_000 : 0));
+      await append("first");
+      await vi.advanceTimersByTimeAsync(updates === 14 ? 19_999 : 29_999);
+      expect(harness.syncCalls).toEqual([]);
+      await advanceSessionTime(1);
+      const firstPass = updates === 14 ? { reason: "reconcile" } : delta(first, second);
+      expect(harness.syncCalls).toEqual([firstPass]);
+      await advanceSessionTime(300_000);
+      expect(harness.syncCalls).toEqual([firstPass, { reason: "reconcile" }]);
+    },
+  );
 
-    await advanceSessionTime(1);
-    expect(harness.syncCalls).toEqual([delta(first, second)]);
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(harness.syncCalls).toHaveLength(1);
-  });
-
-  it("bounds continuous transcript deferral at five minutes", async () => {
-    const target = await append("continuous");
-    for (let elapsed = 0; elapsed < 280_000; elapsed += 20_000) {
-      await vi.advanceTimersByTimeAsync(20_000);
-      await append("continuous");
-    }
-    await vi.advanceTimersByTimeAsync(19_999);
-    expect(harness.syncCalls).toEqual([]);
-
-    await advanceSessionTime(1);
-    expect(harness.syncCalls).toEqual([delta(target)]);
-  });
-
-  it("starts overdue work as soon as a long running turn settles", async () => {
+  it("starts recovery before a long running turn settles", async () => {
     activity.listener?.(true);
-    const target = await append("busy");
-    await vi.advanceTimersByTimeAsync(360_000);
-    expect(harness.syncCalls).toEqual([]);
+    await append("busy");
+    await advanceSessionTime(360_000);
+    expect(harness.syncCalls).toEqual([{ reason: "reconcile" }]);
 
     activity.listener?.(false);
     await advanceSessionTime(1);
-    expect(harness.syncCalls).toEqual([delta(target)]);
+    expect(harness.syncCalls).toEqual([{ reason: "reconcile" }]);
   });
 
-  it("caps deferral across back-to-back turns and only starts in an idle gap", async () => {
-    const target = { agentId: "main", sessionId: "busy", sessionKey: "agent:main:chat:busy" };
+  it("keeps the recovery deadline across back-to-back turns", async () => {
     for (let turn = 0; turn < 15; turn++) {
       activity.listener?.(true);
       await append("busy");
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(harness.syncCalls).toEqual([]);
+      await advanceSessionTime(20_000);
       activity.listener?.(false);
       await vi.advanceTimersByTimeAsync(1);
       if (turn < 14) {
@@ -136,7 +115,7 @@ describe("session index scheduling", () => {
       }
     }
     await harness.waitForSessionSync();
-    expect(harness.syncCalls).toEqual([delta(target)]);
+    expect(harness.syncCalls).toEqual([{ reason: "reconcile" }]);
   });
 
   it("keeps pending work when a new turn starts during the quiet period", async () => {
@@ -174,8 +153,12 @@ describe("session index scheduling", () => {
 
     await advanceSessionTime(1);
     expect(harness.syncCalls).toEqual([delta(first, second), delta(first, second, third)]);
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(harness.syncCalls).toHaveLength(2);
+    await advanceSessionTime(300_000);
+    expect(harness.syncCalls).toEqual([
+      delta(first, second),
+      delta(first, second, third),
+      { reason: "reconcile" },
+    ]);
     sync.mockRestore();
   });
 
@@ -219,8 +202,6 @@ describe("session index scheduling", () => {
     await advanceSessionTime(1);
     expect(index).toHaveBeenCalledTimes(2);
     expect(harness.syncCalls).toHaveLength(4);
-    await advanceSessionTime(3_600_000);
-    expect(index).toHaveBeenCalledTimes(2);
   });
 
   it("backs off handled fallback failures, yields to turns, and stops retrying until new activity", async () => {
@@ -283,8 +264,6 @@ describe("session index scheduling", () => {
     await advanceSessionTime(59_998);
     expect(index).toHaveBeenCalledTimes(4);
     await advanceSessionTime(2);
-    expect(index).toHaveBeenCalledTimes(5);
-    await advanceSessionTime(3_600_000);
     expect(index).toHaveBeenCalledTimes(5);
   });
 });

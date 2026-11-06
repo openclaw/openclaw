@@ -450,6 +450,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
+    codexHome?: string;
     persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
@@ -463,6 +464,7 @@ export function createAppServerHarness(
       respond: requestImpl,
       persistedThreads: options.persistedThreads,
       agentDir: path.join(tempDir, "wire-agent"),
+      codexHome: options.codexHome,
     });
     setCodexAppServerClientFactoryForTest(
       async (_start, auth, agentDir, _config, clientOptions) => {

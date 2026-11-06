@@ -4,8 +4,7 @@ import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
 } from "../../infra/device-pairing-node-state.js";
-import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
 import { NodeWorkerProcessesChangedSchema } from "../../worker/worker-process-observation.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
@@ -44,6 +43,22 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         }
         return sessionForGeneration(eventPairingGeneration)?.connId === eventConnId;
       };
+      if (p.event === "mcp.elicitation") {
+        if (!nodeSession || !eventConnId || nodeSession.connId !== eventConnId) {
+          respondPairingChanged(respond);
+          return;
+        }
+        const result = await context.nodeRegistry.mcpElicitation.receive(
+          nodeSession,
+          safeParseJson(payloadJSON ?? ""),
+          async () =>
+            (await isEventConnectionCurrent()) &&
+            context.getRuntimeConfig().mcp?.apps?.enabled === true &&
+            nodeSession.commands.includes(NODE_MCP_TOOLS_CALL_COMMAND),
+        );
+        respond(true, result, undefined);
+        return;
+      }
       if (p.event === "worker.processes.changed") {
         const change = NodeWorkerProcessesChangedSchema.safeParse(safeParseJson(payloadJSON ?? ""));
         let handled = false;
@@ -144,22 +159,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.clearPresenceActivity(activity),
         updateNodeDesktopAvailability: (availability) =>
           context.nodeRegistry.updateDesktopAvailability(availability),
-        updateNodeHostStats: (stats) => {
-          const hostStats = context.nodeRegistry.updateHostStats(stats);
-          if (hostStats && eventPairingGeneration) {
-            // The 60 s reporting cadence costs one small JSON-column update per node per minute.
-            void recordPairedNodeHostStats({
-              nodeId,
-              hostStats,
-              expectedPairingGeneration: { nodeId, key: eventPairingGeneration },
-            }).catch((error: unknown) =>
-              context.logGateway.warn(
-                `failed to persist node host stats for ${nodeId}: ${formatErrorMessage(error)}`,
-              ),
-            );
-          }
-          return hostStats;
-        },
+        updateNodeHostStats: (stats) => context.nodeRegistry.updateHostStats(stats),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(

@@ -10,7 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
@@ -34,7 +34,9 @@ it("resolves a Groq manifest model from a global external install during setup",
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
-  const sdkHost = createCompiledSdkHost(groqSetupSdkEntrypoints, (prefix) => tempDirs.make(prefix));
+  const sdkHost = prepareCompiledSdkHost(groqSetupSdkEntrypoints)((prefix) =>
+    tempDirs.make(prefix),
+  );
   await withOpenClawTestState(
     {
       label: "groq-external-setup",
@@ -55,19 +57,14 @@ it("resolves a Groq manifest model from a global external install during setup",
       });
       // Sparse CI may omit the runtime entry; retain the real manifest/discovery
       // and supply only the package and text-provider entry this flow needs.
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
+      for (const [file, content] of Object.entries({
+        "package.json": JSON.stringify({
           name: "@openclaw/groq-provider",
           version: "2026.9.4",
           type: "module",
           openclaw: { extensions: ["./index.ts"], compat: { pluginApi: ">=2026.9.4" } },
         }),
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "index.ts"),
-        `import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+        "index.ts": `import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export default defineSingleProviderPluginEntry({
@@ -82,8 +79,9 @@ export default defineSingleProviderPluginEntry({
   },
 });
 `,
-        "utf8",
-      );
+      })) {
+        await fs.writeFile(path.join(pluginDir, file), content, "utf8");
+      }
       const hostRoot =
         sdkHost ??
         resolveOpenClawPackageRootSync({

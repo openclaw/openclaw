@@ -292,9 +292,9 @@ function afterBackup(callback: () => void) {
 }
 
 async function listBackups(databasePath: string) {
-  const prefix = `${path.basename(databasePath)}.doctor-cron-`;
+  const prefix = `${path.basename(databasePath)}.pre-startup-migration-`;
   return (await fs.readdir(path.dirname(databasePath)))
-    .filter((name) => name.startsWith(prefix))
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
     .map((name) => path.join(path.dirname(databasePath), name))
     .toSorted();
 }
@@ -703,7 +703,7 @@ describe("host Cron Doctor repair", () => {
             expect(managed).toHaveLength(enabled ? 1 : 0);
             if (enabled) {
               expect(managed[0]).toMatchObject({
-                enabled: true,
+                enabled: !activeDreaming,
                 sessionTarget: "isolated",
                 schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
                 payload: { kind: "agentTurn", lightContext: true },
@@ -823,7 +823,7 @@ describe("host Cron Doctor repair", () => {
           (job) => job.declarationKey === declarationKey,
         );
         expect(managed).toMatchObject([
-          { id: "survivor", enabled: true, payload: { kind: "agentTurn" } },
+          { id: "survivor", enabled: false, payload: { kind: "agentTurn" } },
         ]);
       } finally {
         cron.stop();

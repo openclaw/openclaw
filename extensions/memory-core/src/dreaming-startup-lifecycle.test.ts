@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createHookRunner,
@@ -26,8 +27,26 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
-async function createStartedPlugin() {
+async function createStartedPlugin(
+  options: {
+    frequency?: string;
+    getCron?: OpenClawPluginServiceContext["getCron"];
+    register?: typeof registerShortTermPromotionDreaming;
+  } = {},
+) {
   const config: OpenClawConfig = {
+    plugins: {
+      entries: {
+        "memory-core": {
+          config: {
+            dreaming: {
+              enabled: options.frequency !== undefined,
+              frequency: options.frequency,
+            },
+          },
+        },
+      },
+    },
     agents: {
       entries: {
         main: { workspace: "/synthetic/main" },
@@ -43,7 +62,7 @@ async function createStartedPlugin() {
   });
   const record = createPluginRecord({ id: "memory-core", origin: "bundled", kind: "memory" });
   builder.registry.plugins.push(record);
-  registerShortTermPromotionDreaming(builder.createApi(record, { config }));
+  (options.register ?? registerShortTermPromotionDreaming)(builder.createApi(record, { config }));
   const service = builder.registry.services.find(
     (entry) => entry.id === "memory-core-dreaming",
   )?.service;
@@ -51,7 +70,13 @@ async function createStartedPlugin() {
     throw new Error("Expected the dreaming service");
   }
   const scheduler = createTestPluginServiceScheduler();
-  const context = { config, stateDir: "/synthetic", logger, getCron: () => undefined, scheduler };
+  const context = {
+    config,
+    stateDir: "/synthetic",
+    logger,
+    getCron: options.getCron ?? (() => undefined),
+    scheduler,
+  };
   await service.start(context);
   // Match the real hot-replacement owner: errors propagate, and each start hook has 5 seconds.
   const hooks = createHookRunner(builder.registry, {
@@ -71,90 +96,159 @@ async function createStartedPlugin() {
   };
 }
 
+async function withBlockedCleanup(
+  check: (
+    plugin: Awaited<ReturnType<typeof createStartedPlugin>>,
+    starting: Promise<void>,
+    release: () => void,
+  ) => Promise<void>,
+  failure?: Error,
+) {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  scrub.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    if (failure) {
+      throw failure;
+    }
+  });
+  const plugin = await createStartedPlugin();
+  const starting = plugin.start();
+  try {
+    await entered.promise;
+    await check(plugin, starting, release.resolve);
+  } finally {
+    release.resolve();
+    await starting;
+    await plugin.dispose();
+  }
+}
+
+function createSharedCron() {
+  type Cron = NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
+  const jobs: Awaited<ReturnType<Cron["list"]>> = [];
+  const cron: Cron = {
+    list: vi.fn(async () => structuredClone(jobs)),
+    async add(input) {
+      jobs.push({
+        ...input,
+        id: "dreaming",
+        schedule: { kind: "cron", expr: input.schedule.expr },
+      });
+    },
+    async update(id, patch) {
+      const job = jobs.find((entry) => entry.id === id);
+      if (job) {
+        const { schedule, ...rest } = patch;
+        Object.assign(job, rest);
+        if (schedule) {
+          job.schedule = { kind: "cron", expr: schedule.expr };
+        }
+      }
+    },
+    async remove(id) {
+      const index = jobs.findIndex((entry) => entry.id === id);
+      if (index >= 0) {
+        jobs.splice(index, 1);
+      }
+      return { removed: index >= 0 };
+    },
+    async removeStaleJobFamily() {
+      return 0;
+    },
+  };
+  return { cron, jobs };
+}
+
 describe("dreaming startup lifecycle", () => {
-  it("finishes the replacement hook before slow cleanup and still joins cleanup at service stop", async () => {
+  it("orders different module generations so stale reconciliation cannot overwrite the successor", async () => {
+    const { cron, jobs } = createSharedCron();
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    scrub.mockImplementationOnce(async () => {
+    vi.spyOn(cron, "list").mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
+      return structuredClone(jobs);
     });
-    const plugin = await createStartedPlugin();
-    const result = plugin.start().then(
-      () => "started",
-      (error: unknown) => error,
+    const old = await createStartedPlugin({ frequency: "0 3 * * *", getCron: () => cron });
+    await entered.promise;
+    vi.resetModules();
+    const successorModule = await import("./dreaming.js");
+    expect(successorModule.registerShortTermPromotionDreaming).not.toBe(
+      registerShortTermPromotionDreaming,
     );
+    const next = await createStartedPlugin({
+      frequency: "0 4 * * *",
+      getCron: () => cron,
+      register: successorModule.registerShortTermPromotionDreaming,
+    });
     try {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(await result).toBe("started");
-      let stopped = false;
-      const stopping = Promise.resolve(plugin.stop()).then(() => {
-        stopped = true;
-      });
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
       release.resolve();
-      await stopping;
-      expect(stopped).toBe(true);
-      // Disposal fences the next agent and deferred sweep, without abandoning admitted work.
-      await vi.advanceTimersByTimeAsync(300_000);
-      expect(scrub).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.schedule).toMatchObject({ expr: "0 4 * * *" });
+      await old.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(jobs[0]?.schedule).toMatchObject({ expr: "0 4 * * *" });
     } finally {
       release.resolve();
-      await result;
-      await plugin.dispose();
+      await old.dispose();
+      await next.dispose();
     }
   });
 
-  it("reports cleanup rejection after the start hook has completed", async () => {
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    scrub.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      throw new Error("cleanup storage unavailable");
-    });
-    const plugin = await createStartedPlugin();
-    const starting = plugin.start();
+  it("restores predecessor maintenance when successor preparation rolls back", async () => {
+    const { cron, jobs } = createSharedCron();
+    const old = await createStartedPlugin({ frequency: "0 3 * * *", getCron: () => cron });
+    await vi.advanceTimersByTimeAsync(0);
+    const next = await createStartedPlugin({ frequency: "0 4 * * *", getCron: () => cron });
     try {
-      await entered.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(jobs[0]?.schedule).toMatchObject({ expr: "0 4 * * *" });
+      await next.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(jobs[0]?.schedule).toMatchObject({ expr: "0 3 * * *" });
+    } finally {
+      await next.dispose();
+      await old.dispose();
+    }
+  });
+
+  it("reports cleanup rejection after the start hook has completed", () =>
+    withBlockedCleanup(async (plugin, starting, release) => {
       await starting;
-      release.resolve();
+      release();
       await plugin.stop();
       expect(plugin.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(
           "dreaming startup cleanup failed for agent main: cleanup storage unavailable",
         ),
       );
-    } finally {
-      release.resolve();
-      await starting;
-      await plugin.dispose();
-    }
-  });
+    }, new Error("cleanup storage unavailable")));
 
-  it("prevents a retired instance from cleaning another agent before its successor starts", async () => {
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    scrub.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+  it("starts promptly, drains admitted cleanup, then fences the retired instance before replacement", async () => {
     const successorFinished = Promise.withResolvers<void>();
     scrub.mockImplementation(async ({ agentId }) => {
       if (agentId === "researcher") {
         successorFinished.resolve();
       }
     });
-    const plugin = await createStartedPlugin();
-    const starting = plugin.start();
-    try {
-      await entered.promise;
-      await starting;
-      const stopping = plugin.stop();
-      release.resolve();
+    await withBlockedCleanup(async (plugin, starting, release) => {
+      const result = starting.then(
+        () => "started",
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await result).toBe("started");
+      const stopped = vi.fn();
+      const stopping = Promise.resolve(plugin.stop()).then(stopped);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).not.toHaveBeenCalled();
+      release();
       await stopping;
+      expect(stopped).toHaveBeenCalledOnce();
       expect(scrub).toHaveBeenCalledTimes(1);
       const successor = await createStartedPlugin();
       try {
@@ -168,10 +262,6 @@ describe("dreaming startup lifecycle", () => {
       expect(scrub).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(300_000);
       expect(scrub).toHaveBeenCalledTimes(3);
-    } finally {
-      release.resolve();
-      await starting;
-      await plugin.dispose();
-    }
+    });
   });
 });

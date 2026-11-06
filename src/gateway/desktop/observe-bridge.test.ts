@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import { WebSocket as NpmWebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   expectUnauthorizedUpgrade,
   closeServer,
@@ -155,12 +156,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       const requester = resolveDesktopObserveRequester({
         client: {
           authenticatedUserId: userId,
-          authenticatedUserProfile: {
-            profileId: "synthetic-profile",
-            displayName,
-            hasAvatar: false,
-            updatedAt: 0,
-          },
+          authenticatedUserProfile: gatewayProfile("synthetic-profile", displayName, 0),
           connect: {
             minProtocol: 1,
             maxProtocol: 1,

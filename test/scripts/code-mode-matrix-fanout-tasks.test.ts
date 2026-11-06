@@ -170,10 +170,9 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
   const withActivities = (activities: MatrixPerformanceEvaluation["trace"]["activities"]) => ({
     trace: { ...evidence.trace, activities },
   });
-  const recovered = await fixture.evaluate({
-    ...evidence,
-    ...withActivities([rejectedSpawn, ...evidence.trace.activities]),
-  });
+  const evaluate = (patch: Partial<MatrixPerformanceEvaluation>) =>
+    fixture.evaluate({ ...evidence, ...patch });
+  const recovered = await evaluate(withActivities([rejectedSpawn, ...evidence.trace.activities]));
   expect(Object.values(recovered).every(Boolean)).toBe(true);
   const changeTask = (index: number, patch: Partial<(typeof taskRecords)[number]>) => ({
     taskRecords: taskRecords.map((task, i) => (i === index ? { ...task, ...patch } : task)),
@@ -183,41 +182,37 @@ it("scores child submissions and rejects incorrect, missing, excessive, and prem
       isRecord(row) && row.kind === kind && row.stage === stage ? { ...row, ...patch } : row,
     ),
   });
-  const rejects = async (check: string, patch: Partial<MatrixPerformanceEvaluation>) => {
-    const checks = await fixture.evaluate({ ...evidence, ...patch });
+  const invalid: Array<[string, Partial<MatrixPerformanceEvaluation>]> = [
+    ["exactChildren", { taskRecords: taskRecords.slice(1) }],
+    [
+      "collectorLaunches",
+      withActivities([...evidence.trace.activities, launch("fanout-r2-v1-H", "run-H")]),
+    ],
+    ["completedByResponse", changeTask(6, { endedAt: taskResponseAt + 1 })],
+    ["completedByResponse", { taskResponseAt: undefined }],
+    ["exactSubmissions", changeReceipt("fanout-submit", "G", { at: taskResponseAt + 1 })],
+    [
+      "completeSourceReads",
+      changeReceipt("fanout-read", "A", { sessionKey: "agent:qa:subagent:B" }),
+    ],
+    ["exactSubmissions", changeTask(0, { childSessionKey: "agent:qa:subagent:invented" })],
+    ["dependencyOrder", changeTask(5, { createdAt: 19 })],
+    ["boundedConcurrency", changeTask(3, { startedAt: 5 })],
+    ["settledChildren", changeTask(6, { status: "running", endedAt: undefined })],
+    [
+      "collectorLaunches",
+      withActivities(
+        evidence.trace.activities.map((activity, index) =>
+          index === 0 ? { ...activity, input: { ...activity.input, collect: false } } : activity,
+        ),
+      ),
+    ],
+  ];
+  for (const [check, patch] of invalid) {
+    const checks = await evaluate(patch);
     expect(Object.values(checks).every(Boolean), check).toBe(false);
     expect(checks[check], check).toBe(false);
-  };
-  await rejects("exactChildren", { taskRecords: taskRecords.slice(1) });
-  await rejects(
-    "collectorLaunches",
-    withActivities([...evidence.trace.activities, launch("fanout-r2-v1-H", "run-H")]),
-  );
-  await rejects("completedByResponse", changeTask(6, { endedAt: taskResponseAt + 1 }));
-  await rejects("completedByResponse", { taskResponseAt: undefined });
-  await rejects(
-    "exactSubmissions",
-    changeReceipt("fanout-submit", "G", { at: taskResponseAt + 1 }),
-  );
-  await rejects(
-    "completeSourceReads",
-    changeReceipt("fanout-read", "A", { sessionKey: "agent:qa:subagent:B" }),
-  );
-  await rejects(
-    "exactSubmissions",
-    changeTask(0, { childSessionKey: "agent:qa:subagent:invented" }),
-  );
-  await rejects("dependencyOrder", changeTask(5, { createdAt: 19 }));
-  await rejects("boundedConcurrency", changeTask(3, { startedAt: 5 }));
-  await rejects("settledChildren", changeTask(6, { status: "running", endedAt: undefined }));
-  await rejects(
-    "collectorLaunches",
-    withActivities(
-      evidence.trace.activities.map((activity, index) =>
-        index === 0 ? { ...activity, input: { ...activity.input, collect: false } } : activity,
-      ),
-    ),
-  );
+  }
   await fs.writeFile(
     path.join(workspace, "fanout-result.json"),
     JSON.stringify({ ...artifact, audit: { ...audit, totalCents: 1 } }),

@@ -3,7 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
@@ -127,23 +129,35 @@ const svgResponse = (body = '<svg xmlns="http://www.w3.org/2000/svg"></svg>') =>
 const subscribers = new Set<() => void>();
 
 function stubAttachmentIntersection(): () => Promise<void> {
-  const callbacks: IntersectionObserverCallback[] = [];
+  const callbacks: Array<() => void> = [];
   vi.stubGlobal(
     "IntersectionObserver",
     class {
-      constructor(callback: IntersectionObserverCallback) {
-        callbacks.push(callback);
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        callbacks.push(() => {
+          if (this.targets.has(target)) {
+            // SAFETY: The viewport owner reads only target and isIntersecting.
+            this.callback(
+              [{ target, isIntersecting: true } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          }
+        });
       }
-      observe() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   return async () => {
     await vi.waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
-    callbacks.shift()?.(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
+    callbacks.shift()?.();
   };
 }
 
@@ -415,15 +429,9 @@ describe("attachment sidebar source ownership", () => {
       if (failure === "chunk") {
         intersect = stubAttachmentIntersection();
         fetchMock.mockResolvedValue(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array(256 * 1024 + 1));
-              },
-              cancel,
-            }),
-            { headers: { "Content-Type": "image/svg+xml" } },
-          ),
+          new Response(makeStallingStream([new Uint8Array(256 * 1024 + 1)], cancel), {
+            headers: { "Content-Type": "image/svg+xml" },
+          }),
         );
       } else if (failure === "timeout") {
         vi.useFakeTimers();
@@ -568,7 +576,13 @@ describe("attachment sidebar source ownership", () => {
     {
       code: "unsupported-format",
       label: "settings.toml",
-      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
+      reason:
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
+    },
+    {
+      code: "file-too-large",
+      label: "orders-large.zip",
+      reason: "Too large to attach. Look for this file in Files.",
     },
     {
       code: "invalid-reference",
@@ -600,6 +614,34 @@ describe("attachment sidebar source ownership", () => {
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
       ),
     ).toBeNull();
+  });
+
+  it("offers filename search only for size failures with a current Files owner", () => {
+    const failure: AssistantAttachmentItem = {
+      type: "attachment_error",
+      attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+    };
+    const onFindWorkspaceFile = vi.fn();
+    const onOpenSidebar = vi.fn();
+    const options = { sessionKey: "agent:main:orders", agentId: "main", onFindWorkspaceFile };
+    draw([failure], options, onOpenSidebar);
+    const find = expectDefined(
+      container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__action"),
+      "Find in Files action",
+    );
+    expect(find.textContent?.trim()).toBe("Find in Files");
+    expect(find.getAttribute("aria-label")).toBe("Find orders-large.zip in Files");
+    find.click();
+    expect(onFindWorkspaceFile).toHaveBeenCalledExactlyOnceWith({
+      name: "orders-large.zip",
+      sessionKey: "agent:main:orders",
+      agentId: "main",
+    });
+    expect(onOpenSidebar).not.toHaveBeenCalled();
+    draw([failure], { sessionKey: options.sessionKey });
+    expect(card("__action")).toBeNull();
+    draw([{ ...failure, attachment: { ...failure.attachment, code: "delivery-failed" } }], options);
+    expect(card("__action")).toBeNull();
   });
 
   it("renders normalized base64 audio with inline playback and Files actions", () => {
@@ -636,11 +678,7 @@ describe("attachment sidebar source ownership", () => {
     const source = "/tmp/openclaw/clip.mp3";
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const token = new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "") ?? "";
-      return Response.json({
-        available: true,
-        mediaTicket: `ticket-${token}`,
-        mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-      });
+      return Response.json(mediaTicketPayload(`ticket-${token}`, 5 * 60_000));
     });
     vi.stubGlobal("fetch", fetchMock);
     let sidebarContent: AttachmentSidebarContent | undefined;

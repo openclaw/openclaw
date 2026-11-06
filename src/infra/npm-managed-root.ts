@@ -2,7 +2,7 @@ import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -772,10 +772,9 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   });
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
-    // Planning yields; publish this small manifest without yielding after authority revalidation.
-    params.beforePersistentApply?.();
-    replaceFileAtomicSync({
+    await replaceFileAtomic({
       filePath: manifestPath,
+      assertBeforeMutation: params.beforePersistentApply,
       content: `${JSON.stringify(next, null, 2)}\n`,
       mode: 0o600,
       dirMode: 0o777 & ~process.umask(),

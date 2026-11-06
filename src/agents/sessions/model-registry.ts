@@ -1,11 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { Api, Model, SimpleStreamOptions } from "../../llm/types.js";
+import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -34,7 +33,12 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
-import { resolveModelRegistryRequestAuth } from "./model-registry-request-auth.js";
+import {
+  resolveModelRegistryRequestAuth,
+  hasModelRegistryConfiguredAuth,
+  resolveModelRegistryProviderApiKey,
+} from "./model-registry-request-auth.js";
+import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -58,7 +62,6 @@ import {
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
-import { resolveConfigValueUncached } from "./resolve-config-value.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -630,7 +633,7 @@ export class ModelRegistry {
 
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
         models.push(
-          this.createRuntimeModel(providerName, providerConfig, modelDef, api, {
+          createRegistryRuntimeModel(providerName, providerConfig, modelDef, api, {
             baseUrl,
             input: runtimeInput,
           }),
@@ -639,40 +642,6 @@ export class ModelRegistry {
     }
 
     return models;
-  }
-
-  private createRuntimeModel(
-    provider: string,
-    config: ProviderModelCatalog,
-    model: NonNullable<ProviderModelCatalog["models"]>[number],
-    api: string | undefined,
-    catalog?: { baseUrl: string; input: Model["input"] },
-  ): Model {
-    return {
-      id: model.id,
-      name: catalog ? (model.name ?? model.id) : model.name,
-      api: api as Api,
-      provider,
-      baseUrl: catalog ? catalog.baseUrl : (model.baseUrl ?? config.baseUrl!),
-      reasoning: catalog ? (model.reasoning ?? false) : model.reasoning,
-      thinkingLevelMap: model.thinkingLevelMap,
-      input: catalog ? catalog.input : model.input,
-      cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
-      // Missing catalog windows remain unknown on disk; estimates belong to runtime models.
-      contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
-      ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
-      contextTokens: model.contextTokens,
-      ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
-      contextWindows: model.contextWindows,
-      contextWindowDefault: model.contextWindowDefault,
-      maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
-      ...(catalog && model.maxTokens !== undefined
-        ? { maxTokensSource: model.maxTokensSource }
-        : {}),
-      params: model.params,
-      headers: undefined,
-      compat: model.compat,
-    } as Model;
   }
 
   getAll(): Model[] {
@@ -692,15 +661,11 @@ export class ModelRegistry {
   }
 
   hasConfiguredAuth(model: Model): boolean {
-    const providerConfig = this.getModelProviderRequestConfig(model);
-    if (providerConfig?.auth === "none") {
-      return model.api === "openai-completions";
-    }
-    return (
-      this.authStorage.hasAuth(model.provider) ||
-      providerConfig?.auth === "aws-sdk" ||
-      providerConfig?.apiKey !== undefined
-    );
+    return hasModelRegistryConfiguredAuth({
+      model,
+      providerConfig: this.getModelProviderRequestConfig(model),
+      authStorage: this.authStorage,
+    });
   }
 
   private getModelProviderRequestConfig(model: Model): ProviderRequestConfig | undefined {
@@ -811,13 +776,11 @@ export class ModelRegistry {
   }
 
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
-    const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
-    if (apiKey !== undefined) {
-      return apiKey;
-    }
-
-    const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
-    return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+    return resolveModelRegistryProviderApiKey({
+      provider,
+      readProviderConfig: () => this.providerRequestConfigs.get(provider),
+      authStorage: this.authStorage,
+    });
   }
 
   isUsingOAuth(model: Model): boolean {
@@ -868,10 +831,9 @@ export class ModelRegistry {
         "ModelRegistry.unregisterProviderAsync",
       );
     }
-    if (!this.registeredProviders.has(providerName)) {
+    if (!this.registeredProviders.delete(providerName)) {
       return;
     }
-    this.registeredProviders.delete(providerName);
     this.refreshFromStorage();
   }
 
@@ -913,7 +875,7 @@ export class ModelRegistry {
         const api = modelDef.api || config.api;
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
-        this.models.push(this.createRuntimeModel(providerName, config, modelDef, api));
+        this.models.push(createRegistryRuntimeModel(providerName, config, modelDef, api));
       }
 
       if (config.oauth?.modifyModels) {

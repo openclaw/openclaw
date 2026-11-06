@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -93,22 +94,13 @@ async function setGatewayModelCatalogForTest(
     { refreshPreparedModelRuntimeSnapshots },
     { clearRuntimeConfigSnapshot, getRuntimeConfig, writeConfigFile },
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
-  await writeConfigFile({
-    models: {
-      providers: {
-        "ollama-cloud": {
-          baseUrl: "https://ollama-cloud.example.test/v1",
-          models: models.map((model) => ({
-            ...model,
-            reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          })),
-        },
-      },
-    },
-  });
+  await writeConfigFile(
+    configFor("ollama-cloud", "https://ollama-cloud.example.test/v1", {
+      models: models.map((model) =>
+        modelDefinition(model.id, { ...model, reasoning: false, contextWindow: 128_000 }),
+      ),
+    }),
+  );
   clearRuntimeConfigSnapshot();
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
@@ -192,6 +184,7 @@ describe("gateway server agent", () => {
             ? {
                 [sessionKey]: {
                   sessionId: "expired-predecessor",
+                  lifecycleRevision: "expired-lifecycle",
                   updatedAt: expiredAt,
                   sessionStartedAt: expiredAt,
                   lastInteractionAt: expiredAt,
@@ -227,7 +220,9 @@ describe("gateway server agent", () => {
           expect(stored.entry?.sessionId).toBe(boundSessionId);
         }
         if (kind === "expired") {
-          expect(boundSessionId).not.toBe("expired-predecessor");
+          expect(boundSessionId).toBe("expired-predecessor");
+          expect(stored.entry?.lifecycleRevision).toEqual(expect.any(String));
+          expect(stored.entry?.lifecycleRevision).not.toBe("expired-lifecycle");
         } else if (kind === "requested") {
           expect(boundSessionId).toBe("requested-session");
         }

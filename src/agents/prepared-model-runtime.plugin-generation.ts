@@ -55,6 +55,10 @@ const derivedGenerationBases = new WeakMap<
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimePluginGeneration
 >();
+const configuredGenerationBases = new WeakMap<
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimePluginGeneration
+>();
 
 /** Borrowing may narrow a prepared selection, but cannot acquire a different plugin owner. */
 export function preparedPluginGenerationSupportsSelections(
@@ -95,6 +99,33 @@ export function preparedPluginGenerationReusesBase(
     generation === base ||
     (generation !== undefined && derivedGenerationBases.get(generation) === base)
   );
+}
+
+/** Configured publication remains required for this generation and every derived view. */
+export function markPreparedPluginGenerationConfigured(
+  generation: PreparedModelRuntimePluginGeneration,
+): void {
+  configuredGenerationBases.set(generation, generation);
+}
+
+export function bindPreparedPluginGenerationConfiguredBase(
+  generation: PreparedModelRuntimePluginGeneration,
+  base: PreparedModelRuntimePluginGeneration,
+): void {
+  const configuredBase = configuredGenerationBases.get(base);
+  if (
+    configuredBase &&
+    preparedPluginGenerationReusesBase(generation, base) &&
+    !configuredGenerationBases.has(generation)
+  ) {
+    configuredGenerationBases.set(generation, configuredBase);
+  }
+}
+
+export function getPreparedPluginGenerationConfiguredBase(
+  generation: PreparedModelRuntimePluginGeneration,
+): PreparedModelRuntimePluginGeneration | undefined {
+  return configuredGenerationBases.get(generation);
 }
 
 export function createPreparedPluginGeneration(params: {

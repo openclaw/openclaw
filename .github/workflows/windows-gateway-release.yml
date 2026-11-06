@@ -1,0 +1,74 @@
+name: Windows Gateway Release Request
+
+run-name: Windows Gateway Release Request [${{ inputs.tag }}] source=${{ inputs.release_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published regular stable or beta Gateway tag
+        required: true
+        type: string
+      release_sha:
+        description: Exact signed Gateway release source commit
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: windows-gateway-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  request:
+    name: Request stable Store approval or publish beta GitHub assets
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted Gateway handoff tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+      - name: Create cross-repository build and approval request token
+        id: packaging_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: |
+            openclaw
+            openclaw-windows-packaging
+            ${{ !contains(inputs.tag, '-beta.') && 'releases' || '' }}
+          permission-actions: write
+          permission-contents: read
+      - name: Request publication of the exact published Gateway source
+        env:
+          GH_TOKEN: ${{ steps.packaging_token.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          WINDOWS_GATEWAY_RELEASE_EVIDENCE: ${{ runner.temp }}/windows-gateway-release.json
+        run: node scripts/windows-gateway-release.mjs publish
+      - name: Record unconfirmed Gateway publication
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Gateway publication is unconfirmed. Recover the downstream run IDs in this request's evidence; do not rerun the request or republish npm."
+      - name: Retain Gateway release request evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-gateway-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-gateway-release.json
+          if-no-files-found: warn
+          retention-days: 90

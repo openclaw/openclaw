@@ -5,10 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import {
-  registerSealedRuntimeProcessEntrypoint,
-  resolveRuntimeProcessEntrypointUrl,
-} from "./runtime-process-url.js";
+import * as runtimeProcess from "./runtime-process-url.js";
 import {
   captureLegacyStateSnapshotIdentity,
   readLegacyStateMigrationPlanConfig,
@@ -77,11 +74,14 @@ describe("legacy state migration snapshot identity", () => {
   });
 
   it("refuses unavailable snapshot workers without falling back to caller-process hashing", async () => {
-    const original = resolveRuntimeProcessEntrypointUrl("stateMigrationSnapshot");
-    registerSealedRuntimeProcessEntrypoint(
-      "stateMigrationSnapshot",
-      pathToFileURL(path.join(fixture.root, "missing-worker.js")),
-    );
+    const resolve = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+    const unavailable = vi
+      .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+      .mockImplementation((name) =>
+        name === "stateMigrationSnapshot"
+          ? pathToFileURL(path.join(fixture.root, "missing-worker.js"))
+          : resolve(name),
+      );
     try {
       const refused = await fixture.plan();
       expect(refused.refusal?.code).toBe("snapshot-identity-unavailable");
@@ -89,7 +89,7 @@ describe("legacy state migration snapshot identity", () => {
       expect(refused.steps).toEqual([]);
       expectWarning(refused.warnings, "Could not bind copied snapshot:");
     } finally {
-      registerSealedRuntimeProcessEntrypoint("stateMigrationSnapshot", original);
+      unavailable.mockRestore();
     }
     expectBoundPlan(await fixture.plan());
   });

@@ -37,6 +37,13 @@ const SEARCH_CANDIDATE_UNIVERSE = 200;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
+function shouldPropagateSearchSyncError(error: unknown): boolean {
+  return (
+    (error instanceof WorkerTaskError && error.code === "overloaded") ||
+    readErrorName(error) === "DatabaseSearchCapabilityUnavailableError"
+  );
+}
+
 export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
   async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
     const normalizedQuery = query.trim();
@@ -182,6 +189,19 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
     };
     const runSearch = async () => {
       opts?.onDebug?.({ backend: "builtin" });
+      if (this.purpose === "cli") {
+        // One-shot readers refresh before taking a lease; they have no resident timer.
+        this.dirty ||= this.sources.has("memory");
+        await this.syncAdmitted(
+          { reason: "cli-search" },
+          { allowEmbeddingBootstrapFallback: true },
+        ).catch((error: unknown) => {
+          if (shouldPropagateSearchSyncError(error)) {
+            throw error;
+          }
+          log.warn(`memory sync failed (cli-search): ${formatErrorMessage(error)}`);
+        });
+      }
       if (this.providerRequirement.mode === "required") {
         await this.ensureProviderInitialized();
         this.assertRequiredProviderAvailable("search");
@@ -199,10 +219,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
             { allowEmbeddingBootstrapFallback: true },
           );
         } catch (err) {
-          if (err instanceof WorkerTaskError && err.code === "overloaded") {
-            throw err;
-          }
-          if (readErrorName(err) === "DatabaseSearchCapabilityUnavailableError") {
+          if (shouldPropagateSearchSyncError(err)) {
             throw err;
           }
           if (
@@ -219,10 +236,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
             this.markEmbeddingBootstrapFailure(err, { provider: failedProvider });
             await this.syncAdmitted({ reason: "search-bootstrap" }).catch(
               (fallbackErr: unknown) => {
-                if (fallbackErr instanceof WorkerTaskError && fallbackErr.code === "overloaded") {
-                  throw fallbackErr;
-                }
-                if (readErrorName(fallbackErr) === "DatabaseSearchCapabilityUnavailableError") {
+                if (shouldPropagateSearchSyncError(fallbackErr)) {
                   throw fallbackErr;
                 }
                 const message = redactSensitiveText(formatErrorMessage(fallbackErr), {
@@ -232,7 +246,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
               },
             );
           } else {
-            log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+            log.warn(`memory sync failed (search-bootstrap): ${formatErrorMessage(err)}`);
           }
         }
         indexState = await readIndexState();
@@ -321,11 +335,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           { reason: "search" },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
-          if (
-            shouldUpgradeProviderKey ||
-            (err instanceof WorkerTaskError && err.code === "overloaded") ||
-            readErrorName(err) === "DatabaseSearchCapabilityUnavailableError"
-          ) {
+          if (shouldUpgradeProviderKey || shouldPropagateSearchSyncError(err)) {
             throw err;
           }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
@@ -357,30 +367,6 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         log.warn(
           "memory search: format upgrade rebuild is pending; serving the existing keyword index",
         );
-      }
-      // No watcher can observe later edits after kernel capacity exhaustion.
-      // Record a fresh generation at the search boundary so detached maintenance
-      // receives the fact instead of starting from a clean transient manager.
-      if (this.memoryWatchCapacityDegraded || this.memoryWatchUnavailable) {
-        this.dirty = true;
-      }
-      const capacitySyncInFlight =
-        (this.memoryWatchCapacityDegraded || this.memoryWatchUnavailable) &&
-        this.activeBackgroundSearchSyncs.size > 0;
-      if (
-        searchSyncEnabled &&
-        !capacitySyncInFlight &&
-        !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
-        this.dirty
-      ) {
-        const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
-          .catch((err: unknown) => {
-            log.warn(`memory sync failed (search): ${String(err)}`);
-          })
-          .finally(() => {
-            this.activeBackgroundSearchSyncs.delete(trackedSearchSync);
-          });
-        this.activeBackgroundSearchSyncs.add(trackedSearchSync);
       }
       // Reuse the facts captured under this lease. Bootstrap and repair release
       // it before writing, then reread the published generation before continuing.
@@ -531,6 +517,11 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const hasVector = queryVec.some((v) => v !== 0);
+      if (!hasVector) {
+        log.warn(
+          `memory search: query embedding from ${semanticProvider.id} is all zeros; vector recall skipped; check the embedding service and retry`,
+        );
+      }
       const vector = hasVector
         ? await this.searchVector(
             queryVec,
@@ -623,8 +614,8 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
             .catch((error: unknown) => {
               log.warn(`memory recall source cleanup failed: ${formatErrorMessage(error)}`);
             })
-            .finally(() => this.activeBackgroundSearchSyncs.delete(cleanup));
-          this.activeBackgroundSearchSyncs.add(cleanup);
+            .finally(() => this.activeBackgroundCleanup.delete(cleanup));
+          this.activeBackgroundCleanup.add(cleanup);
         }
       }
     });

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
-import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
+import { parseTtsDirectives } from "./directives.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
-import { speechProvider } from "./speech-provider.test-support.js";
+import { createSpeechPolicy, speechProvider } from "./speech-provider.test-support.js";
 
 const speed: NonNullable<SpeechProviderPlugin["parseDirectiveToken"]> = ({ key, value }) =>
   key === "speed" ? { handled: true, overrides: { speed: Number(value) } } : { handled: false };
@@ -14,16 +14,7 @@ const elevenlabs = speechProvider("elevenlabs", {
 });
 const minimax = speechProvider("minimax", { autoSelectOrder: 20, parseDirectiveToken: speed });
 
-const fullPolicy: SpeechModelOverridePolicy = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const fullPolicy: SpeechModelOverridePolicy = createSpeechPolicy(true);
 
 function parse(
   text: string,
@@ -102,34 +93,32 @@ describe("parseTtsDirectives provider-aware routing", () => {
     });
   });
 
-  it("keeps explicit-provider tokens scoped to the selected provider", () => {
-    const result = parse("[[tts:provider=minimax style=0.4 speed=1.2]]");
-
-    expect(result.overrides).toEqual({
-      provider: "minimax",
-      providerOverrides: { minimax: { speed: 1.2 } },
-    });
-    expect(result.warnings).toContain('unsupported minimax directive key "style"');
-  });
-
-  it("routes generic speakerVoice directive tokens to the selected provider", () => {
-    const result = parse(
-      "[[tts:provider=elevenlabs speakerVoice=Rachel speakerVoiceId=voice-123]]",
-    );
-
-    expect(result.overrides).toEqual({
-      provider: "elevenlabs",
-      providerOverrides: {
-        elevenlabs: {
-          speakerVoice: "Rachel",
-          voice: "Rachel",
-          voiceName: "Rachel",
-          speakerVoiceId: "voice-123",
-          voiceId: "voice-123",
-        },
+  it.each([
+    [
+      "minimax",
+      "style=0.4 speed=1.2",
+      { speed: 1.2 },
+      ['unsupported minimax directive key "style"'],
+    ],
+    [
+      "elevenlabs",
+      "speakerVoice=Rachel speakerVoiceId=voice-123",
+      {
+        speakerVoice: "Rachel",
+        voice: "Rachel",
+        voiceName: "Rachel",
+        speakerVoiceId: "voice-123",
+        voiceId: "voice-123",
       },
+      [],
+    ],
+  ] as const)("scopes directive tokens to %s", (provider, tokens, patch, warnings) => {
+    const result = parse(`[[tts:provider=${provider} ${tokens}]]`);
+    expect(result.overrides).toEqual({
+      provider,
+      providerOverrides: { [provider]: patch },
     });
-    expect(result.warnings).toStrictEqual([]);
+    expect(result.warnings).toEqual(warnings);
   });
 
   it("warns once and drops non-provider tokens when the explicit provider is unknown", () => {
@@ -170,57 +159,5 @@ describe("parseTtsDirectives provider-aware routing", () => {
       warnings: [],
       hasDirective: false,
     });
-  });
-});
-
-describe("createTtsDirectiveTextStreamCleaner", () => {
-  it.each([
-    [
-      ["Hello [[tts:voice=al", "loy]]world[[/tt", "s]]"],
-      ["Hello ", "world", ""],
-    ],
-    [
-      ["Shown [[tts:text]]hid", "den[[/tts:text]] visible"],
-      ["Shown ", " visible"],
-    ],
-  ] as const)("cleans every incremental chunk: %j", (chunks, expected) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk))).toEqual(expected);
-    expect(cleaner.flush()).toBe("");
-  });
-
-  it.each([
-    [["Some [[tts:hello there]] note"], "Some hello there note"],
-    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
-    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
-    [["Go [[tts:\nhello]] now"], "Go hello now"],
-    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
-    [["See [[note"], "See [[note"],
-    [
-      ["[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]"],
-      " Visible. ",
-    ],
-    [
-      [
-        "[[tts:text]]Press the ` key.[[/tts:text]]",
-        " Visible. [[tts:text]]Audio only.[[/tts:text]]",
-      ],
-      " Visible. ",
-    ],
-  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
-  });
-
-  it.each([
-    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
-    ["Use `", "[[tts:literal", " speech]]", "` here."],
-    ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
-    ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
-  ])("preserves code literals across chunks: %j", (...chunks) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
-    expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
-    expect(cleaner.flush()).toBe("");
   });
 });

@@ -105,22 +105,16 @@ export async function resolveMatrixInboundContext(config: {
     }
     return true;
   };
-  const shouldIncludeRoomContextSender = (
-    kind: "thread" | "quote" | "history",
-    contextSenderId?: string,
-  ): boolean =>
+  const shouldIncludeRoomContextSender = (contextSenderId?: string): boolean =>
     evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
-      kind,
+      kind: "thread",
       senderAllowed: isRoomContextSenderAllowed(contextSenderId),
     }).include;
   let threadContext =
     ingress.threadContext ??
     (threadRootId ? await resolveThreadContext({ roomId, eventId: threadRootId }) : undefined);
-  if (
-    threadContext?.senderId &&
-    !shouldIncludeRoomContextSender("thread", threadContext.senderId)
-  ) {
+  if (threadContext?.senderId && !shouldIncludeRoomContextSender(threadContext.senderId)) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
     threadContext = undefined;
   }
@@ -238,10 +232,12 @@ export async function resolveMatrixInboundContext(config: {
       nativeChannelId: roomId,
       threadId: threadTarget,
     },
+    // Preserve model ancestry without requesting a room-transcript fork.
     route: {
       ..._route,
       routeSessionKey: _route.sessionKey,
-      parentSessionKey:
+      parentSessionKey: undefined,
+      modelParentSessionKey:
         threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
     },
     reply: {

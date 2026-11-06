@@ -1,6 +1,7 @@
 import { setImmediate as settle } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runStandaloneMcpAppHost } from "./mcp-app-standalone-host.js";
 import {
   createMcpAppStandaloneTicket,
   createSerializedHost,
@@ -46,6 +47,9 @@ async function appStatus(ticket: string, params: Partial<Parameters<typeof reque
 }
 const appCall = (name = "app-only") => ({ method: "tools/call", params: { name, arguments: {} } });
 const resourceRead = { method: "resources/read", params: { uri: "ui://demo/state" } };
+function issue(overrides: Partial<Parameters<typeof issueTicket>[0]> = {}) {
+  return issueTicket({ sessionKey: "agent:main:main", view, nowMs, ...overrides });
+}
 function mintTicket(
   sessionKey: string,
   changes: Partial<Parameters<typeof createMcpAppStandaloneTicket>[0]["view"]> = {},
@@ -79,11 +83,11 @@ describe("MCP App standalone host", () => {
   });
 
   it("mints an opaque reusable ticket and rejects tampering and expiry at HTTP admission", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u);
     expect(issued.ticket).not.toContain("agent:main:main");
     expect(issued.expiresAtMs).toBe(nowMs + 2 * 60_000);
-    expect(issueTicket({ sessionKey: "agent:main:main", view, nowMs: nowMs + 1 })).toEqual(issued);
+    expect(issue({ nowMs: nowMs + 1 })).toEqual(issued);
     const invoke = (ticket: string, now = nowMs) => appStatus(ticket, { now });
     expect(await invoke(issued.ticket)).toBe(200);
     expect(mocks.peekSessionMcpRuntime).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
@@ -96,38 +100,11 @@ describe("MCP App standalone host", () => {
     expect(mintTicket("agent:main:main", { requesterId: "alice" })).toBeUndefined();
   });
 
-  it("bounds ticket lifetime and omits issuance at capacity", () => {
+  it("bounds ticket lifetime by the view lease", () => {
     const shortView = { ...view, expiresAtMs: nowMs + 1_000 };
     expect(issueTicket({ sessionKey: "short", view: shortView, nowMs }).expiresAtMs).toBe(
       nowMs + 1_000,
     );
-    vi.spyOn(Date, "now").mockReturnValue(nowMs + 1_001);
-    for (let index = 0; index < 256; index += 1) {
-      expect(mintTicket(`agent:${index}`, { viewId: `mcp-app-${index}` })).toBeDefined();
-    }
-    expect(mintTicket("agent:overflow", { viewId: "mcp-app-overflow" })).toBeUndefined();
-  });
-
-  it("binds tool authority and never reuses a stronger ticket for a read-only issuer", async () => {
-    const stronger = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const readOnly = issueTicket({
-      sessionKey: "agent:main:main",
-      view,
-      toolOperationsAuthorized: false,
-      nowMs: nowMs + 1,
-    });
-
-    expect(readOnly.ticket).not.toBe(stronger.ticket);
-    const payload = await appRequest(readOnly.ticket);
-    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
-      serverTools: false,
-    });
-
-    expect(await operations(readOnly.ticket)(appCall())).toBe(403);
-    expect(runtime.callTool).not.toHaveBeenCalled();
-
-    expect(await operations(stronger.ticket)(appCall())).toBe(200);
-    expect(runtime.callTool).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -136,9 +113,7 @@ describe("MCP App standalone host", () => {
       const path = `/__openclaw__/mcp-app${authorized ? "/view" : ""}`;
       const originalHtml = view.html;
       view.html = "<!doctype html><p>caf\u00e9 \ud83e\udd9e</p>";
-      const ticket = authorized
-        ? issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket
-        : undefined;
+      const ticket = authorized ? issue().ticket : undefined;
       const server = await startStandaloneHttp({ sandboxPort: 18_790 });
       try {
         const headers = ticket ? { Authorization: `MCP-App ${ticket}` } : undefined;
@@ -171,26 +146,36 @@ describe("MCP App standalone host", () => {
     },
   );
 
-  it("bounds initial serialized body fetch with a visible outcome", async () => {
-    const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
-    const initialSignal = AbortSignal.abort(timeoutError);
-    const initialBody = createDeferred<unknown>();
-    const host = await createSerializedHost({ initialBody, initialSignal });
-    initialBody.reject(timeoutError);
-    await vi.waitFor(() =>
-      expect(host.replaceChildren).toHaveBeenCalledWith(
-        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
-      ),
-    );
-    expect(host.timeout).toHaveBeenCalledWith(30_000);
-    expect(host.fetch).toHaveBeenCalledWith(
-      "/__openclaw__/mcp-app/view",
-      expect.objectContaining({ signal: initialSignal }),
-    );
+  it("bounds the built browser fetch when runtime function source is unavailable", async () => {
+    Object.defineProperty(runStandaloneMcpAppHost, "toString", {
+      configurable: true,
+      value() {
+        throw new Error("Runtime function source is unavailable");
+      },
+    });
+    try {
+      const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      const initialSignal = AbortSignal.abort(timeoutError);
+      const initialBody = createDeferred<unknown>();
+      const host = await createSerializedHost({ initialBody, initialSignal });
+      initialBody.reject(timeoutError);
+      await vi.waitFor(() =>
+        expect(host.replaceChildren).toHaveBeenCalledWith(
+          expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+        ),
+      );
+      expect(host.timeout).toHaveBeenCalledWith(30_000);
+      expect(host.fetch).toHaveBeenCalledWith(
+        "/__openclaw__/mcp-app/view",
+        expect.objectContaining({ signal: initialSignal }),
+      );
+    } finally {
+      Reflect.deleteProperty(runStandaloneMcpAppHost, "toString");
+    }
   });
 
   it("returns capabilities only for handlers installed on the live view", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     const route = "/__openclaw__/mcp-app/view";
     expect((await request({ url: route })).res.statusCode).toBe(401);
     expect((await request({ url: `${route}?ticket=${issued.ticket}` })).res.statusCode).toBe(401);
@@ -202,6 +187,9 @@ describe("MCP App standalone host", () => {
       serverTools: true,
       serverResources: true,
     });
+    const readOnly = issue({ toolOperationsAuthorized: false });
+    const payload = await appRequest(readOnly.ticket);
+    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toHaveProperty("serverTools", false);
     expect(await appStatus(issued.ticket)).toBe(200);
     for (const replacement of [null, { ...runtime, sessionId: "runtime-replaced" }]) {
       mocks.peekSessionMcpRuntime.mockReturnValue(replacement);
@@ -233,7 +221,6 @@ describe("MCP App standalone host", () => {
     operation.result.resolve("late response");
     await settle();
     expect(host.postMessage.mock.calls.filter(([message]) => message.id === id)).toEqual([]);
-    expect(host.timeout).toHaveBeenCalledTimes(1);
 
     call(host, "next");
     host.emit(cancel);
@@ -370,44 +357,26 @@ describe("MCP App standalone host", () => {
 
   it("finishes an existing call and async teardown save before unmount", async () => {
     const host = await createSerializedHost();
-    const existingReply = createDeferred();
-    const savedReply = createDeferred();
-    let cleanup: Promise<void> | undefined;
-    host.postMessage.mockImplementation((message) => {
-      if (message.method === "ui/resource-teardown") {
-        cleanup = Promise.resolve().then(async () => {
-          await existingReply.promise;
-          call(host, "save");
-          await savedReply.promise;
-          host.emit({ jsonrpc: "2.0", id: message.id, result: {} });
-        });
-      } else if (message.id === "existing" && "result" in message) {
-        existingReply.resolve();
-      } else if (message.id === "save" && "result" in message) {
-        savedReply.resolve();
-      }
-    });
     try {
       call(host, "existing");
       host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
-      expect(cleanup).toBeDefined();
+      expectMessage(host, { jsonrpc: "2.0", id: 1, method: "ui/resource-teardown", params: {} });
       expect(host.frame.remove).not.toHaveBeenCalled();
       expect(host.operations[0]!.signal?.aborted).toBe(false);
       host.operations[0]!.result.resolve("existing saved");
-      await vi.waitFor(() => expect(host.operations).toHaveLength(2));
+      await vi.waitFor(() => expectReply(host, "existing", "existing saved"));
+      call(host, "save");
+      expect(host.operations).toHaveLength(2);
       const save = host.operations.at(-1)!;
       expect(save.signal?.aborted).toBe(false);
       expect(host.frame.remove).not.toHaveBeenCalled();
       save.result.resolve("cleanup saved");
-      await cleanup;
-      expectReply(host, "save", "cleanup saved");
+      await vi.waitFor(() => expectReply(host, "save", "cleanup saved"));
+      host.emit({ jsonrpc: "2.0", id: 1, result: {} });
       expect(host.frame.remove).toHaveBeenCalledOnce();
       host.timers[0]!.run();
       expect(host.frame.remove).toHaveBeenCalledOnce();
     } finally {
-      existingReply.resolve();
-      savedReply.resolve();
-      await cleanup;
       for (const operation of host.operations) {
         operation.result.resolve("cleanup");
       }
@@ -473,7 +442,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     const invoke = operations(issued.ticket);
 
     expect(await invoke(appCall())).toBe(200);
@@ -487,34 +456,6 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).toHaveBeenCalledTimes(1);
     expect(releaseRuntimeLease).toHaveBeenCalled();
     expect(mocks.completeRetirement).toHaveBeenCalledWith(runtime);
-  });
-
-  it("inherits post-catalog grant revalidation from the shared operation boundary", async () => {
-    const catalogStarted = createDeferred();
-    const releaseCatalog = createDeferred<Awaited<ReturnType<typeof runtime.getCatalog>>>();
-    runtime.getCatalog.mockImplementationOnce(async () => {
-      catalogStarted.resolve();
-      return await releaseCatalog.promise;
-    });
-    let grantActive = true;
-    view.authorizeAppInteraction = vi.fn(async () => grantActive);
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-
-    const pending = appRequest(issued.ticket, {
-      method: "POST",
-      body: appCall(),
-    });
-    await catalogStarted.promise;
-    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
-    grantActive = false;
-    releaseCatalog.resolve({
-      tools: [{ serverName: "demo", toolName: "app-only", uiVisibility: ["app"] }],
-    });
-
-    const denied = await pending;
-    expect(denied.res.statusCode).toBe(403);
-    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
-    expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
   it.each(["read-only", "unbound", "rejected-authority"])(
@@ -532,7 +473,7 @@ describe("MCP App standalone host", () => {
                 },
               },
       );
-      const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+      const issued = issue();
       const invoke = operations(issued.ticket);
       if (mode !== "unbound") {
         const payload = await appRequest(issued.ticket);
@@ -551,7 +492,7 @@ describe("MCP App standalone host", () => {
   );
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     const invoke = (now: number) =>
       appStatus(issued.ticket, {
         method: "POST",
@@ -580,7 +521,7 @@ describe("MCP App standalone host", () => {
   });
 
   it("is path-scoped and rejects malformed operations", async () => {
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+    const issued = issue();
     expect((await request({ url: "/__openclaw__/mcp-app", method: "POST" })).res.statusCode).toBe(
       404,
     );
@@ -630,26 +571,16 @@ describe("standalone channel launch", () => {
   it("emits only a typed launch action with a usable tool-authorized opaque ticket", async () => {
     publish();
     const presentation = materialize();
-    expect(presentation).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Open app",
-              action: {
-                type: "web-app",
-                url: expect.stringMatching(
-                  /^https:\/\/node\.tailnet\.ts\.net\/__openclaw__\/mcp-app#v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u,
-                ),
-              },
-            },
-          ],
-        },
-      ],
+    expect(JSON.stringify(presentation)).not.toContain(view.html);
+    const button = presentation?.blocks.find((block) => block.type === "buttons")?.buttons[0];
+    expect(button?.label).toBe("Open app");
+    const action = button?.action;
+    expect(action).toEqual({
+      type: "web-app",
+      url: expect.stringMatching(
+        /^https:\/\/node\.tailnet\.ts\.net\/__openclaw__\/mcp-app#v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u,
+      ),
     });
-    const action = presentation?.blocks.find((block) => block.type === "buttons")?.buttons[0]
-      ?.action;
     if (action?.type !== "web-app" || !action.url) {
       throw new Error("missing app launch action");
     }

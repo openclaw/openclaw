@@ -1,5 +1,6 @@
 import type { MessagePort, Worker, WorkerOptions } from "node:worker_threads";
 import { afterEach, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
@@ -84,4 +85,55 @@ export function useReconcileWorkerObserver() {
     observer.workers.clear();
   });
   return observer;
+}
+
+export function holdReconcileAck(
+  reconcileObserver: ReturnType<typeof useReconcileWorkerObserver>,
+  stage: "plan-start" | "plan-finish",
+  sessionId?: string,
+  databasePath?: string,
+) {
+  const paused = createDeferred();
+  let release: (() => void) | undefined;
+  let worker: Worker | undefined;
+  let released = false;
+  const plannerLeases = new Map<string, string>();
+  reconcileObserver.onTask = ({ input, worker: created, port, observeMessage }) => {
+    if (databasePath !== undefined && (input.mode !== "disk" || input.path !== databasePath)) {
+      return;
+    }
+    worker = created;
+    if (input.mode === "disk") {
+      plannerLeases.set(input.path, input.leaseId);
+    }
+    let holding = false;
+    observeMessage((message) => {
+      holding =
+        message.type === stage &&
+        (sessionId === undefined ||
+          (message.type === "plan-start" && message.plan.sessionId === sessionId) ||
+          (message.type === "plan-finish" && message.sessionId === sessionId));
+    });
+    const post = port.postMessage.bind(port);
+    port.postMessage = (message, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      if (holding && !released) {
+        holding = false;
+        release = () => post(message, options);
+        paused.resolve();
+      } else {
+        post(message, options);
+      }
+    };
+  };
+  return {
+    paused: paused.promise,
+    plannerLeases,
+    threadId: () => worker?.threadId,
+    release: () => {
+      // A targeted lifecycle fence releases permanently; unscoped callers may hold later plans.
+      released = sessionId !== undefined;
+      release?.();
+    },
+  };
 }

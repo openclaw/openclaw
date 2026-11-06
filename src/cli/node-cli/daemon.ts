@@ -202,9 +202,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
   let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
-  const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
+  const runtimeRaw =
+    opts.runtime ||
+    pinSnapshot.pin?.runtime ||
+    resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node", "bun", or "standalone")');
     return;
   }
 
@@ -261,7 +264,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   });
   const cliEntrypoint =
     restoreServiceCli?.entrypoint ??
-    (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(installEnv) : undefined);
+    (!devMode && !wrapperPath && runtime !== "standalone"
+      ? await resolveDurableNodeEntrypoint(installEnv)
+      : undefined);
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,

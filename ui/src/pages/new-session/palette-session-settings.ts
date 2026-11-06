@@ -18,19 +18,10 @@ export type SettingsOptions = {
   draft: NewSessionDraft;
   context: ApplicationContext | undefined;
   preferences: PaletteSessionPreferences;
-  onAgentPickerOpen: (open: boolean) => void;
+  identityTargetsRef: (read: () => readonly string[]) => void;
+  onIdentityTargetsChange: () => void;
   onChange: () => void;
   onConnectMachine: () => void;
-};
-
-type MachineChoice = {
-  id: string;
-  label: string;
-  remote: boolean;
-  hosted?: boolean;
-  selected: boolean;
-  disabledReason?: string;
-  select: () => void;
 };
 
 export function resolvePaletteSessionSettings(options: SettingsOptions, search: string) {
@@ -60,7 +51,15 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
     projectQuery: "",
     freshWorkspace: place.freshWorkspace,
   });
-  const machines: MachineChoice[] = [
+  const machines: {
+    id: string;
+    label: string;
+    remote: boolean;
+    hosted?: boolean;
+    selected: boolean;
+    disabledReason?: string;
+    select: () => void;
+  }[] = [
     ...place.modelControl.hostedEnvironments().map((environment) => ({
       id: "runtime:" + environment.id,
       label: environment.label,
@@ -107,7 +106,7 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
       select: () => place.selectCloudProfile(profile.id),
     })),
   ];
-  const query = search.trim().toLocaleLowerCase();
+  const query = search.trim().toLocaleLowerCase().normalize("NFC");
   const groups = machines
     .map((machine) => ({
       machine,
@@ -136,7 +135,8 @@ export function resolvePaletteSessionSettings(options: SettingsOptions, search: 
           ]
       ).filter(
         (choice) =>
-          !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+          !query ||
+          (machine.label + " " + choice.label).toLocaleLowerCase().normalize("NFC").includes(query),
       ),
     }))
     .filter((group) => group.choices.length);

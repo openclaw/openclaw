@@ -1438,6 +1438,35 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Write Windows release approval
+        id: windows_approval
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}
+        continue-on-error: true
+        env:
+          SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
+        run: |
+          node .release-harness/scripts/windows-release-promotion.mjs create \
+            --receipt "$RUNNER_TEMP/openclaw-release-approval/approval.json" \
+            --output "$RUNNER_TEMP/windows-release-approval/approval.json"
+      - name: Attest Windows release approval
+        id: windows_attestation
+        if: ${{ steps.windows_approval.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/windows-release-approval/approval.json
+      - name: Upload Windows release approval
+        if: ${{ steps.windows_attestation.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-release-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify all prepared plugin bytes before publication
         if: inputs.prepared_plugins != ''
         env:
@@ -2540,18 +2569,18 @@ jobs:
           path: ${{ runner.temp }}/linux-dispatch.json
           if-no-files-found: warn
 
-  request_windows_gateway_store:
-    name: Request Gateway Microsoft Store publication
+  request_windows_gateway_release:
+    name: Request Gateway MSIX publication
     needs: [resolve_release_target, finalize_github_release]
-    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag == 'latest' && !contains(inputs.tag, '-beta.') }}
-    # The detached request owns MSIX/Store work, not npm or GitHub activation.
+    if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && ((inputs.npm_dist_tag == 'latest' && !contains(inputs.tag, '-beta.')) || (inputs.npm_dist_tag == 'beta' && contains(inputs.tag, '-beta.'))) }}
+    # The detached request owns MSIX publication, not npm or GitHub activation.
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - name: Checkout trusted Gateway Store request tooling
+      - name: Checkout trusted Gateway release request tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
@@ -2562,8 +2591,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
-      - name: Create Gateway Store request token
-        id: store_request_token
+      - name: Create Gateway release request token
+        id: gateway_request_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
@@ -2572,19 +2601,19 @@ jobs:
           repositories: openclaw
           permission-actions: write
           permission-contents: read
-      - name: Dispatch detached Gateway Store request
+      - name: Dispatch detached Gateway release request
         env:
-          GH_TOKEN: ${{ steps.store_request_token.outputs.token }}
+          GH_TOKEN: ${{ steps.gateway_request_token.outputs.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ needs.resolve_release_target.outputs.sha }}
-          WINDOWS_GATEWAY_STORE_EVIDENCE: ${{ runner.temp }}/windows-gateway-store.json
-        run: node scripts/windows-gateway-store-release.mjs request
-      - name: Retain Gateway Store dispatch evidence
+          WINDOWS_GATEWAY_RELEASE_EVIDENCE: ${{ runner.temp }}/windows-gateway-release.json
+        run: node scripts/windows-gateway-release.mjs request
+      - name: Retain Gateway release dispatch evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-gateway-store-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/windows-gateway-store.json
+          name: windows-gateway-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-gateway-release.json
           if-no-files-found: warn
 
   publish_windows:
@@ -2610,6 +2639,8 @@ jobs:
 
       - name: Dispatch detached Windows promotion
         env:
+          RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}

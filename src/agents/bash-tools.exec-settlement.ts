@@ -4,7 +4,7 @@ import {
   settleExecSessionFinalization,
   type ProcessSession,
 } from "./bash-process-registry.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
 
 /** Settle the process owner's ledger and notifications before releasing scope joins. */
 export async function settleExecProcessExit({
@@ -51,6 +51,11 @@ export async function settleExecProcessExit({
       await settlement;
     }
   } finally {
+    try {
+      await session.durable?.finalize();
+    } catch {
+      session.finalizationFailed = true;
+    }
     try {
       if (!session.exited) {
         markProcessExited();

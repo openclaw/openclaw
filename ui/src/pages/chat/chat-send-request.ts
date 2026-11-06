@@ -1,11 +1,9 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
@@ -125,13 +123,4 @@ export function resolveDisplayedLeafEntryId(state: ChatState): string | null | u
   }
   const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
   return leafEntryId || undefined;
-}
-
-const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
-
-export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
-  );
 }

@@ -1,11 +1,8 @@
-/**
- * Gateway exec approval E2E tests.
- * Exercises a real gateway server approval flow, approval follow-up text, and
- * approval timeout behavior in an isolated temp config.
- */
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -26,12 +23,16 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
+import type {
+  ExecApprovalFollowupFactory,
+  ExecApprovalFollowupOutcome,
+} from "./bash-tools.exec-types.js";
 import { createExecTool } from "./bash-tools.js";
 
 const TEST_ENV_KEYS = [
@@ -61,6 +62,32 @@ function requireApprovalId(details: unknown): string {
   return record.approvalId;
 }
 
+function scheduledExec(
+  config: OpenClawConfig,
+  workspaceDir: string,
+  approvalFollowup: ExecApprovalFollowupFactory,
+) {
+  return expectDefined(
+    createOpenClawCodingTools({
+      agentId: "main",
+      config,
+      workspaceDir,
+      cwd: workspaceDir,
+      sessionPermissionPolicy: { root: workspaceDir, mode: "full" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "trusted",
+        execTarget: { host: "gateway", ask: "always" },
+      },
+      exec: { approvalRunningNoticeMs: 0, approvalFollowupMode: "direct", approvalFollowup },
+    }).find((candidate) => candidate.name === "exec"),
+    "scheduled exec tool",
+  );
+}
+
+const approvedOutcome = (promise: Promise<ExecApprovalFollowupOutcome>) =>
+  withTimeout(promise, 15_000, { message: "timed out waiting for approved exec outcome" });
+
 describe("gateway-hosted exec approvals", () => {
   const cleanup: Cleanup[] = [];
 
@@ -75,7 +102,7 @@ describe("gateway-hosted exec approvals", () => {
   });
 
   async function startApprovalGateway(
-    buildConfig: (params: { port: number; token: string; workspaceDir: string }) => OpenClawConfig,
+    buildConfig: (workspaceDir: string) => Partial<OpenClawConfig>,
     options: { extraEnvKeys?: string[]; configReload?: boolean } = {},
   ) {
     const extraEnvKeys = options.extraEnvKeys ?? [];
@@ -93,7 +120,16 @@ describe("gateway-hosted exec approvals", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
     const claim = await acquireGatewayE2ePortBlock();
-    const config = buildConfig({ port: claim.port, token, workspaceDir });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: workspaceDir },
+        entries: { main: {} },
+      },
+      gateway: { port: claim.port, auth: { mode: "token", token } },
+      tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+      ...buildConfig(workspaceDir),
+    };
     const server = await startClaimedGateway(claim, async () => {
       await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
@@ -125,37 +161,139 @@ describe("gateway-hosted exec approvals", () => {
     });
     cleanup.push(() => server.close());
 
-    const operator = await connectGatewayClient({
-      url: `ws://127.0.0.1:${claim.port}`,
-      token,
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "approval operator",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      scopes: [ADMIN_SCOPE],
-      caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
-      requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-      timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-    });
-    cleanup.push(() => disconnectGatewayClient(operator));
-    return { config, configPath, operator, port: claim.port, stateDir, token, workspaceDir };
+    const connect = async (clientDisplayName: string, reviewer?: string) => {
+      const deviceIdentity = reviewer
+        ? loadOrCreateDeviceIdentity({
+            path: path.join(
+              stateDir,
+              "test-device-identities",
+              reviewer,
+              "client",
+              "credentials.sqlite",
+            ),
+          })
+        : undefined;
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${claim.port}`,
+        token,
+        clientDisplayName,
+        deviceIdentity,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: [reviewer ? APPROVALS_SCOPE : ADMIN_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      });
+      cleanup.push(() => disconnectGatewayClient(client));
+      return { client, deviceIdentity };
+    };
+    const { client: operator } = await connect("approval operator");
+    return { config, configPath, operator, connect, port: claim.port, workspaceDir };
   }
+
+  it.skipIf(process.platform === "win32" || !existsSync("/usr/bin/printf"))(
+    "gates dynamic predicates through real gateway approval and process owners",
+    async () => {
+      const { operator, workspaceDir } = await startApprovalGateway(() => ({
+        tools: { exec: { host: "gateway", security: "allowlist", ask: "on-miss" } },
+      }));
+      await fs.writeFile(path.join(workspaceDir, "proof.txt"), "fixture");
+      const command = "test -e *.txt && /usr/bin/printf 'approved\\n'";
+      const setPolicy = async (security: "allowlist" | "deny", ask: "on-miss" | "off") => {
+        const previous = await operator.request<{ hash: string }>("exec.approvals.get", {});
+        await operator.request("exec.approvals.set", {
+          baseHash: previous.hash,
+          file: {
+            version: 1,
+            defaults: { security, ask, askFallback: "deny" },
+            agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
+          },
+        });
+        const current = await operator.request<{
+          file: { defaults: { security: string; ask: string } };
+        }>("exec.approvals.get", {});
+        expect(current.file.defaults).toMatchObject({ security, ask });
+      };
+      const tool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+        safeBins: [],
+        cwd: workspaceDir,
+        agentId: "main",
+      });
+      const pendingApprovalId = async () => {
+        let id: string | undefined;
+        await vi.waitFor(
+          async () => {
+            const pending = await operator.request<
+              Array<{ id: string; request: { command?: string } }>
+            >("exec.approval.list", {});
+            id = pending.find((entry) => entry.request.command === command)?.id;
+            expect(id).toBeDefined();
+          },
+          { timeout: 15_000, interval: 100 },
+        );
+        return expectDefined(id, "pending dynamic predicate approval");
+      };
+
+      await setPolicy("allowlist", "off");
+      const deniedTool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        safeBins: [],
+        cwd: workspaceDir,
+        agentId: "main",
+      });
+      await expect(
+        deniedTool.execute("dynamic-predicate-denied", { command, workdir: workspaceDir }),
+      ).rejects.toThrow("exec denied: allowlist miss");
+
+      await setPolicy("allowlist", "on-miss");
+      const approved = tool.execute("dynamic-predicate-approved", {
+        command,
+        workdir: workspaceDir,
+      });
+      const approvedId = await pendingApprovalId();
+      await operator.request("exec.approval.resolve", {
+        id: approvedId,
+        decision: "allow-once",
+      });
+      expect((await approved).details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: "approved",
+      });
+
+      const revoked = tool.execute("dynamic-predicate-revoked", {
+        command,
+        workdir: workspaceDir,
+      });
+      const revokedId = await pendingApprovalId();
+      await setPolicy("deny", "off");
+      await operator.request("exec.approval.resolve", {
+        id: revokedId,
+        decision: "allow-once",
+      });
+      await expect(revoked).rejects.toThrow("Exec approval changed before execution");
+    },
+    EXEC_APPROVAL_E2E_TIMEOUT_MS,
+  );
 
   it(
     "keeps a scheduled approval floor in a reused full-permission session",
     async () => {
-      const { config, operator, port, stateDir, token, workspaceDir } = await startApprovalGateway(
-        (gateway) => ({
+      const { config, operator, connect, workspaceDir } = await startApprovalGateway(
+        (workspace) => ({
           agents: {
             ownership: "explicit",
-            defaults: { workspace: gateway.workspaceDir },
+            defaults: { workspace },
             entries: {
               main: { tools: { exec: { cleanupMs: 180_000 } } },
               helper: {},
             },
-          },
-          gateway: {
-            port: gateway.port,
-            auth: { mode: "token", token: gateway.token },
           },
           tools: {
             exec: {
@@ -168,79 +306,19 @@ describe("gateway-hosted exec approvals", () => {
         }),
       );
 
-      const originReviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(
-          stateDir,
-          "test-device-identities",
-          "origin-reviewer",
-          "client",
-          "credentials.sqlite",
-        ),
-      });
-      const otherReviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(
-          stateDir,
-          "test-device-identities",
-          "other-reviewer",
-          "client",
-          "credentials.sqlite",
-        ),
-      });
-      const originReviewer = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        clientName: GATEWAY_CLIENT_NAMES.TEST,
-        clientDisplayName: "origin approval reviewer",
-        mode: GATEWAY_CLIENT_MODES.TEST,
-        scopes: [APPROVALS_SCOPE],
-        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
-        deviceIdentity: originReviewerIdentity,
-        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-      });
-      cleanup.push(() => disconnectGatewayClient(originReviewer));
-      const otherReviewer = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        clientName: GATEWAY_CLIENT_NAMES.TEST,
-        clientDisplayName: "other approval reviewer",
-        mode: GATEWAY_CLIENT_MODES.TEST,
-        scopes: [APPROVALS_SCOPE],
-        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
-        deviceIdentity: otherReviewerIdentity,
-        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-      });
-      cleanup.push(() => disconnectGatewayClient(otherReviewer));
-
-      let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      const { client: originReviewer, deviceIdentity } = await connect(
+        "origin approval reviewer",
+        "origin-reviewer",
+      );
+      const { client: otherReviewer } = await connect("other approval reviewer", "other-reviewer");
+      const allowed = createDeferredCore<ExecApprovalFollowupOutcome>();
       let approvedProcessId: string | undefined;
-
-      const tools = createOpenClawCodingTools({
-        agentId: "main",
-        workspaceDir,
-        cwd: workspaceDir,
-        config,
-        sessionPermissionPolicy: { root: workspaceDir, mode: "full" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "trusted",
-          execTarget: { host: "gateway", ask: "always" },
-        },
-        exec: {
-          approvalRunningNoticeMs: 0,
-          approvalFollowupMode: "direct",
-          approvalFollowup: ({ outcome, sessionId }) => {
-            approvedProcessId = sessionId;
-            resolveOutcome(outcome);
-            return undefined;
-          },
-        },
+      let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      const tool = scheduledExec(config, workspaceDir, ({ outcome, sessionId }) => {
+        approvedProcessId = sessionId;
+        resolveOutcome(outcome);
+        return undefined;
       });
-      const tool = tools.find((candidate) => candidate.name === "exec");
-      if (!tool) {
-        throw new Error("expected scheduled exec tool");
-      }
 
       const markerPath = path.join(workspaceDir, "denied-marker");
       const deniedPending = await tool.execute("exec-approval-e2e-denied", {
@@ -256,9 +334,7 @@ describe("gateway-hosted exec approvals", () => {
       );
       await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
 
-      const allowedOutcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
-        resolveOutcome = resolve;
-      });
+      resolveOutcome = allowed.resolve;
 
       const pending = await tool.execute("exec-approval-e2e", {
         command: "printf 'smoke\\n'",
@@ -268,10 +344,10 @@ describe("gateway-hosted exec approvals", () => {
       const approvalId = requireApprovalId(pending.details);
 
       const helperTools = createOpenClawCodingTools({ agentId: "helper", config, workspaceDir });
-      const helperProcess = helperTools.find((candidate) => candidate.name === "process");
-      if (!helperProcess) {
-        throw new Error("expected helper process tool");
-      }
+      const helperProcess = expectDefined(
+        helperTools.find((candidate) => candidate.name === "process"),
+        "helper process tool",
+      );
       await helperProcess.execute("helper-process-during-approval", { action: "list" });
 
       await operator.request(
@@ -280,19 +356,15 @@ describe("gateway-hosted exec approvals", () => {
         { timeoutMs: 10_000 },
       );
 
-      const outcome = await withTimeout(allowedOutcomePromise, 15_000, {
-        message: "timed out waiting for approved exec outcome",
+      expect(await approvedOutcome(allowed.promise)).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: "smoke",
       });
-      expect(outcome.status).toBe("completed");
-      expect(outcome.exitCode).toBe(0);
-      expect(outcome.aggregated).toBe("smoke");
-      if (!approvedProcessId) {
-        throw new Error("expected the approved process identity");
-      }
-      const finished = getFinishedSession(approvedProcessId);
-      if (!finished) {
-        throw new Error("expected retained approved process output");
-      }
+      const finished = expectDefined(
+        getFinishedSession(expectDefined(approvedProcessId, "approved process identity")),
+        "retained approved process output",
+      );
       expect(finished.expiresAt - finished.endedAt).toBe(180_000);
 
       const {
@@ -310,16 +382,14 @@ describe("gateway-hosted exec approvals", () => {
             Surface: "webchat",
             From: "owner",
             To: "owner",
-            ApprovalReviewerDeviceId: originReviewerIdentity.deviceId,
+            ApprovalReviewerDeviceId: expectDefined(deviceIdentity, "origin reviewer identity")
+              .deviceId,
             OriginatingTo: "owner",
           },
           { workspaceDir },
         ),
       );
-      let resolveRoutedOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
-      const routedOutcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
-        resolveRoutedOutcome = resolve;
-      });
+      const routed = createDeferredCore<ExecApprovalFollowupOutcome>();
       const routedTool = createExecTool({
         host: "gateway",
         security: "allowlist",
@@ -328,7 +398,7 @@ describe("gateway-hosted exec approvals", () => {
         approvalRunningNoticeMs: 0,
         approvalFollowupMode: "direct",
         approvalFollowup: ({ outcome: routedOutcome }) => {
-          resolveRoutedOutcome(routedOutcome);
+          routed.resolve(routedOutcome);
           return undefined;
         },
         cwd: workspaceDir,
@@ -361,12 +431,11 @@ describe("gateway-hosted exec approvals", () => {
         { timeoutMs: 10_000 },
       );
 
-      const routedOutcome = await withTimeout(routedOutcomePromise, 15_000, {
-        message: "timed out waiting for device-bound exec outcome",
+      expect(await approvedOutcome(routed.promise)).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: "device-bound-smoke",
       });
-      expect(routedOutcome.status).toBe("completed");
-      expect(routedOutcome.exitCode).toBe(0);
-      expect(routedOutcome.aggregated).toBe("device-bound-smoke");
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );
@@ -378,19 +447,12 @@ describe("gateway-hosted exec approvals", () => {
       const newName = "OPENCLAW_E2E_HOOK_SOURCE_NEW";
       const oldValue = "synthetic-old-hook-ingress-value";
       const newValue = "synthetic-new-hook-ingress-value";
-      const { config, configPath, operator, port, workspaceDir } = await startApprovalGateway(
-        (gateway) => {
+      const { config, operator, port, workspaceDir } = await startApprovalGateway(
+        () => {
           setTestEnvValue(oldName, oldValue);
           setTestEnvValue(newName, newValue);
           return {
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: gateway.workspaceDir },
-              entries: { main: {} },
-            },
-            gateway: { port: gateway.port, auth: { mode: "token", token: gateway.token } },
             hooks: { enabled: true, token: `\${${oldName}}` },
-            tools: { exec: { host: "gateway", security: "full", ask: "off" } },
           };
         },
         { extraEnvKeys: [oldName, newName], configReload: true },
@@ -407,29 +469,10 @@ describe("gateway-hosted exec approvals", () => {
         ).status;
 
       let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
-      const tool = createOpenClawCodingTools({
-        agentId: "main",
-        workspaceDir,
-        cwd: workspaceDir,
-        config,
-        sessionPermissionPolicy: { root: workspaceDir, mode: "full" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "trusted",
-          execTarget: { host: "gateway", ask: "always" },
-        },
-        exec: {
-          approvalRunningNoticeMs: 0,
-          approvalFollowupMode: "direct",
-          approvalFollowup: ({ outcome }) => {
-            resolveOutcome(outcome);
-            return undefined;
-          },
-        },
-      }).find((candidate) => candidate.name === "exec");
-      if (!tool) {
-        throw new Error("expected exec tool");
-      }
+      const tool = scheduledExec(config, workspaceDir, ({ outcome }) => {
+        resolveOutcome(outcome);
+        return undefined;
+      });
       const queue = async (id: string, command = "env") => {
         const outcome = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
           resolveOutcome = resolve;
@@ -449,9 +492,7 @@ describe("gateway-hosted exec approvals", () => {
         );
       const approve = async (queued: Awaited<ReturnType<typeof queue>>) => {
         await allowOnce(queued.approvalId);
-        const outcome = await withTimeout(queued.outcome, 15_000, {
-          message: `timed out waiting for approved exec outcome (${queued.id})`,
-        });
+        const outcome = await approvedOutcome(queued.outcome);
         expect(outcome.status).toBe("completed");
         const inherited = new Set(outcome.aggregated.split("\n").map((line) => line.split("=")[0]));
         return [oldName, newName].filter((name) => inherited.has(name));
@@ -468,11 +509,11 @@ describe("gateway-hosted exec approvals", () => {
       // An approval still pending when hooks.token is reloaded to another env name.
       const markerPath = path.join(workspaceDir, "queued-across-reload");
       const queued = await queue("hook-token-queued", `touch ${JSON.stringify(markerPath)}`);
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ ...config, hooks: { enabled: true, token: `\${${newName}}` } }, null, 2)}\n`,
-        "utf8",
-      );
+      const before = await operator.request<{ hash: string }>("config.get", {});
+      await operator.request("config.patch", {
+        baseHash: before.hash,
+        raw: JSON.stringify({ hooks: { token: `\${${newName}}` } }),
+      });
       await vi.waitFor(async () => expect(await wake(newValue)).toBe(400), {
         timeout: 15_000,
         interval: 500,

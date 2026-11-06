@@ -3,7 +3,7 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
-import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
@@ -355,7 +355,9 @@ export function resolveUpdateStatusBanner(params: {
     // which step owned it.
     text: cause
       ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
-      : t("updates.status", { status, reason, guidance }),
+      : status === "error"
+        ? t("updates.error", { error: `${reason}. ${guidance}` })
+        : t("updates.status", { status, reason, guidance }),
   };
 }
 

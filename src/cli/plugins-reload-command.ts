@@ -1,7 +1,9 @@
 import type { PluginsReloadResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatSelectedEntry } from "../plugins/reload-entry-guidance.js";
 import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 
@@ -14,7 +16,7 @@ export async function runPluginsReloadCommand(
   const pluginIds = [...new Set(ids)];
   const gateway = await resolvePluginLifecycleGateway();
   if (!gateway) {
-    throw new Error("The Gateway is not running. Start it before reloading a plugin.");
+    throwExpectedCliError("The Gateway is not running. Start it before reloading a plugin.");
   }
   const consent = resolvePluginCapabilityConsentCliOptions({
     ...opts,
@@ -33,12 +35,12 @@ export async function runPluginsReloadCommand(
     return defaultRuntime.writeJson(result);
   }
   for (const warning of result.warnings ?? []) {
-    defaultRuntime.log(theme.warn(warning));
+    defaultRuntime.log(theme.warn(terminalText`${warning}`));
   }
   for (const [id, entry] of Object.entries(result.runtime.selectedEntries ?? {})) {
-    defaultRuntime.log(`${id}: ${formatSelectedEntry(entry)}`);
+    defaultRuntime.log(terminalText`${id}: ${formatSelectedEntry(entry)}`);
   }
   defaultRuntime.log(
-    `Reloaded ${result.restartRequired ? "registrations for " : ""}${pluginIds.length === 1 ? "plugin" : "plugins"} ${pluginIds.map((id) => `"${id}"`).join(", ")} (generation ${result.runtime.generation}).${result.restartRequired ? " Gateway restart required to load edited code." : ""}`,
+    terminalText`Reloaded ${result.restartRequired ? "registrations for " : ""}${pluginIds.length === 1 ? "plugin" : "plugins"} ${pluginIds.map((id) => `"${id}"`).join(", ")} (generation ${result.runtime.generation}).${result.restartRequired ? " Gateway restart required to load edited code." : ""}`,
   );
 }

@@ -7,7 +7,7 @@ import {
 } from "../../lib/chat/history-message-identity.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
   senderIdentityKey,
@@ -15,16 +15,18 @@ import {
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { assistantMessageIsInterrupted, assistantMessageKind } from "./chat-assistant-reply.ts";
-import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import {
-  createChatItemsGroupingCache,
-  rowsAfterHiddenTurns,
-} from "./chat-thread-grouping-cache.ts";
+  assistantMessageCanOwnTurnActions,
+  assistantMessageIsInterrupted,
+  assistantMessageKind,
+} from "./chat-assistant-reply.ts";
+import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
   assistantMessageIsAutomationResult,
+  chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
@@ -33,46 +35,166 @@ import {
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { ChatReasoning } from "./tool-stream-contract.ts";
 
-/**
- * Keys a sender without a typed identity by its id alone; names change, ids do
- * not. The Gateway stores a profile user's id as `senderId` (typed identities
- * persist only when their id equals it), so an untyped id that matches a
- * counted profile is that person. Any other untyped id is its own person.
- */
-function untypedSenderPersonKey(
-  sender: SenderIdentity,
-  people: ReadonlySet<string>,
-  localPerson: string | undefined,
-): string {
-  if (!sender.id) {
-    return JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]);
-  }
-  const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
-  return people.has(profile) || profile === localPerson
-    ? profile
-    : JSON.stringify(["sender", sender.id]);
-}
-
 type ReplyState = {
   sender?: MessageGroup["sender"];
   message?: MessageGroup["replyToMessage"];
   turnSource?: MessageGroup["replyTurnSource"];
 };
 
-/**
- * Reply context comes from the full transcript, not the rendered rows: search
- * renders a subset that can drop the other speaker or the prompt a reply answers.
- */
-function stampReplyAttribution(
-  items: Array<ChatItem | MessageGroup>,
-  context: Array<ChatItem | MessageGroup>,
-  { people: sessionPeople, localPerson }: ReplyAttributionContext,
+/** Transcript facts that outlive the rendered subset of rows. */
+export type ReplyAttributionContext = {
+  /** Every transcript row, including those a search hides from `items`. */
+  items?: ChatItem[];
+  /** People the session row lists, keyed by `sessionParticipantIdentityKey`. */
+  people?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  localPerson?: string;
+  /** Receives the transcript-wide attribution facts. */
+  facts?: ReplyAttributionFacts;
+};
+
+export type ReplyAttributionFacts = {
+  people?: ReadonlySet<string>;
+  /** Prompts per persisted user-turn run; a repeated run has no single prompt. */
+  prompts?: ReadonlyMap<string, number>;
+  /** Runs whose shown replies answer the prompt that started them. */
+  currentReplies?: ReadonlySet<string>;
+};
+
+const groupedSegments = new WeakMap<
+  object,
+  { inputs: unknown[]; items: Array<ChatItem | MessageGroup> }
+>();
+
+/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
+function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
+  const visible = new Set(items.map((item) => item.key));
+  const rows = new Set<string>();
+  let hiddenTurn = false;
+  for (const item of context) {
+    if (!visible.has(item.key)) {
+      hiddenTurn ||= chatItemStartsDisplayTurn(item);
+    } else if (hiddenTurn) {
+      rows.add(item.key);
+      hiddenTurn = false;
+    }
+  }
+  return rows;
+}
+
+function groupChatItems(
+  items: ChatItem[],
+  visibleReasoning: ReadonlySet<string>,
+  rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
+  const reasoningKey = JSON.stringify([...visibleReasoning]);
+  const result: Array<ChatItem | MessageGroup> = [];
+  let source: Array<Extract<ChatItem, { kind: "message" }>> = [];
+  const flush = () => {
+    if (source.length === 0) {
+      return;
+    }
+    const owner = asRecord(source[0]?.message);
+    const inputs: unknown[] = [reasoningKey, showReasoning];
+    for (const item of source) {
+      inputs.push(
+        item.key,
+        item.message,
+        normalizeMessage(item.message),
+        item.startsTurn,
+        rowsAfterHiddenTurn?.has(item.key) === true,
+      );
+    }
+    const cached = owner && groupedSegments.get(owner);
+    const grouped =
+      cached &&
+      cached.inputs.length === inputs.length &&
+      inputs.every((input, index) => input === cached.inputs[index])
+        ? cached.items
+        : groupChatItemSegment(source, visibleReasoning, rowsAfterHiddenTurn, showReasoning);
+    if (grouped !== cached?.items) {
+      const segment = { inputs, items: grouped };
+      // Hidden or retained source objects must not keep overlapping old snapshots alive.
+      for (const item of source) {
+        const message = asRecord(item.message);
+        if (message) {
+          const previous = groupedSegments.get(message);
+          if (previous && previous !== segment && previous.inputs.length > 0) {
+            previous.inputs = [];
+            previous.items = [];
+          }
+          groupedSegments.set(message, segment);
+        }
+      }
+    }
+    // Attribution is transcript-wide and must never annotate cached local groups.
+    for (const item of grouped) {
+      result.push(item.kind === "group" ? { ...item } : item);
+    }
+    source = [];
+  };
+  for (const [index, item] of items.entries()) {
+    if (item.kind !== "message") {
+      flush();
+      result.push(item);
+      continue;
+    }
+    const previous = items[index - 1];
+    if (
+      previous?.kind === "message" &&
+      normalizeRoleForGrouping(normalizeMessage(item.message).role) === "user"
+    ) {
+      const normalized = normalizeMessage(previous.message);
+      const role = normalizeRoleForGrouping(normalized.role);
+      // A visible non-user row guarantees a grouping and duplicate boundary.
+      // Keep hidden rows and consecutive inputs together for the canonical grouper.
+      if (
+        role !== "user" &&
+        (role !== "assistant" ||
+          resolveMessageVisibleContent(previous.message, normalized) === "non-text" ||
+          resolveMessageDisplayMarkdown(previous.message, normalized).trim())
+      ) {
+        flush();
+      }
+    }
+    source.push(item);
+  }
+  flush();
+  return result;
+}
+
+export function groupMessages(
+  items: ChatItem[],
+  replyContext: ReplyAttributionContext = {},
+  reasoning?: ChatReasoning | null,
+  showReasoning = false,
+): Array<ChatItem | MessageGroup> {
+  const visibleReasoning = new Set(
+    reasoning?.items.flatMap(({ receipt }) =>
+      receipt?.persisted ? [JSON.stringify([receipt.runId, receipt.messageId])] : [],
+    ),
+  );
+  const result = groupChatItems(
+    items,
+    visibleReasoning,
+    replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+    showReasoning,
+  );
+  const context = replyContext.items
+    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
+    : result;
+  /**
+   * Reply context comes from the full transcript, not the rendered rows: search
+   * renders a subset that can drop the other speaker or the prompt a reply answers.
+   */
+  const { people: sessionPeople, localPerson } = replyContext;
   const people = new Set(sessionPeople);
   const untypedSenders: SenderIdentity[] = [];
   // reply_to_current names the prompt that started the run. Only the persisted
   // user-turn run identity resolves it; an ambiguous owner stays unresolved.
   const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const promptCounts = new Map<string, number>();
   const stateBefore = new Map<string, ReplyState>();
   let state: ReplyState = {};
   for (const item of context) {
@@ -82,19 +204,20 @@ function stampReplyAttribution(
       state = {};
     }
     if (item.kind === "stream") {
-      stateBefore.set(item.key, state);
+      stateBefore.set(item.key, { ...state });
     }
     if (item.kind !== "group") {
       continue;
     }
     for (const source of item.messages) {
-      stateBefore.set(source.key, state);
+      stateBefore.set(source.key, { ...state });
     }
     if (item.role === "user") {
       for (const source of item.messages) {
         const runId = userTurnRunId(source.message);
         if (runId) {
           runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+          promptCounts.set(runId, (promptCounts.get(runId) ?? 0) + 1);
         }
       }
       // A local message carries no sender metadata: its author is the signed-in
@@ -119,18 +242,37 @@ function stampReplyAttribution(
     }
   }
   // Untyped senders resolve after every typed person is known, so order never splits one.
+  /**
+   * Keys a sender without a typed identity by its id alone; names change, ids do
+   * not. The Gateway stores a profile user's id as `senderId` (typed identities
+   * persist only when their id equals it), so an untyped id that matches a
+   * counted profile is that person. Any other untyped id is its own person.
+   */
   for (const sender of untypedSenders) {
-    people.add(untypedSenderPersonKey(sender, people, localPerson));
+    if (!sender.id) {
+      people.add(JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]));
+      continue;
+    }
+    const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
+    people.add(
+      people.has(profile) || profile === localPerson
+        ? profile
+        : JSON.stringify(["sender", sender.id]),
+    );
   }
   // Automatic attribution is only useful when several people share the thread.
   const shared = people.size >= 2;
+  const currentReplies = new Set<string>();
+  if (replyContext.facts) {
+    Object.assign(replyContext.facts, { people, prompts: promptCounts, currentReplies });
+  }
 
   // Rows outside the context (live output) take the state of the next row that
   // has one, or the transcript end.
   const states: ReplyState[] = [];
-  let next = state;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]!;
+  let next: ReplyState = state;
+  for (let index = result.length - 1; index >= 0; index -= 1) {
+    const item = result[index]!;
     const known =
       item.kind === "group"
         ? item.messages.map((source) => stateBefore.get(source.key)).find(Boolean)
@@ -140,9 +282,21 @@ function stampReplyAttribution(
     next = known ?? next;
     states[index] = next;
   }
-  for (const [index, item] of items.entries()) {
+  let previousMessageId: string | undefined;
+  for (const [index, item] of result.entries()) {
     const { sender, message, turnSource } = states[index]!;
+    if (item.kind === "group" || item.kind === "stream") {
+      item.replyPreviousMessageId = previousMessageId;
+    }
     if (item.kind === "group") {
+      // Excerpts are redundant only when their source is in the displayed projection.
+      if (item.role === "user" || item.role === "assistant") {
+        for (const source of item.messages) {
+          if (source.hasVisibleContent) {
+            previousMessageId = persistedMessageEntryId(source.message) ?? undefined;
+          }
+        }
+      }
       // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
         item.replyShared = true;
@@ -154,10 +308,13 @@ function stampReplyAttribution(
       ) {
         continue;
       }
-      const currentSource =
-        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-          ? runPrompts.get(item.runId)
-          : undefined;
+      const currentRun = item.messages.some((source) => source.replyTarget?.kind === "current")
+        ? item.runId
+        : undefined;
+      if (currentRun) {
+        currentReplies.add(currentRun);
+      }
+      const currentSource = currentRun ? runPrompts.get(currentRun) : undefined;
       if (turnSource) {
         item.replyTurnSource = turnSource;
       }
@@ -172,42 +329,7 @@ function stampReplyAttribution(
       item.replyToMessage = message;
     }
   }
-  return items;
-}
-
-/** Transcript facts that outlive the rendered subset of rows. */
-export type ReplyAttributionContext = {
-  /** Every transcript row, including those a search hides from `items`. */
-  items?: ChatItem[];
-  /** People the session row lists, keyed by `sessionParticipantIdentityKey`. */
-  people?: readonly string[];
-  /** Key of the signed-in viewer, who authors local user messages without a sender. */
-  localPerson?: string;
-};
-
-const groupChatItems = createChatItemsGroupingCache(groupChatItemSegment);
-
-export function groupMessages(
-  items: ChatItem[],
-  replyContext: ReplyAttributionContext = {},
-  reasoning?: ChatReasoning | null,
-  showReasoning = false,
-): Array<ChatItem | MessageGroup> {
-  const visibleReasoning = new Set(
-    reasoning?.items.flatMap(({ receipt }) =>
-      receipt?.persisted ? [JSON.stringify([receipt.runId, receipt.messageId])] : [],
-    ),
-  );
-  const result = groupChatItems(
-    items,
-    visibleReasoning,
-    replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
-    showReasoning,
-  );
-  const context = replyContext.items
-    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
-    : result;
-  return stampReplyAttribution(result, context, replyContext);
+  return result;
 }
 
 function groupChatItemSegment(
@@ -239,15 +361,18 @@ function groupChatItemSegment(
       !identity.isImported &&
       visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
       Boolean(extractThinkingCached(item.message));
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasAssistantText =
+      normalizedRole === "tool" &&
       record?.role === "assistant" &&
-      record.stopReason === "toolUse" &&
+      (record.stopReason === "toolUse" ||
+        assistantMessageCanOwnTurnActions(item.message, Boolean(normalized.senderSession))) &&
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
-    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Mixed answers retain assistant ownership; forwarded narration needs an
+    // explicit answer before gaining its own display-turn boundary.
     // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
-    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasPreparedActivity =
       normalizedRole === "assistant" &&
       visibleContent === "none" &&
@@ -261,7 +386,6 @@ function groupChatItemSegment(
     const source = {
       message: item.message,
       key: item.key,
-      duplicateCount: item.duplicateCount,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         hasVisibleReasoning ||

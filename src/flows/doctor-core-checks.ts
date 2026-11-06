@@ -1,4 +1,3 @@
-import { listAgentIds } from "../agents/agent-scope.js";
 import {
   maybeRepairOwnedChromeExtensionNativeHosts,
   collectBrowserReadinessFindings,
@@ -25,17 +24,17 @@ import {
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
+import { cronInferenceCheck, legacyCronStoreCheck } from "./doctor-cron-checks.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { sessionArchiveCacheCheck } from "./doctor-session-archive-cache-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -49,7 +48,6 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
-const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
 const gatewayConfigCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-config",
@@ -108,36 +106,6 @@ const commandOwnerCheck: CoreHealthCheck = {
   },
 };
 
-const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
-  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-  description: "Autonomous Skill Workshop capture has a callable review tool.",
-  async detect(ctx) {
-    const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
-    const listedAgentIds = listAgentIds(ctx.cfg);
-    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
-      (agentId) => {
-        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-          config: ctx.cfg,
-          workshopEnabled,
-          ...(agentId ? { agentId } : {}),
-        });
-        return diagnostic ? [diagnostic] : [];
-      },
-    );
-    return diagnostics.map((diagnostic) => ({
-      checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-      category: "fix-now",
-      docsUrl: "https://docs.openclaw.ai/tools/skill-workshop",
-      severity: "warning",
-      message: diagnostic.detail,
-      path: diagnostic.source,
-      target: diagnostic.agentId,
-      requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
-      fixHint: diagnostic.fix,
-    }));
-  },
-};
-
 const gatewayAuthCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-auth",
   description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
@@ -179,7 +147,7 @@ const legacyStateCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       doctorOnlyStateMigrations: true,
@@ -354,17 +322,6 @@ const legacyWhatsAppCrontabCheck: CoreHealthCheck = {
   },
 };
 
-const legacyCronStoreCheck: CoreHealthCheck = {
-  id: "core/doctor/legacy-cron-store",
-  description: "Legacy cron store, run-log, and payload state is normalized.",
-  defaultEnabled: false,
-  async detect(ctx) {
-    const { collectLegacyCronStoreHealthFindings } =
-      await import("../commands/doctor/cron/index.js");
-    return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
-  },
-};
-
 const staleRuntimeBuildCheck: CoreHealthCheck = {
   id: "core/doctor/stale-runtime-build",
   description: "The loaded runtime was built from the checkout's current commit.",
@@ -419,7 +376,7 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
-    const repairs = detectTelegramGeneralTopicConversationRepairs({
+    const repairs = await detectTelegramGeneralTopicConversationRepairs({
       cfg: ctx.cfg,
       ...(ctx.env ? { env: ctx.env } : {}),
     });
@@ -667,8 +624,10 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     gatewayAuthCheck,
     legacyStateCheck,
     removedWorkspacesStateCheck,
+    sessionArchiveCacheCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
+    cronInferenceCheck,
     staleRuntimeBuildCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
@@ -697,6 +656,22 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
       },
     },
     nodeRuntimeCheck,
+    {
+      id: "core/doctor/runtime-capabilities",
+      description: "Report capabilities of the Doctor process without executing optional features.",
+      async detect() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        return [
+          {
+            checkId: "core/doctor/runtime-capabilities",
+            severity: "info",
+            source: "doctor-process",
+            message: `Runtime capabilities (Doctor process)\n${formatRuntimeCapabilities(collectRuntimeCapabilities())}`,
+          },
+        ];
+      },
+    },
     {
       id: "core/doctor/security",
       updateReadiness: "post-plugin",
@@ -733,7 +708,6 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
-    skillWorkshopToolPolicyCheck,
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,
@@ -744,4 +718,3 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
 }
 
 export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

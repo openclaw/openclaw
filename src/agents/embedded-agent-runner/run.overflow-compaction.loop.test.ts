@@ -74,6 +74,7 @@ vi.mock("../harness/selection.js", () => ({
   runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
 
+// mock-isolation: Exercise dispatch snapshots without constructing provider transport or auth state.
 vi.mock("../runtime-plan/build.js", () => ({
   buildAgentRuntimePlan: ({
     provider,
@@ -83,7 +84,11 @@ vi.mock("../runtime-plan/build.js", () => ({
     provider: string;
     modelId: string;
     preparedAuthPlan: unknown;
-  }) => ({ resolvedRef: { provider, modelId }, auth: preparedAuthPlan }),
+  }) => ({
+    resolvedRef: { provider, modelId },
+    auth: preparedAuthPlan,
+    transport: { resolveExtraParams: () => ({}) },
+  }),
 }));
 
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
@@ -289,11 +294,18 @@ describe("embedded run retry dispatch", () => {
   it.each([
     {
       session: { execHost: "node", execNode: "session-node", execCwd: "/remote/default" },
-      expected: { host: "node", security: "full", ask: "off", node: "session-node", safeBins: [] },
+      expected: {
+        mode: "full",
+        host: "node",
+        security: "full",
+        ask: "off",
+        node: "session-node",
+        safeBins: [],
+      },
     },
     {
       session: { sandbox: "required" },
-      expected: { host: "sandbox", security: "deny", ask: "off", safeBins: [] },
+      expected: { mode: "deny", host: "sandbox", security: "deny", ask: "off", safeBins: [] },
     },
   ] satisfies Array<{
     session: ExecSessionDefaults;

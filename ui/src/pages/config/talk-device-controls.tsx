@@ -35,10 +35,8 @@ const voiceToggles = [
 ] as const;
 
 type VoiceToggle = (typeof voiceToggles)[number];
-type VoiceSetting = `voice.${VoiceToggle}` | "voice.microphone";
-type VoiceScope = { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
 type VoiceControlProps = {
-  scope: VoiceScope;
+  scope: { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
   snapshot: NativeDeviceSettingsSnapshot;
   isCurrent: () => boolean;
   presentationRetired: () => Promise<void>;
@@ -46,8 +44,8 @@ type VoiceControlProps = {
 
 export function voiceControlErrorFallback(retry: () => void) {
   return (error: () => unknown, reset: () => void) => (
-    <div class="callout danger" role="alert">
-      {formatUiError(error())}
+    <div class="callout callout--action danger" role="alert">
+      <span class="callout__content">{formatUiError(error())}</span>
       <button
         class="btn btn--sm"
         type="button"
@@ -64,7 +62,7 @@ export function voiceControlErrorFallback(retry: () => void) {
 
 function createVoiceEdit<T extends boolean | string | null>(
   props: VoiceControlProps,
-  key: () => VoiceSetting,
+  key: () => `voice.${VoiceToggle}` | "voice.microphone",
   read: () => T,
 ) {
   const [value, setValue] = createOptimistic(read);

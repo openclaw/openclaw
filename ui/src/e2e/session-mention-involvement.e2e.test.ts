@@ -31,7 +31,10 @@ function session(key: string, label: string, actor: typeof ada, age: number) {
   };
 }
 const home = session(homeKey, "My work", bob, 120_000);
-const mentioned = session(sessionKey, "Design review", ada, 60_000);
+const mentioned = {
+  ...session(sessionKey, "Design review", ada, 60_000),
+  sharingRole: "viewer",
+};
 const list = (rows: unknown[]) => ({ ...sessionsListResponse(rows), owners: [ada, bob] });
 
 function withSession(
@@ -55,6 +58,7 @@ function withSession(
         ],
         ...(collaboration
           ? {
+              operatorScopes: ["operator.sessions.read"],
               presenceUsers: [{ self: true, id: bob.id, identity: bob.identity, name: bob.label }],
             }
           : {}),
@@ -86,7 +90,7 @@ suite.define(() => {
       ).toHaveCount(0);
     }));
 
-  it("refreshes an involving-me list on mention and offers reversible personal hiding", () =>
+  it("lets a session reader reversibly hide a foreign mentioned session from Involving me", () =>
     withSession(
       true,
       async (page, gateway, target) => {

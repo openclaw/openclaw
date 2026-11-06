@@ -1,16 +1,25 @@
 import { Show } from "solid-js";
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import { describePendingSteerWait, isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { readPendingSendStatus } from "../chat-thread-items.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSendStatusActions = {
+  onSteerNow?: (runId: string) => void;
   connected?: boolean;
   onRetryQueuedMessage?: (id: string) => void;
   onDiscardQueuedMessage?: (id: string) => void;
-  queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
+  queuedMessageAction?: {
+    id: string;
+    label?: string;
+    onAction?: () => void;
+    onDiscard?: () => void;
+  };
 };
 
 type SendStatus = ReturnType<typeof readPendingSendStatus>;
@@ -53,18 +62,16 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
     props.actions.queuedMessageAction?.id === props.status?.id
       ? props.actions.queuedMessageAction
       : undefined;
-  const awaitingRecovery = () => props.status?.state === "waiting-reconnect";
+  const pending = () =>
+    props.status && props.status.state !== "failed" && props.status.state !== "held";
   const reconnecting = () => isChatSendReconnecting(props.status?.state, props.actions.connected);
   const retry = () =>
-    awaitingRecovery() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
+    pending() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
   const discard = () =>
-    props.status &&
-    (props.status.state === "failed" ||
-      props.status.state === "unconfirmed" ||
-      props.status.state === "held" ||
-      awaitingRecovery()) &&
-    !action()
-      ? props.actions.onDiscardQueuedMessage
+    props.status
+      ? action()
+        ? action()?.onDiscard
+        : props.actions.onDiscardQueuedMessage
       : undefined;
   return (
     <Show when={props.status}>
@@ -80,13 +87,9 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
               {t(
                 reconnecting()
                   ? "chat.queue.states.waitingForReconnect"
-                  : awaitingRecovery()
-                    ? "common.queued"
-                    : status().state === "held"
-                      ? "chat.queue.states.needsReview"
-                      : status().state === "unconfirmed"
-                        ? "chat.queue.deliveryUnconfirmed"
-                        : "chat.queue.notSent",
+                  : status().state === "held"
+                    ? "chat.queue.states.needsReview"
+                    : "chat.queue.notSent",
               )}
             </span>
           </span>
@@ -98,6 +101,33 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
           />
           <SendStatusAction kind="discard" id={status().id} callback={discard()} />
         </span>
+      )}
+    </Show>
+  );
+}
+
+export function ChatSteerNow(props: {
+  input?: ChatPendingInputsPage["items"][number];
+  onSend?: (runId: string) => void;
+}) {
+  return (
+    <Show
+      when={(props.onSend || props.input?.steerNow?.status === "blocked") && props.input?.steerNow}
+    >
+      {(steerNow) => (
+        <div class="chat-steer-now chat-message-source">
+          {steerNow().status === "available" ? (
+            <button
+              class="chat-send-status__action"
+              type="button"
+              onClick={() => props.onSend?.(props.input!.runId!)}
+            >
+              {t("chat.pendingInputs.sendNow")}
+            </button>
+          ) : (
+            <span>{describePendingSteerWait(steerNow().tools)}</span>
+          )}
+        </div>
       )}
     </Show>
   );

@@ -1,15 +1,20 @@
 /* @vitest-environment jsdom */
-import { createMemo, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsSearchRemoteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
+
+async function openProjectSearch(container: ParentNode) {
+  await waitForSolid(() => expect(container.querySelector(".header-search")).not.toBeNull());
+  if (!container.querySelector('input[type="search"]')) {
+    container.querySelector<HTMLButtonElement>(".header-search__toggle")?.click();
+    flush();
+  }
+  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
+}
 
 function result(name: string): ProjectsSearchRemoteResult {
   return {
@@ -29,7 +34,7 @@ function result(name: string): ProjectsSearchRemoteResult {
 async function mountSearch() {
   vi.useFakeTimers();
   const fixture = createRepositoryFixture();
-  const { browser, state: place, context, gateway, changed } = fixture;
+  const { browser, state: place, context, gateway } = fixture;
   const projects = [
     {
       id: "sample",
@@ -60,42 +65,16 @@ async function mountSearch() {
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   browser.selectProject({ kind: "local", id: "sample" });
   onTestFinished(() => browser.disconnect());
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: changed,
-  };
-  const view = mountSolid(() => {
-    const [revision, setRevision] = createSignal(0);
-    changed.mockImplementation(() => setRevision((value) => value + 1));
-    const props = createMemo(() => {
-      revision();
-      return {
-        params: { ...options },
-        state: resolveProjectChip({
-          folder: "",
-          workspace: "/fixture",
-          projectId: browser.projectId,
-          selectedRemoteProject: browser.remoteProject,
-          projects,
-          recents: [],
-          projectQuery: browser.projectQuery,
-        }),
-        nativeTerminal: false,
-      };
-    });
-    return <ProjectChip {...props()} />;
-  });
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/fixture",
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects,
+    recents: [],
+    projectQuery: browser.projectQuery,
+  }));
+  await openProjectSearch(view.container);
   const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const localRow = view.container.querySelector('[data-value="project:sample"]')!;
   const typeQuery = (query: string) => {
