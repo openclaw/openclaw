@@ -1,2 +1,0 @@
-# Databricks Unity Gateway provider: plugin registration, auth, model catalog and gateway transport coverage for the new extension.
-736
