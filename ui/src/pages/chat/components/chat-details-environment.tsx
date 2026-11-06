@@ -13,7 +13,7 @@ import {
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
-import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
+import { hasEnvironmentTextChanges } from "./chat-environment-changes.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createChatMachinePresentation } from "./chat-pane-placement.tsx";
 

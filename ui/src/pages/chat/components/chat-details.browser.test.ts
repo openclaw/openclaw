@@ -14,7 +14,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { admittedDetailsAutomationsCache } from "./chat-details-availability.ts";
+import { admittedDetailsAutomationsCache } from "./chat-details-content.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";

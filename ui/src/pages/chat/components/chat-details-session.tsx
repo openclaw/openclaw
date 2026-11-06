@@ -14,12 +14,9 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
-import {
-  detailsSessionFacts,
-  hasDetailsPeople,
-  readDetailsPeople,
-} from "./chat-details-availability.ts";
+import { readDetailsPeople } from "./chat-details-availability.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
+import { detailsSessionFacts, hasDetailsPeople } from "./chat-details-content.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import "../../../styles/chat/details-desktop.css";
@@ -27,7 +24,7 @@ import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import {
   ChatDetailsDesktopPresence,
   ChatDetailsPresence,
-  type DetailsAutomationAvailability,
+  type DetailsSectionAvailability,
 } from "./chat-details-presence.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -237,7 +234,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const desktopPeople = () => peopleState().people;
           const showPeople = () =>
             hasDetailsPeople(
-              peopleState(),
+              session(),
               readDetailsViewer(gateway?.read().snapshot.selfUser, Boolean(gateway)),
             );
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
@@ -621,7 +618,7 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   onReady?: () => void;
   onContentChange?: (hasContent: boolean) => void;
   availabilityIdentity?: unknown;
-  onAutomationAvailability?: (fact: DetailsAutomationAvailability) => void;
+  onSectionAvailability?: (fact: DetailsSectionAvailability) => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
@@ -633,7 +630,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
     <ChatDetailsPresence
       onContentChange={props.onContentChange}
       identity={props.availabilityIdentity}
-      onAutomationAvailability={props.onAutomationAvailability}
+      onSectionAvailability={props.onSectionAvailability}
     >
       <ChatDetailsSession
         props={props.props}

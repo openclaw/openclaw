@@ -54,13 +54,17 @@ export function readChatDesktopOutputs(
   return {
     liveCount,
     count,
-    visible: Boolean(data && (hasChatDesktopOutputs(data) || (count ?? 0) > 0)),
+    visible: Boolean(data && hasChatDesktopOutputs(data, cachedCount)),
   };
 }
 
 /** Optional desktop sections need content or an actionable read error, not a speculative slot. */
-export function hasChatDesktopOutputs(data: ChatOutputsData): boolean {
+export function hasChatDesktopOutputs(data: ChatOutputsData, cachedCount?: number): boolean {
   return Boolean(
-    data.artifacts?.length || data.dashboard || data.artifactsError || data.dashboardError,
+    data.artifacts?.length ||
+    data.dashboard ||
+    data.artifactsError ||
+    data.dashboardError ||
+    (getChatOutputsCount(data) ?? cachedCount ?? 0) > 0,
   );
 }

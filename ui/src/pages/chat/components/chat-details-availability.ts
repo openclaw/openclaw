@@ -1,21 +1,16 @@
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
-import { readChatMachinePlacement } from "../chat-pane-placement.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
-import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
-import type { DetailsViewer } from "./chat-details-viewer.ts";
-import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
-import { readChatDesktopOutputs } from "./chat-outputs-data.ts";
-import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import {
-  hasChatPublishedPullRequests,
-  retainedPublication,
-  showWorkRow,
-} from "./chat-pull-requests.ts";
+  environmentWork,
+  hasDetailsEnvironment,
+  hasDetailsSubagents,
+} from "./chat-details-content.ts";
+import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
+import { hasEnvironmentTextChanges } from "./chat-environment-changes.ts";
+import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 
 type DetailsSession = ChatDetailsProps["selectedSession"];
 type DetailsWork = Pick<
@@ -23,13 +18,6 @@ type DetailsWork = Pick<
   "branch" | "branchDismissed" | "publication" | "pullRequests"
 >;
 
-export function detailsSessionFacts(details: ChatDetailsProps | undefined): DetailsSession {
-  const selected = details?.selectedSession;
-  const cached = !details?.sessionFactsReady && details?.cachedDetails?.session;
-  return selected && cached ? { ...selected, ...cached } : selected;
-}
-
-/** One People policy for the rendered section and its pre-hydration reservation. */
 export function readDetailsPeople(session: DetailsSession) {
   const participants = session?.expandedParticipants ?? session?.participants ?? [];
   const count = session?.participantCount ?? participants.length;
@@ -56,46 +44,7 @@ export function readDetailsPeople(session: DetailsSession) {
   return { participants, count, partial, people, unknownActor, hasContent };
 }
 
-export function hasDetailsPeople(
-  facts: ReturnType<typeof readDetailsPeople>,
-  viewer: DetailsViewer = { pending: true },
-) {
-  const identity = viewer.identity;
-  // The server count excludes the owner. Unknown actors alone remain inconclusive.
-  return (
-    facts.hasContent &&
-    (facts.count > 1 ||
-      facts.people.length > 1 ||
-      (!viewer.pending &&
-        (facts.partial ||
-          facts.unknownActor ||
-          !identity ||
-          facts.people.some(
-            (person) =>
-              person.identity.type !== identity.type || person.identity.id !== identity.id,
-          ))))
-  );
-}
-
 /** Preserve the Environment owner's suppression of already-published work. */
-function environmentWork<T extends DetailsWork>(candidate: T | undefined) {
-  if (
-    !candidate ||
-    candidate.publication?.result?.status === "published" ||
-    (!candidate.branch &&
-      !candidate.publication?.locked &&
-      candidate.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft"))
-  ) {
-    return undefined;
-  }
-  const publication = candidate.publication;
-  return showWorkRow(candidate) ||
-    (retainedPublication(publication) &&
-      (publication?.result?.status !== "published" || publication.error))
-    ? candidate
-    : undefined;
-}
-
 /** Availability and display facts share the exact same cache, placement, work and Changes rules. */
 export function readDetailsEnvironment<T extends DetailsWork>(
   details: ChatDetailsProps | undefined,
@@ -103,7 +52,6 @@ export function readDetailsEnvironment<T extends DetailsWork>(
   candidate: T | undefined,
 ) {
   const session = details?.selectedSession;
-  const machine = readChatMachinePlacement({ session, ...environment?.placement }.session);
   const work = environmentWork(candidate);
   const result = environment?.uncommitted;
   const changes =
@@ -113,15 +61,12 @@ export function readDetailsEnvironment<T extends DetailsWork>(
     worktree: Boolean(session?.worktree),
   };
   const facts = (!details?.sessionFactsReady && details?.cachedDetails?.environment) || live;
-  const hasMachine =
-    machine.showPlacementMenu &&
-    Boolean(environment?.placement || machine.workerPlacement?.environmentId);
   return {
     work,
     changes,
     live,
     facts,
-    visible: Boolean(hasMachine || facts.branch || work || facts.worktree || changes),
+    visible: hasDetailsEnvironment(details, environment, candidate),
   };
 }
 
@@ -136,47 +81,8 @@ export function readDetailsSubagents(
       ? projectDetailsSubagents(rows.filter((row) => row.listed))
       : undefined;
   const summary = liveSummary ?? (desktop ? details?.cachedDetails?.subagents : undefined);
-  return { liveSummary, summary, visible: rows.length > 0 || (summary?.total ?? 0) > 0 };
+  return { liveSummary, summary, visible: hasDetailsSubagents(details, rows, desktop) };
 }
 
 /** Before mount, inventory flags use their fresh-owner defaults; mounted owners supply them.
  * Offline previews follow that owner, while a current hello must admit cron reads. */
-export function admittedDetailsAutomationsCache(
-  cache: NonNullable<ChatDetailsProps["cachedDetails"]>["automations"],
-  snapshot: ApplicationGateway["snapshot"] | undefined,
-  loaded = false,
-  denied = false,
-  readable = canPresentGatewayMethod(snapshot, "cron.list", "operator.read", {
-    requireAdvertisement: false,
-  }),
-) {
-  return !loaded && !denied && (!snapshot?.hello || readable) ? cache : undefined;
-}
-
-export function hasDetailsContent(
-  details: ChatDetailsProps | undefined,
-  facts: { automation?: boolean; viewer?: DetailsViewer } = {},
-) {
-  return Boolean(
-    readDetailsSubagents(details).visible ||
-    (facts.automation ??
-      (admittedDetailsAutomationsCache(
-        details?.cachedDetails?.automations,
-        details?.pullRequestsGateway?.snapshot,
-      )?.rows.length ?? 0) > 0) ||
-    hasChatPublishedPullRequests({
-      pullRequests: details?.pullRequests ?? [],
-      publication: details?.githubPublication,
-    }) ||
-    details?.progressCard ||
-    details?.progressCardError === "access-denied" ||
-    readChatDesktopOutputs(details?.outputs, details?.cachedDetails?.outputs).visible ||
-    hasDetailsPeople(readDetailsPeople(detailsSessionFacts(details)), facts.viewer) ||
-    readDetailsEnvironment(details, details?.environment, {
-      branch: details?.pullRequestsBranch,
-      branchDismissed: details?.pullRequestsBranchDismissed,
-      publication: details?.githubPublication,
-      pullRequests: details?.pullRequests ?? [],
-    }).visible,
-  );
-}

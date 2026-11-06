@@ -18,8 +18,13 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createKeyedListMotion } from "../../../lib/reactive/keyed-list-motion.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import {
+  ChatDetailsSectionAvailability,
+  useDetailsAvailability,
+  type DetailsSectionAvailability,
+} from "./chat-details-presence.tsx";
 import "./chat-details-processes.css";
-import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
+import { readDetailsProcesses } from "./chat-details-processes-presentation.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 
@@ -104,22 +109,14 @@ function ProcessRow(props: {
 
 /** Desktop list using the same process snapshot and operations as the full panel. */
 export function ChatDetailsProcesses(props: Props) {
+  const detailsAvailability = useDetailsAvailability();
   const presentation = createProcessesPresentation(() => props.processes(), true);
   const snapshot = () => props.processes()?.snapshot;
-  const live = createDetailsProcessesPresentation(() => snapshot()?.rows ?? []);
   const cached = () => props.details.cachedDetails?.processes;
-  const visibleRows = createMemo(() =>
-    snapshot()?.hasResult || snapshot()?.errorKind === "access"
-      ? live().slice(0, 3)
-      : (cached()?.rows ?? []).map(({ processId, instanceId, name }) => ({
-          processId,
-          instanceId,
-          name,
-          canStop: false,
-        })),
-  );
-  const hidden = () =>
-    (snapshot()?.hasResult ? live().length : (cached()?.total ?? 0)) - visibleRows().length;
+  const selection = createMemo(() => readDetailsProcesses(snapshot(), cached()));
+  const live = () => selection().live;
+  const visibleRows = () => selection().rows;
+  const hidden = () => selection().hidden;
   const receipt = createMemo(() =>
     (snapshot()?.hasResult || snapshot()?.errorKind === "access") && props.details.onDetailsSnapshot
       ? {
@@ -148,7 +145,18 @@ export function ChatDetailsProcesses(props: Props) {
       props.onOpen?.(instanceId);
     }
   };
-  const hasRunning = () => visibleRows().length > 0;
+  const hasRunning = () => selection().available;
+  const availability = createMemo<DetailsSectionAvailability | undefined>(
+    () => {
+      const identity = detailsAvailability?.identity();
+      const state = snapshot();
+      return identity === undefined ||
+        !(hasRunning() || state?.hasResult || state?.errorKind === "access")
+        ? undefined
+        : { identity, section: "processes", available: Boolean(props.onOpen) && hasRunning() };
+    },
+    { equals: (a, b) => a?.identity === b?.identity && a?.available === b?.available },
+  );
   const ProcessError = (errorProps: { loading: boolean; retry: () => void }) => (
     <Show when={snapshot()?.errorKind !== "read" && snapshot()?.error}>
       {(error) => (
@@ -226,31 +234,34 @@ export function ChatDetailsProcesses(props: Props) {
   );
   // The disclosure's layout owner must survive pending and errored body reads.
   return (
-    <Show when={props.onOpen}>
-      <Show when={receipt()} keyed>
-        {(value) => {
-          onSettled(() => value.write({ processes: value.processes }));
-          return null;
-        }}
-      </Show>
-      <Show when={motion.present()} fallback={<ReadContent />}>
-        <div ref={motion.shell} class="chat-details-processes__envelope">
-          <div ref={motion.content} class="chat-details-processes__motion-content">
-            <Show when={hasRunning()}>
-              <ChatDetailsDesktopSection
-                section="processes"
-                title={t("chat.sessionDetails.processes")}
-                expanded={props.expanded}
-                presented={props.presented}
-                onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
-                onRevealMotionChange={setRevealing}
-              >
-                <ReadContent />
-              </ChatDetailsDesktopSection>
-            </Show>
+    <>
+      <ChatDetailsSectionAvailability fact={availability()} />
+      <Show when={props.onOpen}>
+        <Show when={receipt()} keyed>
+          {(value) => {
+            onSettled(() => value.write({ processes: value.processes }));
+            return null;
+          }}
+        </Show>
+        <Show when={motion.present()} fallback={<ReadContent />}>
+          <div ref={motion.shell} class="chat-details-processes__envelope">
+            <div ref={motion.content} class="chat-details-processes__motion-content">
+              <Show when={hasRunning()}>
+                <ChatDetailsDesktopSection
+                  section="processes"
+                  title={t("chat.sessionDetails.processes")}
+                  expanded={props.expanded}
+                  presented={props.presented}
+                  onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
+                  onRevealMotionChange={setRevealing}
+                >
+                  <ReadContent />
+                </ChatDetailsDesktopSection>
+              </Show>
+            </div>
           </div>
-        </div>
+        </Show>
       </Show>
-    </Show>
+    </>
   );
 }

@@ -32,12 +32,12 @@ import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
 import "../../../styles/chat/summary-automations.css";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
-import { admittedDetailsAutomationsCache } from "./chat-details-availability.ts";
+import { admittedDetailsAutomationsCache } from "./chat-details-content.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import {
-  ChatDetailsAutomationAvailability,
+  ChatDetailsSectionAvailability,
   useDetailsAvailability,
-  type DetailsAutomationAvailability,
+  type DetailsSectionAvailability,
 } from "./chat-details-presence.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
@@ -409,12 +409,16 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       inventory.readable(),
     );
   const hasContent = () => inventory.jobs().length > 0 || (cached()?.rows.length ?? 0) > 0;
-  const availability = createMemo<DetailsAutomationAvailability | undefined>(
+  const availability = createMemo<DetailsSectionAvailability | undefined>(
     () => {
       const identity = inventory.availabilityIdentity();
       return identity === undefined
         ? undefined
-        : { identity, available: Boolean((inventory.readable() || cached()) && hasContent()) };
+        : {
+            identity,
+            section: "automation",
+            available: Boolean((inventory.readable() || cached()) && hasContent()),
+          };
     },
     { equals: (a, b) => a?.identity === b?.identity && a?.available === b?.available },
   );
@@ -663,7 +667,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       {inventory.lifecycle}
-      <ChatDetailsAutomationAvailability fact={availability()} />
+      <ChatDetailsSectionAvailability fact={availability()} />
       <ChatLazyBoundary>
         <Show when={receipt()} keyed>
           {(value) => {

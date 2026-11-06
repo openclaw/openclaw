@@ -19,10 +19,10 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import { hasDetailsContent } from "./chat-details-availability.ts";
+import { hasDetailsContent } from "./chat-details-content.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { createDetailsContentBoundary } from "./chat-details-loading.tsx";
-import { createDetailsAvailabilityProjection } from "./chat-details-presence.tsx";
+import { createDetailsAvailabilityProjection } from "./chat-details-projection.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -601,7 +601,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
               presented={isPresented() && requested()}
               onContentChange={detailsAvailability.onContentChange}
               availabilityIdentity={detailsAvailability.identity()}
-              onAutomationAvailability={detailsAvailability.report}
+              onSectionAvailability={detailsAvailability.report}
               dismissed={intent() === "closed"}
               progressMenuRef={(menu) => {
                 progressMenu = menu;
