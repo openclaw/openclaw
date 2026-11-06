@@ -129,6 +129,7 @@ Doctor prepares valid runtime config before inspecting context-engine plugins, s
 
 ## Sandbox
 
+- Missing sandbox images are retained in update warnings. For the default Docker image, run `openclaw doctor --fix`; the npm package includes its builder and Dockerfile. Updates do not build images automatically or substitute an older default.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use current agent paths after legacy roster normalization.
 - If retired sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), Doctor reports them and `--fix` refuses without changing their contents. Upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original host first; see [legacy state migration](/cli/doctor/state-migrations).

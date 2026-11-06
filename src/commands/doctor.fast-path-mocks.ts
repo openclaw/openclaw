@@ -126,7 +126,7 @@ vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
 }));
 
 vi.mock("./doctor-sandbox.js", () => ({
-  maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairSandboxImages: vi.fn(async () => []),
   noteCodexBwrapNamespaceWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),

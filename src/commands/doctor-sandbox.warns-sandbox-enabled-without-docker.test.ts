@@ -33,6 +33,13 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 // mock-isolation: Capture Doctor notices without writing to the real terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
+// mock-isolation: Image health does not inspect agent rosters, tool policy, or retired state.
+vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
+vi.mock("../agents/sandbox/config.js", () => ({ resolveSandboxScope: () => "agent" }));
+vi.mock("../infra/state-migrations.retired-archive.js", () => ({
+  archiveRetiredStateFiles: vi.fn(),
+}));
+
 const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
   await import("./doctor-sandbox.js");
 
@@ -114,6 +121,27 @@ describe("sandbox health", () => {
     });
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
     expectNoCodexProbe();
+  });
+
+  it("returns a nonblocking update warning when only the previous default image exists", async () => {
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image" && args[2] !== "openclaw-sandbox:bookworm-slim") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const warnings = await maybeRepairSandboxImages(
+      createSandboxConfig("non-main"),
+      mockRuntime,
+      mockPrompter,
+    );
+    expect(warnings).toEqual([
+      expect.stringContaining(`Sandbox base image missing: ${DEFAULT_SANDBOX_IMAGE}`),
+    ]);
+    expect(warnings?.[0]).toContain("openclaw doctor --fix");
+    expect(warnings?.[0]).toContain("Sandboxed turns will fail");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(mockRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -242,51 +270,59 @@ describe("sandbox health", () => {
       return root;
     }
 
-    it.each([false, true])(
-      "locates setup scripts (installed package=%s)",
-      async (installedPackage) => {
-        let argv1: string, cwd: string, expectedRoot: string | null;
-        if (installedPackage) {
-          argv1 = path.join(mkPackage(), "openclaw.mjs");
-          cwd = expectedRoot = mkPackage(true);
-        } else {
-          // Keep an enclosing checkout above TMPDIR outside package discovery.
-          cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
-          fs.mkdirSync(cwd, { recursive: true });
-          argv1 = path.join(cwd, "openclaw");
-          expectedRoot = null;
-        }
-        fs.writeFileSync(argv1, "");
-        const originalArgv = process.argv;
-        const argv = [...originalArgv];
-        argv[1] = argv1;
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
-        try {
-          process.argv = argv;
-          await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
-        } finally {
-          process.argv = originalArgv;
-          cwdSpy.mockRestore();
-        }
-        if (expectedRoot === null) {
-          expect(runCommandWithTimeout).not.toHaveBeenCalled();
-          expect(note).toHaveBeenCalledWith(
-            "Unable to locate scripts/sandbox-setup.sh. Run it from the repo root.",
-            "Sandbox",
-          );
-          expect(mockRuntime.log).not.toHaveBeenCalled();
-        } else {
-          expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
-            ["bash", path.join(expectedRoot, scriptRel)],
-            { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
-          );
-          expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
-            ["Running scripts/sandbox-setup.sh..."],
-            ["Completed scripts/sandbox-setup.sh."],
-          ]);
-        }
-        expect(mockRuntime.error).not.toHaveBeenCalled();
-      },
-    );
+    it.each(["missing", "source", "installed"])("locates setup scripts (%s)", async (location) => {
+      let argv1: string, cwd: string, expectedRoot: string | null;
+      if (location === "installed") {
+        expectedRoot = mkPackage(true);
+        argv1 = path.join(expectedRoot, "openclaw.mjs");
+        cwd = dirs.make("ocsbx-cwd-");
+      } else if (location === "source") {
+        argv1 = path.join(mkPackage(), "openclaw.mjs");
+        cwd = expectedRoot = mkPackage(true);
+      } else {
+        // Keep an enclosing checkout above TMPDIR outside package discovery.
+        cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
+        fs.mkdirSync(cwd, { recursive: true });
+        argv1 = path.join(cwd, "openclaw");
+        expectedRoot = null;
+      }
+      fs.writeFileSync(argv1, "");
+      const originalArgv = process.argv;
+      const argv = [...originalArgv];
+      argv[1] = argv1;
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      let warnings: string[];
+      try {
+        process.argv = argv;
+        warnings = await maybeRepairSandboxImages(
+          createSandboxConfig("all"),
+          mockRuntime,
+          mockPrompter,
+        );
+      } finally {
+        process.argv = originalArgv;
+        cwdSpy.mockRestore();
+      }
+      if (expectedRoot === null) {
+        expect(warnings).toHaveLength(1);
+        expect(runCommandWithTimeout).not.toHaveBeenCalled();
+        expect(note).toHaveBeenCalledWith(
+          "Unable to locate scripts/sandbox-setup.sh. Run it from the repo root.",
+          "Sandbox",
+        );
+        expect(mockRuntime.log).not.toHaveBeenCalled();
+      } else {
+        expect(warnings).toEqual([]);
+        expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+          ["bash", path.join(expectedRoot, scriptRel)],
+          { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
+        );
+        expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
+          ["Running scripts/sandbox-setup.sh..."],
+          ["Completed scripts/sandbox-setup.sh."],
+        ]);
+      }
+      expect(mockRuntime.error).not.toHaveBeenCalled();
+    });
   });
 });
