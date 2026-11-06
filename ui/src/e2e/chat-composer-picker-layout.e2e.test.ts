@@ -1,7 +1,11 @@
 import { webkit, type Browser } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { thinkingLevels } from "./chat-flow.test-support.ts";
 import { layoutBox } from "./chat-presentation.test-support.ts";
@@ -89,6 +93,67 @@ suite.define(() => {
       },
     );
   });
+
+  it.each(["chromium", "webkit"] as const)(
+    "keeps the mobile permission menu content-sized when anchored popovers stretch in %s",
+    async (engine) => {
+      const options = {
+        viewport: { width: 393, height: 720 },
+        isMobile: true,
+        hasTouch: true,
+        serviceWorkers: "block" as const,
+      };
+      const context =
+        engine === "chromium"
+          ? await suite.newBrowserContext(options)
+          : await webkitBrowser.newContext(options);
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      try {
+        const session = createControlUiSessionRow("agent:main:main", "Main", 1, {
+          permissionMode: "guarded",
+        });
+        const gateway = await installMockGateway(page, {
+          sessions: [session],
+          sessionKey: session.key,
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        // Emulation of the reported iOS Safari geometry: the popover block size resolves
+        // as auto and position-area `normal` alignment as stretch. Author rules still win.
+        await page.addStyleTag({
+          content: ":where(.oc-overlay) { height: auto; align-self: stretch; }",
+        });
+        await page.locator(".agent-chat__input textarea").click();
+        const trigger = page.locator("[data-chat-permission-select]");
+        await trigger.click();
+        const panel = page.locator(".chat-controls__permission-menu:popover-open");
+        const rows = panel.locator("[data-chat-permission-option]");
+        await expect.poll(() => rows.count()).toBe(5);
+        const geometry = await panel.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const rowBoxes = [...element.querySelectorAll("[data-chat-permission-option]")].map(
+            (row) => row.getBoundingClientRect(),
+          );
+          return {
+            bottom: box.bottom,
+            gaps: rowBoxes.slice(1).map((row, index) => row.top - rowBoxes[index]!.bottom),
+            rowsBottom: rowBoxes.at(-1)!.bottom,
+          };
+        });
+        const triggerBox = (await trigger.boundingBox())!;
+        expect(Math.max(...geometry.gaps)).toBeLessThanOrEqual(4);
+        expect(geometry.bottom - geometry.rowsBottom).toBeLessThanOrEqual(12);
+        expect(geometry.bottom).toBeLessThanOrEqual(triggerBox.y);
+        expect(triggerBox.y - geometry.bottom).toBeLessThanOrEqual(12);
+
+        const patch = { key: session.key, permissionMode: "workspace" };
+        await panel.locator('[data-chat-permission-option="workspace"]').click();
+        await gateway.waitForRequest("sessions.patch", { match: patch });
+      } finally {
+        await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
+      }
+    },
+  );
 
   it.each(["chromium", "webkit"] as const)(
     "keeps model and effort targets separate when Files narrows the composer in %s",

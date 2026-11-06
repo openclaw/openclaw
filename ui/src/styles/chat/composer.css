@@ -2244,6 +2244,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 8px;
   align-items: start;
+  /* The menu opens above its trigger. Engines that resolve `normal` alignment in a
+     position-area as stretch would fill the area and spread the grid rows apart. */
+  align-self: end;
   width: min(440px, calc(100vw - 24px));
   padding: var(--chat-permission-panel-padding);
   overflow: hidden;
