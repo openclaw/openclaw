@@ -1,3 +1,3 @@
 # LaTeX parser, sanitizer, lazy-browser, and streaming regressions.
 # Preserves contributed chunk-boundary cases and proves the per-message budget.
-454
+469
