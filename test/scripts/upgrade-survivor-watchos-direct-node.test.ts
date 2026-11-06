@@ -1,10 +1,11 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createLoopbackTlsFixture as createTlsFixture } from "../helpers/loopback-tls.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -13,60 +14,6 @@ const adapter = resolve("scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mj
 
 function writeJson(file: string, value: unknown) {
   writeFileSync(file, JSON.stringify(value));
-}
-
-function createTlsFixture(root: string) {
-  const tlsRoot = join(root, "tls");
-  const caKey = join(tlsRoot, "ca-key.pem");
-  const caCert = join(tlsRoot, "ca-cert.pem");
-  const serverKey = join(tlsRoot, "server-key.pem");
-  const serverCsr = join(tlsRoot, "server.csr");
-  const serverCert = join(tlsRoot, "server-cert.pem");
-  const serverExt = join(tlsRoot, "server.ext");
-  mkdirSync(tlsRoot);
-  const openssl = (command: string, options: Record<string, string | string[] | true>) => {
-    const args = Object.entries(options).flatMap(([key, value]) =>
-      value === true ? ["-" + key] : [value].flat().flatMap((item) => ["-" + key, item]),
-    );
-    execFileSync("openssl", [command, ...args], { stdio: "ignore" });
-  };
-  const keyOptions = { newkey: "rsa:2048", nodes: true, sha256: true } as const;
-  openssl("req", {
-    ...keyOptions,
-    x509: true,
-    days: "1",
-    subj: "/CN=OpenClaw watchOS survivor test CA",
-    addext: ["basicConstraints=critical,CA:TRUE", "keyUsage=critical,keyCertSign,cRLSign"],
-    keyout: caKey,
-    out: caCert,
-  });
-  openssl("req", { ...keyOptions, subj: "/CN=localhost", keyout: serverKey, out: serverCsr });
-  writeFileSync(
-    serverExt,
-    [
-      "basicConstraints=critical,CA:FALSE",
-      "subjectAltName=DNS:localhost,IP:127.0.0.1",
-      "keyUsage=critical,digitalSignature,keyEncipherment",
-      "extendedKeyUsage=serverAuth",
-      "",
-    ].join("\n"),
-  );
-  openssl("x509", {
-    req: true,
-    in: serverCsr,
-    CA: caCert,
-    CAkey: caKey,
-    CAcreateserial: true,
-    days: "1",
-    sha256: true,
-    extfile: serverExt,
-    out: serverCert,
-  });
-  return {
-    caCert,
-    cert: readFileSync(serverCert),
-    key: readFileSync(serverKey),
-  };
 }
 
 function runAdapter(

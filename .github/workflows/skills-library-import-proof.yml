@@ -1,0 +1,81 @@
+name: Skills Library Real Import Proof
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/skills-library-import-proof.yml"
+      - "src/skills/library/**"
+      - "src/gateway/server-methods/skills-library*"
+      - "src/config/zod-schema.root-shape.ts"
+      - "ui/src/pages/skills/**"
+      - "ui/src/e2e/skills-library-import*"
+      - "test/helpers/loopback-tls.test-support.ts"
+      - "test/helpers/skills-library*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skills-library-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PROOF_HEAD: ${{ github.event.pull_request.head.sha }}
+      PROOF_PUBLIC_DIR: ${{ runner.temp }}/skill-import-proof/public
+      PROOF_STABLE_MANIFEST: ${{ runner.temp }}/skill-import-proof/private/stable.json
+      PROOF_PRIVATE_DIR: ${{ runner.temp }}/skill-import-proof/private
+    steps:
+      - name: Checkout exact PR head, not the merge ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify source qualification
+        run: |
+          set -euo pipefail
+          [[ "$PROOF_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$PROOF_HEAD"
+      - name: Prepare fresh repository dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "true"
+          cache-mode: "off"
+          dependency-cache: "false"
+          vitest-fs-cache: "false"
+          vitest-worker-cache: "false"
+      - name: Build the checked-out candidate normally
+        run: pnpm build
+      - name: Resolve, verify and install actual latest stable in private scratch
+        run: node --import ./scripts/tsx.mjs test/helpers/skills-library-upgrade-proof.test-support.ts --prepare-stable
+      - name: Install the maintained Chromium test browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Exercise real authenticated import, authority and stable upgrade
+        id: proof
+        run: |
+          bash scripts/ci-collect-checks.sh \
+            'node scripts/run-vitest.mjs run --config test/vitest/vitest.tooling.config.ts --maxWorkers=1 test/scripts/upgrade-survivor-watchos-direct-node.test.ts' \
+            'node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --maxWorkers=1 ui/src/e2e/skills-library-import-authority.real-gateway.e2e.test.ts'
+      - name: Upload only sanitized evidence
+        id: evidence
+        if: always() && steps.proof.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: skills-library-proof-${{ github.event.pull_request.head.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/skill-import-proof/public/report.json
+            ${{ runner.temp }}/skill-import-proof/public/imported-skill.png
+            ${{ runner.temp }}/skill-import-proof/public/companion-detail.png
+      - name: Remove only completed owned private package scratch
+        if: success() && steps.proof.outcome == 'success' && steps.evidence.outcome == 'success'
+        run: >-
+          node --input-type=module -e
+          'import fs from "node:fs/promises"; await fs.rm(process.env.PROOF_PRIVATE_DIR, { recursive: true, force: true });'
