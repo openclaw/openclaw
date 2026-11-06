@@ -1,3 +1,4 @@
 # LaTeX parser, sanitizer, lazy-browser, and streaming regressions.
 # Preserves contributed chunk-boundary cases and proves the per-message budget.
-469
+# Math in plain-text projections and the wide-equation edge fade (+38 net lines).
+507
