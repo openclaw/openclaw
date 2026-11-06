@@ -21,6 +21,16 @@ vi.mock("./in-process-gateway.js", async (importOriginal) => ({
 }));
 
 const caller = { agentId: "main", sessionKey: "agent:main:host-owned" };
+
+it("limits readiness to publication instead of making workspace setup a user prerequisite", () => {
+  const tool = createGitHubPublishTool();
+  expect(tool.description).toContain(
+    "not a prerequisite for local workspace setup, inspection, repair or validation",
+  );
+  expect(tool.description).toContain(
+    "Do not ask the user to create or bind a workspace solely because readiness reports unbound_workspace",
+  );
+});
 const publication = {
   requestId: "publication-1",
   status: "requested" as const,
