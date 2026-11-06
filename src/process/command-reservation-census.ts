@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { listProcesses } from "@openclaw/proc-safe/inspect";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 
 // A reservation spawns within the same tick (agent tools: after a short admission await).
 const BORN_AFTER_RESERVATION_MS = 15_000;
@@ -36,8 +38,11 @@ function readLinuxProcessBirths(): ProcessBirth[] {
         bornAtMs: bootSeconds * 1_000 + (Number(fields[19]) * 1_000) / LINUX_CLOCK_TICKS_PER_SECOND,
         zombie: fields[0] === "Z",
       });
-    } catch {
-      // The task exited during enumeration.
+    } catch (error) {
+      // Only disappearance proves absence; any other inspection failure keeps custody.
+      if (!["ENOENT", "ESRCH"].includes(extractErrorCode(error) ?? "")) {
+        throw error;
+      }
     }
   }
   return births;
@@ -84,7 +89,8 @@ export function findCommandReservationCandidates(reservedAtMs: number): number[]
   return births
     .filter(
       ({ pid, bornAtMs, zombie }) =>
-        !zombie &&
+        // A zombie leader may retain live Linux threads.
+        !(zombie && isPidDefinitelyDead(pid)) &&
         !inspector.has(pid) &&
         (bornAtMs === undefined ||
           (bornAtMs >= reservedAtMs - CLOCK_SLACK_MS &&
