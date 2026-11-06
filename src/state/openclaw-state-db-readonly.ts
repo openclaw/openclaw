@@ -674,7 +674,8 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
     const directRead =
       (isStatePostgres() || options.allowNativeRead) &&
       !isArtifactPreservingStateRead() &&
-      !openStateSchemaReadAdmission;
+      // Explicit host guards still use a fresh reader without copying the database.
+      (!openStateSchemaReadAdmission || options.allowNativeRead === true);
     if (!directRead) {
       assertStateFileSnapshotAllowed();
     }

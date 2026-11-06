@@ -4,15 +4,28 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 import { createRetainedCheckpointFixture } from "./update-retained-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
+import { assertNoPendingUpdateRecovery } from "./update-run-recovery.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 afterEach(() => vi.restoreAllMocks());
 
 describe("package-only recovery admission", () => {
+  it("runs host recovery guards without copying the database", () => {
+    const f = createRetainedCheckpointFixture(dirs.make("update-guard-copies-"));
+    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    for (let check = 0; check < 3; check += 1) {
+      expect(() =>
+        assertNoPendingUpdateRecovery({ ...f.options, allowNativeRead: true }),
+      ).toThrowError(expect.objectContaining({ name: "UpdateRecoveryRequiredError" }));
+    }
+    expect(copies).not.toHaveBeenCalled();
+  });
+
   it("admits absent state without creating it", async () => {
     const root = path.join(dirs.make("update-admission-"), "absent");
     await assertUpdateRecoveryAdmission({ env: { OPENCLAW_STATE_DIR: root } });

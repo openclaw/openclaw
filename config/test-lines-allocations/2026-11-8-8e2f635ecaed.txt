@@ -1,0 +1,5 @@
+13
+# LOCAL 2026.11.8 row 185; source 8e2f635ecaedc211d0bf68dc6a495d010589e708.
+# Explicit allowNativeRead host guards open a fresh native reader even when recovery schema admission is supplied, avoiding snapshot copies. Artifact-preserving mode still requires its path, and fresh-open/quarantine/admission checks remain in the reader owner.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
