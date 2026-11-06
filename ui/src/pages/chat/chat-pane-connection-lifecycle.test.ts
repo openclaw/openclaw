@@ -96,7 +96,13 @@ function openingPane(approvals = false) {
     initialHistory: { ok: true; payload: ChatHistoryResult };
   }>();
   const history = {
-    messages: [{ role: "assistant", content: [{ type: "text", text: "Pipelined transcript" }] }],
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Pipelined transcript" }],
+        __openclaw: { seq: 1 },
+      },
+    ],
     sessionId: "pipeline-session",
   } satisfies ChatHistoryResult;
   const request = createReconnectRequest(history, {

@@ -76,17 +76,23 @@ afterEach(() => {
 it.each(["older", "newer"] as const)(
   "keeps mounted survivor frames idle after %s history replaces unchanged reply facts",
   async (direction) => {
+    // Keep both replacement windows mounted so frame reuse is independent of window admission.
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(2_000);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 800, 2_000),
+    );
+    vi.stubGlobal("innerHeight", 2_000);
     const { pane, state } = createRefreshChatPane();
     onTestFinished(() => pane.chatProps?.transcript.dispose());
-    const messages = Array.from({ length: 12 }, (_, index) => ({
+    const messages = Array.from({ length: 14 }, (_, index) => ({
       role: index % 2 ? "assistant" : "user",
       content: `reply-fact body ${index + 1}`,
       timestamp: (index + 1) * 10,
       __openclaw: { id: `reply-fact-${index + 1}`, seq: index + 1, runId: `turn-${index >> 1}` },
     }));
-    const initial = direction === "older" ? messages.slice(4) : messages.slice(0, 8);
-    const incoming = direction === "older" ? messages.slice(0, 8) : messages.slice(4);
-    const survivors = messages.slice(4, 8);
+    const initial = direction === "older" ? messages.slice(4) : messages.slice(0, 10);
+    const incoming = direction === "older" ? messages.slice(0, 10) : messages.slice(4);
+    const survivors = messages.slice(4, 10);
     const retained = new Set<unknown>(survivors);
     expect(admitChatHistoryPages(state, [{ messages: initial }], "around")).toBe("messages");
     pane.render();
@@ -101,6 +107,8 @@ it.each(["older", "newer"] as const)(
       transcript.update();
     };
     onTestFinished(() => transcript.dispose());
+    const preparation = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
+    onTestFinished(() => preparation.mockRestore());
     rerender();
     await flushDeferredRowPrune();
     const bubble = (message: (typeof messages)[number]) =>
@@ -112,7 +120,15 @@ it.each(["older", "newer"] as const)(
         key: node.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
       };
     });
-    const preparation = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
+    const boundaryBefore = expectDefined(
+      preparation.mock.calls
+        .map(([group]) => group)
+        .find((group) => group.messages.some(({ message }) => message === survivors[0])),
+      "first surviving user group",
+    );
+    const previousBoundaryId = direction === "older" ? undefined : "reply-fact-4";
+    expect(boundaryBefore.replyPreviousMessageId).toBe(previousBoundaryId);
+    preparation.mockClear();
     const retirement = vi.spyOn(transcriptResidency, "retireChatTranscriptSources");
     onTestFinished(() => {
       preparation.mockRestore();
@@ -149,12 +165,23 @@ it.each(["older", "newer"] as const)(
       expect(
         prepared.some((message) => incomingSources.has(message) && !retained.has(message)),
       ).toBe(true);
-      // Latest-assistant status changes for turn 7–8. Only the complete
-      // interior turn 5–6 keeps all row dependencies unchanged.
-      expect(prepared).toContain(survivors[3]);
-      const unchanged = new Set<unknown>(survivors.slice(0, 2));
-      for (const [index, message] of survivors.slice(0, 2).entries()) {
-        expect.soft(bubble(message)).toBe(before[index]!.node);
+      const boundaryAfter = expectDefined(
+        preparation.mock.calls
+          .map(([group]) => group)
+          .find((group) => group.messages.some(({ message }) => message === survivors[0])),
+        "refreshed first surviving user group",
+      );
+      expect(boundaryAfter).not.toBe(boundaryBefore);
+      expect(boundaryAfter.replyPreviousMessageId).toBe(
+        direction === "older" ? "reply-fact-4" : undefined,
+      );
+      expect(boundaryBefore.replyPreviousMessageId).toBe(previousBoundaryId);
+      // Boundary adjacency changes at 5; latest-assistant status changes at 10.
+      // The complete interior turn 7–8 keeps every frame dependency unchanged.
+      expect(prepared).toContain(survivors[5]);
+      const unchanged = new Set<unknown>(survivors.slice(2, 4));
+      for (const [index, message] of survivors.slice(2, 4).entries()) {
+        expect.soft(bubble(message)).toBe(before[index + 2]!.node);
       }
       expect(prepared.filter((message) => unchanged.has(message))).toHaveLength(0);
     } finally {

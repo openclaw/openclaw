@@ -6,7 +6,7 @@ import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-sn
 import {
   createStagedPrefetchPane,
   nativeHistoryMessage,
-  nativeHistorySeq,
+  expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 
@@ -62,17 +62,13 @@ it.each(["older", "newer"] as const)(
       direction === "older" ? pane.loadOlderMessages() : pane.loadNewerMessages();
 
     await expect(load()).resolves.toBe(true);
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-      Array.from({ length: 400 }, (_, index) => (direction === "older" ? 501 : 1) + index),
-    );
+    expectNativeHistoryRange(state.chatMessages, direction === "older" ? 501 : 1, 400);
     const firstCalls = request.mock.calls.length;
     const stagedAfterFirst = pane.stagedHistory.page;
     const pendingAfterFirst = pane.stagedHistory.load;
     reader = direction === "older" ? 501 : 400;
     await expect(load()).resolves.toBe(true);
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-      Array.from({ length: 400 }, (_, index) => (direction === "older" ? 102 : 400) + index),
-    );
+    expectNativeHistoryRange(state.chatMessages, direction === "older" ? 102 : 400, 400);
     expect(state.chatHistoryPagination).toMatchObject(
       direction === "older"
         ? { hasMore: true, olderCursor: "older-101" }

@@ -1,3 +1,3 @@
 # Remaining M3 history admission, source retirement, and native reader regression coverage.
-# Together with the existing 6461 allocation, covers this PR's exact 13425 net test LF lines.
-6964
+# Together with the existing 6461 allocation, covers this PR's exact 13389 net test LF lines.
+6928

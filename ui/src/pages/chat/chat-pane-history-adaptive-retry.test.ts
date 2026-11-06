@@ -11,6 +11,7 @@ import {
   createStagedPrefetchPane,
   nativeHistoryMessage,
   nativeHistorySeq,
+  expectNativeHistoryRange,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
@@ -218,9 +219,7 @@ it.each(["older", "newer"] as const)(
     } finally {
       await fixture.finish();
     }
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-      Array.from({ length: 400 }, (_, index) => (direction === "older" ? 164 : 338) + index),
-    );
+    expectNativeHistoryRange(state.chatMessages, direction === "older" ? 164 : 338, 400);
   },
 );
 
@@ -455,9 +454,7 @@ it("releases rejected broad bodies while the smaller adaptive reply is pending",
     await collectGarbageForTest();
     expect(control.deref()).toBeUndefined();
     expect(rejected?.deref()).toBeUndefined();
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-      Array.from({ length: 383 }, (_, index) => index + 1),
-    );
+    expectNativeHistoryRange(state.chatMessages, 1, 383);
   } finally {
     narrowed.resolve(page(384, 737));
     await loading;

@@ -12,6 +12,7 @@ import {
   historyPage,
   nativeHistoryMessage,
   nativeHistorySeq,
+  expectNativeHistoryRange,
   packetHistoryPane,
   pagination,
   sparsePrefetchRequest,
@@ -62,9 +63,7 @@ it("settles a filled chain and reverses through its opaque edge without source I
   const published = vi.spyOn(state, "chatMessages", "set");
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(published).toHaveBeenCalledTimes(1);
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 400 }, (_, index) => index + 81),
-  );
+  expectNativeHistoryRange(state.chatMessages, 81, 400);
   expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([
     "older-400",
     "older-320",
@@ -78,9 +77,7 @@ it("settles a filled chain and reverses through its opaque edge without source I
   moveReader(81);
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(request).toHaveBeenCalledTimes(5);
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 400 }, (_, index) => index + 1),
-  );
+  expectNativeHistoryRange(state.chatMessages, 1, 400);
   expect(state.chatHistoryPagination).toMatchObject({
     hasMore: false,
     hasNewer: true,
@@ -89,9 +86,7 @@ it("settles a filled chain and reverses through its opaque edge without source I
   moveReader(400);
   await expect(pane.loadNewerMessages()).resolves.toBe(true);
   expect(request.mock.calls.at(-1)?.[1].cursor).toBe("newer-401");
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 400 }, (_, index) => index + 81),
-  );
+  expectNativeHistoryRange(state.chatMessages, 81, 400);
   expect(state.chatHistoryPagination.hasNewer).toBeUndefined();
   expect(pane.stagedHistory.page).toBeNull();
   expect(request.mock.calls.map(([, params]) => params)).toEqual([
@@ -155,9 +150,7 @@ it("revalidates the reader bridge before admission and stages its earliest unadm
   moveReader(241);
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(request.mock.calls.filter(([, params]) => params.cursor === "older-160")).toHaveLength(2);
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 400 }, (_, index) => index + 1),
-  );
+  expectNativeHistoryRange(state.chatMessages, 1, 400);
 });
 
 it("adopts later-packet user receipts while keeping a live publication made during the chain", async () => {

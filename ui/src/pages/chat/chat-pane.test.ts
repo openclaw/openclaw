@@ -528,6 +528,9 @@ describe("chat pane initialization", () => {
         hasMore: true,
         nextOffset: 1,
         totalMessages: 2,
+        needsBoundary: undefined,
+        olderCursor: undefined,
+        segments: [{ sources: ["seq:1"], hasOlder: true, hasNewer: false }],
       });
       expect(attachedState?.currentSessionId).toBe("split-session");
     } finally {

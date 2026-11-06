@@ -113,7 +113,12 @@ export class TranscriptReaderAnchor {
     const rows = entries
       .flatMap((entry) => {
         const row = entry.target;
-        if (!(row instanceof HTMLElement) || !row.isConnected || row.dataset.preparedRow === "true" || !element.contains(row)) {
+        if (
+          !(row instanceof HTMLElement) ||
+          !row.isConnected ||
+          row.dataset.preparedRow === "true" ||
+          !element.contains(row)
+        ) {
           return [];
         }
         const rect = row.getBoundingClientRect();

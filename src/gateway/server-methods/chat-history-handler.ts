@@ -527,13 +527,6 @@ export async function handleChatHistoryRequest({
           });
           let delta: Awaited<ReturnType<typeof readChatHistoryDelta>>;
           try {
-            const scope = {
-              agentId: sessionAgentId,
-              sessionEntry: entry,
-              sessionId,
-              sessionKey: canonicalKey,
-              storePath,
-            };
             delta = await readChatHistoryDelta(
               {
                 maxChars: effectiveMaxChars,
@@ -542,7 +535,13 @@ export async function handleChatHistoryRequest({
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,
-                scope,
+                scope: {
+                  agentId: sessionAgentId,
+                  sessionEntry: entry,
+                  sessionId,
+                  sessionKey: canonicalKey,
+                  storePath,
+                },
                 sessionKey: canonicalKey,
                 sessionSnapshot,
                 incognito: entry?.incognito,
@@ -557,7 +556,7 @@ export async function handleChatHistoryRequest({
           return withReadySessionRows(rowProjection, queries, (publicationRead) => {
             const publicationSharing = readCurrentSharing(publicationRead);
             if (!publicationSharing) {
-              return undefined;
+              return;
             }
             // Delta envelopes already contain budgeted session metadata from before restoration.
             if (
@@ -569,11 +568,11 @@ export async function handleChatHistoryRequest({
                 respond,
                 "session changed while reading history; reload the conversation",
               );
-              return undefined;
+              return;
             }
             if (delta.kind === "reset") {
               respond(true, delta);
-              return undefined;
+              return;
             }
             sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
             const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
@@ -594,7 +593,6 @@ export async function handleChatHistoryRequest({
               ...(startupMetadata ? { metadata: startupMetadata } : {}),
             };
             respond(true, presentHistory(payload));
-            return undefined;
           });
         };
       }

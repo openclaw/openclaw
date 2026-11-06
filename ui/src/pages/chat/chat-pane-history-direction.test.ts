@@ -6,7 +6,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import {
   appendSentinel,
   installHistoryObserver,
-  nativeHistorySeq,
+  expectNativeHistoryRange,
   transcriptScrollFact,
 } from "./chat-pane-history.test-support.ts";
 import { residentPane } from "./chat-pane-resident.test-support.ts";
@@ -39,9 +39,7 @@ async function directionalHistoryPane(olderPages = 0) {
 it("does not carry exhausted upward intent into a newer admission that reopens older history", async () => {
   const { pane, state, thread, requests, observer, loads, scroll, intersect, joinOlder } =
     await directionalHistoryPane(7);
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-    Array.from({ length: 400 }, (_, index) => index + 1),
-  );
+  expectNativeHistoryRange(state.chatMessages, 1, 400);
   expect(state.chatHistoryPagination.hasMore).toBe(false);
   thread.scrollTop = 80;
   const before = requests.length;

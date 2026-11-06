@@ -1,4 +1,4 @@
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGatewayHarness,
@@ -65,6 +65,16 @@ export function createTestChatPane(
   resetChatScroll(state);
   vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
   return { pane, state };
+}
+
+export function expectNativeHistoryRange(
+  messages: readonly unknown[],
+  first: number,
+  count: number,
+) {
+  expect(messages.map(nativeHistorySeq)).toEqual(
+    Array.from({ length: count }, (_, index) => first + index),
+  );
 }
 
 export function nativeHistorySeq(message: unknown): number | undefined {

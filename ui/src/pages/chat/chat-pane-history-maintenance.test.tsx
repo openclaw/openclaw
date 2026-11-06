@@ -202,6 +202,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     // owns reader intent after leaving the maintenance target.
     container.scrollTop = 720;
     container.dispatchEvent(new Event("scroll"));
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "chat.history",
