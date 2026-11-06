@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
@@ -19,7 +20,7 @@ import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
@@ -291,6 +292,28 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
+  const message = { role: "user", content: "Hello", timestamp: 1000 };
+  const frame = (sender: MessageGroupData["sender"], userId?: string) =>
+    prepareMessageGroupFrame(createMessageGroup(message, "user", { sender }), {
+      showReasoning: false,
+      userId,
+    });
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  const cases = [
+    { sender: profile("viewer"), userId: "viewer", peer: false },
+    { sender: profile("peer"), userId: "viewer", peer: true },
+    // Without a viewer profile every user turn is the viewer's, whatever the sender stamp.
+    { sender: { id: "pat@example.com" }, userId: undefined, peer: false },
+    { sender: profile("viewer"), userId: undefined, peer: false },
+  ];
+  for (const { sender, userId, peer } of cases) {
+    const prepared = frame(sender, userId);
+    expect(prepared.isPeerGroup).toBe(peer);
+    expect(prepared.senderHue === null).toBe(!peer);
+  }
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
