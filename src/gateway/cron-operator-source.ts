@@ -16,6 +16,7 @@ import {
   operatorScopeSatisfied,
   intersectOperatorScopes,
 } from "../shared/operator-scope-compat.js";
+import { isSameOpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import type { RestartRecoveryOperatorSource } from "./operator-run-recovery-source.codec.js";
@@ -200,14 +201,21 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
       ["schedule", "enabled", "description", "displayName"].includes(key),
     );
   const sameRequester = previous.source.snapshot.profileId === fresh.snapshot.profileId;
+  // Devices share their account's profile, so only the exact device listing that holds the
+  // grant may refresh it; another device or a reapproval of the same one keeps the original.
+  const sameDevice = isSameOpenClawIdTunnelPrincipal(
+    previous.source.snapshot.openclawIdPrincipal,
+    fresh.snapshot.openclawIdPrincipal,
+  );
   const samePolicy = isDeepStrictEqual(
     sourceRolePolicy(previous.source.snapshot.rolePolicy),
     sourceRolePolicy(fresh.snapshot.rolePolicy),
   );
-  if (sameRequester && (!controlOnly || samePolicy)) {
-    if (!controlOnly) {
-      return params.capture;
-    }
+  if (sameRequester && !controlOnly) {
+    // Changing what runs authorizes the new task under the editing device, as recreating it would.
+    return params.capture;
+  }
+  if (sameRequester && sameDevice && samePolicy) {
     // A fresh connection may have broader invocation scopes; a timing edit does not grant them.
     const scopes = intersectOperatorScopes(fresh.snapshot.scopes, previous.source.snapshot.scopes);
     return {
@@ -238,7 +246,7 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
       "Changing this automation's execution requires its original requester or explicit ownership reauthorization.",
     );
   }
-  // Another operator's timing edit keeps the stored grant unchanged; each run revalidates it.
+  // Another requester's or device's timing edit keeps the stored grant; each run revalidates it.
   return {
     ...params.capture,
     operatorSource: previous.source,

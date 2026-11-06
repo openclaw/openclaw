@@ -49,11 +49,23 @@ it.each([
     directAdmin: true,
     originalRevoked: true,
   },
+  // The same account's other device, or the original device reapproved, edits only timing.
+  { kind: "member", target: "isolated", reset: false, direct: true, editor: "sibling" },
+  { kind: "owner", target: "isolated", reset: false, direct: true, editor: "sibling" },
+  {
+    kind: "member",
+    target: "isolated",
+    reset: false,
+    direct: true,
+    editor: "reapproved",
+    originalRevoked: true,
+  },
 ] as const)(
-  "keeps OCID $kind condition authority (target=$target reset=$reset directEdit=$direct directAdmin=$directAdmin originalRevoked=$originalRevoked)",
+  "keeps OCID $kind condition authority (target=$target reset=$reset directEdit=$direct directAdmin=$directAdmin editor=$editor originalRevoked=$originalRevoked)",
   async (scenario) => {
     const { kind, target, reset, direct } = scenario;
     const directAdmin = "directAdmin" in scenario && scenario.directAdmin;
+    const editor = "editor" in scenario ? scenario.editor : undefined;
     const originalRevoked = "originalRevoked" in scenario && scenario.originalRevoked;
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const profile =
@@ -70,7 +82,8 @@ it.each([
       const administrativeProfile = directAdmin
         ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
         : undefined;
-      const administrativePeer: OpenClawIdTunnelPrincipal | undefined = directAdmin
+      const original = principal;
+      const editingPeer: OpenClawIdTunnelPrincipal | undefined = directAdmin
         ? {
             kind: "owner",
             peerKey: `iroh:${"ab".repeat(32)}`,
@@ -81,12 +94,18 @@ it.each([
               ownerDevice: "administrative-device",
             },
           }
-        : undefined;
+        : editor
+          ? {
+              ...original,
+              peerKey: editor === "sibling" ? `iroh:${"ac".repeat(32)}` : original.peerKey,
+              authority: { ...original.authority!, listedSeq: 2 },
+            }
+          : undefined;
       const lookup = (key: string) =>
         principal?.peerKey === key
           ? principal
-          : administrativePeer?.peerKey === key
-            ? administrativePeer
+          : editingPeer?.peerKey === key
+            ? editingPeer
             : undefined;
       setOpenClawIdTunnelPrincipalLookup(lookup);
       const context = createContext([
@@ -206,12 +225,12 @@ it.each([
           await prepareUserProfileCatalog();
           const client = createOperatorClient({
             profileId: administrativeProfile?.id ?? profile.id,
-            scopes: directAdmin ? ["operator.admin"] : ["operator.write"],
+            scopes: directAdmin || kind === "owner" ? ["operator.admin"] : ["operator.write"],
           });
           // Socket admission has classified this fixture as independent of plugin access grants.
           client.internal = {
             authenticatedOperator: true,
-            openclawIdPrincipal: administrativePeer ?? principal,
+            openclawIdPrincipal: editingPeer ?? principal,
             operatorAccessAuthority: null,
           };
           client.authPolicy = captureGatewayAuthPolicy(config, {
@@ -225,7 +244,7 @@ it.each([
               {
                 client,
                 context: fixture.context,
-                hasCurrentClientAuthority: () => (administrativePeer ?? principal) !== undefined,
+                hasCurrentClientAuthority: () => (editingPeer ?? principal) !== undefined,
               },
             ),
           ).resolves.toMatchObject({ id: job.id });

@@ -141,6 +141,38 @@ export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPr
   );
 }
 
+/**
+ * True when two retained principals name the same admitted device listing: the
+ * same peer, kind, account and role under the same claw, root and listing.
+ * Two absent principals match; a device and a non-device requester do not.
+ */
+export function isSameOpenClawIdTunnelPrincipal(
+  left: OpenClawIdTunnelPrincipal | undefined,
+  right: OpenClawIdTunnelPrincipal | undefined,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  const a = left.authority;
+  const b = right.authority;
+  // A bare peer without its listing is not evidence of the same approval.
+  if (!a || !b || left.peerKey !== right.peerKey || left.kind !== right.kind) {
+    return false;
+  }
+  if (
+    a.clawId !== b.clawId ||
+    a.rootPub !== b.rootPub ||
+    a.listedSeq !== b.listedSeq ||
+    a.ownerDevice !== b.ownerDevice
+  ) {
+    return false;
+  }
+  return (
+    left.kind === "owner" ||
+    (right.kind === "member" && left.accountId === right.accountId && left.role === right.role)
+  );
+}
+
 /** The trusted-proxy user of a member; owners act as the Gateway owner and carry none. */
 export function openclawIdTunnelUser(principal: OpenClawIdTunnelPrincipal): string | undefined {
   return principal.kind === "member" ? `openclaw-id:${principal.accountId}` : undefined;
