@@ -860,6 +860,7 @@ src/config/zod-schema.cloud-workers.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.desktop.ts
 src/config/zod-schema.gateway.ts
+src/config/zod-schema.gateway-openclaw-id.ts
 src/config/zod-schema.hooks.ts
 src/config/zod-schema.implicit-mentions.ts
 src/config/zod-schema.installs.ts
