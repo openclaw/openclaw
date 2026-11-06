@@ -693,7 +693,8 @@ async function verifyAndPublishSqliteSnapshot(
       if (!options.preserveRowIds) {
         // Keep the database-sized rebuild on the staging volume rather than
         // SQLite's potentially quota-limited SQLITE_TMPDIR/TMPDIR filesystem.
-        const compactedPath = path.join(stagingDir, "compacted.sqlite");
+        // Reuse the staging payload name recognized by abandoned-snapshot reclamation.
+        const compactedPath = path.join(stagingDir, "database.sqlite.partial");
         snapshot.prepare("VACUUM INTO ?;").run(resolveSqliteFilesystemPath(compactedPath));
         outputPath = compactedPath;
         await fs.chmod(outputPath, 0o600);

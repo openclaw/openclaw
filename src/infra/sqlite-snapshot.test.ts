@@ -518,7 +518,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     interceptOpen(
       (file, flags) =>
         flags === "r" &&
-        path.basename(file) === "compacted.sqlite" &&
+        path.basename(file) === "database.sqlite.partial" &&
         path.basename(path.dirname(file)).startsWith(".sqlite-snapshot-"),
       async (file) => {
         if (++stagedReadCount === 2) {
