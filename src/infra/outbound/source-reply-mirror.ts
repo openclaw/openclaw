@@ -40,6 +40,8 @@ type SourceReplyTranscriptMirrorParams = {
   sourceReplyFinal?: boolean;
   toolCallId?: string;
   deliveredPayload?: unknown;
+  /** Actual local delivery content; absent for legacy Gateway request projections. */
+  deliveredPayloads?: readonly ReplyPayload[];
   replyToIsExplicit?: boolean;
 };
 
@@ -433,25 +435,27 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     return false;
   }
 
-  const plan = createOutboundPayloadPlan([
-    {
-      text:
-        readTrimmedStringAlias(params.actionParams, ["message", "content", "text", "caption"]) ??
-        "",
-      mediaUrl: readTrimmedStringAlias(params.actionParams, [
-        "mediaUrl",
-        "media",
-        "path",
-        "filePath",
-        "fileUrl",
-      ]),
-      mediaUrls: normalizeOptionalTrimmedStringList(params.actionParams.mediaUrls),
-      presentation: params.actionParams.presentation as ReplyPayload["presentation"],
-      interactive: params.actionParams.interactive as ReplyPayload["interactive"],
-      channelData: params.actionParams.channelData as ReplyPayload["channelData"],
-      location: normalizeOutboundLocation(params.actionParams.location),
-    },
-  ]);
+  const plan = createOutboundPayloadPlan(
+    params.deliveredPayloads ?? [
+      {
+        text:
+          readTrimmedStringAlias(params.actionParams, ["message", "content", "text", "caption"]) ??
+          "",
+        mediaUrl: readTrimmedStringAlias(params.actionParams, [
+          "mediaUrl",
+          "media",
+          "path",
+          "filePath",
+          "fileUrl",
+        ]),
+        mediaUrls: normalizeOptionalTrimmedStringList(params.actionParams.mediaUrls),
+        presentation: params.actionParams.presentation as ReplyPayload["presentation"],
+        interactive: params.actionParams.interactive as ReplyPayload["interactive"],
+        channelData: params.actionParams.channelData as ReplyPayload["channelData"],
+        location: normalizeOutboundLocation(params.actionParams.location),
+      },
+    ],
+  );
   const mirror = projectOutboundPayloadPlanForMirror(plan);
   if (!mirror.text && mirror.mediaUrls.length === 0) {
     return false;
