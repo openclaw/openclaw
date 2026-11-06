@@ -59,6 +59,8 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
   device-alias-rename.real-gateway device-platform-family.real-gateway logs-lifecycle model-api-keys.real-gateway
   model-catalog-partial-refresh.real-gateway model-connection-check.real-gateway
+  model-providers-fresh-install.real-gateway
+  model-add-provider-to-chat.real-gateway
   model-key-save-check.real-gateway
   model-provider-remove-in-use.real-gateway
   model-picker-search.real-gateway
@@ -500,7 +502,7 @@ describe("Control UI E2E resource ownership", () => {
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(59);
+      expect(parallel).toHaveLength(61);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

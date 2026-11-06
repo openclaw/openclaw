@@ -205,13 +205,15 @@ it("clears persisted delivery routing", async () => {
 it.each([
   [0, "0"],
   [Number.MAX_SAFE_INTEGER, "9007199254740.991"],
-] as const)("round trips a %s ms cooldown through the form", async (cooldownMs, seconds) => {
+] as const)("round trips %s ms and clears cloned cooldown", async (cooldownMs, seconds) => {
   const { state, submit } = editFields({ failureAlert: { cooldownMs } });
   expect(state.cronForm.failureAlertCooldownSeconds).toBe(seconds);
   state.cronForm.description = "Metadata changed";
-  expect(patchOf(await submit()).failureAlert).toMatchObject({
-    cooldownMs,
-  });
+  expect(patchOf(await submit()).failureAlert).toMatchObject({ cooldownMs });
+  const clone = cloneJob(makeJob({ failureAlert: { cooldownMs, threadId: 41 } }));
+  clone.state.cronForm.failureAlertCooldownSeconds = "";
+  const alert = (await clone.submit()).failureAlert;
+  expect(alert).toMatchObject({ cooldownMs: undefined, threadId: 41 });
 });
 
 it("submits webhook delivery and resets the form", async () => {
@@ -483,16 +485,13 @@ it.each([
       includeSkipped: true,
     },
   },
-  { failureAlert: { channel: "last", includeSkipped: false } },
+  { failureAlert: { channel: "last", includeSkipped: false, threadId: 41 } },
   { failureAlert: false },
 ] as const)("clones exact persisted fields: %j", async (fields) => {
   const sourceJob = createCronJob("source", "Source", { ...fields, agentId: "writer" });
-  const { submit } = cloneJob(sourceJob, {
-    cronJobs: "schedule" in fields ? [sourceJob] : [],
-  });
-  const payload = await submit();
-  expect(payload.agentId).toBe("writer");
-  expect(payload.name).toBe("Source copy");
+  const cronJobs = "schedule" in fields ? [sourceJob] : [];
+  const payload = await cloneJob(sourceJob, { cronJobs }).submit();
+  expect(payload).toMatchObject({ agentId: "writer", name: "Source copy" });
   for (const [field, expected] of Object.entries(fields)) {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify omitted fields on the wire
     expect(JSON.parse(JSON.stringify(payload[field]))).toEqual(expected);

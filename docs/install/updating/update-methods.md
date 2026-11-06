@@ -428,6 +428,18 @@ Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin
 migrations.
 
+OpenClaw 2026.10.10 can report `spawnSync node ETIMEDOUT` while probing SQLite
+headers in a large state directory. Candidate safety checks do not replace the
+installed updater's backup implementation: its original-state capture and update
+backup discovery still use the installed code, including its retained runtime.
+Selecting a candidate with the batched probe does not repair that running updater.
+Use the manual procedure above for the first hop. If the old backup command also
+times out, stop the Gateway and other state writers and take a verified filesystem
+or volume snapshot covering the state, config, credentials, and configured agent
+and workspace directories before replacing the package. Do not copy only the main
+file of a live SQLite database or edit installed distribution files to bypass the
+probe.
+
 On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
 their fixed 30-second baseline package-fingerprint budget before replacing any
 files. They then report `Installation recovery is unverified`,
