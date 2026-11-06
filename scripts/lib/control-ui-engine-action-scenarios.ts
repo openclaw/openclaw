@@ -14,6 +14,7 @@ function installProviderArtworkProbe(pathname: string) {
   const blobs = new WeakSet<Blob>();
   const urls = new Set<string>();
   const counts = { blobs: 0, objectUrls: 0, revokedUrls: 0 };
+  // oxlint-disable-next-line typescript/unbound-method -- The wrapper forwards the original Response receiver.
   const originalBlob = Response.prototype.blob;
   Response.prototype.blob = async function () {
     const blob = await originalBlob.call(this);
@@ -23,21 +24,21 @@ function installProviderArtworkProbe(pathname: string) {
     }
     return blob;
   };
-  const originalCreate = URL.createObjectURL;
+  const originalCreate = URL.createObjectURL.bind(URL);
   URL.createObjectURL = function (object) {
-    const url = originalCreate.call(this, object);
+    const url = originalCreate(object);
     if (object instanceof Blob && blobs.has(object)) {
       urls.add(url);
       counts.objectUrls++;
     }
     return url;
   };
-  const originalRevoke = URL.revokeObjectURL;
+  const originalRevoke = URL.revokeObjectURL.bind(URL);
   URL.revokeObjectURL = function (url) {
     if (urls.delete(url)) {
       counts.revokedUrls++;
     }
-    originalRevoke.call(this, url);
+    originalRevoke(url);
   };
   window.openclawProviderArtworkProbe = () => ({ ...counts, liveUrls: urls.size });
 }
@@ -47,7 +48,7 @@ async function providerArtworkCounts(page: Page) {
   return { requests: providerArtworkRequests.get(page)!.count, ...counts };
 }
 
-async function waitForProviderArtwork(page: Page, filtered: boolean) {
+async function waitForProviderArtwork(page: Page, isFiltered: boolean) {
   await page.waitForFunction(
     ({ selector, filtered }) => {
       const picker = document.querySelector(selector);
@@ -64,7 +65,7 @@ async function waitForProviderArtwork(page: Page, filtered: boolean) {
         images.every((image) => image.complete && image.naturalWidth > 0)
       );
     },
-    { selector: providerPicker, filtered },
+    { selector: providerPicker, filtered: isFiltered },
   );
 }
 
@@ -132,12 +133,12 @@ function createProviderArtworkScenario(): EngineScenario {
           await page.keyboard.press("Escape");
         }
         await page.waitForFunction((selector) => {
-          const picker = document.querySelector(selector);
-          const trigger = picker?.querySelector(".picker-select__trigger");
+          const element = document.querySelector(selector);
+          const button = element?.querySelector(".picker-select__trigger");
           return (
-            trigger?.getAttribute("aria-expanded") === "false" &&
-            trigger === document.activeElement &&
-            picker?.querySelectorAll('[role="option"]').length === 0
+            button?.getAttribute("aria-expanded") === "false" &&
+            button === document.activeElement &&
+            element?.querySelectorAll('[role="option"]').length === 0
           );
         }, providerPicker);
       };
