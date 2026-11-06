@@ -609,6 +609,19 @@ describe("Search configuration lifecycle", () => {
           enabled: { type: "boolean" },
           provider: { type: "string" },
           maxResults: { type: "integer", title: "Result limit", default: 5 },
+          openaiCodex: {
+            type: "object",
+            title: "OpenAI Codex",
+            additionalProperties: false,
+            properties: {
+              userLocation: {
+                type: "object",
+                title: "User location",
+                additionalProperties: false,
+                properties: { city: { type: "string", title: "City" } },
+              },
+            },
+          },
         }).properties,
       );
     }
@@ -721,6 +734,23 @@ describe("Search configuration lifecycle", () => {
         ? atPath(endpointPath, value)
         : atPath([...searchPath, "maxResults"], Number(value));
     expect(JSON.parse(submitted.raw)).toMatchObject(expected);
+    page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
+    await page.runtime.flushFormChanges();
+  });
+
+  it("gives nested advanced settings their own rows", async () => {
+    const page = await mount({ advanced: true });
+    page.element.querySelector<HTMLDetailsElement>("details")!.open = true;
+    const label = "OpenAI Codex: User location: City";
+    const row = page.input(label).closest(".settings-row--stacked-on-narrow")!;
+    expect(row.querySelector(".settings-row__title")?.textContent).toBe(label);
+    expect(row.querySelectorAll("input")).toHaveLength(1);
+    expect(row.textContent!.split(label)).toHaveLength(2);
+    page.edit(label, "Bengaluru");
+    const submitted = await page.writeStarted.promise;
+    expect(JSON.parse(submitted.raw)).toMatchObject(
+      atPath([...searchPath, "openaiCodex", "userLocation", "city"], "Bengaluru"),
+    );
     page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
     await page.runtime.flushFormChanges();
   });
