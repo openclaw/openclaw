@@ -2,10 +2,10 @@
 // and the supervised tunnel child. Imported only after the Labs switch is on.
 import { createHash } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { startOpenClawIdIngressListener, type TunnelApiHandler } from "./ingress-listener.js";
 import { createTunnelSupervisor, type TunnelSupervisorStatus } from "./tunnel-supervisor.js";
 
@@ -36,9 +36,10 @@ function resolveTunnelPaths(stateDir: string): { keyPath: string; socketPath: st
     return { keyPath: path.join(dir, "endpoint.key"), socketPath };
   }
   const id = createHash("sha256").update(stateDir).digest("hex").slice(0, 16);
+  // A long state path moves the socket under the private OpenClaw temp root, not shared /tmp.
   return {
     keyPath: path.join(dir, "endpoint.key"),
-    socketPath: path.join(os.tmpdir(), `openclaw-id-${id}`, "ingress.sock"),
+    socketPath: path.join(resolvePreferredOpenClawTmpDir(), `openclaw-id-${id}`, "ingress.sock"),
   };
 }
 
