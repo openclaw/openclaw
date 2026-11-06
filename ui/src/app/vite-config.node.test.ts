@@ -694,14 +694,10 @@ it("composes the complete source without registering runtime English", () => {
   expect(flat.get("configView.sections.cron")).toBe("Automations");
 });
 
-it("packs Chat boot fragments without loading their optional page siblings", async () => {
+it("batches Chat namespaces while retaining first-use copy and deferred pages", async () => {
   const { load } = await localeHooks();
   await withoutMemory(async () => {
-    const { catalog, loadNamespace } = await executeLocale(
-      load,
-      await loadLocaleSource(load),
-      true,
-    );
+    const { catalog } = await executeLocale(load, await loadLocaleSource(load), true);
     const initial = flattenTranslations(catalog);
     const bootKeys = [
       "runtimeErrors.permissionDenied",
@@ -715,23 +711,19 @@ it("packs Chat boot fragments without loading their optional page siblings", asy
       "mcpPage.noServers",
       "profilePage.modelAccounts.inventoryFailed",
       "chat.goals.start",
+      "sessionsView.renameSessionMenu",
+      "chat.composer.menu.webSearch",
+      "chat.sessionDetails.environment",
     ];
     for (const key of bootKeys) {
       expect(initial.get(key), key).toBeTypeOf("string");
     }
     await getLazyLocaleCatalog(catalog)?.prepare(loadControlUiStartupCatalog());
     const prepared = flattenTranslations(catalog);
-    for (const key of [
-      "newSession.messagePlaceholder",
-      "worktrees.cleanNow",
-      "profilePage.access.admin",
-      "chat.sessionDetails.environment",
-      "commandPalette.newSessionSettings",
-    ]) {
+    for (const key of ["activity.title", "commandPalette.newSessionSettings"]) {
       expect(prepared.has(key), key).toBe(false);
     }
     expect(catalog.configHints).toBeUndefined();
-    await loadNamespace("newSession");
     expect(flattenTranslations(catalog).get("newSession.messagePlaceholder")).toBe(
       "What should this session work on?",
     );
