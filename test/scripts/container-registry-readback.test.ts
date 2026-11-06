@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createContainerRegistryReadbackPlan,
+  readContainerManifest,
   verifyContainerRegistryReadback,
 } from "../../scripts/container-registry-readback.mjs";
 
@@ -94,6 +95,78 @@ const stableParams = {
 };
 
 describe("container registry post-publish readback", () => {
+  it("uses a stored credential only with the registry's authorized HTTPS token realm", async () => {
+    const auth = Buffer.from("release-user:release-secret").toString("base64");
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 401,
+          headers: {
+            "www-authenticate":
+              'Bearer realm="https://vcr.vercel.com/token",service="vcr.vercel.com"',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ token: "registry-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(imageManifest()), {
+          status: 200,
+          headers: {
+            "content-type": imageType,
+            "docker-content-digest": digest("a"),
+          },
+        }),
+      );
+
+    await expect(
+      readContainerManifest(vercelImage + ":2026.10.6", {
+        delay: async () => {},
+        dockerConfig: { auths: { "vcr.vercel.com": { auth } } },
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ digest: digest("a"), ref: vercelImage + ":2026.10.6" });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl.mock.calls[1]?.[0].origin).toBe("https://vcr.vercel.com");
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers.authorization).toBe(
+      "Basic " + Buffer.from("release-user:release-secret").toString("base64"),
+    );
+    expect(fetchImpl.mock.calls[2]?.[1]?.headers.authorization).toBe("Bearer registry-token");
+  });
+
+  it.each(["http://vcr.vercel.com/token", "https://unrelated.example/token"])(
+    "rejects unauthorized token realm %s before credential-bearing I/O",
+    async (realm) => {
+      const fetchImpl = vi.fn().mockResolvedValueOnce(
+        new Response(null, {
+          status: 401,
+          headers: { "www-authenticate": 'Bearer realm="' + realm + '"' },
+        }),
+      );
+
+      await expect(
+        readContainerManifest(vercelImage + ":2026.10.6", {
+          delay: async () => {},
+          dockerConfig: {
+            auths: {
+              "vcr.vercel.com": {
+                auth: Buffer.from("release-user:release-secret").toString("base64"),
+              },
+            },
+          },
+          fetchImpl,
+        }),
+      ).rejects.toThrow("registry token realm is not an authorized HTTPS origin");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(fetchImpl.mock.calls[0]?.[1]?.headers).not.toHaveProperty("authorization");
+    },
+  );
+
   it.each([
     {
       ref: "docker.io/openclaw/openclaw:2026.10.6-slim-arm64",
@@ -119,6 +192,43 @@ describe("container registry post-publish readback", () => {
     await expect(
       verifyContainerRegistryReadback(stableParams, { readManifest: fixture.readManifest }),
     ).rejects.toThrow(ref + expected);
+  });
+
+  it("rejects Vercel platform descriptor drift beyond the digest", async () => {
+    const fixture = registryFixture(stableParams.version);
+    const ref = vercelImage + ":" + stableParams.version;
+    const policy = createContainerRegistryReadbackPlan(stableParams).policy;
+    const defaultRefs = [
+      ref,
+      ...policy.movingAliases.default.map((alias) => vercelImage + ":" + alias),
+    ];
+    for (const candidateRef of defaultRefs) {
+      const record = fixture.records.get(candidateRef)!;
+      const manifests = record.manifest.manifests as Array<Record<string, unknown>>;
+      manifests[0] = { ...manifests[0], size: 456 };
+    }
+
+    await expect(
+      verifyContainerRegistryReadback(stableParams, { readManifest: fixture.readManifest }),
+    ).rejects.toThrow(ref + " descriptor set differs from the expected immutable ref.");
+  });
+
+  it("accepts equivalent platform metadata with a different property order", async () => {
+    const fixture = registryFixture(stableParams.version);
+    for (const [candidateRef, record] of fixture.records) {
+      if (!candidateRef.startsWith(vercelImage + ":")) {
+        continue;
+      }
+      const manifests = record.manifest.manifests as Array<Record<string, unknown>> | undefined;
+      for (const manifestDescriptor of manifests ?? []) {
+        const platform = manifestDescriptor.platform as { architecture: string; os: string };
+        manifestDescriptor.platform = { os: platform.os, architecture: platform.architecture };
+      }
+    }
+
+    await expect(
+      verifyContainerRegistryReadback(stableParams, { readManifest: fixture.readManifest }),
+    ).resolves.toMatchObject({ registryCount: 3 });
   });
 
   it("keeps beta publication at zero moving aliases", async () => {

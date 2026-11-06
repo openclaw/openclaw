@@ -184,8 +184,26 @@ async function readResponseJson(response, label) {
   return parseJson(await readBoundedResponseText(response, label, BODY_MAX_BYTES), label);
 }
 
-async function resolveRegistryToken(challenge, host, repository, options) {
+function authorizedTokenRealm(challenge, host) {
   const url = new URL(challenge.realm);
+  const registryOrigin = new URL("https://" + host).origin;
+  const allowedOrigins =
+    host === "docker.io"
+      ? new Set([registryOrigin, "https://auth.docker.io"])
+      : new Set([registryOrigin]);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    !allowedOrigins.has(url.origin)
+  ) {
+    throw new Error(host + ": registry token realm is not an authorized HTTPS origin.");
+  }
+  return url;
+}
+
+async function resolveRegistryToken(challenge, host, repository, options) {
+  const url = authorizedTokenRealm(challenge, host);
   url.searchParams.set("service", challenge.service ?? host);
   url.searchParams.set("scope", challenge.scope ?? "repository:" + repository + ":pull");
   const credential = resolveDockerCredential(host, options);
@@ -295,6 +313,20 @@ export function createContainerRegistryReadbackPlan({
   return { policy, registries };
 }
 
+function normalizedJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizedJsonValue(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, normalizedJsonValue(value[key])]),
+  );
+}
+
 function normalizedDescriptor(descriptor, ref) {
   if (!descriptor || typeof descriptor !== "object") {
     throw new Error(ref + " contains an invalid descriptor.");
@@ -303,7 +335,7 @@ function normalizedDescriptor(descriptor, ref) {
     digest: requireDigest(descriptor.digest, ref),
     mediaType: descriptor.mediaType,
     size: descriptor.size,
-    platform: descriptor.platform,
+    platform: normalizedJsonValue(descriptor.platform),
   };
 }
 
@@ -483,21 +515,10 @@ export async function verifyContainerRegistryReadback(params, options = {}) {
   if (vercel && docker[0]) {
     for (const actual of vercel.variants) {
       const expected = docker[0].variants.find(({ aliasKey }) => aliasKey === actual.aliasKey);
-      for (const architecture of ARCHITECTURES) {
-        if (
-          actual.index.platforms[architecture].digest !==
-          expected.index.platforms[architecture].digest
-        ) {
-          throw new Error(
-            actual.versionRef +
-              " linux/" +
-              architecture +
-              " differs from " +
-              expected.versionRef +
-              ".",
-          );
-        }
-      }
+      const expectedPlatforms = ARCHITECTURES.map(
+        (architecture) => expected.index.platforms[architecture],
+      ).toSorted((left, right) => descriptorKey(left).localeCompare(descriptorKey(right)));
+      assertSameDescriptors(actual.index.descriptors, expectedPlatforms, actual.versionRef);
     }
   }
   return {
