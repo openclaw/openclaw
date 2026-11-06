@@ -1,9 +1,9 @@
 import { createMemo, createProjection, createUniqueId, For, onSettled, Show } from "solid-js";
 import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { nextRadio, RadioMark } from "../../../components/solid/radio.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { nextRadio, RadioMark } from "../../../components/solid/radio.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import "./chat-session-versions-mobile.css";

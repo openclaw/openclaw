@@ -69,3 +69,26 @@
     transition: none;
   }
 }
+
+/* System colors keep selection and keyboard focus visible in high-contrast modes. */
+@media (forced-colors: active) {
+  :is(span, input[type="radio"]).oc-radio {
+    forced-color-adjust: none;
+    border-color: ButtonText;
+  }
+
+  :is(span, input[type="radio"]).oc-radio[data-checked],
+  :is(span, input[type="radio"]).oc-radio:checked {
+    border-color: Highlight;
+    background: Highlight;
+  }
+
+  :is(span, input[type="radio"]).oc-radio::after {
+    background: HighlightText;
+  }
+
+  :is(span, input[type="radio"]).oc-radio:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}

@@ -203,9 +203,7 @@ describe("shared question panel", () => {
     drawGateway(prompt, { onSubmit });
     await panelIn(container);
 
-    expect(
-      container.querySelector('[role="radio"] .oc-radio'),
-    ).not.toBeNull();
+    expect(container.querySelector('[role="radio"] .oc-radio')).not.toBeNull();
     expect(container.querySelector('[role="radio"] kbd')).not.toBeNull();
     expect(
       container.querySelector(

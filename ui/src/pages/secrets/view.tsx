@@ -2,8 +2,8 @@ import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Radio } from "../../components/solid/radio.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import "../../components/modal-dialog.tsx";
 import {
   DocsLink,

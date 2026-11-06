@@ -20,8 +20,8 @@ import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
 import { CloudProfileIcon } from "./solid/cloud-profile-icon.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { nextRadio, RadioMark } from "./solid/radio.tsx";
 import { Menu } from "./solid/menu.tsx";
+import { nextRadio, RadioMark } from "./solid/radio.tsx";
 
 registerSessionOrganizationEnglish();
 
