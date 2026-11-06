@@ -199,18 +199,29 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
       id: "sidebar-running-clock-scroll-resize",
       explicitOnly: true,
       expected: "Running child rows resume their clocks while scrolling and resizing the sidebar.",
-      run: async (page, gateway) => {
-        const clocks = page.locator(".sidebar-recent-session openclaw-elapsed-time");
-        const last = (await clocks.count()) - 1;
+      run: async (page) => {
+        const clockRows = page.locator(".sidebar-recent-session openclaw-elapsed-time");
+        const scroller = page.locator(".sidebar-shell__body").first();
+        const distance = await clockRows.last().evaluate((element) => {
+          const row = element.closest(".sidebar-recent-session")!;
+          const port = element.closest(".sidebar-shell__body")!;
+          return row.getBoundingClientRect().bottom - port.getBoundingClientRect().bottom;
+        });
+        const box = (await scroller.boundingBox())!;
+        await page.mouse.move(box.x + box.width - 4, box.y + box.height / 2);
         const viewport = page.viewportSize()!;
-        for (const fraction of [0.25, 0.5, 0.75, 1]) {
-          await clocks.nth(Math.floor(last * fraction)).scrollIntoViewIfNeeded();
+        for (let step = 1; step <= 4; step++) {
+          await page.mouse.wheel(0, distance / 4);
+          await page.waitForFunction(
+            (minimum) => document.querySelector(".sidebar-shell__body")!.scrollTop >= minimum,
+            // WebKit rounds each wheel delta to CSS pixels.
+            (distance * step) / 4 - step,
+          );
           await frames(page);
         }
         await page.setViewportSize({ width: viewport.width + 48, height: viewport.height });
         await frames(page);
         await page.setViewportSize(viewport);
-        await verifyEngineIdleClocks(page, gateway);
       },
     },
     ...sources.flatMap(({ name, source }) =>

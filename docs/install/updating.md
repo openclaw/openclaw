@@ -53,6 +53,11 @@ backup.
 
 ## Update implementation contract
 
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. Probe batching, backup refusal, and rollback safety
+are unchanged. This diagnostic requires the updater performing discovery to
+contain the fix; a candidate cannot change an older installed updater's probe.
+
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
 post-plugin Doctor without an unprepared-source refusal blocking later state

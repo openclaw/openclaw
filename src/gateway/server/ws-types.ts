@@ -91,6 +91,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
+    openclawIdPeerKey?: string;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
