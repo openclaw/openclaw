@@ -123,8 +123,7 @@ export function createGatewayHttpRequestHandler(
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
-  const controlUiRouteBasePath =
-    controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
+  const controlUiRouteBasePath = normalizeControlUiBasePath(controlUiBasePath);
   const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
   const publicSessionRoute = createControlUiSessionRoutes(opts);
   const handleServerRequest = (
@@ -199,11 +198,12 @@ export function createGatewayHttpRequestHandler(
     }
 
     try {
-      const requestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
-      if (requestPath === undefined) {
+      const requestUrl = URL.parse(req.url ?? "/", "http://localhost");
+      if (!requestUrl) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return undefined;
       }
+      const requestPath = requestUrl.pathname;
       // Share documents and images stay fetchable for previews, but never invite
       // indexing, including static, unavailable, and rejected responses.
       if (isControlUiSharePath(requestPath, controlUiRouteBasePath)) {
@@ -234,6 +234,18 @@ export function createGatewayHttpRequestHandler(
           getStartup,
         );
         return undefined;
+      }
+
+      const startup = probeKind === "outside" ? getStartup?.() : undefined;
+      if (
+        startup &&
+        startup.status !== "started" &&
+        (!remoteIngress || remoteRoute === "document")
+      ) {
+        const { serveControlUiStartupRequest } = await import("./control-ui-availability.js");
+        if (await serveControlUiStartupRequest(req, res, startup, requestUrl, opts)) {
+          return undefined;
+        }
       }
 
       if (probeKind === "outside" || probeKind === "namespace") {

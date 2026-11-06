@@ -1377,6 +1377,49 @@ const startupEnglish = {
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
+    workspace: {
+      header: "OpenClaw",
+      tryAgain: "Try again",
+      reloadAction: "Reload page",
+      connecting: {
+        title: "Connecting to OpenClaw",
+        description: "Your workspace will open as soon as the Gateway responds.",
+      },
+      starting: {
+        title: "OpenClaw is starting",
+        description: "The Gateway is still starting up. Your workspace will open when it’s ready.",
+      },
+      restarting: {
+        title: "OpenClaw is restarting",
+        description: "Your workspace will open when the Gateway is back.",
+      },
+      reconnecting: {
+        title: "Still connecting to OpenClaw",
+        description: "The Gateway isn’t responding yet. Trying again automatically.",
+      },
+      pausing: {
+        title: "OpenClaw is pausing",
+        description: "The Gateway is finishing its current work before it pauses.",
+      },
+      paused: {
+        title: "OpenClaw is paused",
+        description: "Your workspace will open when the Gateway resumes.",
+      },
+      restoring: {
+        title: "Opening your workspace",
+        description: "Connected. Loading your latest conversations.",
+      },
+      offline: {
+        title: "Couldn’t connect to OpenClaw",
+        description:
+          "Automatic retries have stopped. Make sure the Gateway is running, then try again.",
+      },
+      reload: {
+        title: "Reload to continue",
+        description:
+          "This page is from a different OpenClaw version than the Gateway. Reload to get the matching version.",
+      },
+    },
     queued: "{count} queued",
     offlineChangesDiscarded: "Offline changes discarded: {count}",
     offlineChangesReloadBlocked:

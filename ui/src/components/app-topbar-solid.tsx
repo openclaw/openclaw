@@ -25,6 +25,7 @@ type Props = {
   onOpenPalette: (() => void) | undefined;
   /** Phone pages: title in the header, joined action pill, and the shared reconnect notice. */
   floating: boolean;
+  navigationLocked?: boolean;
   /** A settings subpage: the menu button goes up a level instead. */
   onBack: (() => void) | undefined;
   pageTitle: string;
@@ -41,7 +42,16 @@ defineSolidBridge<Props>(
         ? props.gatewayStatus
         : undefined;
     return (
-      <header class={["topbar", { "topbar--floating": props.floating }]}>
+      <header
+        class={[
+          "topbar",
+          {
+            "topbar--floating": props.floating,
+            // Nothing in the drawer or action pill works before the first connection.
+            "topbar--navigation-locked": props.floating && props.navigationLocked,
+          },
+        ]}
+      >
         <div class="topnav-shell">
           <Show
             when={props.floating && props.onBack}
@@ -155,6 +165,7 @@ defineSolidBridge<Props>(
       onToggleDrawer: { default: undefined, attribute: false },
       onOpenPalette: { default: undefined, attribute: false },
       floating: { default: false, attribute: false },
+      navigationLocked: { default: false, attribute: false },
       onBack: { default: undefined, attribute: false },
       pageTitle: { default: "", attribute: false },
       registerPageActions: { default: undefined, attribute: false },

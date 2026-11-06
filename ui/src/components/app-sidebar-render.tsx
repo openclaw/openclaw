@@ -26,6 +26,7 @@ import { iconData, type IconName } from "./icon-data.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
+import { GatewayIdentityPlaceholder } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
@@ -161,14 +162,19 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
                 { "sidebar-agent-card__avatar--environment": Boolean(environment()) },
               ]}
             >
-              <AgentIdentityAvatar
-                agent={{
-                  id: cardAgentId(),
-                  avatar: avatar(),
-                  textAvatar: avatarText(),
-                  pending: Boolean(avatarUrl()?.startsWith("/") && !avatarAuthReady()),
-                }}
-              />
+              <Show
+                when={!host.connectionPending && Boolean(avatar() || avatarText())}
+                fallback={<GatewayIdentityPlaceholder kind="agent" />}
+              >
+                <AgentIdentityAvatar
+                  agent={{
+                    id: cardAgentId(),
+                    avatar: avatar(),
+                    textAvatar: avatarText(),
+                    pending: Boolean(avatarUrl()?.startsWith("/") && !avatarAuthReady()),
+                  }}
+                />
+              </Show>
               {menuUnread() && !menuOpen() ? (
                 <span
                   class="session-unread-dot sidebar-agent-card__menu-unread"
@@ -492,7 +498,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}
         >
           <span class="sidebar-identity-card__avatar">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            <Show
+              when={!host.connectionPending && Boolean(displayUser()?.avatarUrl)}
+              fallback={<GatewayIdentityPlaceholder kind="user" />}
+            >
+              <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            </Show>
             <span class="sidebar-identity-card__status" aria-hidden="true" />
           </span>
           <span class="sidebar-identity-card__text">

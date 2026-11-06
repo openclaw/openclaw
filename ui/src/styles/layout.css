@@ -4097,3 +4097,140 @@ html.openclaw-native-web-chrome
     opacity: 1;
   }
 }
+
+/* Connection feedback belongs inside the application canvas, not a second app shell. */
+.gateway-connection-view {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  padding: 48px 32px;
+}
+.gateway-connection-view__body {
+  width: min(100%, 480px);
+  padding-bottom: 9vh;
+}
+.gateway-connection-view__mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--accent);
+}
+.gateway-connection-view__mark .session-run-spinner {
+  width: 22px;
+  height: 22px;
+}
+.gateway-connection-view__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.gateway-connection-view h1 {
+  margin: 0;
+  font-size: clamp(24px, 2.5vw, 32px);
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+}
+.gateway-connection-view__description {
+  margin: 16px 0 0;
+  max-width: 42ch;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.7;
+}
+.gateway-connection-view__actions {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+@media (max-width: 640px) {
+  .gateway-connection-view {
+    padding: 32px 24px;
+  }
+  .gateway-connection-view__body {
+    padding-bottom: 6vh;
+  }
+}
+
+.content--connecting > openclaw-router-outlet {
+  display: none;
+}
+
+.gateway-identity-placeholder {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+}
+
+.gateway-identity-placeholder[data-kind="agent"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.gateway-identity-placeholder svg {
+  width: 19px;
+  height: 19px;
+}
+.sidebar-connection-skeleton {
+  padding: 18px 14px;
+  pointer-events: none;
+}
+.sidebar-connection-skeleton__heading {
+  display: block;
+  width: 60px;
+  height: 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+.sidebar-connection-skeleton__rows {
+  display: grid;
+  gap: 22px;
+  margin-top: 34px;
+}
+.sidebar-connection-skeleton__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 12px;
+}
+.sidebar-connection-skeleton__row > :first-child {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 9%, transparent);
+}
+.sidebar-connection-skeleton__row > :last-child {
+  width: 70%;
+  height: 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 9%, transparent);
+}
+.sidebar-connection-skeleton__row:nth-child(2) > :last-child {
+  width: 52%;
+}
+.sidebar-connection-skeleton__row:nth-child(3) > :last-child {
+  width: 79%;
+}
+.sidebar-connection-skeleton__row:nth-child(4) > :last-child {
+  width: 61%;
+}
+
+/* Keep the header geometry still; reveal its controls once they can act. */
+.topbar--navigation-locked :is(.topbar-nav-toggle, .topnav-shell__actions) {
+  visibility: hidden;
+}
