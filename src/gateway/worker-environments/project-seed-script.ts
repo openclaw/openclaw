@@ -6,6 +6,8 @@ import {
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
 import {
   PREPARE_PROJECT_WORKSPACE_JS,
+  PreparedSetupEnvironment,
+  type createProjectSetupScript,
   type PreparedProjectVerification,
 } from "./project-setup-script.js";
 
@@ -13,14 +15,12 @@ type ProjectSeedScriptInput = {
   namespace: string;
   seedKey: string;
   baseCommit: string;
+  projectKey?: string;
   verifiedRetained?: PreparedProjectVerification | null;
-  retainedSeedKey?: string;
-  preparation?: {
-    preparationKey: string;
-    cacheKey: string;
-    setupRecipe?: string;
-    runSetupScript?: boolean;
-  };
+  preparation?: Omit<
+    Parameters<typeof createProjectSetupScript>[0],
+    "namespace" | "seedKey" | "baseCommit"
+  >;
   pack?: {
     directory: string;
     sha256: string;
@@ -28,11 +28,14 @@ type ProjectSeedScriptInput = {
     retainedCommit?: string;
     repositoryUrl?: string;
   };
-  repository?: { directory: string; url: string };
+  repository?: { directory?: string; url: string };
 };
 
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
 export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
+  if (input.preparation?.setupEnv) {
+    PreparedSetupEnvironment.parse(input.preparation.setupEnv);
+  }
   // Bootstrap can install a toolchain before Node performs the full seed-path admission.
   return `set -eu
 if [ -n "\${HOME:-}" ] && { [ -L "$HOME/.openclaw-worker" ] || [ -L "$HOME/.openclaw-worker/git-seeds" ]; }; then
@@ -51,6 +54,7 @@ const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
 ${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 const phaseDurationsMs = {};
+const startedAt = performance.now();
 let phaseStart = performance.now();
 const phase = (name) => { const now = performance.now(); phaseDurationsMs[name] = (phaseDurationsMs[name] ?? 0) + Math.round(now - phaseStart); phaseStart = now; };
 process.umask(0o077);
@@ -90,7 +94,7 @@ const ownedDirectory = (parent, target) => {
   const stagingPrefix = ".tmp-" + input.seedKey + "-";
   if (input.pack && input.repository) throw new Error("Project seed transports are mutually exclusive");
   const transport = input.pack ?? input.repository;
-  const directory = transport?.directory;
+  let directory = transport?.directory;
   if (directory !== undefined) {
     if (path.dirname(directory) !== namespace || !path.basename(directory).startsWith(stagingPrefix)) throw new Error("Project staging path escaped its owner");
     ownedDirectory(namespace, directory);
@@ -98,9 +102,11 @@ const ownedDirectory = (parent, target) => {
   try {
     phase("seedPreparation");
     const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true, phaseDurationsMs);
+    input.verifiedRetained = retained ? { baseCommit: retained.baseCommit, sourceManifestRef: retained.sourceManifestRef, preparedManifestRef: retained.preparedManifestRef } : null;
+    const retainedSeedKey = retained && input.projectKey ? crypto.createHash("sha256").update(input.projectKey + "\\0" + retained.baseCommit).digest("hex") : undefined;
     phaseStart = performance.now();
     const retainedWorkspace = input.preparation ? { retainedWorkspace: retained ?? null } : {};
-    if (!transport) {
+    if (directory === undefined) {
       if (fs.existsSync(seed)) {
         ownedDirectory(namespace, seed);
         ownedDirectory(seed, path.join(seed, ".git"));
@@ -109,7 +115,7 @@ const ownedDirectory = (parent, target) => {
         phase("seedVerification");
         prune();
         phase("seedPreparation");
-        return { ready: true, preparedWorkspace, ...retainedWorkspace };
+        return { ready: true, cacheHit: true, preparedWorkspace, ...retainedWorkspace };
       }
       // Provisioning serializes this lease. Discard only this project's abandoned staging.
       for (const entry of fs.readdirSync(namespace)) {
@@ -118,14 +124,14 @@ const ownedDirectory = (parent, target) => {
         ownedDirectory(namespace, stale);
         fs.rmSync(stale, { recursive: true });
       }
-      const directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
+      directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
       phase("seedPreparation");
-      return { ready: false, directory, ...retainedWorkspace };
+      if (!transport) return { ready: false, directory, ...retainedWorkspace };
     }
     const repository = path.join(directory, "repository");
     let reused = false;
-    if (input.retainedSeedKey && retained) {
-      const donor = path.join(namespace, input.retainedSeedKey);
+    if (retainedSeedKey && retained) {
+      const donor = path.join(namespace, retainedSeedKey);
       try {
         ownedDirectory(namespace, donor);
         ownedDirectory(donor, path.join(donor, ".git"));
@@ -150,7 +156,7 @@ const ownedDirectory = (parent, target) => {
       const authHome = fs.mkdtempSync(path.join(directory, ".fetch-home-"));
       const networkEnv = { ...Object.fromEntries(Object.entries(env).filter(([key]) => !/^(HOME|USERPROFILE|NETRC)$/i.test(key))), HOME: authHome, USERPROFILE: authHome };
       // Detached HEAD is not advertised by default; name it to negotiate the retained objects.
-      git(repository, ["-c", "fetch.fsckObjects=true", "-c", "http.followRedirects=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", ...(reused ? ["--negotiation-tip=HEAD"] : []), repositoryUrl, input.baseCommit], undefined, networkEnv);
+      git(repository, ["-c", "fetch.unpackLimit=1", "-c", "fetch.fsckObjects=true", "-c", "http.followRedirects=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", ...(reused ? ["--negotiation-tip=HEAD"] : []), repositoryUrl, input.baseCommit], undefined, networkEnv);
     } else {
       const pack = path.join(directory, "base.pack");
       const stat = fs.lstatSync(pack);
@@ -162,7 +168,7 @@ const ownedDirectory = (parent, target) => {
         if (retained?.baseCommit !== input.pack.retainedCommit) throw new Error("Prepared project retained Git base changed before transfer");
         // Fetch one local snapshot into independent objects, without alternates or
         // ancestors that the retained checkout may never have received.
-        if (!reused) git(repository, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", retained.workspaceDir, input.pack.retainedCommit]);
+        if (!reused) git(repository, ["-c", "fetch.unpackLimit=1", "fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", retained.workspaceDir, input.pack.retainedCommit]);
       }
       fs.writeFileSync(path.join(repository, ".git", "shallow"), [...new Set([input.baseCommit, input.pack.retainedCommit].filter(Boolean))].join("\\n") + "\\n", { mode: 0o600 });
       const fd = fs.openSync(pack, "r");
@@ -185,13 +191,14 @@ const ownedDirectory = (parent, target) => {
     fs.renameSync(repository, seed);
     prune();
     phase("seedCheckout");
-    // Repository code keeps its separate Gateway authority check. A checkout that
-    // cannot run setup can complete under this seed command's existing owner.
-    const preparedWorkspace = input.preparation && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)
-      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false }, false, phaseDurationsMs)
-      : undefined;
-    return { ready: true, preparedWorkspace };
-  } finally { phaseStart = performance.now(); if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); phase("seedPreparation"); }
-})().then((result) => process.stdout.write(JSON.stringify({ ...result, phaseDurationsMs }))).catch((error) => { console.error(error.message); process.exitCode = 1; });
+    return { ready: true, cacheHit: false, ...retainedWorkspace };
+  } finally { phaseStart = performance.now(); if (transport && directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); phase("seedPreparation"); }
+})().then(async (result) => {
+  // Only budgeted runs may execute repository code. Seed time consumes that same budget.
+  if (result.ready && !result.preparedWorkspace && input.preparation && (input.preparation.timeoutMs !== undefined || (result.cacheHit === false && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)))) {
+    result.preparedWorkspace = await prepareWorkspace({ ...input, ...input.preparation, ...(input.preparation.timeoutMs !== undefined ? { timeoutMs: Math.floor(input.preparation.timeoutMs - (performance.now() - startedAt)) } : { runSetupScript: false }) }, false, phaseDurationsMs);
+  }
+  process.stdout.write(JSON.stringify({ ...result, phaseDurationsMs }));
+}).catch((error) => { console.error(error.message); process.exitCode = 1; });
 PROJECT_SEED_SCRIPT`;
 }
