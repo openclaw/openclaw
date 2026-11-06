@@ -1,6 +1,7 @@
 import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -69,9 +70,9 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
       id={id}
       label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
-      triggerClass="btn btn--sm btn--ghost cron-job-menu__trigger"
+      triggerClass={[iconButtonClass({ size: 28, glyph: "row" }), "cron-job-menu__trigger"]}
       triggerAttributes={{ title: t("cron.actions.moreJob", { name: displayName() }) }}
-      trigger={sessionIcon("moreHorizontal", 16, 1.5)}
+      trigger={sessionIcon("moreHorizontal", 12, ROW_GLYPH_STROKE)}
       placement="bottom-end"
       items={[
         ...(props.job.schedule.kind === "event"

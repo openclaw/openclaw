@@ -13,6 +13,7 @@ import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from ".
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { sessionIconMask } from "../../components/solid/icon.tsx";
+import { IconButton, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -386,44 +387,49 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
         {props.phoneLayout ? undefined : <td>{updated()}</td>}
         <td class="session-actions-cell">
           <div class="session-actions">
-            <button
+            <IconButton
+              size={28}
+              glyph="row"
               class="session-details-toggle"
-              type="button"
+              label={detailsToggleLabel()}
+              tooltip={false}
+              icon={
+                <i
+                  class="session-css-icon"
+                  aria-hidden="true"
+                  style={{ "mask-image": sessionIconMask("chevronDown", ROW_GLYPH_STROKE) }}
+                />
+              }
               aria-expanded={isExpanded() ? "true" : "false"}
               aria-controls={isExpanded() ? detailsId() : undefined}
-              aria-label={detailsToggleLabel()}
               onClick={(e: MouseEvent) => {
                 e.stopPropagation();
                 props.onToggleDetails(row().key);
               }}
-            >
-              <i
-                class="session-css-icon"
-                aria-hidden="true"
-                style={{ "mask-image": sessionIconMask("chevronDown") }}
-              />
-            </button>
-            <button
-              ref={(element) => (menuTrigger = element)}
-              class="icon-btn"
-              type="button"
-              title={menuLabel()}
-              aria-label={`${menuLabel()}: ${row().key}`}
+            />
+            <IconButton
+              ref={(element: HTMLButtonElement) => (menuTrigger = element)}
+              size={28}
+              glyph="row"
+              class="session-row-menu-trigger"
+              label={`${menuLabel()}: ${row().key}`}
+              tooltip={menuLabel()}
+              icon={
+                <i
+                  class="session-css-icon"
+                  aria-hidden="true"
+                  style={{ "mask-image": sessionIconMask("moreHorizontal", ROW_GLYPH_STROKE) }}
+                />
+              }
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
-              onClick={(event) => {
+              onClick={(event: MouseEvent) => {
                 event.stopPropagation();
-                const trigger = event.currentTarget;
+                const trigger = event.currentTarget as HTMLButtonElement;
                 const rect = trigger.getBoundingClientRect();
                 props.onOpenSessionMenu(row(), { x: rect.right, y: rect.bottom + 4 }, trigger);
               }}
-            >
-              <i
-                class="session-css-icon"
-                aria-hidden="true"
-                style={{ "mask-image": sessionIconMask("moreHorizontal") }}
-              />
-            </button>
+            />
           </div>
         </td>
       </tr>
