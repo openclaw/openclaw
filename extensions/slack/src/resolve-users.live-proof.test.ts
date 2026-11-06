@@ -1,7 +1,9 @@
 // Shipped-entry-point proof: real resolveSlackUserAllowlist over a local Slack
 // users.list fixture (SLACK_API_URL), exercising the production WebClient path.
+import { buildAllowlistResolutionSummary, mergeAllowlist } from "openclaw/plugin-sdk/allow-from";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authorizeSlackDirectMessage } from "./monitor/dm-auth.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
 const NFD = "Rene\u0301e"; // decomposed
@@ -144,4 +146,121 @@ it("keeps same-form and ASCII controls unchanged through the production path", a
       expect(ascii[0]).toMatchObject({ resolved: true, id: "U_ACCENT" });
     },
   );
+});
+
+// Authority-chain proof: the resolved grant from the real resolver is merged into
+// the allow-from list exactly as resolveWorkspacePolicy (monitor/runtime-policy.ts)
+// does with buildAllowlistResolutionSummary + mergeAllowlist, then enforced by the
+// production DM admission function authorizeSlackDirectMessage. This does not stop
+// at the resolver's return value: it proves the derived grant admits the intended
+// sender, denies a different sender before any agent/provider I/O, and denies
+// subsequent messages once the name-derived grant is removed.
+describe("name-derived grant through production admission", () => {
+  const DM_POLICY = {
+    ctx: {
+      dmEnabled: true,
+      dmPolicy: "allowlist" as const,
+      allowNameMatching: true,
+      teamId: "T_ACCENT",
+      installationIdentity: { kind: "workspace", teamId: "T_ACCENT" },
+    },
+    accountId: "workspace",
+    resolveSenderName: async () => ({ name: "Ren\u00e9e" }),
+    sendPairingReply: vi.fn(),
+    onDisabled: vi.fn(),
+    onUnauthorized: vi.fn(),
+    log: vi.fn(),
+  };
+
+  // Reproduces resolveWorkspacePolicy's grant derivation: resolved user ids from
+  // resolveSlackUserAllowlist become additions merged into the allow-from list,
+  // which retains the configured name alongside the derived id.
+  function deriveAllowFrom(
+    allowFrom: string[],
+    resolutions: Array<{ input: string; resolved: boolean; id?: string }>,
+  ): string[] {
+    const { additions } = buildAllowlistResolutionSummary(
+      resolutions.filter((entry) => allowFrom.includes(entry.input)),
+      { formatResolved: () => null },
+    );
+    return mergeAllowlist({ existing: allowFrom, additions });
+  }
+
+  async function admitWithUsers(
+    users: Array<Record<string, unknown>>,
+    allowFrom: string[],
+  ): Promise<{ allowedFor: (id: string) => Promise<boolean>; allowFromAfter: string[] }> {
+    let derivedAllowFrom: string[] = [];
+    await runWithUsersList(users, async ({ baseUrl }) => {
+      vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
+      const resolutions = await resolveSlackUserAllowlist({
+        token: "xoxb-synthetic",
+        entries: allowFrom,
+      });
+      derivedAllowFrom = deriveAllowFrom(allowFrom, resolutions);
+    });
+    return {
+      allowFromAfter: derivedAllowFrom,
+      allowedFor: async (id: string) => {
+        const onUnauthorized = vi.fn();
+        const allowed = await authorizeSlackDirectMessage({
+          ...DM_POLICY,
+          ctx: { ...DM_POLICY.ctx },
+          senderId: id,
+          allowFromLower: derivedAllowFrom.map((entry) => entry.toLowerCase()),
+          onUnauthorized,
+        });
+        if (!allowed) {
+          expect(onUnauthorized).toHaveBeenCalled();
+        } else {
+          expect(onUnauthorized).not.toHaveBeenCalled();
+        }
+        return allowed;
+      },
+    };
+  }
+
+  const profile = (displayName: string) => ({
+    id: "U_ACCENT",
+    name: "accented",
+    deleted: false,
+    is_bot: false,
+    is_app_user: false,
+    profile: { email: "accented@example.com", display_name: displayName },
+  });
+
+  it.each([
+    ["NFC allowlist entry", NFC, NFD],
+    ["NFD allowlist entry", NFD, NFC],
+  ] as const)(
+    "admits the canonical sender for %s through production admission (resolver + allow-from + DM gate)",
+    async (_label, allowName, storedName) => {
+      const { allowFromAfter, allowedFor } = await admitWithUsers(
+        [profile(storedName)],
+        [allowName],
+      );
+      expect(allowFromAfter).toEqual([allowName, "U_ACCENT"]);
+      await expect(allowedFor("U_ACCENT")).resolves.toBe(true);
+    },
+  );
+
+  it("denies a different sender before any agent/provider I/O", async () => {
+    // Accent-stripped @Renee is a distinct name: the resolver refuses to resolve it,
+    // so U_ACCENT's id never enters the allow-from list as a derived grant. The DM
+    // admission gate then rejects the sender before any agent/provider I/O.
+    const { allowFromAfter, allowedFor } = await admitWithUsers([profile(NFD)], ["@Renee"]);
+    expect(allowFromAfter).toEqual(["@Renee"]);
+    await expect(allowedFor("U_ACCENT")).resolves.toBe(false);
+    await expect(allowedFor("U_OTHER")).resolves.toBe(false);
+  });
+
+  it("denies subsequent messages once the name-derived grant is removed", async () => {
+    // First turn: the name resolves and its id enters the allow-from list.
+    const { allowFromAfter, allowedFor } = await admitWithUsers([profile(NFD)], ["@Ren\u00e9e"]);
+    expect(allowFromAfter).toEqual(["@Ren\u00e9e", "U_ACCENT"]);
+    await expect(allowedFor("U_ACCENT")).resolves.toBe(true);
+    // Second turn: the configured entry is removed; only the stale name is left.
+    const { allowedFor: allowedAfterRemoval } = await admitWithUsers([profile(NFD)], ["@Renee"]);
+    await expect(allowedAfterRemoval("U_ACCENT")).resolves.toBe(false);
+  });
 });
