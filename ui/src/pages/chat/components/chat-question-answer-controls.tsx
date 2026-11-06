@@ -166,6 +166,7 @@ function FreeTextTextarea(props: FreeTextControlProps) {
       id={props.id}
       class={[props.class, "chat-question-panel__textarea"]}
       rows={1}
+      autocapitalize="sentences"
       placeholder={props.placeholder}
       aria-label={props.label}
       aria-description={t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}

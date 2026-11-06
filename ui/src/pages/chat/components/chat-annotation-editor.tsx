@@ -108,6 +108,7 @@ export function showChatAnnotationEditor(options: {
             }}
             value={options.comment}
             rows={1}
+            autocapitalize="sentences"
             placeholder={t("chat.messages.annotationComment")}
             aria-label={t("chat.messages.annotationComment")}
             onInput={resizeInput}

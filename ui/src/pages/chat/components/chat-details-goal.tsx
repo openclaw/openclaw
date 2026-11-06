@@ -125,6 +125,7 @@ function GoalEditDialog(props: {
             }}
             name="objective"
             rows={5}
+            autocapitalize="sentences"
             value={draft()}
             disabled={pending()}
             aria-invalid={!pending() && invalid() ? "true" : undefined}

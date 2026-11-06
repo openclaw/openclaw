@@ -535,6 +535,7 @@ function ChatQueueItem(rowProps: {
           class="chat-queue__edit-input"
           enterkeyhint="enter"
           rows="1"
+          autocapitalize="sentences"
           ref={[
             (element) => mountQueueEditInput(element, edit()?.editingText ?? item().text),
             liveValue(() => edit()?.editingText ?? item().text, fitQueueEditInput),

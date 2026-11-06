@@ -519,6 +519,7 @@ export function NewSessionComposer(props: {
               }}
               class="new-session-page__message"
               rows="1"
+              autocapitalize="sentences"
               autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               disabled={options().submitting || options().messageLocked}
               readonly={options().dictationActive}

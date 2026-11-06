@@ -189,6 +189,7 @@ export function SessionRailComposer(props: {
             rows="1"
             maxlength={SIDE_CHAT_QUESTION_MAX_LENGTH}
             autocomplete="off"
+            autocapitalize="sentences"
             aria-label={t("chat.rail.askLabel")}
             enterkeyhint="enter"
             aria-keyshortcuts={

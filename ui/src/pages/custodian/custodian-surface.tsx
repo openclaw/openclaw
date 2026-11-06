@@ -528,6 +528,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                         rows="1"
                         value={store().input}
                         autocomplete="on"
+                        autocapitalize="sentences"
                         placeholder={placeholder()}
                         aria-label={placeholder()}
                         disabled={!store().chatAvailable}

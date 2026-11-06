@@ -64,6 +64,7 @@ export function renderComposerTextarea(
         ref={[textareaRef]}
 
         dir={detectTextDirection(value())}
+        autocapitalize="sentences"
         disabled={!context().canCompose}
         readonly={context().dictation?.locksComposer === true || context().goalComposer.pending}
         aria-autocomplete="list"
