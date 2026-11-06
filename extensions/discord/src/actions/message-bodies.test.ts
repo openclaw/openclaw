@@ -283,6 +283,27 @@ describe("Discord action message bodies", () => {
     });
   });
 
+  it.each([0, 15, 16])("renders initial thread content for parent type %i", async (type) => {
+    parentChannelType = type;
+    const settings = config({ mentionAliases: { alice: "523456789012345678" } });
+    await invoke(
+      "thread-create",
+      { channelId, threadName: "example", message: "__Ready__ @alice" },
+      { cfg: settings },
+    );
+    if (type === 0) {
+      expect(
+        writes().find((request) => request.path === messagePath(threadId))?.body,
+      ).toMatchObject({
+        content: "**Ready** <@523456789012345678>",
+      });
+    } else {
+      expect(writes()[0]?.body).toMatchObject({
+        message: { content: "**Ready** <@523456789012345678>" },
+      });
+    }
+  });
+
   it("does not report initial delivery for an empty standalone thread", async () => {
     const result = await createThread();
     expect(threadMessageIds).toEqual([]);
