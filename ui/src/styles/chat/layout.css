@@ -446,7 +446,7 @@ openclaw-pending-session-create {
    avoids invalidating the whole transcript when rows are mounted or retired. */
 .sidebar-region
   > .sidebar-region__header:has(.chat-pane__connection)
-  ~ *
+  ~ :where(.sidebar-region__primary)
   :is(.chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices) {
   padding-top: 38px;
 }
