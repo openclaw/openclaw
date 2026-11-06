@@ -8,6 +8,7 @@ export function createEngineActionTiming(trace: boolean) {
   let commitSource: "mutation" | "native-value" | undefined;
   let scenarioEndMs = 0;
   let inputCount = 0;
+  let inputSource: "native" | "gateway" | undefined;
   let mutationCount = 0;
   const inputTypes = ["pointerdown", "keydown", "input", "wheel"];
   const mark = (name: string, startTime: number) => {
@@ -21,6 +22,7 @@ export function createEngineActionTiming(trace: boolean) {
     }
     const now = performance.now();
     firstInputMs ??= now;
+    inputSource ??= "native";
     lastInputMs = now;
     inputCount++;
     // Native value edits need not produce MutationObserver records.
@@ -46,6 +48,14 @@ export function createEngineActionTiming(trace: boolean) {
     start() {
       startMs = performance.now();
       mark("run:start", startMs);
+      window.openclawEngineMarkGatewayInput = () => {
+        const now = performance.now();
+        firstInputMs ??= now;
+        inputSource ??= "gateway";
+        lastInputMs = now;
+        inputCount++;
+        mark("input:gateway", now);
+      };
       for (const type of inputTypes) {
         document.addEventListener(type, input, true);
       }
@@ -66,6 +76,7 @@ export function createEngineActionTiming(trace: boolean) {
         document.removeEventListener(type, input, true);
       }
       document.removeEventListener("focusin", focus, true);
+      delete window.openclawEngineMarkGatewayInput;
       mark("run:end", scenarioEndMs);
       if (lastCommitMs !== undefined) {
         mark("commit:last", lastCommitMs);
@@ -85,6 +96,7 @@ export function createEngineActionTiming(trace: boolean) {
         scenarioEndMs,
         endMs,
         inputCount,
+        inputSource,
         mutationCount,
         commitSource,
         driverMs: first !== undefined ? first - startMs : null,
@@ -98,3 +110,10 @@ export function createEngineActionTiming(trace: boolean) {
 }
 
 export type EngineActionTiming = ReturnType<ReturnType<typeof createEngineActionTiming>["finish"]>;
+
+declare global {
+  interface Window {
+    /** Harness-only boundary, called immediately before a deferred Gateway response. */
+    openclawEngineMarkGatewayInput?: () => void;
+  }
+}

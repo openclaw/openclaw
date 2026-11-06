@@ -1688,6 +1688,17 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
         return { visitReadyMs: timing.readyMs, contentReadyMs: timing.contentReadyMs };
       },
     };
+    const revisit: EngineScenario = {
+      ...visit,
+      id: `page-${id}-revisit`,
+      expected: `Warm return to ${coverage.path} after its first visit.`,
+      prepare: async (page) => {
+        await enter(page);
+        const destination = id === "about" ? "connection" : "about";
+        await navigate(page, destination);
+        await ready(page, destination, definitions[destination]!);
+      },
+    };
     const leave: EngineScenario = {
       ...common,
       id: `page-${id}-leave`,
@@ -1702,7 +1713,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       },
     };
     if (!definition.action) {
-      return [visit, leave];
+      return [visit, revisit, leave];
     }
     const action: EngineScenario = {
       ...common,
@@ -1750,7 +1761,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           };
         },
       };
-      return [visit, action, leave, firstAdvancedOpen];
+      return [visit, revisit, action, leave, firstAdvancedOpen];
     }
     if (id === "terminal") {
       const composerInput: EngineScenario = {
@@ -1789,8 +1800,8 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           return { typedCharacters: command.length, inputSent: true };
         },
       };
-      return [visit, action, leave, composerInput];
+      return [visit, revisit, action, leave, composerInput];
     }
-    return [visit, action, leave];
+    return [visit, revisit, action, leave];
   });
 }

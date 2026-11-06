@@ -356,6 +356,39 @@ function renderMessage(
 }
 
 describe("message attachment image gallery projection", () => {
+  it.each([0, 40_001])(
+    "opens recovered Markdown images with %i characters of padding",
+    async (length) => {
+      const src = "https://example.com/preview.png";
+      const markdown = "x".repeat(length) + "\n\n![Preview](" + src + ")";
+      const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      renderMessage(
+        createAssistantMessage("Loading preview", {
+          __openclaw: { id: "recovered-image", seq: 1, truncated: true },
+        }),
+        "assistant",
+        {
+          onOpenImage,
+          sessionKey: "agent:main:main",
+          loadFullAssistantMessage: async () => null,
+          getAssistantMessageExpansion: () => ({
+            status: "loaded",
+            markdown,
+            message: length ? createAssistantMessage(markdown) : undefined,
+            revision: 1,
+          }),
+          onToggleAssistantMessageExpanded: vi.fn(),
+        },
+      );
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-text img")?.getAttribute("src")).toBe(src),
+      );
+      container.querySelector<HTMLImageElement>(".chat-text img")?.click();
+      expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ src }));
+    },
+  );
+
   it.each(
     [
       {
@@ -525,7 +558,7 @@ describe("message attachment image gallery projection", () => {
           showToolCalls: false,
           assistantName: "OpenClaw",
           assistantAvatar: null,
-          getTurnMediaMessages: (key) => (key === "first" ? turn : undefined),
+          getThreadMediaMessages: (key) => (key === "first" ? turn : undefined),
           onOpenImage,
         },
       },

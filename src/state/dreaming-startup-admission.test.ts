@@ -442,7 +442,10 @@ it.for([
     const service = owner.registry.services.find(
       (entry) => entry.service.id === "memory-core-index",
     )?.service;
-    assert(registeredRuntime && service && service.apiVersion !== 2, "Missing indexing lifecycle");
+    assert(
+      registeredRuntime && service && service.apiVersion !== 2 && service.apiVersion !== 3,
+      "Missing indexing lifecycle",
+    );
     const runtime = (getPluginOriginalValue(registeredRuntime, instance) ??
       registeredRuntime) as typeof registeredRuntime;
     // Service restarts reopen indexes only after a manager has run in this process.

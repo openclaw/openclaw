@@ -58,7 +58,11 @@ function boardSnapshot(cacheKey: string, message: string, receivedAtMs = 100) {
   };
 }
 
-function historyState(content: unknown, commands = true): ChatSessionSnapshot["historyState"] {
+function historyState(
+  content: unknown,
+  commands = true,
+  skillReferenceable?: boolean,
+): ChatSessionSnapshot["historyState"] {
   const message = { role: "user", content };
   return {
     stateRevision: {
@@ -69,7 +73,14 @@ function historyState(content: unknown, commands = true): ChatSessionSnapshot["h
     ...(commands
       ? {
           commands: [
-            { name: "x", description: "", source: "skill", scope: "text", acceptsArgs: true },
+            {
+              name: "x",
+              description: "",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+              ...(skillReferenceable !== undefined ? { skillReferenceable } : {}),
+            },
           ],
         }
       : {}),
@@ -510,7 +521,7 @@ describe("persistent chat session snapshots", () => {
     expect((await new SessionSnapshotStore().read(sessionKey))?.board).toBeNull();
   });
 
-  it.each(["plain", "pairing", "legacy"])(
+  it.each(["plain", "pairing", "legacy", "referenceable", "slash-only"])(
     "persists raw metadata with its receipts unless privacy projection changes it (%s)",
     async (mode) => {
       const value: ChatSessionSnapshot = {
@@ -521,6 +532,7 @@ describe("persistent chat session snapshots", () => {
             ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
             : "Follow up.",
           mode !== "legacy",
+          mode === "referenceable" ? true : mode === "slash-only" ? false : undefined,
         ),
       };
       await seed(value);

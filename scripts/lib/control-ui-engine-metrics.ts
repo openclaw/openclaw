@@ -294,7 +294,7 @@ export async function startEngineMeasurement(
       session.on("Tracing.dataCollected", ({ value }) => timeline.push(...value));
       await session.send("Tracing.start", {
         categories: options.nativeAudit
-          ? "toplevel,blink,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking,v8,disabled-by-default-v8.gc,cc"
+          ? "toplevel,blink,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.timeline.invalidationTracking,v8,disabled-by-default-v8.gc,cc"
           : "toplevel,blink.user_timing,devtools.timeline",
         transferMode: "ReportEvents",
       });

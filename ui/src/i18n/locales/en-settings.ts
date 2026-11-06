@@ -1236,6 +1236,7 @@ const enSettings = {
       save: "Save provider",
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
+      ready: "Added {provider}. {model} is ready to chat.",
     },
     defaults: {
       title: "Defaults for all agents",
