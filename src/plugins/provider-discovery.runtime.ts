@@ -416,13 +416,20 @@ export function resolvePluginDiscoveryProvidersRuntime(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): ProviderPlugin[] {
   const plan = planPluginDiscoveryRuntime(params);
-  if (plan.kind === "entries") {
+  if (plan.kind === "entries" && params.discoveryEntriesOnly === true) {
     return plan.providers;
   }
+  // Entry coverage avoids loading plugins, but existing runtime catalogs still own replacement.
+  const onlyPluginIds =
+    plan.kind === "entries"
+      ? (params.onlyPluginIds ??
+        sortUniqueStrings(plan.providers.flatMap(({ pluginId }) => (pluginId ? [pluginId] : []))))
+      : plan.pluginIds;
   const fullProviders = resolvePluginProvidersCore({
     ...params,
     env: params.env ?? process.env,
-    ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
+    ...(onlyPluginIds ? { onlyPluginIds } : {}),
+    ...(plan.kind === "entries" ? { registryScope: "loaded" } : {}),
   });
   const providers = [...plan.providers];
   const entryIndices = new Map(

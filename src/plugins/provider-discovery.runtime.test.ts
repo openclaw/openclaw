@@ -142,6 +142,7 @@ const runtimePluginIds = () => mocks.resolvePluginProvidersCore.mock.calls[0]?.[
 describe("resolvePluginDiscoveryProvidersRuntime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
     mockManifestPlugins([createManifestPlugin("deepseek")]);
     mocks.resolvePluginMetadataSnapshot.mockImplementation(
       (params?: { pluginMetadataSnapshot?: unknown }) =>
@@ -240,11 +241,10 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       expect(providers.map(({ catalog }) => catalog)).toEqual(
         entries.map(({ catalog }) => catalog),
       );
-      if (siblingCovered) {
-        expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
-      } else {
-        expect(runtimePluginIds()).toEqual(["fixture"]);
-      }
+      expect(runtimePluginIds()).toEqual(["fixture"]);
+      expect(mocks.resolvePluginProvidersCore.mock.calls[0]?.[0]?.registryScope).toBe(
+        siblingCovered ? "loaded" : undefined,
+      );
     },
   );
 
