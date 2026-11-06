@@ -1469,7 +1469,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 }
 
 .callout.danger,
-.callout.warn {
+.callout.warn,
+.callout.warning {
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 14%, var(--bg-elevated)) 0%,
@@ -1492,7 +1493,8 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   --callout-tone: var(--danger);
 }
 
-.callout.warn {
+.callout.warn,
+.callout.warning {
   --callout-tone: var(--warn);
 }
 
