@@ -111,6 +111,7 @@ const localesDir = path.resolve(
 const sourceFiles = [
   "en-chat-permissions.ts",
   "en-chat-composer-menu.ts",
+  "en-chat-reset-confirmation.ts",
   "en-chat-session-optional.ts",
   "en-chat-session-sharing.ts",
   "en-session-progress.ts",
