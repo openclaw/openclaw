@@ -405,8 +405,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Within a subscription, core's block index runs at previewEpoch plus a learned offset.
   // A restarted subscription can reuse an index, so the index alone is not a unique source ID.
   let sourceIndexOffset = 0;
-  // Without text from an earlier message there is no old block, so an index behind the epoch
-  // is a restarted subscription, whose first block the current preview covers.
+  // When no earlier text was observed, prefer a covered lower index as a restart.
+  // A previewless earlier message's late block is ambiguous, so this matches main.
   let earlierText = false;
   let epochText = false;
   const isCurrentSource = (source: number | undefined, text: string) => {
