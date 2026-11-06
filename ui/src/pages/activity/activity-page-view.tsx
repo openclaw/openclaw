@@ -38,6 +38,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import {
@@ -175,9 +176,16 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     agentsList: pageProps.page.agents.read().agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
+  // Match the page-scrolling layout in activity.css, including short landscape phones.
+  const pageScrolls = createMediaQuery(
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+  );
   let stream: HTMLDivElement | undefined;
+  // Resolve ancestry after insertion; the stream ref is assigned before it joins main.
+  const scrollContainer = () =>
+    pageScrolls() ? (stream?.closest<HTMLElement>("main.content") ?? stream) : stream;
   const follow = useStreamAutoFollow({
-    container: () => stream,
+    container: scrollContainer,
     enabled: () => filters.autoFollow,
     identity: liveRevision,
     content: () => liveSnapshot().entries,
@@ -195,6 +203,22 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     };
   });
   function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
+    onSettled(() => {
+      // Wait for insertion, then capture both responsive owners within the page.
+      const root = stream?.closest<HTMLElement>("main.content") ?? stream;
+      return root
+        ? listen(
+            root,
+            "scroll",
+            (event) => {
+              if (event.target === scrollContainer()) {
+                follow.handleScroll();
+              }
+            },
+            true,
+          )
+        : undefined;
+    });
     function StatusFilter(props: { status: ActivityStatus }) {
       return (
         <label class="activity-status-filter">
@@ -523,11 +547,17 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
             }}
             role="group"
             aria-label={t("activity.streamLabel")}
-            onScroll={follow.handleScroll}
           >
             {filtered().length === 0 ? (
               <div class="activity-empty">
-                {liveProps.entries.length === 0 ? t("activity.empty") : t("activity.emptyFiltered")}
+                {liveProps.entries.length === 0 ? (
+                  <div>
+                    <p>{t("activity.empty")}</p>
+                    <p>{t("activity.emptyDescription")}</p>
+                  </div>
+                ) : (
+                  t("activity.emptyFiltered")
+                )}
               </div>
             ) : (
               <For each={filtered()} keyed={(entry) => entry.id}>

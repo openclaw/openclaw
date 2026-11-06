@@ -568,12 +568,13 @@ it.each([
   [undefined, undefined],
   [[], []],
   [
-    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "x".repeat(2048)],
-    ["Plan  my week.\nPrioritize commitments.", "Compare options.", "x".repeat(2048)],
+    ["  Plan  my week.\nPrioritize commitments.  ", "Compare options.", "😀".repeat(128)],
+    ["Plan my week. Prioritize commitments.", "Compare options.", "😀".repeat(128)],
   ],
   [["one", "two", "three", "four"], undefined],
   [["valid", " "], undefined],
   [["valid", false], undefined],
+  [["valid", "😀".repeat(129)], undefined],
 ])(
   "transports third-party not-installed manifest recommendations without installation: %j",
   async (recommendedPrompts, expected) => {

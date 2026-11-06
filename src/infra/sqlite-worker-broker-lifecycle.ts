@@ -110,9 +110,10 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    // Agent integrity scans are synchronous; shared state and plugins need independent carriers.
+    // Synchronous scans and external databases must not pin unrelated storage carriers.
     const pool = [...slots].filter((slot) => slot.carrierClass === options.carrierClass);
-    const maxWorkers = options.carrierClass === "shared-state" ? 1 : limits.maxWorkers;
+    const maxWorkers =
+      options.carrierClass && options.carrierClass !== "agent" ? 1 : limits.maxWorkers;
     const available = pool.filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,

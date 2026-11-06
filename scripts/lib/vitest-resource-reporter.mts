@@ -10,6 +10,7 @@ import type {
   TestSpecification,
   Vitest,
 } from "vitest/node";
+import { createCiTestObservationCapture } from "./ci-test-observation-capture.mts";
 import { readProcessCgroupV2Snapshot, readProcessMemoryCapacity } from "./process-memory.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { detectVitestHostInfo } from "./vitest-local-scheduling.mts";
@@ -43,6 +44,7 @@ function moduleKey(spec: TestSpecification) {
 // Opt in through Vitest's existing --reporter option. Observe the resolved
 // process and native events without changing test selection or pool policy.
 export default class VitestResourceReporter implements Reporter {
+  private observations: ReturnType<typeof createCiTestObservationCapture>;
   private invocation = "";
   private readonly repositoryRoot = resolveRepoRoot(import.meta.url);
   private dependencyRoot = "";
@@ -101,6 +103,70 @@ export default class VitestResourceReporter implements Reporter {
   }
 
   onInit(ctx: Vitest) {
+    this.observations = createCiTestObservationCapture({
+      repositoryRoot: this.repositoryRoot,
+      cacheDirectory: ctx.vite.config.cacheDir,
+      configFiles: [ctx.vite.config.configFile, ...ctx.vite.config.configFileDependencies].filter(
+        (file): file is string => typeof file === "string",
+      ),
+      configuration: {
+        include: ctx.config.include,
+        exclude: ctx.config.exclude,
+        pool: ctx.config.pool,
+        isolate: ctx.config.isolate,
+        maxWorkers: ctx.config.maxWorkers,
+        testTimeout: ctx.config.testTimeout,
+        hookTimeout: ctx.config.hookTimeout,
+        retry: ctx.config.retry,
+      },
+      graphConfiguration:
+        ctx.config.name === "unit-fast" &&
+        ctx.vite.config.configFile ===
+          path.join(this.repositoryRoot, "test/vitest/vitest.unit-fast.config.ts")
+          ? {
+              files: [
+                ctx.vite.config.configFile,
+                ...ctx.vite.config.configFileDependencies,
+                ...ctx.config.setupFiles,
+                ...[ctx.config.globalSetup].flat(),
+              ],
+              settings: {
+                exclude: ctx.config.exclude,
+                pool: ctx.config.pool,
+                isolate: ctx.config.isolate,
+                maxWorkers: ctx.config.maxWorkers,
+                maxConcurrency: ctx.config.maxConcurrency,
+                testTimeout: ctx.config.testTimeout,
+                hookTimeout: ctx.config.hookTimeout,
+                retry: ctx.config.retry,
+                environment: ctx.config.environment,
+                environmentOptions: ctx.config.environmentOptions,
+                setupFiles: ctx.config.setupFiles,
+                globalSetup: ctx.config.globalSetup,
+                runner: ctx.config.runner,
+                execArgv: ctx.config.execArgv,
+                globals: ctx.config.globals,
+                env: ctx.config.env,
+                clearMocks: ctx.config.clearMocks,
+                mockReset: ctx.config.mockReset,
+                restoreMocks: ctx.config.restoreMocks,
+                unstubGlobals: ctx.config.unstubGlobals,
+                unstubEnvs: ctx.config.unstubEnvs,
+                sequence: {
+                  hooks: ctx.config.sequence.hooks,
+                  setupFiles: ctx.config.sequence.setupFiles,
+                  shuffle: ctx.config.sequence.shuffle,
+                  concurrent: ctx.config.sequence.concurrent,
+                  seed: ctx.config.sequence.shuffle ? ctx.config.sequence.seed : null,
+                },
+                resolve: ctx.vite.config.resolve,
+                define: ctx.vite.config.define,
+                esbuild: ctx.vite.config.esbuild,
+                plugins: ctx.vite.config.plugins.map((plugin) => plugin.name),
+              },
+            }
+          : undefined,
+    });
     this.dependencyRoot = path
       .relative(this.repositoryRoot, ctx.config.root)
       .split(path.sep)
@@ -130,7 +196,7 @@ export default class VitestResourceReporter implements Reporter {
     this.cpu = process.cpuUsage();
     this.queued.clear();
     this.active.clear();
-    writeReceipt("inventory", {
+    this.writeObservation("inventory", {
       version: 1,
       dependencyRoot: this.dependencyRoot,
       invocation: this.invocation,
@@ -250,7 +316,7 @@ export default class VitestResourceReporter implements Reporter {
         cases.pending++;
       }
     }
-    writeReceipt("module", {
+    this.writeObservation("module", {
       invocation: this.invocation,
       observationFile: path.relative(this.repositoryRoot, spec.moduleId).split(path.sep).join("/"),
       project: module.project.name,
@@ -271,7 +337,7 @@ export default class VitestResourceReporter implements Reporter {
 
   onTestRunEnd(modules: readonly TestModule[], errors: readonly unknown[], reason: string) {
     this.writeDiagnostic(reason);
-    writeReceipt("run", {
+    this.writeObservation("run", {
       invocation: this.invocation,
       reason,
       files: modules.length,
@@ -285,5 +351,10 @@ export default class VitestResourceReporter implements Reporter {
       hostCpu: readHostCpuSnapshot(),
       cgroup: readProcessCgroupV2Snapshot(),
     });
+  }
+
+  private writeObservation(kind: string, value: unknown) {
+    writeReceipt(kind, value);
+    this.observations?.record(kind, value);
   }
 }

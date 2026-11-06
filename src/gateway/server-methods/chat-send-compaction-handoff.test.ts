@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import * as dispatchRuntimeLoaders from "../../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { InternalGetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
@@ -36,7 +40,9 @@ import type { GatewayClient } from "./types.js";
 
 type ChatDispatchParams = Parameters<typeof chatDispatch.startChatDispatch>[0];
 
-it("retains the accepted chat target through successive compactions during preparation", async () => {
+it("retains the accepted chat target through successive compactions during preparation", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await loadOrCreateProcessDeviceIdentityAsync();
     const agentId = "main";
@@ -73,6 +79,14 @@ it("retains the accepted chat target through successive compactions during prepa
       throw new Error("fixture requires the predecessor's real physical database admission");
     }
     const predecessor = previousAdmission.operation;
+    const ownedWork: Promise<unknown>[] = [];
+    const observeOwned = <T>(work: Promise<T>): Promise<T> => {
+      ownedWork.push(work);
+      // Observe immediately; retirement below still joins and reports every rejection.
+      void work.catch(() => {});
+      return work;
+    };
+    void observeOwned(predecessor.ownerSettlement);
     predecessor.setPhase("running");
 
     const client: GatewayClient = {
@@ -98,8 +112,18 @@ it("retains the accepted chat target through successive compactions during prepa
       });
 
     const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
-    const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
+    const originalStart = chatDispatch.startChatDispatch;
     let owned: ChatDispatchParams | undefined;
+    let completion: Promise<void> | undefined;
+    const observeChatDispatch = vi
+      .spyOn(chatDispatch, "startChatDispatch")
+      .mockImplementation((params) => {
+        // The ACK and preparation gate can fail before the test resumes.
+        owned = params;
+        void observeOwned(params.admission.gatewayWorkAdmission.released);
+        completion = observeOwned(originalStart(params));
+        return completion;
+      });
     let successor: ReplyOperation | undefined;
     let successorInput: SessionControllerInput | undefined;
     let successorClaim: SessionControllerMailboxClaim | undefined;
@@ -132,19 +156,28 @@ it("retains the accepted chat target through successive compactions during prepa
         await releasePreparation.promise;
         return await originalDispatch({ ...options, replyResolver: resolver });
       });
+    let primaryFailure: unknown;
+    let failed = false;
+    const cleanupFailures = new Set<unknown>();
     try {
       // The queued compaction precedes this chat input in the same mailbox.
       successorInput = reserveSessionControllerSource(sessionKey, {
         target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
         policy: { mode: "followup" },
       });
+      void observeOwned(successorInput.settlement.promise);
       const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
       const [ok, response] = await chatRpc(context, client, "chat.send", params);
       expect([ok, response]).toEqual([true, expect.objectContaining({ runId, status: "started" })]);
-      await prepared.promise;
-      owned = expectDefined(
-        observeChatDispatch.mock.calls.at(-1)?.[0],
-        "chat.send did not start detached dispatch",
+      const admitted = expectDefined(owned, "chat.send did not start detached dispatch");
+      const dispatchCompletion = expectDefined(completion, "chat.send completion");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          prepared.promise,
+          dispatchCompletion,
+          "chat dispatch settled before preparation",
+        ),
+        signal,
       );
       await replaceSessionEntry(scope, { ...entry, sessionId: nextSessionId });
       predecessor.updateSessionId(nextSessionId);
@@ -152,6 +185,7 @@ it("retains the accepted chat target through successive compactions during prepa
       await predecessor.ownerSettlement;
       if (successorInput) {
         successorClaim = await claimSessionControllerTask(successorInput, () => {}, "visible");
+        void observeOwned(successorClaim.settlement.promise);
         const successorAdmission = await admitReplyTurn({
           ...scope,
           mailboxClaim: successorClaim,
@@ -164,11 +198,19 @@ it("retains the accepted chat target through successive compactions during prepa
           throw new Error("fixture requires the successor's real physical database admission");
         }
         successor = successorAdmission.operation;
+        void observeOwned(successor.ownerSettlement);
         successor.setPhase("running");
       }
       releasePreparation.resolve();
       if (successor) {
-        await capturedSuccessor.promise;
+        await withinTest(
+          awaitGateBeforeSettlement(
+            capturedSuccessor.promise,
+            dispatchCompletion,
+            "chat dispatch settled before successor preparation",
+          ),
+          signal,
+        );
         await replaceSessionEntry(scope, { ...entry, sessionId: finalSessionId });
         successor.updateSessionId(finalSessionId);
         successor.complete();
@@ -179,8 +221,9 @@ it("retains the accepted chat target through successive compactions during prepa
         }
         releaseRuntimePlugins.resolve();
       }
-      // Source cleanup follows post-dispatch persistence and the Gateway root's release.
-      await owned.admission.gatewayWorkAdmission.released;
+      // Dispatch finalization and the asynchronous input-actor release own distinct tails.
+      await dispatchCompletion;
+      await admitted.admission.gatewayWorkAdmission.released;
       expect(rpcSourceTesting.has(runId)).toBe(false);
 
       expect(context.broadcast).not.toHaveBeenCalledWith(
@@ -202,23 +245,46 @@ it("retains the accepted chat target through successive compactions during prepa
             event.message.role === "user",
         ),
       ).toHaveLength(1);
+    } catch (error) {
+      primaryFailure = error;
+      failed = true;
     } finally {
-      predecessor.complete();
-      successor?.complete();
-      if (successorClaim) {
-        releaseSessionControllerClaim(successorClaim);
-      } else if (successorInput) {
-        retireSessionControllerInput(successorInput);
+      const release = (finish: () => void) => {
+        try {
+          finish();
+        } catch (error) {
+          cleanupFailures.add(error);
+        }
+      };
+      // Unblock all test-owned producers before joining either chat receipt.
+      release(() => releasePreparation.resolve());
+      release(() => releaseRuntimePlugins.resolve());
+      release(() => predecessor.complete());
+      release(() => successor?.complete());
+      release(() => {
+        if (successorClaim) {
+          releaseSessionControllerClaim(successorClaim);
+        } else if (successorInput) {
+          retireSessionControllerInput(successorInput);
+        }
+      });
+      for (const result of await Promise.allSettled(ownedWork)) {
+        if (result.status === "rejected") {
+          cleanupFailures.add(result.reason);
+        }
       }
-      releasePreparation.resolve();
-      releaseRuntimePlugins.resolve();
-      await successorInput?.settlement.promise;
-      if (owned) {
-        await owned.admission.gatewayWorkAdmission.released;
-      }
-      holdPreparation.mockRestore();
-      holdRuntimePlugins.mockRestore();
-      observeChatDispatch.mockRestore();
+      release(() => holdPreparation.mockRestore());
+      release(() => holdRuntimePlugins.mockRestore());
+      release(() => observeChatDispatch.mockRestore());
+    }
+    if (failed) {
+      cleanupFailures.delete(primaryFailure);
+    }
+    const errors = [...(failed ? [primaryFailure] : []), ...cleanupFailures];
+    if (errors.length) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, "chat fixture cleanup failed");
     }
   });
 });

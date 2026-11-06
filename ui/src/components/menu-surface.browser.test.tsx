@@ -289,11 +289,12 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   });
 });
 
-it("keeps inferred group spacing inside menus and direct row gaps outside", () => {
+it("keeps inferred group spacing inside menus and direct row gaps outside", async () => {
   const style = document.head.appendChild(document.createElement("style"));
   style.textContent = overlayStyles;
   onTestFinished(() => style.remove());
-  const host = document.body.appendChild(document.createElement("div"));
+  const host = document.body.appendChild(document.createElement("openclaw-menu-surface"));
+  onTestFinished(() => host.remove());
   host.style.setProperty("--menu-item-gap", "6px");
   const item = '<button class="oc-menu-item">Action</button>';
   const group = `<section>${item}</section>`;
@@ -306,6 +307,13 @@ it("keeps inferred group spacing inside menus and direct row gaps outside", () =
     ["group then row", group, item, "oc-menu", "6px"],
     ["groups", group, group, "oc-menu", "6px"],
     ["submenu then row", submenu, item, "oc-menu", "6px"],
+    [
+      "custom submenu marker then row",
+      '<div><button class="oc-menu-item--submenu">More</button></div>',
+      item,
+      "oc-menu",
+      "6px",
+    ],
     ["popup exclusion", item, `<div class="oc-overlay">${item}</div>`, "oc-menu", "4px"],
     ["row override", item, overridden, "oc-menu", "11px"],
     ["standalone rows", item, item, "", "6px"],
@@ -313,7 +321,9 @@ it("keeps inferred group spacing inside menus and direct row gaps outside", () =
   ] as const) {
     host.innerHTML = `<div class="${menuClass}"><div><div class="spacing-pair">${first}${second}</div></div></div>`;
     const target = query(host, ".spacing-pair").lastElementChild!;
-    expect(getComputedStyle(target).marginBlockStart, name).toBe(expected);
+    await expect
+      .poll(() => getComputedStyle(target).marginBlockStart, { message: name })
+      .toBe(expected);
   }
   host.innerHTML = `<div class="oc-menu"><div class="outer">${group}${group}</div><div class="oc-menu" style="--menu-item-gap: 9px"><div class="inner">${group}${group}</div></div></div><div class="outside">${group}${group}</div>`;
   for (const [selector, expected] of [
@@ -321,9 +331,9 @@ it("keeps inferred group spacing inside menus and direct row gaps outside", () =
     [".inner", "9px"],
     [".outside", "0px"],
   ] as const) {
-    expect(getComputedStyle(query(host, selector).lastElementChild!).marginBlockStart).toBe(
-      expected,
-    );
+    await expect
+      .poll(() => getComputedStyle(query(host, selector).lastElementChild!).marginBlockStart)
+      .toBe(expected);
   }
 });
 

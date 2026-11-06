@@ -362,11 +362,23 @@ console.log("headless-read-ok");`,
     );
   });
 
-  it("suggests a close filename without reading it", async () => {
-    const { tool } = await fileFixture("AGENTS.md", "instructions");
-    await expect(executeRead(tool, { path: "AGENT.md" })).rejects.toThrow(
-      /Did you mean: AGENTS\.md\?/,
+  it("ranks close filenames without scoring impossible lengths or reading suggestions", async () => {
+    const { tempDir, tool } = await fileFixture("AGENTS.md", "instructions");
+    const distant = "session-12345678-1234-1234-1234-123456789abc.jsonl";
+    await Promise.all(
+      ["AGENT.txt", "AGENTs.mdx", "AGENT.mdx", distant].map((name) =>
+        fs.writeFile(path.join(tempDir, name), "must not be read"),
+      ),
     );
+    const scoring = vi.spyOn(String.prototype, "charCodeAt");
+    try {
+      await expect(executeRead(tool, { path: "AGENT.md" })).rejects.toThrow(
+        /Did you mean: AGENT\.mdx, AGENTS\.md, AGENTs\.mdx\?/,
+      );
+      expect(scoring.mock.contexts).not.toContain(distant);
+    } finally {
+      scoring.mockRestore();
+    }
   });
 
   it("continues an oversized astral emoji line without splitting characters", async () => {

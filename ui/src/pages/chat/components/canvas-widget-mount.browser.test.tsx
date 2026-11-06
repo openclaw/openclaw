@@ -45,7 +45,7 @@ it.each(["commit", "retirement"])(
         }
         throw new GatewayProtocolRequestError({
           code: "UNAVAILABLE",
-          message: "Waiting for the widget result.",
+          message: "Waiting for the widget result…",
           retryable: true,
           details: { type: "canvas_widget_pending" },
         });

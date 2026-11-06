@@ -113,6 +113,49 @@ describe("memory host SDK package internals", () => {
     },
   );
 
+  it("bounds canonical reads and preserves discovery order when aliases settle out of order", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    const files = Array.from({ length: 6 }, (_, index) => path.join(memoryDir, `${index}.md`));
+    await Promise.all(files.map((file) => fs.writeFile(file, "memory")));
+    const gates = files.map(() => Promise.withResolvers<string>());
+    const originalRealpath = fs.realpath.bind(fs);
+    const started: number[] = [];
+    let active = 0;
+    let maximum = 0;
+    vi.spyOn(fs, "realpath").mockImplementation(async (file, options) => {
+      const index = files.indexOf(String(file));
+      if (index < 0) {
+        return originalRealpath(file, options);
+      }
+      started.push(index);
+      maximum = Math.max(maximum, ++active);
+      try {
+        return await gates[index]!.promise;
+      } finally {
+        active--;
+      }
+    });
+    const listing = listMemoryFiles(workspaceDir);
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(4));
+      expect(maximum).toBe(4);
+      gates[1]!.resolve(files[0]!);
+      gates[3]!.reject(new Error("file disappeared"));
+      await vi.waitFor(() => expect(started).toHaveLength(6));
+      gates[5]!.resolve(files[5]!);
+      gates[4]!.resolve(files[4]!);
+      gates[2]!.resolve(files[2]!);
+      gates[0]!.resolve(files[0]!);
+      await expect(listing).resolves.toEqual(files.filter((_, index) => index !== 1));
+      expect(maximum).toBe(4);
+    } finally {
+      gates.forEach((gate, index) => gate.resolve(files[index]!));
+      await listing;
+    }
+  });
+
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");
     const release = createDeferred();

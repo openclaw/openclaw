@@ -111,7 +111,7 @@ suite.define(() => {
         await row.hover();
         await row.click({ button: "right" });
         await support.openSessionMenuSubmenu(page, "Move to group");
-        await ui.menuItem(page, "Move back to Groups").waitFor({ state: "visible" });
+        await ui.menuItem(page, "Move back to groups").waitFor({ state: "visible" });
         const capture = (name: string) =>
           support.captureUiProof(suite, page, `sidebar-done-return-${name}.png`);
         await setThemeMode(page, "light");

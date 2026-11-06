@@ -44,6 +44,43 @@ function createPlacementStore() {
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it.each([
+    { executionMode: "worker-turn", replaceInterrupted: false },
+    { executionMode: "worker-turn", replaceInterrupted: true },
+    { executionMode: "remote-exec", replaceInterrupted: false },
+    { executionMode: "remote-exec", replaceInterrupted: true },
+  ] as const)(
+    "leaves a post-startup $executionMode claim alive (replacement: $replaceInterrupted)",
+    async ({ executionMode, replaceInterrupted }) => {
+      const placements = createPlacementStore();
+      const initial = await createHarness(support.testState.stateDb, placements);
+      const active = await initial.placements.seedActive(2, executionMode);
+      assert(active.state === "active");
+      const interrupted = replaceInterrupted
+        ? await placements.claimTurn(makeClaimInput(active, "interrupted-claim"))
+        : undefined;
+      const restarted = await createHarness(support.testState.stateDb, placements);
+      if (interrupted) {
+        await placements.releaseTurn(interrupted);
+      }
+      const live = await placements.claimTurn(
+        makeClaimInput(active, "post-restart-claim", "post-restart-run"),
+      );
+
+      try {
+        await restarted.service.reconcile("startup");
+        expect(await placements.getAsync(live.sessionId)).toMatchObject({
+          state: "active",
+          turnClaim: { claimId: live.claimId, runId: live.runId },
+        });
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+        expect(restarted.environments.stopTunnel).not.toHaveBeenCalled();
+      } finally {
+        await placements.releaseTurnIfOwned(live);
+      }
+    },
+  );
+
   it("cancels an unfinished provisioning request instead of resuming it", async () => {
     const placements = createPlacementStore();
     const harness = await createHarness(support.testState.stateDb, placements);
@@ -234,24 +271,13 @@ describe("worker placement restart recovery", () => {
       "reclaims only a clean idle stale-build placement: %s",
       async (scenario) => {
         const placements = createPlacementStore();
-        const harness = await createHarness(support.testState.stateDb, placements, {
+        let harness = await createHarness(support.testState.stateDb, placements, {
           workspacePath: support.testState.root,
         });
         const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
         assert(active.state === "active", "retirement fixture did not produce an active placement");
         const error =
           scenario === "provider loss" ? "provider lost worker" : STALE_WORKER_BUILD_REASON;
-        vi.mocked(harness.environments.get).mockReturnValue({
-          ...harness.attached,
-          state: "failed",
-          leaseId: null,
-          sshEndpoint: null,
-          bootstrapReceipt: null,
-          sharedHost: null,
-          tunnelStatus: "stopped",
-          lastError: error,
-          error,
-        });
         if (scenario === "claimed turn" || scenario === "pending result") {
           const claim = await placements.claimTurn(
             makeClaimInput(active, "retirement-claim", "retirement-run"),
@@ -263,6 +289,22 @@ describe("worker placement restart recovery", () => {
           }
         }
 
+        if (mode === "startup") {
+          harness = await createHarness(support.testState.stateDb, placements, {
+            workspacePath: support.testState.root,
+          });
+        }
+        vi.mocked(harness.environments.get).mockReturnValue({
+          ...harness.attached,
+          state: "failed",
+          leaseId: null,
+          sshEndpoint: null,
+          bootstrapReceipt: null,
+          sharedHost: null,
+          tunnelStatus: "stopped",
+          lastError: error,
+          error,
+        });
         if (mode === "startup") {
           await harness.service.reconcile("startup");
         } else {

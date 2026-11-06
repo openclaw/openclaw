@@ -167,7 +167,13 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
               <span class="chat-details-subagents__counts">
                 <For each={presentation().counts} keyed={(entry) => entry.status}>
                   {(entry) => (
-                    <span class="chat-details-subagents__count" data-status={entry().status}>
+                    <span
+                      class={[
+                        "chat-details-subagents__count",
+                        { "text-shimmer": entry().status === "running" },
+                      ]}
+                      data-status={entry().status}
+                    >
                       <span>{entry().count}</span>{" "}
                       <span class="chat-details-subagents__count-label">
                         {countLabel(entry().status)}

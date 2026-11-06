@@ -220,7 +220,7 @@ suite.define(() => {
       expect(await summary.getByRole("meter").getAttribute("aria-valuenow")).toBe("50000");
       await summary.getByRole("button", { name: "View context", exact: true }).click();
       const panel = page.locator("openclaw-chat-context-panel");
-      await panel.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      await panel.getByText(/Ask an admin to grant read access\./).waitFor();
       expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       for (const method of [...forbidden, "sessions.create"]) {
         expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
@@ -230,7 +230,7 @@ suite.define(() => {
       );
       await captureUiProof(suite, page, "scoped-reader-context.png");
       await page.goto(`${suite.server.baseUrl}usage`);
-      await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      await page.getByText(/Ask an admin to grant read access\./).waitFor();
       for (const method of ["sessions.usage", "usage.status"]) {
         expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
@@ -238,7 +238,7 @@ suite.define(() => {
       await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
       expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
       await page
-        .getByText("Image uploads require permission to edit your profile.", { exact: true })
+        .getByText("You need permission to edit your profile to upload images.", { exact: true })
         .waitFor();
       await captureUiProof(suite, page, "scoped-reader-background.png");
       if (captureUiProofEnabled) {
@@ -249,7 +249,7 @@ suite.define(() => {
       }
       expect.soft(await gateway.getRequests("users.background.get")).toHaveLength(0);
       await page.goto(`${suite.server.baseUrl}automations`);
-      await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      await page.getByText(/Ask an admin to grant read access\./).waitFor();
       for (const method of forbidden) {
         expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
@@ -481,7 +481,7 @@ suite.define(() => {
         await pollValue(pathInput).toBe(workspace);
         await page
           .locator(".new-session-page__browser")
-          .getByText("No subfolders", { exact: true })
+          .getByText("No subfolders yet.", { exact: true })
           .waitFor();
         await gateway.deferNext("fs.listDir", { path: "/tmp" });
         await pathInput.fill("/tmp");
@@ -499,9 +499,7 @@ suite.define(() => {
         });
         await pollLocatorText(
           page.locator(".new-session-page__browser .new-session-page__error"),
-        ).toContain(
-          "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-        );
+        ).toContain("You need admin access to browse outside agent workspaces.");
         expect(await pathInput.inputValue()).toBe("/tmp");
         expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
       },
@@ -557,8 +555,8 @@ suite.define(() => {
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
       });
-      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
-        "missing scope: operator.admin",
+      await pollLocatorText(page.locator(".new-session-page__error")).toBe(
+        "Couldn’t complete this request. Ask an admin to grant admin access.",
       );
     });
   });

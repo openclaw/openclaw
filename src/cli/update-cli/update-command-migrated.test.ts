@@ -60,6 +60,7 @@ import {
 } from "./update-command-migrated-package.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -638,3 +639,39 @@ it.for([
     expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
   },
 );
+
+it.each([
+  { code: 3, error: /worker termination=exit, code=3, signal=null, cleanup=normal\.$/u },
+  { code: 0, error: /the worker exited without a readable result\.$/u },
+])("reports a finalizer that exits $code without a result", async ({ code, error }) => {
+  const stateDir = await fs.realpath(dirs.make("migrated-worker-exit-"));
+  const root = path.join(stateDir, "candidate");
+  const worker = path.join(root, "dist", "infra", "update-migrated-finalize.worker.js");
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  await fs.writeFile(
+    worker,
+    `process.stderr.write("finalizer failed before its result\\n"); process.exitCode = ${code};`,
+  );
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const runId = "migrated-worker-exit";
+  let stderr = "";
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    stderr += String(chunk);
+    return true;
+  });
+  const failure = await continueMigratedUpdateInFreshProcess(
+    finishParams({
+      root,
+      result: updateResult({ status: "error", root, runId, durationMs: 0 }),
+      configSnapshot: createTestConfigSnapshot({}, {}, path.join(stateDir, "openclaw.json")),
+      opts: { json: true, run: { runId, env } },
+      packageUpdateNodeRunner: process.execPath,
+      rollbackBlockedReason: "state-migrated-no-rollback",
+    }),
+    [],
+  ).catch((caught: unknown) => caught);
+  // A plain error keeps the caller's pending-recovery classification unchanged.
+  expect(failure).not.toBeInstanceOf(UpdateCommandRecoveryPendingError);
+  expect(failure).toMatchObject({ message: expect.stringMatching(error) });
+  expect(stderr).toContain("finalizer failed before its result");
+});

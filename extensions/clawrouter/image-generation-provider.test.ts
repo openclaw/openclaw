@@ -35,6 +35,15 @@ function catalog(model = MODEL) {
     providers: [
       {
         id: "openai",
+        routes: [
+          {
+            endpoint: "images_generations",
+            methods: ["POST"],
+            path: "/v1/images/generations",
+            requestFormat: "openai.images_generations",
+            responseFormat: "openai.images_generations",
+          },
+        ],
         allowed: true,
         executable: true,
         models: [
@@ -220,6 +229,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
     const granted = catalog(snapshot);
     inventory = granted;
     const result = await generate({
+      timeoutMs: 10_000,
       modelOverride: "clawrouter/" + snapshot,
       size: "1024x1024",
       quality: "medium",

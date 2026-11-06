@@ -1,2 +1,2 @@
-# Restored inverted reasoning-map catalog coverage for PR #191529.
-18
+# Discovery transport coverage for PR #191529, including the authored reasoning-map catalog.
+45

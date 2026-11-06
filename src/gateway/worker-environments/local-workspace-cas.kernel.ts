@@ -212,7 +212,6 @@ export function readLocalWorkspaceSweepCandidates(
   }
   const reachable = new Set<string>();
   const paths = new Set<string>();
-  const roots = new Set<string>();
   for (const row of executeSqliteQuerySync(
     db,
     query(db)
@@ -220,7 +219,7 @@ export function readLocalWorkspaceSweepCandidates(
       .select(["tree_root_digest", "source_paths_digest", "checkpoint_json"]),
   ).rows) {
     if (row.tree_root_digest) {
-      roots.add(localWorkspaceDigestReference(row.tree_root_digest));
+      reachable.add(localWorkspaceDigestReference(row.tree_root_digest));
     }
     if (row.source_paths_digest) {
       paths.add(localWorkspaceDigestReference(row.source_paths_digest));
@@ -229,37 +228,38 @@ export function readLocalWorkspaceSweepCandidates(
       // SAFETY: The projection owner writes this recovery document with its pending receipt.
       const checkpoint = JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestMutation;
       if (checkpoint.treeRoot) {
-        roots.add(checkpoint.treeRoot);
+        reachable.add(checkpoint.treeRoot);
       }
       if (checkpoint.previousTreeRoot) {
-        roots.add(checkpoint.previousTreeRoot);
+        reachable.add(checkpoint.previousTreeRoot);
       }
     }
   }
-  // Traverse the union once: revisions and projections share most of their graph.
-  // GC reads only child-pack arrays, never record payloads or decoded manifest maps.
-  const pending = new Set(roots);
-  while (pending.size) {
-    const batch = [...pending].slice(0, LOCAL_WORKSPACE_CONTENT_BATCH);
+  // One growing set deduplicates queued and visited packs. Do not exhaust its
+  // iterator: a partial batch can append children after the current last entry.
+  const pending = reachable.values();
+  let consumed = 0;
+  while (consumed < reachable.size) {
+    const batch: string[] = [];
+    const count = Math.min(LOCAL_WORKSPACE_CONTENT_BATCH, reachable.size - consumed);
+    for (let index = 0; index < count; index++) {
+      batch.push(pending.next().value!);
+    }
+    consumed += count;
     const rows = executeSqliteQuerySync(
       db,
       query(db)
         .selectFrom(packs)
-        .select(["tree_digest", "children_json"])
+        .select("children_json")
         .where("tree_digest", "in", batch.map(localWorkspaceDigestBytes)),
     ).rows;
     if (rows.length !== batch.length) {
       throw new Error("Local workspace baseline nodes are missing");
     }
     for (const row of rows) {
-      const ref = localWorkspaceDigestReference(row.tree_digest);
-      reachable.add(ref);
-      pending.delete(ref);
       // SAFETY: The pack owner records immutable child digests beside its payload.
       for (const childRef of JSON.parse(row.children_json) as string[]) {
-        if (!reachable.has(childRef)) {
-          pending.add(childRef);
-        }
+        reachable.add(childRef);
       }
     }
   }

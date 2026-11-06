@@ -110,11 +110,13 @@ export type WikiPagePreview = {
   updatedAt?: string;
 };
 
+export type DreamingReviewPanel = "waiting" | "promotions" | "dailyLog" | "insights" | "wiki";
+
 export type DreamingViewState = {
   dreamIndex: number;
   dreamLastSwap: number;
-  activeSubTab: "scene" | "diary" | "advanced";
-  activeDiarySubTab: "dreams" | "insights" | "wiki";
+  /** Only one review list stays open, so the page stays short enough to scan. */
+  openReviewPanel: DreamingReviewPanel | null;
   advancedWaitingSort: "recent" | "signals";
   expandedInsightCards: Record<string, boolean>;
   expandedWikiCards: Record<string, boolean>;
@@ -145,8 +147,7 @@ export function createDreamingViewState(): DreamingViewState {
   return {
     dreamIndex: Math.floor(Math.random() * DREAM_PHRASE_KEYS.length),
     dreamLastSwap: 0,
-    activeSubTab: "scene",
-    activeDiarySubTab: "dreams",
+    openReviewPanel: null,
     advancedWaitingSort: "recent",
     expandedInsightCards: {},
     expandedWikiCards: {},

@@ -19,7 +19,10 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
-import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
+import {
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseStartupPublicationError,
+} from "./agent-database-admission-error.js";
 import {
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
@@ -482,12 +485,15 @@ class AgentDatabaseStartupAdmission {
                           error instanceof AgentDatabaseStartupSupersededError ||
                           error instanceof AgentDatabaseSchemaAdmissionChangedError;
                         if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
-                          throw error;
+                          // Only runtime churn outlasts the retries; Doctor cannot repair that.
+                          throw retryable ? new AgentDatabaseStartupPublicationError(error) : error;
                         }
                         log.warn("agent database startup preparation was superseded; retrying", {
                           agentId,
                           attempt,
                         });
+                        // A reload may still be replacing the plugins this publication borrows.
+                        await capacityRetry.sleep(capacityRetry.minDelayMs * 2 ** (attempt - 1));
                         await assertNotDeleted();
                       }
                     }

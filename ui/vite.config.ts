@@ -21,6 +21,7 @@ import {
   isControlUiVersionedPublicAsset,
 } from "../src/gateway/control-ui-root-assets.ts";
 import { selectControlUiRoutePreloads } from "../src/gateway/control-ui-route-preloads.ts";
+import { shouldPrecompressControlUiAsset } from "./config/control-ui-asset-compression.ts";
 import {
   collectControlUiBootAssets,
   controlUiBootPreloadsPlugin,
@@ -81,12 +82,6 @@ const controlUiPrecompressedAssetExtensions = new Set([
 ]);
 
 const compressBrotli = promisify(brotliCompress);
-// Each optional-asset sidecar is an entry in the installed package's updater
-// budget (shipped updaters refuse trees over 50,000). Boot assets and CSS keep
-// sidecars at any size; deferred route and locale-namespace chunks below this
-// size are served uncompressed and then come from the service-worker cache.
-const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 16 * 1024;
-
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
     (fileName === "sw.js" || fileName.startsWith("assets/")) &&
@@ -103,11 +98,7 @@ export async function createControlUiPrecompressedAssetVariants(
     return [];
   }
   const body = typeof source === "string" ? Buffer.from(source) : source;
-  if (
-    body.byteLength < CONTROL_UI_PRECOMPRESS_MIN_BYTES &&
-    path.extname(fileName).toLowerCase() !== ".css" &&
-    !bootAssets.has(fileName)
-  ) {
+  if (!shouldPrecompressControlUiAsset(fileName, body.byteLength, bootAssets.has(fileName))) {
     return [];
   }
   const variants = [
@@ -124,8 +115,8 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.gz`,
       // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Level 11 retains nearly all of level 12's savings at lower build-time cost.
-      source: Buffer.from(gzip(body, 11)),
+      // Prefer maximum gzip effort for shipped assets; benchmark the added build cost.
+      source: Buffer.from(gzip(body, 12)),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);
@@ -375,6 +366,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "stringified-error"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
@@ -548,7 +540,7 @@ export async function refreshControlUiBuildOutput(
       // Inventory must work before compression sidecars have been written.
       deferredSize.count++;
       deferredSize.rawBytes += assetSource.byteLength;
-      deferredSize.gzipBytes += gzip(assetSource, 11).byteLength;
+      deferredSize.gzipBytes += gzip(assetSource, 12).byteLength;
       return {
         path: file,
         integrity: "sha256-" + createHash("sha256").update(assetSource).digest("base64"),
