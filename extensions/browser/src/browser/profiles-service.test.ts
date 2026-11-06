@@ -1,8 +1,11 @@
+import { once } from "node:events";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
@@ -223,6 +226,34 @@ describe("BrowserProfilesService", () => {
     expect(result.cdpPort).toBe(30012);
     expect(state.resolved.profiles.work?.cdpPort).toBe(30012);
     expect(writtenProfiles().work?.cdpPort).toBe(30012);
+  });
+
+  it("skips an auto-selected CDP port that another process already listens on", async () => {
+    // Claim the busy candidate and the next one so parallel tests cannot take either.
+    const claim = await acquireTestPortBlock({ offsets: [0, 1] });
+    // Simulates another Gateway's Chrome holding the first candidate in this Gateway's range.
+    const occupied = net.createServer();
+    try {
+      occupied.listen(claim.port, "127.0.0.1");
+      await once(occupied, "listening");
+      const { state, service } = createCtx();
+      // The CDP range starts at gateway + 11 and the default profile owns that port,
+      // so the first candidate for a new profile is gateway + 12.
+      vi.mocked(getRuntimeConfig)
+        .mockReturnValueOnce({ browser: { profiles: {} } })
+        .mockReturnValue({ gateway: { port: claim.port - 12 }, browser: { profiles: {} } });
+      const result = await service.createProfile({ name: "work" });
+
+      expect(result.cdpPort).toBe(claim.port + 1);
+      expect(state.resolved.profiles.work?.cdpPort).toBe(claim.port + 1);
+      expect(writtenProfiles().work?.cdpPort).toBe(claim.port + 1);
+    } finally {
+      if (occupied.listening) {
+        occupied.close();
+        await once(occupied, "close");
+      }
+      await claim.release();
+    }
   });
 
   it("redacts CDP credentials from create responses while preserving profile auth", async () => {

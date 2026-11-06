@@ -6,17 +6,17 @@ const CDP_PORT_RANGE_START = 18800;
 const CDP_PORT_RANGE_END = 18899;
 
 describe("port allocation", () => {
-  it("returns null when all ports are exhausted", () => {
+  it("returns null when all ports are exhausted", async () => {
     const usedPorts = new Set<number>();
     for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port++) {
       usedPorts.add(port);
     }
-    expect(allocateCdpPort(usedPorts)).toBeNull();
+    await expect(allocateCdpPort(usedPorts)).resolves.toBeNull();
   });
 
-  it("rejects fractional or out-of-range allocation ranges", () => {
-    expect(allocateCdpPort(new Set(), { start: 20000.5, end: 20002 })).toBeNull();
-    expect(allocateCdpPort(new Set(), { start: 20000, end: 65536 })).toBeNull();
+  it("rejects fractional or out-of-range allocation ranges", async () => {
+    await expect(allocateCdpPort(new Set(), { start: 20000.5, end: 20002 })).resolves.toBeNull();
+    await expect(allocateCdpPort(new Set(), { start: 20000, end: 65536 })).resolves.toBeNull();
   });
 });
 
