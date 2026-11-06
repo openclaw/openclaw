@@ -9,6 +9,7 @@ import { buildChildEnv, resolveShardPlans } from "../../scripts/ci-run-node-test
 import {
   createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
   hasUiE2eAffectingChange,
+  packChangedNodeBoundary,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -16,6 +17,7 @@ import {
   createSelectedNodeTestShardBundles,
   isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
+  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
@@ -104,6 +106,62 @@ function toolingShard(
     ...overrides,
   };
 }
+
+describe("selected boundary setup sharing", () => {
+  const runner = "blacksmith-8vcpu-ubuntu-2404";
+  const boundary: NodeTestShard = {
+    checkName: "checks-node-changed-boundary",
+    shardName: "changed-boundary",
+    configs: ["test/vitest/vitest.boundary.config.ts"],
+    requiresDist: false,
+    runner,
+  };
+  const tooling = () => ({
+    ...toolingShard(
+      "tooling",
+      ["test/scripts/ci-workflow-cost.test.ts"],
+      40,
+      { runner },
+      { runner, env: { OPENCLAW_VITEST_MAX_WORKERS: "2" } },
+    ),
+    configs: [],
+  });
+
+  it("keeps the complete boundary process and selected tooling in one serial allocation", () => {
+    const selected = tooling();
+    const [packed] = packChangedNodeBoundary([selected, boundary]);
+    expect(packed).toMatchObject({ runner, planConcurrency: 1, predictedTestSeconds: 130 });
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(packed?.groups),
+    });
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toMatchObject({
+      kind: "group",
+      name: "changed-boundary",
+      plan: { configs: boundary.configs },
+    });
+    expect(plans[1]).toMatchObject({ kind: "group", plan: selected.groups[0] });
+    expect(selected.groups).toHaveLength(1);
+  });
+
+  it("retains the standalone gate when setup, concurrency, or timing cannot be shared", () => {
+    const base = tooling();
+    const variants = [
+      { predictedSeconds: 61, predictedTestSeconds: 61 },
+      { runner: "blacksmith-32vcpu-ubuntu-2404" },
+      { planConcurrency: 2 },
+      { pretestBuildMode: "runtime" as const },
+      { requiresDist: true },
+      { env: { OPENCLAW_VITEST_MAX_WORKERS: "4" } },
+      { groups: [{ ...base.groups[0]!, configs: ["test/vitest/vitest.infra.config.ts"] }] },
+    ];
+    for (const variant of variants) {
+      const shards = [{ ...base, ...variant }, boundary];
+      expect(packChangedNodeBoundary(shards)).toBe(shards);
+    }
+    expect(packChangedNodeBoundary([boundary])).toEqual([boundary]);
+  });
+});
 
 function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   const job = expectDefined(

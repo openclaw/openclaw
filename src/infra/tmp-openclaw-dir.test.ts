@@ -3,7 +3,11 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { DEFAULT_POSIX_TMP_ROOT, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import {
+  DEFAULT_POSIX_TMP_ROOT,
+  resolvePreferredOpenClawTmpDir,
+  resolveExistingPreferredOpenClawTmpDir,
+} from "./tmp-openclaw-dir.js";
 
 type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredOpenClawTmpDir>[0]>;
 
@@ -167,6 +171,23 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
         resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => directory, warn }),
     };
   }
+
+  it.each(["absent", "broad", "private"] as const)("inspects a %s root without writes", (kind) => {
+    const directory = fs.realpathSync(tempDirs.make("openclaw-temp-inspect-"));
+    const preferredDir = path.join(directory, "preferred");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(directory, "state"));
+    if (kind !== "absent") {
+      fs.mkdirSync(preferredDir, { mode: kind === "private" ? 0o700 : 0o777 });
+      fs.chmodSync(preferredDir, kind === "private" ? 0o700 : 0o777);
+    }
+    expect(resolveExistingPreferredOpenClawTmpDir({ preferredDir, tmpdir: () => directory })).toBe(
+      kind === "private" ? preferredDir : undefined,
+    );
+    expect(fs.readdirSync(directory)).toEqual(kind === "absent" ? [] : ["preferred"]);
+    if (kind !== "absent") {
+      expect(fs.statSync(preferredDir).mode & 0o777).toBe(kind === "private" ? 0o700 : 0o777);
+    }
+  });
 
   function expectPrivateDirectory(candidate: string, uid: number, identity?: fs.BigIntStats) {
     const stat = fs.lstatSync(candidate, { bigint: true });

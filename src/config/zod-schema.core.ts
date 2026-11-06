@@ -319,9 +319,30 @@ const ModelProviderLocalServiceSchema = z
   })
   .optional();
 
+const ModelProviderIconSchema = z.discriminatedUnion("source", [
+  z.strictObject({ source: z.literal("file"), path: z.string().trim().min(1).max(4096) }),
+  z.strictObject({
+    source: z.literal("url"),
+    url: z
+      .string()
+      .url()
+      .max(4096)
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return url.protocol === "https:" && !url.username && !url.password && !url.hash;
+        } catch {
+          return false;
+        }
+      }, "Provider icon URL must use HTTPS without credentials or a fragment"),
+  }),
+  z.strictObject({ source: z.literal("builtin"), name: z.string().trim().min(1).max(100) }),
+]);
+
 const ModelProviderSchema = z.strictObject({
-  /** Optional display branding; provider IDs and credential ownership do not change. */
-  name: z.string().trim().min(1).optional(),
+  /** Display-only metadata; never changes provider identity or model routing. */
+  name: z.string().trim().min(1).max(100).optional(),
+  icon: ModelProviderIconSchema.optional(),
   logo: z
     .string()
     .refine(isRenderableAvatarImageDataUrl, "Use a bounded image data URL.")

@@ -121,6 +121,7 @@ export async function prepareOpenClawStateReadSnapshotSource({
         preserveSourceArtifacts,
         signal: admissionSignal,
         expectedSourceIdentity: preserveSourceArtifacts ? captured.identity : undefined,
+        reuse: true,
       });
       // Sync readers must publish the same source without waiting for a Promise reaction.
       materialization = mapRetainedOperation(preparation, (location) => {
@@ -218,8 +219,11 @@ export async function prepareOpenClawStateReadSnapshotSource({
           preserveSourceArtifacts: true,
           signal: admissionSignal,
           expectedSourceIdentity: admission.identity,
+          reuse: true,
         });
         prepared = await preparation.result;
+        // A borrowed image settles at once, so cancellation has not been observed yet.
+        admissionSignal.throwIfAborted();
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {
           preserveSourceArtifacts: artifactPreserving,

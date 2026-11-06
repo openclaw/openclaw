@@ -6,6 +6,9 @@ export const gatewayPluginTestFiles = [
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+  "test/plugins/deep-research-recovery.gateway.test.ts",
+  "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/plugins/deep-research-startup.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 
@@ -148,6 +151,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/node-invoke-plugin-policy.test.ts",
   "src/gateway/node-invoke-system-run-approval.test.ts",
   "src/gateway/node-reapproval-coordinator.test.ts",
+  "src/gateway/openclaw-id/claw-store.persistence.test.ts",
+  "src/gateway/openclaw-id/member-profiles.persistence.test.ts",
   "src/gateway/openresponses-session-store.test.ts",
   "src/gateway/operator-approval-mcp-grants.test.ts",
   "src/gateway/operator-approval-placement-grants.test.ts",
@@ -405,6 +410,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-dispatch-reclaim.test.ts",
   "src/gateway/worker-environments/placement-dispatch-recovery-admission.test.ts",
   "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
+  "src/gateway/worker-environments/placement-dispatch-reserve-refresh.test.ts",
   "src/gateway/worker-environments/placement-dispatch-shutdown.test.ts",
   "src/gateway/worker-environments/placement-dispatch-staged-results.test.ts",
   "src/gateway/worker-environments/placement-dispatch-transport-authority.test.ts",
@@ -566,6 +572,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
+  "test/plugins/deep-research-recovery.gateway.test.ts",
+  "test/plugins/deep-research-routing.gateway.test.ts",
 ];
 
 export const gatewayClientTestInclude = [

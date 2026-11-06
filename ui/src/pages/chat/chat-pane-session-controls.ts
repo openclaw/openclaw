@@ -27,7 +27,7 @@ import {
   readChatModelCatalogState,
   refreshChatModelCatalogOnDemand,
 } from "./chat-state-refresh.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
@@ -106,27 +106,35 @@ export function readChatPaneMutationAccess(
       requiredScope: "operator.sessions.write",
       session,
     }),
+    pendingInputSteer: readSessionMethodAccess(snapshot, {
+      method: "chat.steerNow",
+      requiredScope: "operator.write",
+      sessionScope: true,
+      session,
+    }),
   };
 }
 
-export function canDismissChatPendingInputs(
+export function createChatPanePendingInputControls(
   access: ReturnType<typeof readChatPaneMutationAccess>,
   session: Pick<GatewaySessionRow, "sharingRole"> | undefined,
   options: { nativeConversation: boolean; participationBlocked: boolean },
-): boolean {
-  return (
-    access.pendingInputDismiss.allowed &&
+) {
+  const canParticipate =
     session?.sharingRole !== "viewer" &&
     options.nativeConversation &&
-    !options.participationBlocked
-  );
+    !options.participationBlocked;
+  return {
+    canDismissPendingInputs: canParticipate && access.pendingInputDismiss.allowed,
+    canSteerNow: canParticipate && access.pendingInputSteer.allowed,
+  };
 }
 
 export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
+  cachedSessionStatePending: boolean;
   agentDefaultModel: string | undefined;
-  agentDefaultPermissionMode?: ChatPermissionPickerProps["defaultMode"];
   modelAccess: SessionMethodAccess;
   effortAccess: SessionMethodAccess;
   contextWindowAccess: SessionMethodAccess;
@@ -144,8 +152,8 @@ export function renderChatPaneComposerControls(params: {
   const {
     state,
     selectedSession,
+    cachedSessionStatePending,
     agentDefaultModel,
-    agentDefaultPermissionMode,
     modelAccess,
     effortAccess,
     contextWindowAccess,
@@ -236,16 +244,15 @@ export function renderChatPaneComposerControls(params: {
   );
   // Background history refreshes must not interrupt gestures for the accepted session.
   const historyLoading = state.chatLoading && !hasAcceptedHistory;
-  const sessionReady =
-    state.connected &&
-    selectedSession &&
-    (!state.sessions.state.resultCached || hasAcceptedHistory);
+  const agents = state.readChatAgentsList();
+  const savedComposer = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey,
+  })?.composer;
   const snapshot =
-    sessionReady && state.chatModelCatalogInitialized
+    !cachedSessionStatePending && state.chatModelCatalogInitialized
       ? undefined
-      : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })?.composer ??
-        undefined);
-  const permissionSnapshot = sessionReady ? undefined : snapshot;
+      : (savedComposer ?? undefined);
+  const permissionSnapshot = cachedSessionStatePending ? savedComposer : undefined;
   const snapshotReason = snapshot ? t("chat.modelControls.refreshingSettings") : undefined;
   return {
     composerControls: {
@@ -373,9 +380,10 @@ export function renderChatPaneComposerControls(params: {
     },
     permissionPicker: {
       canSelectFull,
-      defaultMode: permissionSnapshot
-        ? permissionSnapshot.defaultPermissionMode
-        : agentDefaultPermissionMode,
+      defaultMode: agents
+        ? agents.agents.find((agent) => agent.id === resolveChatAgentId(state))
+            ?.defaultPermissionMode
+        : savedComposer?.defaultPermissionMode,
       disabled: Boolean(permissionSnapshot) || !permissionAccess.allowed,
       disabledReason: permissionSnapshot
         ? snapshotReason

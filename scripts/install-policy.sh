@@ -61,6 +61,19 @@ download_file() {
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
 }
 
+warn_node_security_patch() {
+    local version="${1#v}" major minor patch
+    [[ "${NODE_SECURITY_WARNING_PRINTED:-0}" != 1 ]] || return 0
+    [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 0
+    major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+    if { ((major == 24)) && { ((minor < 22)) || ((minor == 22 && patch < 1)); }; } ||
+        { ((major == 26)) && { ((minor < 12)) || ((minor == 12 && patch < 1)); }; }; then
+        printf '%s\n' "SECURITY WARNING: Node.js ${version} may trust TLS certificates signed with keys compromised in the October 2026 eMudhra incident. Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+. Continuing with this compatible runtime." >&2
+        NODE_SECURITY_WARNING_PRINTED=1
+    fi
+    return 0
+}
+
 node_binary_has_safe_sqlite() {
     local node_bin="$1"
     "$node_bin" -e '
@@ -89,9 +102,9 @@ node_binary_has_safe_sqlite() {
             const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
             const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
             if (!textSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
             } else if (!blobSafe || !jsonSafe) {
-                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability check failed; use 24.22.1+/26.12.1+ or a build with the fix");
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix");
             } else if (!safe) {
                 console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
             }

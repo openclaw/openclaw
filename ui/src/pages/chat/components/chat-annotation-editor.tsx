@@ -12,11 +12,10 @@ import {
 } from "../../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import {
-  isChatSelectionPopupElement,
   mountChatSelectionPopup,
   positionChatSelectionPopup,
-  removeChatSelectionPopup,
-} from "./chat-selection-popup.tsx";
+} from "./chat-selection-popup-view.tsx";
+import { isChatSelectionPopupElement, removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 export function showChatAnnotationEditor(options: {
   paneId: string;

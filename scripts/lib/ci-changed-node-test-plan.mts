@@ -421,8 +421,8 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
     return false;
   }
   const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
-  // Each config runs in its own process; unit-fast shares the Markdown worker.
-  return config !== undefined && config !== "test/vitest/vitest.unit-fast.config.ts";
+  // Companions must execute outside the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
 }
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
@@ -1002,6 +1002,85 @@ function boundChangedNodeRows(
     });
 }
 
+/** Share setup without changing the mandatory boundary suite or any child process. */
+export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): ChangedNodeTestShard[] {
+  const boundary = shards.find(
+    (shard) =>
+      shard.checkName === "checks-node-changed-boundary" &&
+      shard.configs.length === 1 &&
+      shard.configs[0] === BOUNDARY_NODE_TEST_CONFIG &&
+      !shard.groups &&
+      !shard.targets &&
+      !shard.includePatterns &&
+      !shard.requiresDist &&
+      !shard.pretestBuildMode,
+  );
+  if (!boundary) {
+    return shards;
+  }
+  // All 97 observed boundary test steps fit 73s, including both runtimes.
+  // Reserve 90s and retain the ordinary 150s selected-row budget.
+  const boundarySeconds = 90;
+  const recipient = shards
+    .filter(
+      (shard) =>
+        shard !== boundary &&
+        shard.runner === boundary.runner &&
+        shard.planConcurrency === 1 &&
+        !shard.requiresDist &&
+        !shard.pretestBuildMode &&
+        !shard.targets &&
+        Object.entries(shard.env ?? {}).every(
+          ([key, value]) => key === "OPENCLAW_VITEST_MAX_WORKERS" && value === "2",
+        ) &&
+        !shard.timeoutMinutes &&
+        shard.groups?.length &&
+        shard.groups.length < 10 &&
+        shard.groups.every(
+          (group) =>
+            !group.requiresDist &&
+            !group.pretestBuildMode &&
+            group.configs.length === 1 &&
+            group.configs[0] === "test/vitest/vitest.tooling.config.ts",
+        ) &&
+        (shard.predictedTestSeconds ?? shard.predictedSeconds ?? Infinity) + boundarySeconds <=
+          PR_NODE_TEST_SECONDS,
+    )
+    .toSorted(
+      (a, b) =>
+        (a.predictedTestSeconds ?? a.predictedSeconds!) -
+        (b.predictedTestSeconds ?? b.predictedSeconds!),
+    )[0];
+  if (!recipient) {
+    return shards;
+  }
+  const predictedTestSeconds =
+    (recipient.predictedTestSeconds ?? recipient.predictedSeconds!) + boundarySeconds;
+  return shards.flatMap((shard) =>
+    shard === boundary
+      ? []
+      : shard === recipient
+        ? [
+            {
+              ...recipient,
+              // Run the fixed gate first; each config still gets its own process.
+              groups: [
+                {
+                  configs: boundary.configs,
+                  requiresDist: false,
+                  runner: boundary.runner,
+                  shard_name: boundary.shardName,
+                },
+                ...recipient.groups!,
+              ],
+              predictedSeconds: predictedTestSeconds,
+              predictedTestSeconds,
+            },
+          ]
+        : [shard],
+  );
+}
+
 /**
  * Builds bounded PR jobs from precise changed-test targets.
  * Missing input is an error for the caller; changed inputs never widen to a full suite.
@@ -1250,7 +1329,9 @@ export function createChangedNodeTestShards(
     ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
-  const bounded = boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd);
+  const bounded = packChangedNodeBoundary(
+    boundChangedNodeRows(shards, selectedTargets, options.runnerBackend, cwd),
+  );
   // Time-based splitting must not make an admitted owner plan exceed the matrix
   // budget. Retain its compact rows, including plugin work, without widening scope.
   const cap = options.compactNodeJobCap;
