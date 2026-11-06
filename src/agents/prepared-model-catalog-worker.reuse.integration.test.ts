@@ -183,9 +183,51 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
         seed.config.plugins.allow.push(provider);
         Object.assign(seed.config.plugins.entries, { [provider]: { enabled: true } });
       }
+      // Planning covers entry-only and disabled owners even though neither enters
+      // the runtime registry. Unknown shared credentials remain in the original fixture.
+      const unloadedProviders = ["worker-reuse-static", "worker-reuse-disabled"];
+      for (const provider of unloadedProviders) {
+        const directory = file("bundled", provider);
+        fs.mkdirSync(directory);
+        writeFixtureFiles(directory, {
+          "index.cjs": `const fs = require("node:fs"); ${registration(provider)}
+throw Error("non-runtime catalog owner was loaded");`,
+          "openclaw.plugin.json": {
+            id: provider,
+            providers: [provider],
+            modelCatalog: {
+              discovery: { [provider]: "static" },
+              providers: {
+                [provider]: {
+                  api: "openai-completions",
+                  baseUrl: "https://reuse.invalid/v1",
+                  models: [
+                    {
+                      id: "static-model",
+                      name: "Static fixture",
+                      contextWindow: 8192,
+                      maxTokens: 4096,
+                    },
+                  ],
+                },
+              },
+            },
+            configSchema: { type: "object", additionalProperties: false },
+          },
+          "package.json": {
+            name: `@openclaw/${provider}`,
+            version: "0.0.0",
+            openclaw: { extensions: ["./index.cjs"] },
+          },
+        });
+        seed.config.plugins.allow.push(provider);
+        Object.assign(seed.config.plugins.entries, {
+          [provider]: { enabled: provider === unloadedProviders[0] },
+        });
+      }
       for (const agentId of agentIds) {
         const profiles: AuthProfileStore["profiles"] = {};
-        for (const provider of providerIds) {
+        for (const provider of [...providerIds, ...unloadedProviders]) {
           profiles[profileId(provider)] = { type: "api_key", provider, key: credential(agentId) };
         }
         saveAuthProfileStore(

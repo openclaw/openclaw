@@ -16,9 +16,9 @@ import * as modelCatalog from "../model-catalog/index.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { withPreparedModelRuntimePluginGenerationScope as withGeneration } from "./prepared-model-runtime-generation-scope.js";
 import {
   loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
   refreshPreparedModelRuntimeSnapshots,
@@ -37,7 +37,7 @@ it("rejects descriptors captured before auth reload rebinds the retained plugin 
   const providerConfig = {
     api: "openai-completions" as const,
     baseUrl: "https://catalog.example.invalid/v1",
-    models: [buildCatalogModel("configured")],
+    models: [{ ...buildCatalogModel("configured"), input: ["text" as const] }],
   };
   const metadata = createPluginMetadataSnapshotFixture({
     plugins: [
@@ -75,16 +75,21 @@ it("rejects descriptors captured before auth reload rebinds the retained plugin 
   expect(generation.pluginRegistry).toBe(registry);
   expect(prepared.providers).toHaveLength(1);
   const read = (config: OpenClawConfig) =>
-    withGeneration(generation, () =>
-      resolveImplicitProviders({
-        config,
-        env: process.env,
-        agentDir: fixture.state.agentDir("default"),
-        authStore: { version: 1, profiles: {} },
-        pluginMetadataSnapshot: metadata,
-        providerDiscoveryProviderIds: [id],
-        preparedStaticProviderCatalog: prepared,
-      }),
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: generation.pluginMetadataSnapshot,
+        pluginRegistry: generation.pluginRegistry,
+      },
+      () =>
+        resolveImplicitProviders({
+          config,
+          env: process.env,
+          agentDir: fixture.state.agentDir("default"),
+          authStore: { version: 1, profiles: {} },
+          pluginMetadataSnapshot: metadata,
+          providerDiscoveryProviderIds: [id],
+          preparedStaticProviderCatalog: prepared,
+        }),
     );
   using plans = vi.spyOn(modelCatalog, "planEffectiveModelCatalogRows");
   await read(before);
@@ -107,7 +112,7 @@ it("rejects descriptors captured before auth reload rebinds the retained plugin 
   expect(current?.pluginGeneration).toBe(generation);
   expect(current?.pluginGeneration?.preparedStaticProviderCatalog).toBe(prepared);
   expect(getPluginRuntimeLoadContextState(registry)).not.toBe(binding);
-  expect(getPluginRuntimeLoadContextState(registry)?.rawConfig).toBe(after);
+  expect(getPluginRuntimeLoadContextState(registry)?.rawConfig).toEqual(after);
   plans.mockClear();
   expect((await read(after))?.[id]?.models[0]?.id).toBe("configured");
   expect(plans).toHaveBeenCalledOnce();

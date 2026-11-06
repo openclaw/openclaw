@@ -394,6 +394,7 @@ vi.mock("./models-config.js", () => ({
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 
+// mock-isolation: lifecycle fixtures supply prepared catalog facts without loading provider discovery.
 vi.mock("./models-config.providers.implicit.js", () => ({
   prepareImplicitProviderStaticCatalog: (...args: Parameters<PrepareStaticCatalog>) =>
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),

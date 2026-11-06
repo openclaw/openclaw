@@ -33,7 +33,7 @@ async function fixture(runtimeAuth = true, authOnly?: "collision" | "sibling") {
   const providerConfig = {
     api: "openai-completions" as const,
     baseUrl: "https://catalog.example.invalid/v1",
-    models: [buildCatalogModel("static-model")],
+    models: [{ ...buildCatalogModel("static-model"), input: ["text" as const] }],
   };
   const authCalls = state.path("entry-auth-calls.txt");
   const discovery = state.path("provider-discovery.cjs");
@@ -42,7 +42,8 @@ async function fixture(runtimeAuth = true, authOnly?: "collision" | "sibling") {
     `module.exports = {
     id: ${JSON.stringify(liveId)}, label: "Entry fixture", auth: [],
     catalog: { run() { throw Error("superseded entry catalog executed"); } },
-    resolveSyntheticAuth() {
+    resolveSyntheticAuth({ providerConfig }) {
+      if (!providerConfig) return undefined;
       require("node:fs").appendFileSync(${JSON.stringify(authCalls)}, "entry\\n");
       return { apiKey: "oauth:entry", source: "entry", mode: "api-key" };
     }
@@ -59,7 +60,7 @@ async function fixture(runtimeAuth = true, authOnly?: "collision" | "sibling") {
     };`,
     );
   }
-  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+  const metadataInput: NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]> = {
     plugins: [
       {
         id: staticId,
@@ -79,18 +80,17 @@ async function fixture(runtimeAuth = true, authOnly?: "collision" | "sibling") {
         providers: [liveId],
         modelCatalog: { discovery: { [liveId]: "runtime" } },
       },
-      ...(authOnly === "sibling"
-        ? [
-            {
-              id: authId,
-              providers: [authId],
-              rootDir: path.dirname(authDiscovery),
-              providerDiscoverySource: authDiscovery,
-            },
-          ]
-        : []),
     ],
-  });
+  };
+  if (authOnly === "sibling") {
+    metadataInput.plugins.push({
+      id: authId,
+      providers: [authId],
+      rootDir: path.dirname(authDiscovery),
+      providerDiscoverySource: authDiscovery,
+    });
+  }
+  const metadataSnapshot = createPluginMetadataSnapshotFixture(metadataInput);
   let liveReads = 0;
   const run = vi.fn<NonNullable<ProviderPlugin["catalog"]>["run"]>(async (context) => ({
     provider: {
@@ -160,6 +160,9 @@ async function fixture(runtimeAuth = true, authOnly?: "collision" | "sibling") {
         ...params,
         agentDir: state.agentDir(),
         authStore: { version: 1, profiles: {} },
+        // Only the catalog-specific config enables synthetic auth, so this observes
+        // the composed descriptor callback instead of the general entry-auth lookup.
+        explicitProviders: { [liveId]: { ...providerConfig, models: [] } },
         preparedStaticProviderCatalog,
         ...changes,
       }),
@@ -228,11 +231,10 @@ it.each(["registry", "config", "env", "mixed", "startup"] as const)(
       registry.providers.push(...f.pluginRegistry.providers);
       f.bind(registry);
     } else if (change === "config" || change === "env") {
-      inputs = {
-        ...(change === "config"
+      inputs =
+        change === "config"
           ? { config: { ...f.config, auth: { profiles: {} } } }
-          : { env: { ...f.env, DESCRIPTOR_TEST_REVISION: "next" } }),
-      };
+          : { env: { ...f.env, DESCRIPTOR_TEST_REVISION: "next" } };
       f.bind(registry, inputs);
     } else if (change === "mixed") {
       // Derived unions cannot claim that every handle came from this runtime.

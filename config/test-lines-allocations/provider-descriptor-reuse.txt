@@ -1,2 +1,2 @@
-445
+494
 # Prepared descriptor construction, live catalog/auth pairing, retained-generation rebind, scope, collection, and actual worker planning regressions.
