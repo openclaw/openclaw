@@ -202,6 +202,10 @@ suite.define(() => {
           acquisitionDiagnostics.observe(page);
           page.on("response", collectAsset);
           page.on("websocket", (socket) => {
+            // Reload can abandon an old socket's request without a reply.
+            // Idle assertions track the current connection's request lifetime.
+            requests.length = 0;
+            replies.clear();
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
               if (
