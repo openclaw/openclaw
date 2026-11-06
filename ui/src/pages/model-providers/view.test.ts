@@ -260,6 +260,31 @@ describe("renderModelProviders", () => {
     expect(retry?.disabled).toBe(false);
   });
 
+  it("keeps listing failures quiet until something is set up", async () => {
+    const failure = "Couldn’t load models from acp-opencode, openai. Try again.";
+    const alert = (container: HTMLElement) =>
+      container.querySelector('.model-providers__catalog-progress[role="alert"]');
+    // Providers that failed discovery still get a row; none is connected on a fresh install.
+    const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
+    const fresh = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    const configured = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
+    // Both views settled the same way; only the set-up one reports the failure.
+    expect(alert(fresh)).toBeNull();
+  });
+
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
     const onThinkingReset = vi.fn();
     const onFastModeReset = vi.fn();

@@ -1,0 +1,2 @@
+# Preserve mixed UI selection, deletion fallback, and shared Vitest plugin admission.
+23

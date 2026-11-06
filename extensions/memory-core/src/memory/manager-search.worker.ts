@@ -36,20 +36,19 @@ import {
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
   readMemoryDatabaseFacts,
-  type MemoryRecallData,
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
 import {
   searchPostgresMemoryKeyword,
   searchPostgresMemoryVector,
 } from "./manager-search-postgres.js";
-import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
+import type {
+  MemoryKeywordWorkerQuery,
+  MemoryKeywordWorkerResult,
+  MemoryVectorWorkerQuery,
+} from "./manager-search-types.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
-import {
-  searchKeywordWithFallback,
-  type searchKeyword,
-  type searchPathKeyword,
-} from "./manager-search.js";
+import { searchKeywordWithFallback } from "./manager-search.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 import { collectMemoryStatusSnapshot, type MemoryStatusQuery } from "./manager-status-state.js";
 
@@ -78,7 +77,6 @@ export type MemorySearchWorkerInput =
           checkProvenanceRepair: boolean;
         }
     ));
-type QueryResult<T> = { rows: T; error?: string };
 export type MemorySearchWorkerOutput =
   | { kind: "forget-index-plan"; plan: ForgetIndexPlan }
   | MemoryOriginReadOutput
@@ -95,20 +93,12 @@ export type MemorySearchWorkerOutput =
       rows: ReturnType<typeof readCuratedMemoryTriggerCandidates>;
       provenanceRepairPending: boolean;
     }
-  | {
-      kind: "keyword";
-      indexState?: ReturnType<typeof readMemoryRetrievalIndexState>;
-      recallData?: MemoryRecallData;
-      body: QueryResult<Awaited<ReturnType<typeof searchKeyword>>>;
-      path: QueryResult<Awaited<ReturnType<typeof searchPathKeyword>>>;
-    }
+  | MemoryKeywordWorkerResult
   | {
       kind: "vector";
       rows: Awaited<ReturnType<typeof searchChunksByEmbedding>>;
       capabilityError?: { capability: "fullText" | "vector"; message: string };
     };
-
-export type MemoryKeywordWorkerResult = Extract<MemorySearchWorkerOutput, { kind: "keyword" }>;
 
 /** Both engine paths consume the worker's admitted connection. */
 export function executeMemorySearchWorkerQuery(
