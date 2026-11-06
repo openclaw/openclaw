@@ -110,10 +110,10 @@ export async function createControlUiPrecompressedAssetVariants(
   ) {
     return [];
   }
-  let compressedGzip = gzip(body, 11);
+  let compressedGzip = gzip(body, 12);
   if (bootAssets.has(fileName)) {
     // Compression levels are not monotonic. Keep the smallest first-load encoding.
-    for (const level of [10, 12]) {
+    for (const level of [10, 11]) {
       const candidate = gzip(body, level);
       if (candidate.byteLength < compressedGzip.byteLength) {
         compressedGzip = candidate;
@@ -134,7 +134,7 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.gz`,
       // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Deferred assets retain the cheaper level 11 path.
+      // Deferred assets use maximum effort; boot assets keep their smallest encoding.
       source: Buffer.from(compressedGzip),
     },
   ];
@@ -385,6 +385,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "stringified-error"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
@@ -558,7 +559,7 @@ export async function refreshControlUiBuildOutput(
       // Inventory must work before compression sidecars have been written.
       deferredSize.count++;
       deferredSize.rawBytes += assetSource.byteLength;
-      deferredSize.gzipBytes += gzip(assetSource, 11).byteLength;
+      deferredSize.gzipBytes += gzip(assetSource, 12).byteLength;
       return {
         path: file,
         integrity: "sha256-" + createHash("sha256").update(assetSource).digest("base64"),

@@ -490,6 +490,10 @@ Scheduled, manual, and release Matrix checks use the fixed-response mock provide
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
 
+## OpenGrep
+
+OpenGrep PR-diff and manual full scans run on GitHub-hosted Ubuntu 24.04.
+
 ## CodeQL
 
 The `CodeQL` workflow is a narrow first-pass security scanner. Hourly, manual, and non-draft pull request runs scan Actions workflow code and the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.

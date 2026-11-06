@@ -247,7 +247,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       await pollValue(baseRef).toBe("release");
       await pollLocatorText(checkoutLabel).toBe("From release");
       await baseRef.fill("main");
-      await pollLocatorText(checkoutNote).toContain("Syncs target-repo to the selected runner");
+      await pollLocatorText(checkoutNote).toContain("Syncs target-repo to the selected device");
       await page.keyboard.press("Escape");
       await popoverOpen(checkout).toBe(false);
 

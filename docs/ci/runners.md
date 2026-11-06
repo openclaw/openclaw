@@ -66,6 +66,9 @@ the idle limit is not a substitute for caller cleanup.
 | Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes      | 35 minutes                |
 | Windows               | 8- or 16-vCPU Windows | 75 minutes      | 75 minutes                |
 
+The ARM workflow's pull-request setup check uses `ubuntu-24.04-arm`. Manual
+dispatches retain the admitted ARM Testbox profile above.
+
 Routine remote proof uses the 16-class. The explicit high-memory workflow can
 use only four of the shared 32 slots; it does not add four more slots. Normal
 leases can also occupy those slots, so hash collisions may queue high-memory
@@ -206,6 +209,9 @@ their SHA-512 hashes in private staging before extraction; missing or invalid
 archives fall back to the runner image, then the registry. Exact dependency
 archives carry the same files, and dependency repair preserves them. Store v2
 and exact-dependency v4 entries reseed once to include these bootstrap archives.
+Vitest transform and Node compile caches use workspace-relative `.cache/` roots
+so archives restore across different runner workspace layouts. Their new namespaces
+exclude older archives containing absolute-host paths.
 Cache publication still belongs to the existing warmer on each backend.
 Node discovery scans only the toolcache's executable levels, avoiding bundled
 npm dependency trees before selecting an already-installed runtime.
@@ -372,8 +378,27 @@ unchanged by the measured-worker cutover.
 Backend routing still applies. Hybrid retries and fork retries retain their
 hosted routes. Ordinary manual CI dispatches remain hosted in hybrid mode;
 Full Release Validation's existing frozen-target lint exception remains separate.
-Npm preflight uses the larger Blacksmith request by default and retains its
-explicit `use_github_hosted_runners` option.
+Npm preflight build and test jobs use the larger Blacksmith request by default
+and retain their explicit `use_github_hosted_runners` option, which Full Release
+Validation exposes as `npm_preflight_use_github_hosted_runners`. The final npm
+qualification job uses `ubuntu-24.04`, honoring `OPENCLAW_RELEASE_RUNNER_GROUP`.
+It validates and seals the existing artifacts without rerunning builds or tests.
+
+Candidate discovery and binding, plus short Full Release Validation admission,
+reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
+live/E2E source admission and candidate evidence binding use the same label.
+Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
+workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
+and the nightly watcher keep their existing runner selection and 720-minute
+budgets; standard hosted runners cannot preserve that lifetime.
+
+Mantis Discord and web UI actor authorization, request resolution, and ref
+validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
+placement and deadlines.
+
+Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
+The QA controls honor their `runner_group` input. QA profile planning, builds,
+shards, aggregation, and live transport workloads keep their existing runners.
 
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
@@ -437,8 +462,8 @@ A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 current same-repository PR head. The workflow branch and revision must match
 that head. Existing maintainer and exact-head admission applies.
 
-The first attempt runs only `build-artifacts` on `boat-xlarge`, using store-only
-dependency setup. The rest of the plan and its runner routes use `hybrid`.
+The default-shape first attempt runs only `build-artifacts` on `boat-xlarge`,
+using store-only dependency setup. Other runner routes use `hybrid`.
 Retries use the existing hosted route. Boat is not a repository backend value;
 this pilot does not change defaults, fork admission, or worker limits. The Boat
 GitHub integration, repository access, and account capacity must be configured
@@ -450,6 +475,13 @@ the 35-minute dispatch budget, and the plan selects the existing macOS runtime
 and published-driver artifact consumers even for a CI-only change. Those
 consumers remain selected on hosted retries. The macOS scope retains its native
 Node, Swift, and shared-package checks; no platform proof moves to Boat.
+
+With `ci_shape=main` and `test_runtime_policy=node`, the first attempt also routes
+`checks-node-compact-large-4` to `boat-xlarge` when the existing plan selects its
+8-class, serial, source-only row. It retains the planned groups, worker limits,
+8-GiB Node heap, and 60-minute job budget. This row uses store-only dependency
+setup; failed-job-only retries stay hosted even when preflight outputs are reused.
+Retire the build and row overrides when the general Boat backend replaces this pilot.
 
 ### RunsOn qualification
 

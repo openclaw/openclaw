@@ -44,7 +44,12 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
-const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
+const PENDING_INPUT_REASONS = new Set([
+  "send",
+  "agent.run.started",
+  "agent.input.steering",
+  "agent.input.settled",
+]);
 type ChatPanePresentation = () => boolean;
 
 function refreshChatEventHistory(

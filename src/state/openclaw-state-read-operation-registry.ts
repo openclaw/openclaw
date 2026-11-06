@@ -27,6 +27,8 @@ const loaders = {
     import("../agents/sandbox/persistent-exec-store.kernel.js").then(
       (m) => m.sandboxPersistentExecReadOperations,
     ),
+  sandboxRegistry: () =>
+    import("../agents/sandbox/registry.kernel.js").then((m) => m.sandboxRegistryReadOperations),
   worktrees: async () => {
     const [
       { worktreeReadOperations },

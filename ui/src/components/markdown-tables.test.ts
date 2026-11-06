@@ -39,13 +39,31 @@ const MutationObserverMock = vi.fn(function (_callback: MutationCallback) {
   return { disconnect: vi.fn(), observe: vi.fn() };
 });
 const ResizeObserverMock = vi.fn(function (
-  _callback: (entries: Pick<ResizeObserverEntry, "target">[]) => void,
+  _callback: (
+    entries: Pick<ResizeObserverEntry, "target" | "contentRect" | "borderBoxSize">[],
+  ) => void,
 ) {
   return { disconnect: vi.fn(), observe: vi.fn(), unobserve: vi.fn() };
 });
 
-function deliverTableResize(target: HTMLElement): void {
-  ResizeObserverMock.mock.calls.at(-1)?.[0]([{ target }]);
+function deliverTableResize(
+  target: HTMLElement,
+  tableWidth = 300,
+  viewportWidth = 100,
+  observerIndex = -1,
+): void {
+  ResizeObserverMock.mock.calls.at(observerIndex)?.[0]([
+    {
+      target,
+      contentRect: new DOMRect(0, 0, viewportWidth, 100),
+      borderBoxSize: [{ inlineSize: viewportWidth, blockSize: 100 }],
+    },
+    {
+      target: query(target, "table"),
+      contentRect: new DOMRect(0, 0, tableWidth - 2, 100),
+      borderBoxSize: [{ inlineSize: tableWidth, blockSize: 100 }],
+    },
+  ]);
 }
 
 const interactiveOptions = {
@@ -57,10 +75,10 @@ function query(owner: ParentNode, selector: string): HTMLElement {
   return owner.querySelector<HTMLElement>(selector)!;
 }
 
-function interactiveOwner(content = table) {
+function interactiveOwner(content = table, options = interactiveOptions) {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, interactiveOptions)}</div>`;
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, options)}</div>`;
   document.body.append(owner);
   const shell = query(owner, ".markdown-table");
   const viewport = query(owner, ".markdown-table__viewport");
@@ -121,6 +139,19 @@ describe("Markdown table interactions", () => {
     restoreDialogPolyfill();
   });
 
+  it("copies rendered breaks and delimiter characters within their table cells", async () => {
+    vi.useFakeTimers();
+    const { owner, copy } = interactiveOwner(
+      '| Label | Value | Empty |\n| --- | --- | --- |\n| **Alpha**<br>Beta | One | |\n| Quote "here"<br>next | Comma, kept | |\n| `A\tB` | End | |\n| Quote "only" | Plain | |',
+      { ...interactiveOptions, progressBars: false },
+    );
+    await copyTable(copy, "Copied");
+    expect(writeText).toHaveBeenLastCalledWith(
+      'Label\tValue\tEmpty\n"Alpha\nBeta"\tOne\t\n"Quote ""here""\nnext"\tComma, kept\t\n"A\tB"\tEnd\t\n"Quote ""only"""\tPlain\t',
+    );
+    expect(owner.querySelectorAll("br")).toHaveLength(2);
+  });
+
   it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
     const { shell, viewport } = interactiveOwner();
     const canScroll = (side: string) =>
@@ -137,7 +168,32 @@ describe("Markdown table interactions", () => {
     }
   });
 
-  it("updates retained table overflow without mutation-time layout", async () => {
+  it("keeps the table scroll offset across nested and replacement enhancement owners", () => {
+    vi.useFakeTimers();
+    const { owner, shell, viewport } = interactiveOwner();
+    const inner = query(owner, ".chat-text");
+    enhanceMarkdownTables(inner);
+    cleanups.push(() => releaseMarkdownTables(inner));
+    deliverTableResize(viewport);
+    vi.advanceTimersToNextFrame();
+    viewport.scrollLeft = 200;
+    viewport.dispatchEvent(new Event("scroll"));
+    const masks = () => [
+      shell.classList.contains("markdown-table--can-scroll-left"),
+      shell.classList.contains("markdown-table--can-scroll-right"),
+    ];
+    expect(masks()).toEqual([true, false]);
+    deliverTableResize(viewport, 300, 100, 0);
+    vi.advanceTimersToNextFrame();
+    expect(masks()).toEqual([true, false]);
+    releaseMarkdownTables(inner);
+    enhanceMarkdownTables(inner);
+    deliverTableResize(viewport);
+    vi.advanceTimersToNextFrame();
+    expect(masks()).toEqual([true, false]);
+  });
+
+  it("updates retained table overflow from resize entries without reading layout", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("MutationObserver", originalMutationObserver);
     const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
@@ -152,12 +208,12 @@ describe("Markdown table interactions", () => {
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
-    deliverTableResize(viewport);
+    deliverTableResize(viewport, 100);
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
     vi.advanceTimersToNextFrame();
-    expect(changedWidth).toHaveBeenCalled();
+    expect(changedWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
 
     changedWidth.mockClear();
@@ -172,6 +228,7 @@ describe("Markdown table interactions", () => {
     vi.useFakeTimers();
     const { owner, shell, viewport } = interactiveOwner();
     viewport.scrollLeft = 100;
+    viewport.dispatchEvent(new Event("scroll"));
     deliverTableResize(viewport);
     viewport.scrollLeft = 0;
     viewport.dispatchEvent(new Event("scroll"));
@@ -179,10 +236,11 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
 
     viewport.scrollLeft = 100;
-    deliverTableResize(viewport);
+    viewport.dispatchEvent(new Event("scroll"));
+    deliverTableResize(viewport, 100);
     releaseMarkdownTables(owner);
     vi.advanceTimersToNextFrame();
-    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(true);
   });
 
   it("discovers nested tables in code and releases removed tables even after they are emptied", async () => {

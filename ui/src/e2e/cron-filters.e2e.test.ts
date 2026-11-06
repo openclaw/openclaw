@@ -379,7 +379,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -394,11 +394,14 @@ suite.define(() => {
       await pressKeys(page, "ArrowDown", "Enter");
       await button(page, "Status Fehler").waitFor();
       await pressKeys(page, "Home", "Enter");
-      await button(page, "Status Completed, Fehler").waitFor();
-      expect(await statusTrigger.textContent()).toContain("Completed, Fehler");
+      await button(page, "Status Abgeschlossen, Fehler").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Abgeschlossen, Fehler");
       await pressKeys(page, "ArrowDown", "ArrowDown", "Enter");
-      await button(page, "Status Completed +2 (Completed, Fehler und Übersprungen)").waitFor();
-      expect(await statusTrigger.textContent()).toContain("Completed +2");
+      await button(
+        page,
+        "Status Abgeschlossen +2 (Abgeschlossen, Fehler und Übersprungen)",
+      ).waitFor();
+      expect(await statusTrigger.textContent()).toContain("Abgeschlossen +2");
 
       await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
       await page.keyboard.press("Enter");

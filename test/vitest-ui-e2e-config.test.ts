@@ -34,11 +34,14 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `chat-steer-deferred-custody deepseek-search desktop-resize plugin-inline-view`
+  `chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
-const sharedSerialGatewayFile = "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts";
+const sharedSerialGatewayFiles = [
+  "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/slack-inline-identity.e2e.test.ts",
+];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
   background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-completed-assistant.real-gateway chat-daybreak.real-gateway chat-html-csp.real-gateway
@@ -55,7 +58,11 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   command-palette-catalog.real-gateway command-palette-search.real-gateway
   control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
   device-alias-rename.real-gateway device-platform-family.real-gateway logs-lifecycle model-api-keys.real-gateway
-  model-catalog-partial-refresh.real-gateway model-picker-search.real-gateway profile-page.real-gateway
+  model-catalog-partial-refresh.real-gateway model-connection-check.real-gateway
+  model-key-save-check.real-gateway
+  model-provider-remove-in-use.real-gateway
+  model-picker-search.real-gateway
+  model-setup-provider-errors.real-gateway profile-page.real-gateway
   provider-browser-login.real-gateway quota-reset-status.real-gateway
   session-progress-hovercard.real-gateway session-roster-request-rate.real-gateway
   session-pr-reader-lifetime.real-gateway sidebar-running-counts.real-gateway task-pull-requests.real-gateway
@@ -64,7 +71,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFile, workboardFile);
+  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFiles, workboardFile);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
@@ -139,6 +146,11 @@ function probeOwnership(
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
     export const chromium = {
+      // Discovery initializes the observer but does not execute renderer scenarios.
+      connect: async () => ({
+        newBrowserCDPSession: async () => Object.assign(new EventEmitter(), { send: async () => {} }),
+        close: async () => {},
+      }),
       executablePath: () => "/fixture/chromium",
       launchServer: async () => {
         if (!canRunPlaywrightChromium()) throw new Error("fixture Chromium is unavailable");
@@ -442,6 +454,7 @@ describe("Control UI E2E resource ownership", () => {
     const skipped = probeOwnership({ filters: files, skipProductionArtifact: true });
     const artifact = probeOwnership({ productionArtifact: true });
     expect(skipped.files).toEqual([]);
+    expect(skipped.shards.flat()).toEqual([]);
     expect(skipped.passWithNoTests).toBe(true);
     expectInventory(artifact, files);
     expect(artifact.setupError).toBeUndefined();
@@ -450,14 +463,6 @@ describe("Control UI E2E resource ownership", () => {
     ).toBe(true);
     expect(artifact.leases).toEqual([]);
     expect(artifact.canonicalAssetsIntact).toBe(true);
-    expectInventory(
-      {
-        ...artifact,
-        files: [...skipped.files, ...artifact.files],
-        shards: [...skipped.shards, ...artifact.shards],
-      },
-      files,
-    );
 
     const partial = probeOwnership({ productionArtifact: true, filters: [files[0]!] });
     expectInventory(partial, [files[0]!]);
@@ -485,17 +490,17 @@ describe("Control UI E2E resource ownership", () => {
             workers: 1,
             fileParallelism: false,
           })),
-          {
-            file: sharedSerialGatewayFile,
+          ...sharedSerialGatewayFiles.map((file) => ({
+            file,
             project: "ui-e2e-serial",
             phase: 1,
             workers: 1,
             fileParallelism: false,
-          },
+          })),
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(55);
+      expect(parallel).toHaveLength(59);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

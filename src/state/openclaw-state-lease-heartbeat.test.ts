@@ -42,6 +42,7 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 });
 
 const heartbeatWorkers = vi.hoisted(() => ({
+  startupDelayMs: 0,
   beforeCreate: undefined as (() => void) | undefined,
   onCreate: undefined as ((worker: Worker, options: WorkerOptions) => void) | undefined,
 }));
@@ -60,7 +61,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.beforeCreate?.();
         }
-        super(filename, workerOptions);
+        const delayedFilename =
+          String(filename) === heartbeatUrl.href && heartbeatWorkers.startupDelayMs > 0
+            ? new URL(
+                `data:text/javascript,${encodeURIComponent(`await new Promise(resolve => setTimeout(resolve, ${heartbeatWorkers.startupDelayMs})); await import(${JSON.stringify(String(filename))});`)}`,
+              )
+            : filename;
+        super(delayedFilename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.onCreate?.(this, workerOptions);
         }
@@ -100,6 +107,7 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.startupDelayMs = 0;
   heartbeatWorkers.beforeCreate = undefined;
   heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
@@ -171,6 +179,15 @@ describe("maintenance lease heartbeat", () => {
         },
       },
     });
+    expect(readLease(state.env)).toBeUndefined();
+  });
+
+  it("preserves native startup renewals beyond the initial lease expiry", async ({ state }) => {
+    openOpenClawStateDatabase({ env: state.env });
+    heartbeatWorkers.startupDelayMs = 1_500;
+    const entered = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
+    await withOpenClawStateLease(options(state.env), entered);
+    expect(entered).toHaveBeenCalledOnce();
     expect(readLease(state.env)).toBeUndefined();
   });
 

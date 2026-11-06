@@ -14,6 +14,7 @@ type ProjectSeedScriptInput = {
   seedKey: string;
   baseCommit: string;
   verifiedRetained?: PreparedProjectVerification | null;
+  retainedSeedKey?: string;
   preparation?: {
     preparationKey: string;
     cacheKey: string;
@@ -49,6 +50,9 @@ const input = ${JSON.stringify(input)};
 const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
 ${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
+const phaseDurationsMs = {};
+let phaseStart = performance.now();
+const phase = (name) => { const now = performance.now(); phaseDurationsMs[name] = (phaseDurationsMs[name] ?? 0) + Math.round(now - phaseStart); phaseStart = now; };
 process.umask(0o077);
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 Object.assign(env, ${JSON.stringify(gitMaintenanceEnvironment())});
@@ -92,7 +96,9 @@ const ownedDirectory = (parent, target) => {
     ownedDirectory(namespace, directory);
   }
   try {
-    const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true);
+    phase("seedPreparation");
+    const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true, phaseDurationsMs);
+    phaseStart = performance.now();
     const retainedWorkspace = input.preparation ? { retainedWorkspace: retained ?? null } : {};
     if (!transport) {
       if (fs.existsSync(seed)) {
@@ -100,9 +106,10 @@ const ownedDirectory = (parent, target) => {
         ownedDirectory(seed, path.join(seed, ".git"));
         const preparedWorkspace = retained?.baseCommit === input.baseCommit ? retained : undefined;
         if (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project seed is not pristine");
+        phase("seedVerification");
         prune();
-        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace, ...retainedWorkspace }));
-        return;
+        phase("seedPreparation");
+        return { ready: true, preparedWorkspace, ...retainedWorkspace };
       }
       // Provisioning serializes this lease. Discard only this project's abandoned staging.
       for (const entry of fs.readdirSync(namespace)) {
@@ -112,12 +119,25 @@ const ownedDirectory = (parent, target) => {
         fs.rmSync(stale, { recursive: true });
       }
       const directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
-      process.stdout.write(JSON.stringify({ ready: false, directory, ...retainedWorkspace }));
-      return;
+      phase("seedPreparation");
+      return { ready: false, directory, ...retainedWorkspace };
     }
     const repository = path.join(directory, "repository");
-    fs.mkdirSync(repository, { mode: 0o700 });
-    git(repository, ["init", "--quiet", "--object-format=" + (input.baseCommit.length === 40 ? "sha1" : "sha256"), "."]);
+    let reused = false;
+    if (input.retainedSeedKey && retained) {
+      const donor = path.join(namespace, input.retainedSeedKey);
+      try {
+        ownedDirectory(namespace, donor);
+        ownedDirectory(donor, path.join(donor, ".git"));
+        reused = git(donor, ["rev-parse", "--verify", "HEAD"]) === retained.baseCommit && !git(donor, ["status", "--porcelain=v1", "--untracked-files=all"]);
+      } catch { /* Missing or unusable retained seeds use the fresh path. */ }
+      // A failure after this move consumes the donor; the next attempt starts fresh.
+      if (reused) fs.renameSync(donor, repository);
+    }
+    if (!reused) {
+      fs.mkdirSync(repository, { mode: 0o700 });
+      git(repository, ["init", "--quiet", "--object-format=" + (input.baseCommit.length === 40 ? "sha1" : "sha256"), "."]);
+    }
     const repositoryUrl = input.repository?.url ?? input.pack?.repositoryUrl;
     if (repositoryUrl !== undefined) {
       const url = new URL(repositoryUrl);
@@ -129,7 +149,8 @@ const ownedDirectory = (parent, target) => {
       // Git enables libcurl's netrc lookup independently of credential helpers.
       const authHome = fs.mkdtempSync(path.join(directory, ".fetch-home-"));
       const networkEnv = { ...Object.fromEntries(Object.entries(env).filter(([key]) => !/^(HOME|USERPROFILE|NETRC)$/i.test(key))), HOME: authHome, USERPROFILE: authHome };
-      git(repository, ["-c", "http.followRedirects=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", repositoryUrl, input.baseCommit], undefined, networkEnv);
+      // Detached HEAD is not advertised by default; name it to negotiate the retained objects.
+      git(repository, ["-c", "fetch.fsckObjects=true", "-c", "http.followRedirects=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", ...(reused ? ["--negotiation-tip=HEAD"] : []), repositoryUrl, input.baseCommit], undefined, networkEnv);
     } else {
       const pack = path.join(directory, "base.pack");
       const stat = fs.lstatSync(pack);
@@ -141,27 +162,36 @@ const ownedDirectory = (parent, target) => {
         if (retained?.baseCommit !== input.pack.retainedCommit) throw new Error("Prepared project retained Git base changed before transfer");
         // Fetch one local snapshot into independent objects, without alternates or
         // ancestors that the retained checkout may never have received.
-        git(repository, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", retained.workspaceDir, input.pack.retainedCommit]);
+        if (!reused) git(repository, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", retained.workspaceDir, input.pack.retainedCommit]);
       }
       fs.writeFileSync(path.join(repository, ".git", "shallow"), [...new Set([input.baseCommit, input.pack.retainedCommit].filter(Boolean))].join("\\n") + "\\n", { mode: 0o600 });
       const fd = fs.openSync(pack, "r");
-      try { git(repository, ["index-pack", "--stdin", "--fix-thin"], fd); } finally { fs.closeSync(fd); }
+      try { git(repository, ["index-pack", "--strict", "--stdin", "--fix-thin"], fd); } finally { fs.closeSync(fd); }
     }
+    phase("seedTransfer");
     // Session workspace binding verifies this credential-free source identity.
-    if (repositoryUrl !== undefined) git(repository, ["remote", "add", "origin", repositoryUrl]);
+    if (repositoryUrl !== undefined) {
+      if (reused) {
+        if (git(repository, ["remote", "get-url", "origin"]) !== repositoryUrl) throw new Error("Project seed source changed");
+      } else git(repository, ["remote", "add", "origin", repositoryUrl]);
+    }
     if (git(repository, ["rev-parse", "--verify", input.baseCommit + "^{commit}"]) !== input.baseCommit) throw new Error("Project seed commit does not match");
-    git(repository, ["fsck", "--full", "--strict", "--no-reflogs", input.baseCommit]);
+    if (reused) git(repository, ["rev-list", "--objects", "--quiet", "--missing=error", input.baseCommit, "^" + retained.baseCommit]);
+    else git(repository, ["fsck", "--full", "--strict", "--no-reflogs", input.baseCommit]);
+    phase("seedVerification");
+    if (reused) git(repository, ["update-index", "-q", "--refresh"]);
     git(repository, ["checkout", "--detach", "--force", input.baseCommit]);
     if (git(repository, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project checkout is not pristine");
     fs.renameSync(repository, seed);
     prune();
+    phase("seedCheckout");
     // Repository code keeps its separate Gateway authority check. A checkout that
     // cannot run setup can complete under this seed command's existing owner.
     const preparedWorkspace = input.preparation && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)
-      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false })
+      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false }, false, phaseDurationsMs)
       : undefined;
-    process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
-  } finally { if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); }
-})().catch((error) => { console.error(error.message); process.exitCode = 1; });
+    return { ready: true, preparedWorkspace };
+  } finally { phaseStart = performance.now(); if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); phase("seedPreparation"); }
+})().then((result) => process.stdout.write(JSON.stringify({ ...result, phaseDurationsMs }))).catch((error) => { console.error(error.message); process.exitCode = 1; });
 PROJECT_SEED_SCRIPT`;
 }

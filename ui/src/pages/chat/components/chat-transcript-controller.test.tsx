@@ -199,8 +199,31 @@ it("updates the visible range on native scroll without a parent render", async (
   scroll(scroller, 2_400);
   flushFrames();
   await flushDeferredRowPrune();
-  expect(container.textContent).not.toContain("message 0");
-  expect(Number(transcriptRows(container)[0]?.dataset.index)).toBeGreaterThan(0);
+  const activeRows = transcriptRows(container).filter(
+    (row) => !row.hasAttribute("data-prepared-row"),
+  );
+  expect(activeRows.map((row) => row.textContent).join(" ")).not.toContain("message 0");
+  expect(Number(activeRows[0]?.dataset.index)).toBeGreaterThan(0);
+});
+
+it("reads only mounted row keys when rendering an unchanged 2,000-row transcript", async () => {
+  let keyReads = 0;
+  const rows: TestContentRow[] = Array.from({ length: 2_000 }, (_, index) => ({
+    kind: "content",
+    get key() {
+      keyReads += 1;
+      return `row-${index}`;
+    },
+    content: <div>Message {index}</div>,
+  }));
+  const { container, renderRows } = await mountTestTranscript("unchanged-row-model", rows);
+  keyReads = 0;
+  renderRows(rows);
+  expect(keyReads).toBeLessThan(100);
+
+  rows.at(-1)!.content = <div>Updated final message</div>;
+  renderRows(rows);
+  expect(container.textContent).toContain("Updated final message");
 });
 
 it("keeps retained MCP rows and the virtual row model atomic through teardown", async () => {
@@ -224,6 +247,8 @@ it("keeps retained MCP rows and the virtual row model atomic through teardown", 
   expect(transcriptSize(container)).toBe(540);
   stubMcpAppLifecycle(container, () => teardownPending.promise);
 
+  renderRows(regroupedRows);
+  // Reusing a blocked candidate must not promote it ahead of the displayed model.
   renderRows(regroupedRows);
   const retainedRows = transcriptRows(container);
   expect(retainedRows.map((row) => row.dataset.virtualRowKey)).toEqual([
@@ -306,6 +331,33 @@ it.each(["append", "reorder", "focused reorder"] as const)(
     }
   },
 );
+
+it("awaits MCP teardown using the candidate row heights", async () => {
+  const pending = createDeferred();
+  const rows = numberedContentRows(24);
+  const { container, renderRows } = await mountTestTranscript("candidate-mcp-heights", rows);
+  scroll(container, 1_200);
+  await flushDeferredRowPrune();
+  renderRows(rows);
+  const edgeIndex = Number(transcriptRows(container).at(-2)!.dataset.index);
+  rows[edgeIndex]!.content = <mcp-app-view />;
+  renderRows(rows);
+  const { app, teardown } = stubMcpAppLifecycle(container, () => pending.promise);
+  const nextRows = rows.map((row, index) =>
+    index === edgeIndex - 3
+      ? Object.assign({}, row, { key: "rich", estimatedSize: 480, retainDom: true })
+      : row,
+  );
+
+  renderRows(nextRows);
+  expect(teardown).toHaveBeenCalledOnce();
+  expect(app.isConnected).toBe(true);
+  pending.resolve();
+  await pending.promise;
+  await flushDeferredRowPrune();
+  renderRows(nextRows);
+  expect(app.isConnected).toBe(false);
+});
 
 it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
   const flushFrames = stubAnimationFrames();
@@ -441,6 +493,7 @@ it("retries a growing restore without pane commits and renders the settled reade
     flushFrame();
     await host.settleUpdates();
     expect(onSettled).not.toHaveBeenCalled();
+    expect(host.committedRenders - initialCommits).toBe(0);
   }
   scrollHeight = 4800;
   flushFrame();
@@ -448,8 +501,6 @@ it("retries a growing restore without pane commits and renders the settled reade
   expect(onSettled).toHaveBeenCalledExactlyOnceWith({ scrollTop: 2420, anchorToEnd: false });
   expect(container.scrollTop).toBe(2420);
   expect(container.querySelector("output")?.textContent).toBe("Reading history");
-  expect.soft(host.committedRenders - initialCommits).toBe(0);
-
   // jsdom does not emit native scroll events for scrollTop writes. Deliver the browser read-back.
   scroll(container);
   await host.settleUpdates();
@@ -591,6 +642,44 @@ it.each([
   },
 );
 
+it.each(["ordinary", "fragment"])(
+  "preserves newer native offsets when %s measurement precedes the scroll event",
+  async (kind) => {
+    const flushFrames = stubAnimationFrames();
+    transcriptDomState.measuredRowHeight = 120;
+    const rows = numberedContentRows(40).map((row) =>
+      kind === "fragment" ? Object.assign({}, row, { estimatedSize: 120, retainDom: true }) : row,
+    );
+    const { container, renderRows, transcript } = await mountTestTranscript(
+      "native-before-row-measurement",
+      rows,
+    );
+    geometry(container, { clientHeight: 600, scrollHeight: 4000 });
+    emitSize(container, 600);
+    transcript.scrollToOffset(0);
+    renderRows(rows);
+    scroll(container);
+    renderRows(rows);
+    await flushDeferredRowPrune();
+    flushFrames();
+    renderRows(rows);
+    const first = requireElement(container, '[data-index="0"]');
+    container.dispatchEvent(new WheelEvent("wheel", { deltaY: -135 }));
+    scroll(container, 135);
+    expect(transcript.isProgrammaticScroll).toBe(false);
+
+    // Wheel's native movement can reach the top before its scroll event and
+    // before a newly mounted row's first ResizeObserver measurement.
+    container.scrollTop = 0;
+    emitSize(first, 455);
+    expect(container.scrollTop).toBe(0);
+    scroll(container);
+    flushFrames();
+    renderRows(rows);
+    expect(container.scrollTop).toBe(0);
+  },
+);
+
 it.each([0, 252])(
   "retires an end index without losing newer native movement (%s px)",
   async (nativeGrowth) => {
@@ -660,6 +749,8 @@ it("keeps smooth latest through settlement and idle until the target", async () 
   scroll(container, 1000);
   transcript.update();
   transcript.scrollToEnd({ behavior: "smooth" });
+  await Promise.resolve();
+  flush();
   await Promise.resolve();
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
   scroll(container, 1500);

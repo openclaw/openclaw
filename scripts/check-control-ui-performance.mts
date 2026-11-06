@@ -49,13 +49,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // First-visit co-location improves Sessions/Cron by 7–8%, accepting 205 B in Chat.
-  // Measured 1,280,999 B plus the existing 64 B build-variance headroom.
-  chatBootJsGzipBytes: 1_281_063,
-  // Current main already exceeds the earlier New boot baseline.
-  // vincentkoc approved the measured uplift for #187742 (2026-11-05).
-  // Current canonical output is 799,891 B plus 192 B build variance.
-  newBootJsGzipBytes: 800_083,
+  // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
+  // Preserve its approved growth and this branch's 75 B tighter Chat ceiling.
+  // Inline Template references retain Patrick's approved +239 B allowance (2026-11-05).
+  chatBootJsGzipBytes: 1_295_979,
+  // Theme readback also affects New Session's shared bundle; retain main's ceiling.
+  newBootJsGzipBytes: 802_543,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -70,20 +69,12 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
-  // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
-  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
-  // approved the increase on 2026-10-28. Retain 64 B build variance.
-  // iOS-style mobile sheet motion (#188162) adds 279 B to a main that already measured
-  // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
-  // Retain 64 B build variance.
-  // Mobile composer controls stay inside the composer: 309,341 B measured.
-  // Same-toolchain main 6494dce5: 319,575 B; prompt panel adds 671 B.
-  // Keep 1 KiB above that measured base without changing startup budgets.
-  totalCssGzipBytes: 320_599,
-  // Rail first frame #190877 adds 65 B; main measured 1,654,023 B (phone-UI batch landed 2026-11-02).
-  // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
-  totalCssRawBytes: 1_655_112,
+  // Separately indexed class lists avoid universal selector buckets.
+  // Main's 323,552 B gzip / 1,672,385 B raw measurement retains 64 B headroom.
+  // Patrick approved compact Template preview growth (2026-11-05):
+  // +1,386 B gzip / +4,379 B raw; preserve existing headroom.
+  totalCssGzipBytes: 325_002,
+  totalCssRawBytes: 1_676_828,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

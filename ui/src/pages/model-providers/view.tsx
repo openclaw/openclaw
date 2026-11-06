@@ -94,7 +94,11 @@ function AddProvider(props: ModelProvidersViewProps) {
               disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
               onClick={() => props.onAddProvider()}
             >
-              {busy() ? t("modelProviders.saving") : t("modelProviders.add.save")}
+              {props.busy["check:add"]
+                ? t("modelProviders.apiKey.checking")
+                : busy()
+                  ? t("modelProviders.saving")
+                  : t("modelProviders.add.save")}
             </button>
           </openclaw-modal-actions>
         </div>

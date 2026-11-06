@@ -22,6 +22,7 @@ import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
 import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
@@ -91,6 +92,15 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
       );
   return { owner, state, view, input, enter };
 }
+
+it("rebinds the native composer when its pane presentation changes", () => {
+  const { view, input, owner } = mountOwnedComposer({ paneId: "single" });
+  view.update({ paneId: "plugin-app:agent:main:one" });
+  expect(getChatComposerState("plugin-app:agent:main:one").composerTextarea).toBe(view.textarea());
+  input("Describe this shell.");
+  flush();
+  expect(owner.composerDraft.read().draft).toBe("Describe this shell.");
+});
 
 it("updates edits and history from the draft owner without remounting the input", () => {
   const { owner, state, view } = mountOwnedComposer();
