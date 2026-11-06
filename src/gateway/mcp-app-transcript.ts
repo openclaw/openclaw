@@ -206,6 +206,8 @@ export function selectMcpAppReconstructionData(
     ) {
       return;
     }
+    // The resource owner normalizes the saved CSP before rendering.
+    // SAFETY: The version-1 writer owns the canonical result shape; identity is checked above.
     const candidate = data as McpAppSavedDisplay;
     try {
       measureMcpAppViewBytes(candidate.html, candidate.toolInput, candidate.toolResult);

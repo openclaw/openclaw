@@ -11,8 +11,6 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
-  // Saved-display restoration exercises the host-owned durable transcript worker.
-  "src/gateway/mcp-app-saved-display.test.ts",
   "src/gateway/agent-runtime-identity-token.test.ts",
   "src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts",
   "src/gateway/agent-turn/agent-run-media.test.ts",
@@ -131,6 +129,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.test.ts",
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
+  // Saved-display restoration exercises the host-owned durable transcript worker.
+  "src/gateway/mcp-app-saved-display.test.ts",
   "src/gateway/mcp-http.completion-lineage.test.ts",
   "src/gateway/mcp-http.configured-mcp-authority.test.ts",
   "src/gateway/mcp-http.exec-completion.test.ts",
