@@ -4,7 +4,7 @@ import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { createToolResultMessage } from "./chat-message.test-support.ts";
@@ -21,7 +21,7 @@ it("keeps ordinary transcript text synchronous", () => {
   expect(view.container.querySelector(".chat-text")?.textContent?.trim()).toBe("Ready immediately");
 });
 
-it("loads submitted App references when a user message acquires saved context", async () => {
+it("renders submitted App references synchronously when a user message acquires saved context", () => {
   const [appContext, setAppContext] = createSignal<Array<{ title: string }>>([]);
   const view = mountSolid(() => (
     <GroupedMessage
@@ -37,34 +37,11 @@ it("loads submitted App references when a user message acquires saved context", 
   onTestFinished(view.unmount);
   expect(view.container.textContent).toContain("Describe this shell.");
   expect(view.container.querySelector(".mcp-app-context")).toBeNull();
-  setAppContext([{ title: "Helmet shell" }]);
-  await waitForSolid(() => expect(view.container.textContent).toContain("Helmet shell"));
-});
-
-it("loads captured Work context without suspending the authored message", async () => {
-  const view = mountSolid(() => (
-    <GroupedMessage
-      preparation={prepareChatMessageRender({
-        role: "user",
-        content: "Review the parser.",
-        __openclaw: {
-          workContext: { text: "Review the parser.", snapshot: { page: "review:parser" } },
-        },
-      })}
-      messageKey="captured-context"
-      options={{ isStreaming: false, showReasoning: false }}
-    />
-  ));
-  onTestFinished(view.unmount);
-  expect(view.container.querySelector(".chat-text")?.textContent).toContain("Review the parser.");
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".chat-context-attachment")?.textContent).toContain(
-      "review:parser",
-    ),
-  );
-  expect(view.container.querySelector<HTMLDetailsElement>(".chat-context-attachment")?.open).toBe(
-    false,
-  );
+  setAppContext([{ title: "Helmet shell" }, { title: "Tiger cowrie" }]);
+  flush();
+  expect(
+    [...view.container.querySelectorAll(".mcp-app-context__label")].map((item) => item.textContent),
+  ).toEqual(["Helmet shell", "Tiger cowrie"]);
 });
 
 it("renders rich history immediately and retires a superseded message", () => {

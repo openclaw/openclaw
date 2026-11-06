@@ -5,7 +5,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
-import { ForwardedAttribution } from "./chat-message-deferred.tsx";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import "./chat-session-activity.css";

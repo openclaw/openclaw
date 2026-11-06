@@ -32,7 +32,7 @@ import { resolveCappedMessageId } from "../chat-message-recovery.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
-import { ForwardedAttribution } from "./chat-message-deferred.tsx";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);

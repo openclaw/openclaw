@@ -15,7 +15,7 @@ export function SubmittedAppContext(props: { message: unknown }) {
     ),
   );
   return (
-    <Show when={items()?.length}>
+    <Show when={items()}>
       <section
         class="mcp-app-context"
         style="margin-bottom: 8px; border-bottom: 0; padding: 0;"
@@ -25,17 +25,17 @@ export function SubmittedAppContext(props: { message: unknown }) {
           <For each={items()}>
             {(item) => (
               <div class="mcp-app-context__item" title={item.description || item.uri || item.title}>
-                <Show when={item.icon} fallback={<Icon name="fileText" />}>
-                  {(src) => (
-                    <img
-                      class="mcp-app-context__icon"
-                      src={src()}
-                      alt=""
-                      referrerpolicy="no-referrer"
-                      loading="lazy"
-                    />
-                  )}
-                </Show>
+                {item.icon ? (
+                  <img
+                    class="mcp-app-context__icon"
+                    src={item.icon}
+                    alt=""
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                  />
+                ) : (
+                  <Icon name="fileText" />
+                )}
                 <span class="mcp-app-context__label">{item.title}</span>
               </div>
             )}

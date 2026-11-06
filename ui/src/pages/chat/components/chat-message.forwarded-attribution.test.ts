@@ -13,7 +13,6 @@ import { SESSION_TITLE_TARGET_SELECTOR } from "../../../components/session-progr
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
@@ -286,7 +285,6 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
     expect(query(".chat-group--forwarded")).toBeNull();
     return;
   }
-  await waitForSolid(() => expect(text(attributionSelector)).toContain("From"));
   const forwardedGroup = query(".chat-group--forwarded");
   expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
   const attribution = required(
@@ -331,7 +329,7 @@ it.each([
   const chipText = label ?? "Automation";
   const group = createGroup({ sessionKey: key, agentId: key.split(":")[1], label });
   renderGroup(group, { ...agentOptions, mainKey: "main", basePath });
-  await waitForSolid(() => expect(query("a.markdown-session-link")).not.toBeNull());
+
   const chip = required("a.markdown-session-link");
   expect(chip.textContent?.trim()).toBe(chipText);
   expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
@@ -355,11 +353,9 @@ it.each([
   { senderSession: { agentId: "main" }, label: "1 update · Forwarded from main" },
   { senderSession: undefined, label: "1 update · Forwarded message" },
   { senderSession: { sessionKey: "legacy-session" }, label: "1 update from legacy-session" },
-])("renders legacy attribution without a link: $label", async ({ senderSession, label }) => {
+])("renders legacy attribution without a link: $label", ({ senderSession, label }) => {
   renderGroup(createGroup(senderSession, { content: "legacy report", provenance }));
-  await waitForSolid(() =>
-    expect(text(".chat-session-activity .chat-reply-attribution")).toContain(label),
-  );
+
   const attribution = query(".chat-session-activity .chat-reply-attribution");
   expect(attribution?.textContent?.replace(/\s+/g, " ").trim()).toBe(label);
   expect(attribution?.querySelector("a, [tabindex]")).toBeNull();
