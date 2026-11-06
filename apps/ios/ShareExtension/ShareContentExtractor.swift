@@ -208,8 +208,11 @@ extension ShareContentExtractor {
                     let destination = directory.appendingPathComponent(name)
                     let input = try FileHandle(forReadingFrom: source)
                     defer { try? input.close() }
-                    guard FileManager.default.createFile(atPath: destination.path, contents: nil,
-                        attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+                    guard FileManager.default.createFile(
+                        atPath: destination.path,
+                        contents: nil,
+                        attributes: [.protectionKey: FileProtectionType
+                            .completeUntilFirstUserAuthentication])
                     else { throw SharedDraftError.unreadable }
                     let output = try FileHandle(forWritingTo: destination)
                     defer { try? output.close() }

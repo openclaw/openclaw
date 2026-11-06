@@ -100,8 +100,8 @@ public actor SharedDraftInbox {
             try db.expire(now)
             let count = try db.integer("SELECT COUNT(*) FROM imports")
             let items = try db.integer("SELECT COUNT(*) FROM attachments")
-            var remaining = Self.maximumBytes - (try db.integer(
-                "SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM imports")) - (try db.integer(
+            var remaining = try Self.maximumBytes - (db.integer(
+                "SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) FROM imports")) - (db.integer(
                 "SELECT COALESCE(SUM(length(bytes)),0) FROM attachments")) - text.utf8.count
             guard count < Self.maximumItems, items + files.count <= Self.maximumItems, remaining >= 0 else {
                 throw SharedDraftError.full
@@ -142,11 +142,15 @@ public actor SharedDraftInbox {
             defer { sqlite3_finalize(names) }
             try db.bind(id, to: names, index: 1)
             var fileNames: [String] = []
-            while try db.step(names) { fileNames.append(db.text(names, 0)) }
+            while try db.step(names) {
+                fileNames.append(db.text(names, 0))
+            }
             result.append(SharedDraftImport(
                 id: id,
-                target: SharedDraftTarget(gatewayID: db.text(statement, 1), agentID: db.text(statement, 2),
-                                          sessionKey: db.text(statement, 3)),
+                target: SharedDraftTarget(
+                    gatewayID: db.text(statement, 1),
+                    agentID: db.text(statement, 2),
+                    sessionKey: db.text(statement, 3)),
                 text: db.text(statement, 4), fileNames: fileNames,
                 expiresAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))))
         }
@@ -192,9 +196,9 @@ public actor SharedDraftInbox {
     }
 }
 
-// This inbox is deliberately separate from Gateway state and the auto-delivering
-// chat outbox. Raw SQLite is the bounded cross-process storage primitive here;
-// the framework's GRDB dependency belongs to Chat UI, not extension-safe Kit.
+/// This inbox is deliberately separate from Gateway state and the auto-delivering
+/// chat outbox. Raw SQLite is the bounded cross-process storage primitive here;
+/// the framework's GRDB dependency belongs to Chat UI, not extension-safe Kit.
 private final class Connection {
     private let db: OpaquePointer
 
@@ -211,7 +215,7 @@ private final class Connection {
         // Foundation preserves macOS aliases such as /tmp and /var. Reuse the
         // native POSIX path owner and resolve only the directory: NOFOLLOW must
         // still reject a symbolic link at the database filename itself.
-        let databasePath = (try OpenClawClientCredentialStore.canonicalPath(directory) as NSString)
+        let databasePath = try (OpenClawClientCredentialStore.canonicalPath(directory) as NSString)
             .appendingPathComponent("inbox.sqlite")
         var pointer: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW
@@ -298,10 +302,16 @@ private final class Connection {
     func run(_ sql: String, _ values: [String] = [], data: Data? = nil) throws {
         let statement = try self.prepare(sql)
         defer { sqlite3_finalize(statement) }
-        for (offset, value) in values.enumerated() { try self.bind(value, to: statement, index: Int32(offset + 1)) }
+        for (offset, value) in values.enumerated() {
+            try self.bind(value, to: statement, index: Int32(offset + 1))
+        }
         if let data {
             let result = data.withUnsafeBytes {
-                sqlite3_bind_blob(statement, Int32(values.count + 1), $0.baseAddress, Int32(data.count),
+                sqlite3_bind_blob(
+                    statement,
+                    Int32(values.count + 1),
+                    $0.baseAddress,
+                    Int32(data.count),
                     unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             }
             guard result == SQLITE_OK else { throw SharedDraftError.unavailable }

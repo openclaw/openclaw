@@ -49,7 +49,7 @@ struct SharedDraftImportReview: View {
                             Agent: \(draft.target.agentID)
                             Chat: \(draft.target.sessionKey)
                             """)
-                                .font(OpenClawType.caption)
+                            .font(OpenClawType.caption)
                             Text(String(
                                 format: String(localized: "Expires %@. Nothing is sent automatically."),
                                 draft.expiresAt.formatted(date: .abbreviated, time: .shortened)))

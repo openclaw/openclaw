@@ -22,7 +22,9 @@ final class ShareComposeView: UIView, UITextViewDelegate {
     var onSend: (() -> Void)?
     var onCancel: (() -> Void)?
     var onSave: (() -> Void)?
-    var canSave = false { didSet { self.updateControls() } }
+    var canSave = false {
+        didSet { self.updateControls() }
+    }
 
     var draftText: String {
         self.textView.text ?? ""
@@ -93,9 +95,10 @@ final class ShareComposeView: UIView, UITextViewDelegate {
         case .saving:
             self.showFooter(text: NSLocalizedString("Saving share…", comment: "Share import status"), icon: nil)
         case .saved:
-            self.showFooter(text: NSLocalizedString(
-                "Saved for 48 hours. Open OpenClaw to review and import into the original chat. Nothing was sent.",
-                comment: "Share import manual open instructions"),
+            self.showFooter(
+                text: NSLocalizedString(
+                    "Saved for 48 hours. Open OpenClaw to review and import into the original chat. Nothing was sent.",
+                    comment: "Share import manual open instructions"),
                 icon: (name: "checkmark.circle.fill", tint: .systemGreen))
         case .ready:
             self.statusContainer.isHidden = true

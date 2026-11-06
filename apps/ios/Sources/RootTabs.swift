@@ -150,15 +150,20 @@ struct RootTabs: View {
                 self.appModel.chatPresentation.sync(appModel: self.appModel)
                 let canCaptureDestination = self.appModel.chatPresentation.isCurrent(appModel: self.appModel) &&
                     self.appModel.chatPresentation.viewModel?.sessionKey == self.appModel.chatSessionKey
-                let target = (canCaptureDestination ? self.appModel.chatTranscriptCacheGatewayID : nil).flatMap { gatewayID in
-                    self.appModel.chatDeliveryAgentId.map { agentID in
-                        SharedDraftTarget(gatewayID: gatewayID, agentID: agentID, sessionKey: self.appModel.chatSessionKey)
+                let target = (canCaptureDestination ? self.appModel.chatTranscriptCacheGatewayID : nil)
+                    .flatMap { gatewayID in
+                        self.appModel.chatDeliveryAgentId.map { agentID in
+                            SharedDraftTarget(
+                                gatewayID: gatewayID,
+                                agentID: agentID,
+                                sessionKey: self.appModel.chatSessionKey)
+                        }
                     }
-                }
                 do {
                     try await SharedDraftInbox.shared.setDestination(target)
                 } catch {
-                    self.appModel.recordShareEvent("Share import destination could not be saved. Open the app and try again.")
+                    self.appModel
+                        .recordShareEvent("Share import destination could not be saved. Open the app and try again.")
                 }
                 guard !Task.isCancelled else { return }
                 if let viewModel = self.appModel.chatPresentation.viewModel,

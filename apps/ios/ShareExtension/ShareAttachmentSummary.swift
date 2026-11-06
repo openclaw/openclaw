@@ -84,7 +84,6 @@ enum ShareAttachmentBlockReason: Equatable {
     }
 }
 
-
 /// Recovery must name only actions the current share can actually offer.
 enum ShareImportRecovery {
     case save
