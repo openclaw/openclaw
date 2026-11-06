@@ -262,6 +262,11 @@ export function createOpenClawIdService(params: {
     }
     await stopRuntime();
     try {
+      await armOwnerExpiry(await getAuthority());
+      // Loaded before any member connects, so removal finds runs of closed connections.
+      await getEffects();
+      // A token issued over the tunnel must find its binding writer, so it exists first.
+      await publishTokenBindings();
       const { startTunnelRuntime } = await import("./tunnel-runtime.js");
       runtime = await startTunnelRuntime({
         settings,
@@ -275,10 +280,6 @@ export function createOpenClawIdService(params: {
       });
       status = { state: "on", tunnel: runtime.supervisor.status() };
       appliedKey = appliedConfigKey(config);
-      await armOwnerExpiry(await getAuthority());
-      // Loaded before any member connects, so removal finds runs of closed connections.
-      await getEffects();
-      await publishTokenBindings();
       await startMailbox();
       await revokeBoundTokens(await (await getAuthority()).orphanedTokens());
       // Publication runs beside the lifecycle, so a stalled Discovery cannot hold stop.
