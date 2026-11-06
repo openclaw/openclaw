@@ -92,6 +92,7 @@ packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
 packages/media-core/src/mime.ts
 packages/memory-host-sdk/package.json
+packages/memory-host-sdk/src/host/cjk-bigram.ts
 packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
