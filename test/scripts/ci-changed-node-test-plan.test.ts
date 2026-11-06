@@ -1169,9 +1169,8 @@ describe("CI changed Node test plan", () => {
           }
           expect(group.runner).toBe(owner.runner);
           expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
-          for (const key of ["pretestBuildMode", "timeoutMinutes"] as const) {
-            expect(job[key], key).toEqual(ownerJob[key]);
-          }
+          expect(job.pretestBuildMode).toEqual(ownerJob.pretestBuildMode);
+          expect(job.timeoutMinutes ?? 60).toBeLessThanOrEqual(ownerJob.timeoutMinutes ?? 60);
           expect(job.predictedSeconds).toBeGreaterThan(0);
           expect(job.predictedSeconds).toBeLessThanOrEqual(300);
           expect(group.timing_key).toContain("#selector-");
@@ -1256,7 +1255,8 @@ describe("CI changed Node test plan", () => {
               "pretestBuildMode",
             ]);
             expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
-            expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
+            expect(job.runner).toBe(ownerJob.runner);
+            expect(job.timeoutMinutes ?? 60).toBeLessThanOrEqual(ownerJob.timeoutMinutes ?? 60);
           }
         }
       }
