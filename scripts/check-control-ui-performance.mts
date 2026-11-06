@@ -49,10 +49,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Long-session windowing plus lazy Settings/layout changes preserve boot request counts.
-  // Bounded lazy LaTeX measured +1,578 Chat gzip B over matched main builds (eb904f7c).
-  // Chat: 1,294,100 + 1,578 = 1,295,678 B; New: 801,486 B; retain 192 B headroom.
-  chatBootJsGzipBytes: 1_295_870,
+  // Matched e63ddea builds measure 1,296,553 Chat gzip B; Node-safe registration adds 80 B.
+  // Chat measures 1,296,633 B; retain the existing 192 B build-variance headroom.
+  // New retains its separately measured 801,486 B + 192 B allowance.
+  chatBootJsGzipBytes: 1_296_825,
   newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
