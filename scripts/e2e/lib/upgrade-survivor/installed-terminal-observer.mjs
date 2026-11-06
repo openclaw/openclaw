@@ -442,6 +442,13 @@ function readIsolates(directory) {
 // exit code or an earlier death; the reader keeps these processes' full traces.
 export function captureInstalledTerminalProcessAbsence(directory) {
   assert.equal(process.platform, "linux");
+  // Receipts must share the observed Node processes' monotonic clock;
+  // Bun's process-origin timer cannot bound those events.
+  assert.equal(
+    process.versions.bun,
+    undefined,
+    "Kernel absence capture requires the Node monotonic clock",
+  );
   const rows = readIsolates(directory).isolates.flat();
   const missing = rows.filter(
     (row) =>
@@ -843,7 +850,7 @@ function readObservation(directory, spec = {}) {
       .map((row) =>
         lifetimeBounds.has(row)
           ? Object.assign({}, row, {
-              ...(lifetimeBounds.has(row) ? { lifetimeBound: lifetimeBounds.get(row) } : {}),
+              lifetimeBound: lifetimeBounds.get(row),
             })
           : row,
       )

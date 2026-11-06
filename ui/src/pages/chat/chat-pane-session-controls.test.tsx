@@ -283,7 +283,7 @@ describe("chat pane composer controls", () => {
       cached: true,
       connected: false,
       error: "metadata unavailable",
-      message: "Offline",
+      message: "Disconnected",
     },
     {
       label: "failed with a snapshot",
@@ -314,12 +314,17 @@ describe("chat pane composer controls", () => {
           : [],
         chatModelSwitchPromises: {},
         sessionKey: "main",
+        agentsList: {
+          agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
       }) as unknown as ChatPageHost;
       state.chatModelCatalogError = error;
       const onModelSetup = vi.fn();
 
       const controls = renderControls(state, {
-        agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
       controls.composerControls.model.modelPickerOpen = true;
@@ -381,8 +386,13 @@ describe("chat pane composer controls", () => {
       entry: { sessionId: "permission-test-session" },
     } satisfies SessionPatchResult);
 
+    state.agentsList = {
+      agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+    };
     const controls = renderControls(state, {
-      agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
     const view = mountSolid(

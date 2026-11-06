@@ -313,11 +313,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "cron",
     "operator.read",
     "<=2026.7",
-    {
-      shareKey: operatorReadShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["cron"],
-    },
+    { shareKey: operatorReadShareKey, shareMaxAgeMs: 1_000, shareInvalidationEvents: ["cron"] },
   ],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
@@ -749,4 +745,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
+  ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],
+  ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
+  ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
+  ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

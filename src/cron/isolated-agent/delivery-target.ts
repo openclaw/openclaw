@@ -308,16 +308,14 @@ export async function resolveDeliveryTarget(
 
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
-  // then to the agent's bound account from bindings config.
+  // then to the agent's bound account and the channel's default account.
   const explicitAccountId =
     typeof jobPayload.accountId === "string" ? jobPayload.accountId.trim() || undefined : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
-    accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
-      cfg,
-      channelId: channel,
-      agentId,
-    });
+    accountId =
+      deliveryTargetRuntime.resolveFirstBoundAccountId({ cfg, channelId: channel, agentId }) ??
+      deliveryTargetRuntime.resolveChannelDefaultAccountIdForDelivery({ cfg, channel, agentId });
   }
 
   if (!channel) {

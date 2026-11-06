@@ -3,6 +3,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
+import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import {
   ConfigCollectionDraft,
   type ConfigCollectionDraftHandle,
@@ -193,6 +194,11 @@ function ConfigMapRow(
 export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  const visible = createProgressiveList(() => content().visibleEntries, {
+    initial: 2,
+    batch: 5,
+    enabled: () => props.params.progressive === true,
+  });
   let localEdit: { expected: unknown; retained: unknown } | undefined;
   let sourceRevision = 0;
   let sourceSnapshot: { source: unknown; revision: number } | undefined;
@@ -241,7 +247,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
   const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
-      <div class="cfg-block cfg-map">
+      <div class="cfg-block cfg-map" aria-busy={visible.pending() ? "true" : undefined}>
         <div class="settings-row cfg-collection-row">
           <Show
             when={props.heading}
@@ -327,7 +333,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         />
         <Show when={content().visibleEntries.length > 0}>
           <div class="settings-subrows cfg-subrows">
-            <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
+            <For each={visible.items()} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow
                   params={{ ...props.params, onPatch: patchChild }}

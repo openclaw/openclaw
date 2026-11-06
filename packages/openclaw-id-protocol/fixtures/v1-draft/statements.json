@@ -324,6 +324,8 @@
         "v": 1,
         "type": "Revocation",
         "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "seq": 2,
           "target_fp": "fp:6fbec950dc6ff246776d5cfad063c33f08e55a9347e4375e2ddf217dd3b05660",
           "target_kind": "owner_device",
           "reason": "lost",
@@ -332,9 +334,9 @@
         },
         "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
         "alg": "ed25519",
-        "sig": "wVQCEBBBnc7GHVSGPBOPv1FTr1K83LjZrNFbCynHUkXnRFX-3V1ejkGy2eP3qftQcEnfioVMXTVSE29Z5k_FCg"
+        "sig": "hVzXftpPJI78k8Gk8WW3VWn2IqKiheluvlBrN14p-37oVV5g-R7H6vp8M2QLrP_P3t7I2J0TpFa55RONlw4bCQ"
       },
-      "signing_input_hex": "6f70656e636c61772f5265766f636174696f6e2f7631007b226973737565645f6174223a313739333331343830302c22726561736f6e223a226c6f7374222c22726f6f745f65706f6368223a312c227461726765745f6670223a2266703a36666265633935306463366666323436373736643563666164303633633333663038653535613933343765343337356532646466323137646433623035363630222c227461726765745f6b696e64223a226f776e65725f646576696365227d"
+      "signing_input_hex": "6f70656e636c61772f5265766f636174696f6e2f7631007b22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c22726561736f6e223a226c6f7374222c22726f6f745f65706f6368223a312c22736571223a322c227461726765745f6670223a2266703a36666265633935306463366666323436373736643563666164303633633333663038653535613933343765343337356532646466323137646433623035363630222c227461726765745f6b696e64223a226f776e65725f646576696365227d"
     },
     {
       "name": "gateway signs membership snapshot",
@@ -379,13 +381,21 @@
               ]
             }
           ],
+          "protocols": {
+            "statement": [
+              1
+            ],
+            "descriptor": [
+              1
+            ]
+          },
           "issued_at": 1793314800
         },
         "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
         "alg": "ed25519",
-        "sig": "0Rp0RUoz5VWaJ_2HYbFtHwzWDSyUrQLHNRmf6p2Watlu-H1HbUDOEZ3h_509FGquHnbTpZVpmCeeDEEkJb69AA"
+        "sig": "IJZrKcvvxZ4_MkDSQWkJx3XXYhdkBnXvIQej9KvIQSUXENJLQCJpvYJ9HhN8A_LVu7UeOsmZ8oxTwOmNLSP9DA"
       },
-      "signing_input_hex": "6f70656e636c61772f4d656d62657273686970536e617073686f742f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226d656d62657273223a5b7b226163636f756e745f6964223a22616363745f626f62222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d5d2c226f776e65725f64657669636573223a5b7b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062227d2c7b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565227d5d2c226f776e65725f706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c22736571223a327d"
+      "signing_input_hex": "6f70656e636c61772f4d656d62657273686970536e617073686f742f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226d656d62657273223a5b7b226163636f756e745f6964223a22616363745f626f62222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d5d2c226f776e65725f64657669636573223a5b7b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062227d2c7b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565227d5d2c226f776e65725f706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c2270726f746f636f6c73223a7b2264657363726970746f72223a5b315d2c2273746174656d656e74223a5b315d7d2c22736571223a327d"
     },
     {
       "name": "invitee signs redemption request",
@@ -407,6 +417,24 @@
         "sig": "87lno6odyhgan2oIX0VmH_A06EhYoQhGLeAoHP0zZ6llfUWctwAqwrEJls6M8P0cQUAA0iFlcEniGfK7d6ZdCQ"
       },
       "signing_input_hex": "6f70656e636c61772f496e76697465526564656d7074696f6e2f7631007b226163636f756e745f6964223a22616363745f626f62222c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226465766963655f707562223a22656432353531393a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832222c22696e766974655f6964223a223030313132323333343435353636373738383939616162626363646465656666222c22706565725f6b6579223a2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832222c2270726f6f66223a2261353336643339663465636532613161366637623031656237613666363762386438353130333564623631346262306465306534653730636233616566393033222c227265717565737465645f6174223a313739333331343830307d"
+    },
+    {
+      "name": "gateway signs root reset to root-2",
+      "verifier": "reset",
+      "statement": {
+        "v": 1,
+        "type": "RootReset",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "binding_seq": 3,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "BrbI3Er5bXQdcDgyWMvIzu9az-KF4xisVXQDiFJ01fLPOV2D54AXRnJRDT5f_WQS9ZjRO6XJMqH0Wd0xROc5Ag"
+      },
+      "signing_input_hex": "6f70656e636c61772f526f6f7452657365742f7631007b2262696e64696e675f736571223a332c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226e65775f726f6f745f707562223a22656432353531393a30323434376530336637623333393834623163646232393661363465353336653134663539333431363035376363383236363138393964363739373265663061227d"
     }
   ],
   "invalid": [
@@ -681,11 +709,19 @@
               ]
             }
           ],
+          "protocols": {
+            "statement": [
+              1
+            ],
+            "descriptor": [
+              1
+            ]
+          },
           "issued_at": 1793314800
         },
         "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
         "alg": "ed25519",
-        "sig": "vNK-gMikI8Zbxwd2G_IIZGjGNf8pqjq0xfKjOeH9jKauBb0U92p72M99RFIaCjob6-lOGmLKEkaGM7gEBBXFDQ"
+        "sig": "wX22kzWQ8svgQvc5ETrie2Ze0GD3Tit84ZdG5yt4lJtWX3rlhvORdP9BNooIbUb01r-MGWp47H7xJci8cI7tBw"
       },
       "expected_error": "wrong_signer"
     },
@@ -709,6 +745,42 @@
         "sig": "umGEFlEbNSr753tR-vy76JSogqyD86-yRm3yZB_ooV3rjFTweI_M4lo9C3xDlnljDU68XRhMhJ7pFpk-uaTfDw"
       },
       "expected_error": "wrong_signer"
+    },
+    {
+      "name": "root reset not signed by K_gw",
+      "verifier": "reset",
+      "statement": {
+        "v": 1,
+        "type": "RootReset",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "binding_seq": 3,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "alg": "ed25519",
+        "sig": "JdFD7fhQ0jTR6Hw4ScF52nitwgRw3SXQOe5H4ZCfBLgbqu9BRevP4mccBySRrKoD_Xv9pw60fFwDl8qHsSoyAw"
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "root reset for another claw",
+      "verifier": "reset",
+      "statement": {
+        "v": 1,
+        "type": "RootReset",
+        "body": {
+          "claw_id": "ffffffffffffffffffffffffffffffff",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "binding_seq": 3,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "alg": "ed25519",
+        "sig": "x_MSlbPB1sE1sJZrjL_ZOcTFJmaHWQNVeh6YQm_vLtpQLBlnlop3rlisJsAO6nWno_AHB5aXTYA-1Tq8zI27DQ"
+      },
+      "expected_error": "wrong_claw"
     }
   ],
   "pins": [
@@ -744,7 +816,8 @@
         "pin": {
           "claw_id": "0123456789abcdef0123456789abcdef",
           "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
-          "binding_seq": 1
+          "binding_seq": 1,
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
         }
       }
     },
@@ -780,7 +853,8 @@
         "pin": {
           "claw_id": "0123456789abcdef0123456789abcdef",
           "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
-          "binding_seq": 2
+          "binding_seq": 2,
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
         }
       }
     },
@@ -937,6 +1011,200 @@
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
           "alg": "ed25519",
           "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "root_mismatch"
+      }
+    },
+    {
+      "name": "owner reset vouched for by the pinned claw's K_gw",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "alg": "ed25519",
+          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        },
+        "reset": {
+          "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "previous_binding": {
+            "v": 1,
+            "type": "ServerBinding",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "hostname": "studio-k7x2q.crabd.me",
+              "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+              "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+              "binding_seq": 2,
+              "root_epoch": 1,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "alg": "ed25519",
+            "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
+          },
+          "statement": {
+            "v": 1,
+            "type": "RootReset",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "binding_seq": 3,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "alg": "ed25519",
+            "sig": "BrbI3Er5bXQdcDgyWMvIzu9az-KF4xisVXQDiFJ01fLPOV2D54AXRnJRDT5f_WQS9ZjRO6XJMqH0Wd0xROc5Ag"
+          }
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "owner_reset"
+      }
+    },
+    {
+      "name": "a new root with a root reset not signed by K_gw (substitution)",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2,
+        "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6"
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "alg": "ed25519",
+          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        },
+        "reset": {
+          "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "previous_binding": {
+            "v": 1,
+            "type": "ServerBinding",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "hostname": "studio-k7x2q.crabd.me",
+              "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+              "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+              "binding_seq": 2,
+              "root_epoch": 1,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "alg": "ed25519",
+            "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
+          },
+          "statement": {
+            "v": 1,
+            "type": "RootReset",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "binding_seq": 3,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+            "alg": "ed25519",
+            "sig": "JdFD7fhQ0jTR6Hw4ScF52nitwgRw3SXQOe5H4ZCfBLgbqu9BRevP4mccBySRrKoD_Xv9pw60fFwDl8qHsSoyAw"
+          }
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "root_mismatch"
+      }
+    },
+    {
+      "name": "a genuine owner reset seen by a pin that never stored K_gw",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "alg": "ed25519",
+          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+        },
+        "reset": {
+          "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "previous_binding": {
+            "v": 1,
+            "type": "ServerBinding",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "hostname": "studio-k7x2q.crabd.me",
+              "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+              "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+              "binding_seq": 2,
+              "root_epoch": 1,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "alg": "ed25519",
+            "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
+          },
+          "statement": {
+            "v": 1,
+            "type": "RootReset",
+            "body": {
+              "claw_id": "0123456789abcdef0123456789abcdef",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "binding_seq": 3,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "alg": "ed25519",
+            "sig": "BrbI3Er5bXQdcDgyWMvIzu9az-KF4xisVXQDiFJ01fLPOV2D54AXRnJRDT5f_WQS9ZjRO6XJMqH0Wd0xROc5Ag"
+          }
         }
       },
       "expected": {

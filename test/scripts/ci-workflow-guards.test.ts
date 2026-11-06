@@ -89,7 +89,7 @@ const manifestSource = readFileSync(
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -903,15 +903,21 @@ AFTER_CD
         ["workflow_dispatch", false, "failure", false, false],
         ["workflow_dispatch", false, "success", true, false],
       ] as const) {
+        const context = {
+          eventName,
+          draft,
+          cancelled,
+          additionalNeeds: { admission: { outputs: { runner: "admitted-arm" }, result } },
+        };
         expect(
-          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
-            eventName,
-            draft,
-            cancelled,
-            additionalNeeds: { admission: { outputs: {}, result } },
-          }),
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, context),
           `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
         ).toBe(admitted);
+        if (jobName === "check-arm") {
+          expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"], context)).toBe(
+            eventName === "pull_request" ? "ubuntu-24.04-arm" : "admitted-arm",
+          );
+        }
       }
     }
   });
@@ -1343,6 +1349,7 @@ AFTER_CD
   it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = readWorkflow(workflowPath);
+      expect(workflow.jobs.scan["runs-on"], workflowPath).toBe("ubuntu-24.04");
       const installStep = requiredWorkflowStep(workflow.jobs.scan.steps, "Install opengrep");
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
@@ -2448,7 +2455,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     {
       file: "full-release-validation.yml",
       runner: "blacksmith-4vcpu-ubuntu-2404",
-      job: "release_checks_independent",
+      job: "release_decision",
     },
     {
       file: "openclaw-npm-preflight.yml",
@@ -2730,7 +2737,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     writeFileSync(path.join(source, "base.txt"), "base\n");
     mkdirSync(path.join(source, "config"));
     writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
-    for (const file of ["scripts/check-test-lines-ratchet.mts", "scripts/lib/shrink-ratchet.mts"]) {
+    for (const file of collectRuntimeImportClosure(process.cwd(), [
+      "scripts/check-test-lines-ratchet.mts",
+    ])) {
       mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
       copyFileSync(file, path.join(source, file));
     }
@@ -3733,62 +3742,6 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
-  it("shares transform generations with the warmer after CI exports its harness", () => {
-    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
-    const generationStep = (action.runs.steps as WorkflowStep[]).find(
-      (step) => step.name === "Resolve Vitest transform cache generation",
-    );
-    const expression = expectDefined(
-      generationStep?.run?.match(/\$\{\{(.*?)\}\}/u)?.[1],
-      "transform generation expression",
-    );
-    const sourceFiles = {
-      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
-      "pnpm-workspace.yaml": "packages: ['packages/*']",
-      "package.json": '{"name":"fixture"}',
-      "packages/worker/package.json": '{"name":"worker"}',
-      "packages/worker/tsconfig.json": "{}",
-      "vitest.config.ts": "export default {}",
-      "test/vitest/shared.ts": "export const shared = {}",
-      "src/state/schema.sql": "CREATE TABLE fixture (id TEXT);",
-      ".github/actions/setup-security-review/package.json": '{"name":"review"}',
-      ".ci-harness-source/package.json": '{"name":"real-source"}',
-    };
-    const files: Record<string, string> = { ...sourceFiles };
-    const fingerprint = () =>
-      runInNewContext(expression, {
-        hashFiles: (...patterns: string[]) => {
-          const includes = patterns.filter((pattern) => !pattern.startsWith("!"));
-          const excludes = patterns
-            .filter((pattern) => pattern.startsWith("!"))
-            .map((pattern) => pattern.slice(1));
-          const hash = createHash("sha256");
-          for (const [file, contents] of Object.entries(files).toSorted(([left], [right]) =>
-            left.localeCompare(right),
-          )) {
-            if (
-              includes.some((pattern) => minimatch(file, pattern, { dot: true })) &&
-              !excludes.some((pattern) => minimatch(file, pattern, { dot: true }))
-            ) {
-              hash.update(createHash("sha256").update(contents).digest());
-            }
-          }
-          return hash.digest("hex");
-        },
-      });
-    const warmer = fingerprint();
-    files[".ci-harness/.github/actions/setup-security-review/package.json"] =
-      sourceFiles[".github/actions/setup-security-review/package.json"];
-    files[".ci-harness/tsconfig.json"] = "{}";
-    files["node_modules/dependency/package.json"] = '{"name":"dependency"}';
-    expect(fingerprint()).toBe(warmer);
-    for (const [file, contents] of Object.entries(sourceFiles)) {
-      files[file] = `${contents}\n`;
-      expect(fingerprint(), file).not.toBe(warmer);
-      files[file] = contents;
-    }
-  });
-
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const step = (name: string) => requiredWorkflowStep(action.runs.steps, name);
@@ -3803,8 +3756,8 @@ server.listen(0, "127.0.0.1", () => {
     }
     expect(transform.if).toContain("runner.os != 'Windows'");
     expect(transform.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(transform.with.key).toContain("vitest-fs-v4-protected-");
-    expect(compile.with.key).toContain("node-compile-v3-test-protected-");
+    expect(transform.with.key).toContain("vitest-fs-v5-protected-");
+    expect(compile.with.key).toContain("node-compile-v4-test-protected-");
     expect(compile.with.key).not.toContain("pull_request");
     const transformConfiguration = step("Configure Vitest transform cache");
     expect(transformConfiguration.env.CACHE_WRITER).toBe("0");

@@ -108,7 +108,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.1"
+  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.2"
   IOS_SCREENSHOT_NODE_VERSION: "24.22.1"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.1 Build version 27A9275"
   NODE_VERSION: "24.22.1"
@@ -161,6 +161,7 @@ jobs:
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
+      skills_python_targets_json: ${{ steps.manifest.outputs.skills_python_targets_json }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_built_source_verifiers: ${{ steps.manifest.outputs.run_built_source_verifiers }}
@@ -776,6 +777,7 @@ jobs:
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
+              security_scripts = (".github/zizmor.yml", "scripts/detect-private-keys.mts", "scripts/ci-production-audit.mjs", "scripts/ci-collect-checks.sh")
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
               platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
@@ -784,8 +786,10 @@ jobs:
                   "scripts/ci-build-manifest.mjs",
                   "scripts/ci-adaptive-priors.mjs",
                   "scripts/lib/actions-artifact-archive.mjs",
+                  "scripts/lib/changed-path-facts.mjs",
                   "scripts/lib/ci-test-observations.mjs",
                   "scripts/lib/ci-ios-smoke-plan.mjs",
+                  "scripts/lib/ci-skills-python-plan.mjs",
                   "scripts/lib/release-context.mjs",
                   "scripts/lib/release-version.mjs",
               )
@@ -819,7 +823,7 @@ jobs:
               if sha == os.environ["WORKFLOW_SHA"]:
                   # Export the workflow revision from the freshly populated index, replacing
                   # retained harness files without updating the index or trusting later edits.
-                  pathspecs = [".github/actions", *node_setup_scripts]
+                  pathspecs = [".github/actions", *(security_scripts if kind == "security-harness" else node_setup_scripts)]
                   if kind in ("platform", "linux-node"):
                       pathspecs += evidence_scripts
                   elif kind == "preflight":
@@ -929,6 +933,13 @@ jobs:
               if kind == "prepare":
                   raise SystemExit(0)
               workspace = os.environ["GITHUB_WORKSPACE"]
+              if kind == "security-harness":
+                  # No candidate code has run: the index still belongs to its trusted checkout.
+                  if resolve_ref("HEAD") == os.environ["WORKFLOW_SHA"]:
+                      checkout_harness(os.environ["WORKFLOW_SHA"])
+                      with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                          output.write("reused=true\n")
+                  return
               remote = f"https://github.com/{os.environ['\''CHECKOUT_REPO'\'']}.git"
               # The workflow'\''s token is repository-bound; never lend it to a sibling checkout.
               token = os.environ.pop("CHECKOUT_TOKEN", "")
@@ -1047,6 +1058,7 @@ jobs:
             /.github/actions/
             /scripts/
             /test/vitest/
+            /config/ci-adaptive-markdown.json
             /config/ci-test-timings.json
             /node-runtime-env.mjs
             /runtime-process-scripts.generated.mjs
@@ -1617,9 +1629,11 @@ jobs:
           persist-credentials: false
 
       - name: Prepare Git owner
+        id: security_harness
         shell: bash
         env:
-          CHECKOUT_KIND: prepare
+          CHECKOUT_KIND: ${{ (github.event_name != 'workflow_dispatch' || inputs.target_ref == '') && 'security-harness' || 'prepare' }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: *owned_checkout_run
 
       - name: Checkout manual target
@@ -1634,6 +1648,7 @@ jobs:
         run: *owned_checkout_run
 
       - name: Checkout trusted CI harness
+        if: steps.security_harness.outputs.reused != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: *workflow_sha
@@ -2689,6 +2704,7 @@ jobs:
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-mcp-app-fullscreen.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
@@ -3660,7 +3676,8 @@ jobs:
     name: ${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}
     needs: [preflight]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
+    # Remove this scoped row override when the general Boat backend replaces the pilot.
+    runs-on: ${{ (needs.preflight.outputs.boat_build_qualification == 'true' && github.run_attempt == 1 && needs.preflight.outputs.ci_shape == 'main' && matrix.check_name == 'checks-node-compact-large-4' && matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && matrix.plan_concurrency == 1 && matrix.pretest_build_mode == null && matrix.test_runtime_policy == 'node') && 'boat-xlarge' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
@@ -3700,7 +3717,7 @@ jobs:
           native-secret-service: ${{ matrix.requires_native_secret_service == true && 'true' || 'false' }}
           install-bun: "false"
           # Only Node 24 consumes the trusted compile seed.
-          dependency-cache: ${{ matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          dependency-cache: ${{ !(needs.preflight.outputs.boat_build_qualification == 'true' && github.run_attempt == 1 && needs.preflight.outputs.ci_shape == 'main' && matrix.check_name == 'checks-node-compact-large-4' && matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && matrix.plan_concurrency == 1 && matrix.pretest_build_mode == null && matrix.test_runtime_policy == 'node') && matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
           node-compile-cache: "true"
@@ -4824,6 +4841,8 @@ jobs:
         run: pnpm run --workspace-concurrency=2 --no-bail '/^(format:docs:check|check:docs:content)$/'
 
   skills-python:
+    env:
+      SKILLS_PYTHON_TARGETS_JSON: ${{ needs.preflight.outputs.skills_python_targets_json }}
     permissions:
       contents: read
     needs: [preflight]
@@ -4853,11 +4872,21 @@ jobs:
 
       - name: Lint Python skill scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
-        run: python -m ruff check --config skills/pyproject.toml skills
+        run: |
+          python - <<'PYTHON'
+          import json, os, subprocess, sys
+          targets = json.loads(os.environ.get("SKILLS_PYTHON_TARGETS_JSON") or '["skills"]')
+          subprocess.run([sys.executable, "-m", "ruff", "check", "--config", "skills/pyproject.toml", *targets], check=True)
+          PYTHON
 
       - name: Test skill Python scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
-        run: python -m pytest -q -c skills/pyproject.toml skills
+        run: |
+          python - <<'PYTHON'
+          import json, os, subprocess, sys
+          targets = json.loads(os.environ.get("SKILLS_PYTHON_TARGETS_JSON") or '["skills"]')
+          subprocess.run([sys.executable, "-m", "pytest", "-q", "-c", "skills/pyproject.toml", *targets], check=True)
+          PYTHON
 
   checks-windows:
     permissions:
@@ -5636,6 +5665,9 @@ jobs:
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
           key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+          # The build phase verifies each slice fingerprint and checksum before reuse.
+          restore-keys: |
+            watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-
 
       - name: Restore iOS test build products
         id: ios-build-cache
@@ -5955,9 +5987,12 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/SettingsHubTests
+            -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
+            -only-testing:OpenClawTests/GatewayAccessDeviceAuthBindingTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
             -only-testing:OpenClawTests/LegacyManualGatewayMigrationTests
             -only-testing:OpenClawTests/GatewayOperatorFleetTests
@@ -6702,7 +6737,8 @@ jobs:
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
-          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          # Bound disposable userdata so the hosted runner can boot after SDK setup.
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"

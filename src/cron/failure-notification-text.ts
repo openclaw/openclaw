@@ -28,6 +28,12 @@ export function cronFailureDetailLines(
     ];
   }
   if (errorReason) {
+    if (errorReason === "route_unavailable") {
+      return [
+        `Cause: ${errorReason}`,
+        "The provider cannot serve this model right now. Choose another model for this automation or ask the provider operator to restore the route, then run it again.",
+      ];
+    }
     return errorReason === "model_not_found"
       ? [
           `Cause: ${errorReason}`,

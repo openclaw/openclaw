@@ -618,7 +618,12 @@ function JobRow(
           class="cron-table__next"
           label={t("cron.jobs.nextRun")}
           value={
-            <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
+            <span
+              class={{
+                "cron-table__running": isCronJobRunning(props.job),
+                "cron-table__waiting": Boolean(props.job.state?.admissionDeferred),
+              }}
+            >
               {describeJobNextRun(props.job)}
             </span>
           }

@@ -200,10 +200,11 @@ describe("ClawRouter native model facts", () => {
       codeMode: "capable",
       mediaInput: { image: { maxSidePx: 1568 } },
     });
-    // The service catalog keeps ownership of the route's reasoning contract.
+    // The service catalog owns route-level reasoning and tool-strictness contracts.
     expect(provider.models.find(({ id }) => id === "openai/gpt-6.1-sol")?.compat).toEqual({
       codeMode: "preferred",
       supportsTemperature: false,
+      supportsStrictMode: true,
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "high"],
     });
@@ -228,7 +229,10 @@ describe("ClawRouter native model facts", () => {
       "openai/gpt-6-unknown",
     ]);
     for (const model of provider.models) {
-      expect(model.compat, model.id).toBeUndefined();
+      // Strictness support belongs to the routed API, not inherited model identity.
+      expect(model.compat, model.id).toEqual(
+        model.api === "openai-responses" ? { supportsStrictMode: true } : undefined,
+      );
       expect(model.mediaInput, model.id).toBeUndefined();
     }
   });
