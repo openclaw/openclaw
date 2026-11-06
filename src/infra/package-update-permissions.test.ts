@@ -1,13 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
   createNpmTarget,
   createRootRunner,
+  packageUpdateStepResult,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { UpdateFailureFactSchema } from "./update-run-schema.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 it.each(["EACCES", "EPERM"])(
   "reports npm %s with its directory and owner without retrying",
@@ -80,3 +86,138 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     });
   },
 );
+
+it.each([
+  ["EACCES", "unknown"],
+  ["EACCES", "stage"],
+  ["EPERM", "unknown"],
+  ["EACCES", "outside"],
+  ["EACCES", "dest"],
+  [undefined, "text-only"],
+  [undefined, "unexpected-error"],
+  [undefined, "causes"],
+] as const)("retains validating exceptions (%s, %s) in reports and status", async (code, kind) => {
+  await withTestDir({ prefix: "openclaw-validating-error-" }, async (base) => {
+    const globalRoot = path.join(base, "lib/node_modules");
+    const packageRoot = path.join(globalRoot, "openclaw");
+    const env = { HOME: "/Users/Private Operator", OPENCLAW_STATE_DIR: path.join(base, "state") };
+    await writePackageRoot(packageRoot, "1.0.0");
+    const original = Object.assign(
+      new Error(
+        "Candidate validation refused token=fixture-private-token /Users/Private Operator/secret",
+        {
+          cause:
+            kind === "causes"
+              ? Object.assign(new TypeError("Nested validation refused"), {
+                  code: "ENOTSUP",
+                  syscall: "open",
+                  path: "/Users/Private Operator/hidden",
+                  cause: Object.assign(new Error("Worker refused"), { code: "SQLITE_BUSY" }),
+                })
+              : undefined,
+        },
+      ),
+      {
+        ...(code ? { code } : {}),
+        errno: -13,
+        syscall: "spawn",
+        ...(kind === "outside" ? { path: `${globalRoot}-other/worker` } : {}),
+        ...(kind === "dest" ? { dest: path.join(packageRoot, "worker") } : {}),
+      },
+    );
+    original.stack = `Error: validation\n    at validate (${fileURLToPath(new URL("./package-update-steps.ts", import.meta.url))}:605:7)`;
+    if (kind === "text-only") {
+      original.message += " EACCES";
+    }
+    const validateCandidate = vi.fn(async () => {
+      throw original;
+    });
+    const stageFault =
+      kind === "stage" ? vi.spyOn(fs, "mkdtemp").mockRejectedValue(original) : undefined;
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget: createNpmTarget(globalRoot),
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      runCommand: createRootRunner(globalRoot),
+      timeoutMs: 1000,
+      env,
+      runStep: async (step) => {
+        await writePackageRoot(
+          path.join(stagedNpmPrefix(step.argv), "lib/node_modules/openclaw"),
+          "2.0.0",
+        );
+        return packageUpdateStepResult(step);
+      },
+      validateCandidate,
+    }).finally(() => stageFault?.mockRestore());
+    expect(validateCandidate).toHaveBeenCalledTimes(kind === "stage" ? 0 : 1);
+    const check = kind === "stage" ? "package-stage" : "package-update";
+    expect(result.failedStep).toMatchObject({ name: check, exitCode: 1 });
+    const failed = result.failedStep!;
+    const facts = failed.failureFacts ?? [];
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          check,
+          errorName: "Error",
+          code: code ?? "Error",
+          location: "src/infra/package-update-steps.ts:605:7",
+          message: expect.stringContaining("Candidate validation refused"),
+        }),
+      ]),
+    );
+    const status = result.steps.flatMap(updateRunStepsFromResultStep);
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "validating-error",
+        recordedRun: {
+          runId: "validating-error",
+          steps: result.steps.flatMap(updateRunStepsFromResultStep),
+        },
+        result: {
+          status: "error",
+          mode: "npm",
+          durationMs: 1,
+          steps: kind === "unexpected-error" ? [] : result.steps,
+          reason: result.reason ?? "unexpected-error",
+        },
+      },
+      { env },
+    );
+    for (const output of [JSON.stringify(status), report.body]) {
+      expect(output).toContain("Candidate validation refused");
+      expect(output).toContain("errno=-13");
+      expect(output).toContain("syscall=spawn");
+      expect(output).toContain("path=");
+      expect(output).toContain("src/infra/package-update-steps.ts:605:7");
+      expect(output).not.toMatch(/Private Operator|fixture-private-token|hidden|secret/);
+      if (kind !== "dest") {
+        expect(output).not.toContain("chmod");
+      }
+      if (kind === "causes") {
+        for (const detail of [
+          "ENOTSUP",
+          "TypeError",
+          "Nested validation refused",
+          "SQLITE_BUSY",
+          "Worker refused",
+        ]) {
+          expect(output).toContain(detail);
+        }
+      }
+    }
+    if (code || kind === "text-only") {
+      expect(result.reason).toBe("global-install-permission-denied");
+      expect(failed.stderrTail).toContain(
+        kind === "dest" ? "rerun `openclaw update`" : "denied path",
+      );
+      if (kind === "dest" && process.platform !== "win32") {
+        expect(failed.stderrTail).toContain("chmod u+rwx");
+      }
+    }
+    for (const fact of facts) {
+      expect(UpdateFailureFactSchema.safeParse(fact).success).toBe(true);
+    }
+    expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+  });
+});

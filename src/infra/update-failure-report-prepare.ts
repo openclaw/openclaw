@@ -320,7 +320,9 @@ async function renderBoundedDiagnostics(
             issueKind !== "Invalid configuration field")
             ? issueKind
             : (updatePreflightDetailMessage(fact.code) ??
-              redactPublicSupportDiagnosticLine(fact.message ?? "", context));
+              (fact.errorName && (fact.check === "package-update" || fact.check === "package-stage")
+                ? `${isPublicUpdateFailureCode(fact.errorName) ? fact.errorName : "Error"}: ${fact.message ?? ""}`
+                : redactPublicSupportDiagnosticLine(fact.message ?? "", context)));
         return {
           ...identifiers,
           affectedKey,
