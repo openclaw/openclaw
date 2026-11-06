@@ -200,12 +200,11 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
       explicitOnly: true,
       expected: "Running child rows resume their clocks while scrolling and resizing the sidebar.",
       run: async (page, gateway) => {
-        const scroller = page.locator(".sidebar-shell__body").first();
+        const clocks = page.locator(".sidebar-recent-session openclaw-elapsed-time");
+        const last = (await clocks.count()) - 1;
         const viewport = page.viewportSize()!;
         for (const fraction of [0.25, 0.5, 0.75, 1]) {
-          await scroller.evaluate((element, position) => {
-            element.scrollTop = (element.scrollHeight - element.clientHeight) * position;
-          }, fraction);
+          await clocks.nth(Math.floor(last * fraction)).scrollIntoViewIfNeeded();
           await frames(page);
         }
         await page.setViewportSize({ width: viewport.width + 48, height: viewport.height });
