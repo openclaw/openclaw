@@ -11,7 +11,7 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
   let frame = 0;
   let readerFrame = 0;
   let readerReady = mode === "end";
-  const sample = () => {
+  const sampleFrame = () => {
     const thread = document.querySelector<HTMLElement>(
       ".chat-pane-cache__pane--active .chat-thread",
     );
@@ -34,7 +34,7 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
             });
           });
         }
-        frame = requestAnimationFrame(sample);
+        frame = requestAnimationFrame(sampleFrame);
         return;
       }
       const viewport = thread.getBoundingClientRect();
@@ -56,7 +56,7 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
         !anchor &&
         rows.some((row) => Math.abs(row.height - row.size) > 0.5)
       ) {
-        frame = requestAnimationFrame(sample);
+        frame = requestAnimationFrame(sampleFrame);
         return;
       }
       anchor ??= rows.find(
@@ -73,9 +73,9 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
         previous = signature;
       }
     }
-    frame = requestAnimationFrame(sample);
+    frame = requestAnimationFrame(sampleFrame);
   };
-  frame = requestAnimationFrame(sample);
+  frame = requestAnimationFrame(sampleFrame);
   const probe = {
     get ready() {
       return Boolean(anchor);

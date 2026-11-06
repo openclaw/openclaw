@@ -2882,17 +2882,17 @@ try {
               const body = row?.querySelector<HTMLElement>(".chat-text");
               const rect = body?.getBoundingClientRect();
               const rowRect = row?.getBoundingClientRect();
-              const viewport = thread?.getBoundingClientRect();
+              const threadBounds = thread?.getBoundingClientRect();
               return Boolean(
                 body?.textContent?.includes(text) &&
                 body.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
                 rect &&
                 rowRect &&
-                viewport &&
-                Math.min(rect.bottom, rowRect.bottom, viewport.bottom, innerHeight) >
-                  Math.max(rect.top, rowRect.top, viewport.top, 0) &&
-                Math.min(rect.right, rowRect.right, viewport.right, innerWidth) >
-                  Math.max(rect.left, rowRect.left, viewport.left, 0),
+                threadBounds &&
+                Math.min(rect.bottom, rowRect.bottom, threadBounds.bottom, innerHeight) >
+                  Math.max(rect.top, rowRect.top, threadBounds.top, 0) &&
+                Math.min(rect.right, rowRect.right, threadBounds.right, innerWidth) >
+                  Math.max(rect.left, rowRect.left, threadBounds.left, 0),
               );
             }, transcriptWitness.witnesses.live)
           : null;

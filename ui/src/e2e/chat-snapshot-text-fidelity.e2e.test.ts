@@ -8,6 +8,12 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { createActiveTranscriptReloadFixture } from "../test-helpers/control-ui-team-scale-history-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+function afterTwoFrames(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 const suite = createControlUiE2eSuite({ name: "Cached transcript text fidelity" });
 const markdown = Array.from(
   { length: 24 },
@@ -33,7 +39,7 @@ suite.define(() => {
         { serviceWorkers: "block", viewport: { width: 1720, height: 1180 } },
         async ({ page }) => {
           const sessionKey = "agent:main:chat:active-reload";
-          const row = createControlUiSessionRow(sessionKey, "Synthetic active conversation", 1);
+          const session = createControlUiSessionRow(sessionKey, "Synthetic active conversation", 1);
           const prefix = Array.from({ length: 12 }, (_, index) => [
             {
               role: "user",
@@ -49,7 +55,7 @@ suite.define(() => {
           const fixture = createActiveTranscriptReloadFixture(prefix, appendedPairs);
           const gateway = await installMockGateway(page, {
             sessionKey,
-            sessions: [row],
+            sessions: [session],
             authMethod: "trusted-proxy",
             authMode: "trusted-proxy",
             historyMessages: fixture.saved,
@@ -78,12 +84,7 @@ suite.define(() => {
           await page
             .locator('[data-position-marker-id="active-reload-fresh-result"]')
             .waitFor({ state: "attached" });
-          await page.evaluate(
-            () =>
-              new Promise<void>((resolve) =>
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-              ),
-          );
+          await page.evaluate(afterTwoFrames);
           if (twoRounds) {
             await gateway.setHistoryMessages(fixture.live);
             await gateway.emitGatewayEvent("sessions.changed", {
@@ -97,12 +98,7 @@ suite.define(() => {
               );
               return pane?.state.chatMessages.length === count;
             }, fixture.live.length);
-            await page.evaluate(
-              () =>
-                new Promise<void>((resolve) =>
-                  requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-                ),
-            );
+            await page.evaluate(afterTwoFrames);
           }
           if (appendedPairs > 1) {
             try {
@@ -122,12 +118,7 @@ suite.define(() => {
                 { cause },
               );
             }
-            await page.evaluate(
-              () =>
-                new Promise<void>((resolve) =>
-                  requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-                ),
-            );
+            await page.evaluate(afterTwoFrames);
           }
           const result: ReturnType<ReturnType<typeof installWarmReloadTranscriptProbe>["read"]> =
             await page.evaluate(() => Reflect.get(window, "__activeTranscriptReload").read());
