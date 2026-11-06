@@ -1,2 +1,2 @@
-# Package-update boundary regressions retain sanitized exceptions through reports and status.
-141
+# Package-update local diagnostic retention and public report privacy regressions.
+169

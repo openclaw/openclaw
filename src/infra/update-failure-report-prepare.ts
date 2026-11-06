@@ -320,9 +320,7 @@ async function renderBoundedDiagnostics(
             issueKind !== "Invalid configuration field")
             ? issueKind
             : (updatePreflightDetailMessage(fact.code) ??
-              (fact.errorName && (fact.check === "package-update" || fact.check === "package-stage")
-                ? `${isPublicUpdateFailureCode(fact.errorName) ? fact.errorName : "Error"}: ${fact.message ?? ""}`
-                : redactPublicSupportDiagnosticLine(fact.message ?? "", context)));
+              redactPublicSupportDiagnosticLine(fact.message ?? "", context));
         return {
           ...identifiers,
           affectedKey,
@@ -369,6 +367,14 @@ async function renderBoundedDiagnostics(
         .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
         .map(formatUpdateFailureFact),
     );
+    if (
+      !refused &&
+      publicFacts.some(
+        (fact, index) => facts[index]?.message && fact.message !== facts[index]?.message,
+      )
+    ) {
+      diagnostics.push("Details retained locally in `openclaw update status --json`.");
+    }
   }
   return diagnostics;
 }

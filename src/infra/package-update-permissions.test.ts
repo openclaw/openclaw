@@ -96,7 +96,9 @@ it.each([
   [undefined, "text-only"],
   [undefined, "unexpected-error"],
   [undefined, "causes"],
-] as const)("retains validating exceptions (%s, %s) in reports and status", async (code, kind) => {
+  [undefined, "private-prose"],
+  [undefined, "saved-private-prose"],
+] as const)("retains local exceptions with public-safe reports (%s, %s)", async (code, kind) => {
   await withTestDir({ prefix: "openclaw-validating-error-" }, async (base) => {
     const globalRoot = path.join(base, "lib/node_modules");
     const packageRoot = path.join(globalRoot, "openclaw");
@@ -104,7 +106,9 @@ it.each([
     await writePackageRoot(packageRoot, "1.0.0");
     const original = Object.assign(
       new Error(
-        "Candidate validation refused token=fixture-private-token /Users/Private Operator/secret",
+        kind.includes("private-prose") || kind === "stage"
+          ? "Candidate validation refused for customer AcmeInternal during merger planning"
+          : "Candidate validation refused token=fixture-private-token /Users/Private Operator/secret",
         {
           cause:
             kind === "causes"
@@ -178,33 +182,46 @@ it.each([
           status: "error",
           mode: "npm",
           durationMs: 1,
-          steps: kind === "unexpected-error" ? [] : result.steps,
+          steps: kind === "unexpected-error" || kind === "saved-private-prose" ? [] : result.steps,
           reason: result.reason ?? "unexpected-error",
         },
       },
       { env },
     );
-    for (const output of [JSON.stringify(status), report.body]) {
-      expect(output).toContain("Candidate validation refused");
-      expect(output).toContain("errno=-13");
-      expect(output).toContain("syscall=spawn");
-      expect(output).toContain("path=");
+    const local = JSON.stringify(status);
+    for (const detail of ["Candidate validation refused", "errno=-13", "syscall=spawn", "path="]) {
+      expect(local).toContain(detail);
+    }
+    if (kind.includes("private-prose") || kind === "stage") {
+      expect(local).toContain("AcmeInternal during merger planning");
+    }
+    expect(report.body).not.toMatch(
+      /Candidate validation refused|AcmeInternal|merger planning|errno=-13|syscall=spawn/u,
+    );
+    expect(report.body).toContain("Details retained locally");
+    for (const output of [local, report.body]) {
       expect(output).toContain("src/infra/package-update-steps.ts:605:7");
       expect(output).not.toMatch(/Private Operator|fixture-private-token|hidden|secret/);
       if (kind !== "dest") {
         expect(output).not.toContain("chmod");
       }
-      if (kind === "causes") {
-        for (const detail of [
-          "ENOTSUP",
-          "TypeError",
-          "Nested validation refused",
-          "SQLITE_BUSY",
-          "Worker refused",
-        ]) {
-          expect(output).toContain(detail);
-        }
+      if (code) {
+        expect(output).toContain(code);
       }
+    }
+    if (kind === "causes") {
+      for (const detail of [
+        "ENOTSUP",
+        "TypeError",
+        "Nested validation refused",
+        "SQLITE_BUSY",
+        "Worker refused",
+      ]) {
+        expect(local).toContain(detail);
+      }
+      expect(report.body).toContain("ENOTSUP");
+      expect(report.body).toContain("SQLITE_BUSY");
+      expect(report.body).not.toMatch(/Nested validation refused|Worker refused/u);
     }
     if (code || kind === "text-only") {
       expect(result.reason).toBe("global-install-permission-denied");
