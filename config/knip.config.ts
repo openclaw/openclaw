@@ -217,6 +217,7 @@ const repositoryScriptEntries = [
   "scripts/perf/long-lived-error-stacks-measure.ts!",
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
+  "scripts/perf/read-image-preparation-measure.ts!",
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
