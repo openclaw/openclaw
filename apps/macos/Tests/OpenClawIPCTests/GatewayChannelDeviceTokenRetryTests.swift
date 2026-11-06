@@ -117,6 +117,95 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
     }
 }
 
+enum DeviceTokenRetryTransportFailure: CaseIterable, Sendable {
+    case connectSend
+    case connectResponse
+}
+
+private final class DurationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var durations: [Duration] = []
+
+    func append(_ duration: Duration) {
+        self.lock.withDeviceRetryLock {
+            self.durations.append(duration)
+        }
+    }
+
+    func snapshot() -> [Duration] {
+        self.lock.withDeviceRetryLock { self.durations }
+    }
+}
+
+/// Rejects the rotated shared token, loses the socket during the first device-token retry,
+/// and accepts only connects that present the stored device token.
+private final class TransportLossDeviceRetryGatewaySession: WebSocketSessioning, @unchecked Sendable {
+    private let lock = NSLock()
+    private let recorder: ConnectAuthRecorder
+    private let failure: DeviceTokenRetryTransportFailure
+    private let storedDeviceToken: String
+    private var makeCount = 0
+
+    init(recorder: ConnectAuthRecorder, failure: DeviceTokenRetryTransportFailure, storedDeviceToken: String) {
+        self.recorder = recorder
+        self.failure = failure
+        self.storedDeviceToken = storedDeviceToken
+    }
+
+    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        _ = request
+        let attemptIndex = self.lock.withDeviceRetryLock { () -> Int in
+            let current = self.makeCount
+            self.makeCount += 1
+            return current
+        }
+        let recorder = self.recorder
+        let failure = self.failure
+        let storedDeviceToken = self.storedDeviceToken
+        let task = GatewayTestWebSocketTask(
+            sendHook: { _, message, sendIndex in
+                guard sendIndex == 0 else { return }
+                recorder.append(from: message)
+                if attemptIndex == 1, failure == .connectSend {
+                    throw URLError(.networkConnectionLost)
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                if attemptIndex == 1, failure == .connectResponse {
+                    throw URLError(.networkConnectionLost)
+                }
+                let id = task.snapshotConnectRequestID() ?? "connect"
+                if recorder.auth(at: attemptIndex)?["deviceToken"] as? String == storedDeviceToken {
+                    return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+                }
+                return try .data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id,
+                    code: "INVALID_REQUEST",
+                    message: "gateway auth rejected",
+                    details: [
+                        "code": GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+                        "authReason": "token_mismatch",
+                        "canRetryWithDeviceToken": true,
+                        "recommendedNextStep": "retry_with_device_token",
+                    ]))
+            })
+        return WebSocketTaskBox(task: task)
+    }
+}
+
+extension GatewayChannelActor {
+    fileprivate func recordConnectFailureBackoffWaits(into recorder: DurationRecorder) {
+        self.testRecoverySleep = { recorder.append($0) }
+    }
+}
+
 @Suite(.serialized)
 struct GatewayChannelDeviceTokenRetryTests {
     @Test func `device-token-only auth binding changes after token rotation`() async throws {
@@ -249,6 +338,74 @@ struct GatewayChannelDeviceTokenRetryTests {
                 #expect(retryAuth["token"] as? String == "stale-shared-token")
                 #expect(retryAuth["deviceToken"] as? String ==
                     (canRetryWithDeviceToken == true ? "stored-device-token" : nil))
+            } catch {
+                await channel.shutdown()
+                throw error
+            }
+            await channel.shutdown()
+        }
+    }
+
+    @Test(arguments: DeviceTokenRetryTransportFailure.allCases)
+    func `transport loss during the device-token retry keeps the stored device token for recovery`(
+        failure: DeviceTokenRetryTransportFailure) async throws
+    {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let storedDeviceToken = "stored-device-token"
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: storedDeviceToken)
+
+            let recorder = ConnectAuthRecorder()
+            let backoffWaits = DurationRecorder()
+            let session = TransportLossDeviceRetryGatewaySession(
+                recorder: recorder,
+                failure: failure,
+                storedDeviceToken: storedDeviceToken)
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "rotated-shared-token",
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "operator",
+                    scopes: ["operator.read"],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos-test",
+                    clientMode: "ui",
+                    clientDisplayName: "macOS Test",
+                    includeDeviceIdentity: true))
+            await channel.recordConnectFailureBackoffWaits(into: backoffWaits)
+
+            do {
+                await #expect(throws: GatewayConnectAuthError.self) {
+                    try await channel.connect()
+                }
+                // Background reconnect and these explicit connects share one attempt at a time.
+                var connected = false
+                for _ in 0..<4 where !connected {
+                    connected = await (try? channel.connect()) != nil
+                }
+                #expect(connected)
+
+                #expect(recorder.auth(at: 1)?["deviceToken"] as? String == storedDeviceToken)
+                let recoveryAuth = try #require(recorder.auth(at: 2))
+                #expect(recoveryAuth["token"] as? String == "rotated-shared-token")
+                #expect(recoveryAuth["deviceToken"] as? String == storedDeviceToken)
+
+                // Only the granting rejection earns the short retry; a lost socket backs off normally.
+                let waits = backoffWaits.snapshot()
+                #expect(waits.count >= 2)
+                #expect(waits.first.map { $0 <= .milliseconds(250) } == true)
+                #expect(waits.dropFirst().first.map { $0 > .milliseconds(250) } == true)
             } catch {
                 await channel.shutdown()
                 throw error
