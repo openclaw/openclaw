@@ -69,7 +69,16 @@ class NodeApp : Application() {
   private fun ensureRuntime(initialForeground: Boolean): NodeRuntime =
     synchronized(runtimeLock) {
       runtimeInstance
-        ?: NodeRuntime(this, prefs, initialForeground = initialForeground).also {
+        ?: NodeRuntime(
+          this,
+          prefs,
+          initialForeground = initialForeground,
+          openClawIdEndpointFactory = { seed, relay ->
+            openClawIdNativeReady
+            ai.openclaw.app.gateway.OpenClawIdNativeTransport
+              .bindNode(seed, relay)
+          },
+        ).also {
           runtimeInstance = it
           disconnectIfStopped(it)
         }
@@ -131,6 +140,17 @@ class NodeApp : Application() {
           ?: NodeRuntime.forGatewayAuthReset(this, prefs).also { runtimeInstance = it }
       }
     return runtime.resetGatewaySetupAuth(stableId)
+  }
+
+  // Process-owned lazy initialization keeps native loading out of non-ID sessions and JVM fixtures.
+  // The only bind factory reads this first; no Activity or second ndk-context owner is retained.
+  private val openClawIdNativeReady by lazy {
+    try {
+      ai.openclaw.iroh.OpenClawIrohAndroid
+        .install(this)
+    } catch (_: LinkageError) {
+      throw IllegalStateException("OpenClaw ID native transport could not load in this build")
+    }
   }
 
   override fun onCreate() {

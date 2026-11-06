@@ -90,6 +90,12 @@ abstract class GenerateGatewayProtocol : Exec() {
   abstract val outputDirectory: DirectoryProperty
 }
 
+/** Builds the locked Rust transport only when AGP consumes JNI libraries. */
+abstract class BuildOpenClawIroh : Exec() {
+  @get:OutputDirectory
+  abstract val outputDirectory: DirectoryProperty
+}
+
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
@@ -235,6 +241,31 @@ androidComponents.onVariants { variant ->
   variant.sources.kotlin?.addGeneratedSourceDirectory(generateGatewayProtocol, GenerateGatewayProtocol::outputDirectory)
 }
 
+val openClawIrohDirectory = rootProject.layout.projectDirectory.dir("../../crates/openclaw-iroh-ffi")
+val buildOpenClawIroh =
+  tasks.register<BuildOpenClawIroh>("buildOpenClawIroh") {
+    group = "build"
+    description = "Builds the locked OpenClaw ID transport for all four Android ABIs."
+    workingDir(openClawIrohDirectory)
+    environment("RUSTUP_TOOLCHAIN", "1.99.0")
+    commandLine("bash", "scripts/build-android.sh")
+    outputDirectory.set(openClawIrohDirectory.dir("dist/android/jniLibs"))
+    // Cargo owns incremental compilation and toolchain/environment invalidation. Always
+    // enter its canonical script rather than letting Gradle reuse an unqualified .so.
+    outputs.upToDateWhen { false }
+    doLast {
+      listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").forEach { abi ->
+        val library = outputDirectory.get().file("$abi/libopenclaw_iroh_ffi.so").asFile
+        check(library.isFile && library.length() > 0) { "Missing OpenClaw ID native library: $library" }
+      }
+    }
+  }
+androidComponents.onVariants { variant ->
+  // A generated JNI source carries its producer dependency into APK/AAB packaging,
+  // without attaching cross-compilation to preBuild or JVM-only compilation/tests.
+  variant.sources.jniLibs?.addGeneratedSourceDirectory(buildOpenClawIroh, BuildOpenClawIroh::outputDirectory)
+}
+
 // NuGet is used only as an upstream native artifact container, never as a managed/runtime dependency.
 val cloudflareSodiumArchive =
   configurations.create("cloudflareSodiumArchive") {
@@ -369,6 +400,8 @@ android {
     getByName("test").kotlin.directories.add("src/testShared/java")
     getByName("androidTest").kotlin.directories.add("src/testShared/java")
     getByName("main") {
+      kotlin.directories.add(openClawIrohDirectory.dir("generated").asFile.path)
+      kotlin.directories.add(openClawIrohDirectory.dir("android").asFile.path)
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
       assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
       assets.directories.add("../../shared/mermaid/assets")
@@ -386,7 +419,7 @@ android {
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
     ndk {
-      // Support all major ABIs — native libs are tiny (~47 KB per ABI)
+      // Keep ABI coverage aligned with the Rust transport and libsodium build inputs.
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
     }
   }
