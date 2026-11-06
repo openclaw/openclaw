@@ -369,7 +369,23 @@ export function sanitizeOpenAIReasoningSignature(
   ) {
     return undefined;
   }
-  if (!hasEncryptedContent && parsed.id === undefined) {
+  // DeepSeek needs reasoning_text again after a tool result, including after reload.
+  const content =
+    route?.provider === "deepseek" &&
+    isOpenAIResponsesRoute(route) &&
+    Array.isArray(parsed.content) &&
+    parsed.content.every(
+      (part) =>
+        part &&
+        typeof part === "object" &&
+        part.type === "reasoning_text" &&
+        typeof part.text === "string",
+    )
+      ? parsed.content.map((part) => ({ type: "reasoning_text", text: part.text }))
+      : Array.isArray(parsed.content) && parsed.content.length === 0
+        ? []
+        : undefined;
+  if (!hasEncryptedContent && parsed.id === undefined && !content?.length) {
     return undefined;
   }
   const replayMetadata = sanitizeOpenAIReasoningReplayMetadata(
@@ -380,7 +396,7 @@ export function sanitizeOpenAIReasoningSignature(
     ...(parsed.id !== undefined ? { id: parsed.id } : {}),
     type: "reasoning",
     summary: [],
-    ...(Array.isArray(parsed.content) && parsed.content.length === 0 ? { content: [] } : {}),
+    ...(content ? { content } : {}),
     ...(parsed.status !== undefined ? { status: parsed.status } : {}),
     ...(hasEncryptedContent ? { encrypted_content: encryptedContent } : {}),
     ...(replayMetadata ? { [OPENAI_REASONING_REPLAY_METADATA_KEY]: replayMetadata } : {}),

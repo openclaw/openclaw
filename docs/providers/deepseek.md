@@ -138,6 +138,13 @@ multi-turn tool use works on `deepseek/deepseek-flash`, `deepseek/deepseek-v4-fl
 OpenAI-compatible provider (no native `reasoning_content`) or from a plain
 assistant message. No `/new` required after switching providers mid-session.
 
+If you explicitly select `openai-responses` for the `deepseek` provider,
+OpenClaw preserves the provider's plaintext `reasoning.content` for tool
+continuations, including after session reload. This required replay payload is
+stored in the session transcript; other Responses providers retain their existing
+reasoning privacy behavior. The default DeepSeek transport remains
+`openai-completions`.
+
 When thinking is disabled (including the UI **None** selection), OpenClaw
 sends `thinking: { type: "disabled" }` and strips replayed `reasoning_content`
 from outgoing history, keeping the session on the non-thinking DeepSeek path.

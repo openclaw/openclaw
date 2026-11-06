@@ -115,7 +115,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   const hasRawMetadata = Object.hasOwn(item, OPENAI_RESPONSES_REASONING_REPLAY_META_KEY);
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } = item;
   if (!("encrypted_content" in rest)) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api, context.provider);
   }
   const metadata =
     blockMetadata !== undefined
@@ -128,11 +128,12 @@ function prepareOpenAIResponsesReasoningItemForReplay(
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
   if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api, context.provider);
   }
   return normalizeOpenAIResponsesReasoningReplayItem(
     stripEncryptedReasoningContentFields(rest) as ReplayableResponseReasoningItem,
     context.api,
+    context.provider,
   );
 }
 
@@ -496,7 +497,10 @@ function convertResponsesMessagesWithStyle(
               delete replayableReasoningItem.id;
               // Summaries alone cannot verify stateless reasoning and poison
               // the next cached continuation, even if this request succeeds.
-              if (!replayableReasoningItem.encrypted_content) {
+              if (
+                !replayableReasoningItem.encrypted_content &&
+                !(model.provider === "deepseek" && replayableReasoningItem.content?.length)
+              ) {
                 continue;
               }
             }
