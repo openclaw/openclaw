@@ -97,7 +97,7 @@ it("offers plugin and personal themes with names in focus and hover hints", asyn
   }
   expect(manuscript.getAttribute("aria-pressed")).toBe("false");
   const { page } = await import("vitest/browser");
-  await page.mouse.move(0, 0);
+  await page.getByRole("heading", { name: "Appearance" }).hover();
   manuscript.focus();
 
   const focusTooltip = page.getByRole("tooltip").filter({ hasText: "Manuscript — Ink on paper" });
