@@ -334,6 +334,14 @@ describe("CI changed lint", () => {
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
       expect(central.some(({ args }) => args[0] === "check:control-ui-controllers")).toBe(true);
+      expect(
+        central.some(({ args }) =>
+          ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
+        ),
+      ).toBe(false);
+      expect(central.map(({ args }) => args[0])).toEqual(
+        expect.arrayContaining(["lint:docker-e2e", "lint:tmp:no-raw-http2-imports"]),
+      );
       const rootLint = central.find(
         ({ args }) => args[0] === "scripts/run-oxlint.mjs" && args.includes(rootTestConfig),
       );
