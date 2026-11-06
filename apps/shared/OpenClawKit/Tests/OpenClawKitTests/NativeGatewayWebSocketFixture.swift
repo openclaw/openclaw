@@ -92,6 +92,41 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         var buffer = Data()
         var phase = Phase.handshake
         var isStalled = false
+        var role = ""
+    }
+
+    /// Test-only Gateway methods after connect. Nil payload answers "unknown method".
+    typealias RequestHandler = @Sendable (_ role: String, _ method: String, _ params: [String: Any]) -> [String: Any]?
+    private var openRequestHandler: RequestHandler?
+    private var advertisedCapabilities: [String] = []
+
+    var requestHandler: RequestHandler? {
+        get { self.queue.sync { self.openRequestHandler } }
+        set { self.queue.sync { self.openRequestHandler = newValue } }
+    }
+
+    var helloCapabilities: [String] {
+        get { self.queue.sync { self.advertisedCapabilities } }
+        set { self.queue.sync { self.advertisedCapabilities = newValue } }
+    }
+
+    private func handleOpenRequest(_ data: Data, index: Int) -> Bool {
+        guard let handler = self.openRequestHandler, let client = self.clients[index], client.phase == .open,
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              request["type"] as? String == "req",
+              let method = request["method"] as? String, method != "connect",
+              let id = request["id"] as? String
+        else { return false }
+        let params = request["params"] as? [String: Any] ?? [:]
+        if let payload = handler(client.role, method, params) {
+            self.sendJSON(["type": "res", "id": id, "ok": true, "payload": payload], index: index)
+        } else {
+            self.sendJSON([
+                "type": "res", "id": id, "ok": false,
+                "error": ["code": "INVALID_REQUEST", "message": "unknown method: \(method)"],
+            ], index: index)
+        }
+        return true
     }
 
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -426,6 +461,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     }
 
     private func handleText(_ data: Data, index: Int) {
+        if self.handleOpenRequest(data, index: index) { return }
         guard var client = self.clients[index], client.phase == .connect,
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               request["type"] as? String == "req",
@@ -442,6 +478,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
             bootstrapToken: auth?["bootstrapToken"] as? String,
             deviceToken: auth?["deviceToken"] as? String))
         client.phase = .open
+        client.role = role
         self.clients[index] = client
         self.connectRoleEvents.continuation.yield(role)
         if let failure = self.connectFailures[index] {
@@ -494,7 +531,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
                 "features": [
                     "methods": [],
                     "events": [],
-                    "capabilities": [],
+                    "capabilities": self.advertisedCapabilities,
                 ],
                 "snapshot": [
                     "presence": [["ts": 1]],
