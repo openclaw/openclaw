@@ -81,20 +81,16 @@ export async function scrollTranscriptToTop(page: Page) {
         break;
       }
       await page.mouse.wheel(0, -distance);
-      await page.waitForFunction(
-        (position) => document.querySelector(position.selector)!.scrollTop < position.previous,
-        { selector, previous },
-      );
+      // Wheel delivery is asynchronous and engines may coalesce a gesture.
+      // Let it settle, then retry within the same bounded traversal.
+      await frames(page);
     }
     if ((await thread.evaluate((element) => element.scrollTop)) > 0) {
       throw new Error(`Transcript did not reach the top after ${wheelEvents} wheel events`);
     }
   }
   await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-  await page.waitForFunction(
-    (query) => document.querySelector(query)?.scrollTop === 0,
-    selector,
-  );
+  await page.waitForFunction((query) => document.querySelector(query)?.scrollTop === 0, selector);
   await frames(page);
   return { wheelEvents };
 }
