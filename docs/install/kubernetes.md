@@ -151,9 +151,14 @@ does not apply to them. See [Kubernetes volume permission policy](https://kubern
 
 The Gateway restores the private modes of the stores this installation owns
 before Doctor's recovery capture and before credential admission, so a remount
-that widens them no longer blocks startup. The restore covers the state
-directory, the client credential store, the daemon runtime pin store, their
-SQLite sidecars, and the sibling `<stateDir>.update-captures` directory.
+that widens them no longer blocks startup. The restore covers the client
+credential store, the daemon runtime pin store, their SQLite sidecars, and the
+sibling `<stateDir>.update-captures` directory.
+
+The state directory itself is left as it is found. A shared, group-accessible
+state root is a supported layout — config publication preserves its mode while
+keeping the files inside private — so only the private stores under and beside
+it are restored.
 
 The restore is deliberately narrow. It repairs an enumerated path list rather
 than walking the state tree, changes no ownership, skips symlinks instead of
