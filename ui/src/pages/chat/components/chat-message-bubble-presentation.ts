@@ -6,6 +6,7 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import {
   type ChatMessageRenderPreparation,
   prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
 } from "../../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import {
@@ -19,7 +20,21 @@ import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts"
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
-import { type AttachmentItem, type ImageBlock, projectMessageMedia } from "./chat-message-media.ts";
+import { openMessageImage } from "./chat-message-image-open.ts";
+import {
+  prepareMarkdownMediaSource,
+  readMarkdownImageSlots,
+} from "./chat-message-media-markdown.ts";
+import {
+  type AttachmentItem,
+  type ImageBlock,
+  type ImageRenderOptions,
+  projectMessageMedia,
+} from "./chat-message-media.ts";
+import {
+  type AssistantMessageDisclosure,
+  resolveMessageMarkdownRender,
+} from "./chat-message-text-preparation.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -64,7 +79,7 @@ function rendersMediaInOrder(params: {
   );
 }
 
-/** Mirrors prepareGroupedMessage for a message that is not mounted. */
+/** Mirrors the rendered message, including inline Markdown and positioned media. */
 function preparedImageSlots(
   preparation: ChatMessageRenderPreparation,
   opts: MessageMediaOptions,
@@ -72,22 +87,60 @@ function preparedImageSlots(
     preparation.message,
     preparation.normalizedMessage.content,
   ),
+  renderInOrder?: boolean,
+  rawMarkdown = preparation.displayMarkdown,
+  isStreaming = false,
+  disclosure?: AssistantMessageDisclosure,
 ) {
-  return messageImageSlots(
-    projection,
-    rendersMediaInOrder({
-      role: normalizeRoleForGrouping(preparation.normalizedMessage.role),
-      markdown: preparation.displayMarkdown || null,
-      asyncQuestions: Boolean(
-        opts.asyncQuestions?.submit && readAsyncQuestions(preparation.message),
-      ),
-      orderedContent: projection.orderedContent,
+  const asyncQuestions = Boolean(
+    opts.asyncQuestions?.submit && readAsyncQuestions(preparation.message),
+  );
+  const role = normalizeRoleForGrouping(preparation.normalizedMessage.role);
+  const rendered = resolveMessageMarkdownRender(
+    rawMarkdown,
+    { role, assistantMessageDisclosure: disclosure },
+    messageMarkdownRenderOptions(role, preparation, rawMarkdown, {
+      onOpenImage: opts.onOpenImage,
+      isStreaming,
     }),
   );
+  const markdown = rendered.source;
+  const inOrder =
+    renderInOrder ??
+    rendersMediaInOrder({
+      role,
+      markdown: markdown || null,
+      asyncQuestions,
+      orderedContent: projection.orderedContent,
+    });
+  const slots = messageImageSlots(projection, inOrder);
+  // The parser remains lazy; ordinary text and attachment-only replies need no Markdown render.
+  if (
+    asyncQuestions ||
+    !markdown.includes("![") ||
+    (!inOrder && !isStreaming && parseMarkdownJson(markdown))
+  ) {
+    const inlineImages: ImageBlock[] = [];
+    return { slots, inlineImages };
+  }
+  const media = inOrder ? prepareMarkdownMediaSource(projection.orderedContent) : undefined;
+  const source = media
+    ? resolveMessageDisplayMarkdown(preparation.message, {
+        ...preparation.normalizedMessage,
+        content: [{ type: "text", text: media.markdown }],
+      })
+    : markdown;
+  const inline = readMarkdownImageSlots(source, rendered.options, media);
+  return {
+    slots: inOrder
+      ? [...projection.supplementalImages, ...inline.images]
+      : [...projection.images, ...inline.images],
+    inlineImages: inline.inlineImages,
+  };
 }
 
-/** Spans the assistant turn when one is projected; otherwise the opened message. */
-function turnMediaGallery<Slot, Item>(
+/** Spans the loaded thread when one is projected; otherwise the opened message. */
+function threadMediaGallery<Slot, Item>(
   messageKey: string,
   opts: MessageMediaOptions,
   local: { slots: readonly Slot[]; messageId?: string },
@@ -96,13 +149,13 @@ function turnMediaGallery<Slot, Item>(
   toItem: (slot: Slot, messageId: string | undefined) => Item,
 ) {
   const slot = local.slots.indexOf(selected);
-  const turn = slot < 0 ? undefined : opts.getTurnMediaMessages?.(messageKey);
-  if (!turn?.some((entry) => entry.key === messageKey)) {
+  const thread = slot < 0 ? undefined : opts.getThreadMediaMessages?.(messageKey);
+  if (!thread?.some((entry) => entry.key === messageKey)) {
     return { index: slot, items: local.slots.map((value) => toItem(value, local.messageId)) };
   }
   const items: Item[] = [];
   let index = -1;
-  for (const entry of turn) {
+  for (const entry of thread) {
     if (entry.key === messageKey) {
       index = items.length + slot;
       items.push(...local.slots.map((value) => toItem(value, local.messageId)));
@@ -146,9 +199,10 @@ export type MessageMediaOptions = Pick<
   | "onOpenImage"
   | "onFindWorkspaceFile"
   | "resolveArtifactDownload"
-  | "getTurnMediaMessages"
+  | "getThreadMediaMessages"
   | "asyncQuestions"
->;
+> &
+  Partial<Pick<GroupedMessageOptions, "isStreaming" | "assistantMessageDisclosure">>;
 
 /** Shared by transcript bubbles and read-only attachment catalogs. */
 export function createMessageMediaOptions(
@@ -158,27 +212,43 @@ export function createMessageMediaOptions(
   projection: MessageMediaProjection,
   /** The mounted bubble's layout; catalogs derive it like an unmounted sibling. */
   renderInOrder?: boolean,
+  markdown?: string | null,
 ) {
+  let imageSlots: ReturnType<typeof preparedImageSlots> | undefined;
+  const readImages = () =>
+    (imageSlots ??= preparedImageSlots(
+      prepareChatMessageRender(message),
+      opts,
+      projection,
+      renderInOrder,
+      markdown ?? undefined,
+      opts.isStreaming,
+      // Recovery belongs to this message, never its lazily projected siblings.
+      opts.assistantMessageDisclosure,
+    ));
   const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
-  return {
+  const options: ImageRenderOptions & { openInlineImage: (index: number, src: string) => void } = {
     // Galleries read membership on open; layout and sibling projection stay off the render path.
     galleryImages: (selected: ImageBlock) =>
-      turnMediaGallery(
+      threadMediaGallery(
         messageKey,
         opts,
         {
-          slots:
-            renderInOrder === undefined
-              ? preparedImageSlots(prepareChatMessageRender(message), opts, projection)
-              : messageImageSlots(projection, renderInOrder),
+          slots: readImages().slots,
           messageId,
         },
         selected,
-        (prepared) => preparedImageSlots(prepared, opts),
+        (prepared) => preparedImageSlots(prepared, opts).slots,
         (image, id) => ({ image, messageId: id }),
       ),
+    openInlineImage: (index, src) => {
+      const selected = readImages().inlineImages[index];
+      if (selected) {
+        openMessageImage(selected, src, options);
+      }
+    },
     galleryVideos: (selected: AttachmentItem) =>
-      turnMediaGallery(
+      threadMediaGallery(
         messageKey,
         opts,
         { slots: messageVideoSlots(projection), messageId },
@@ -204,6 +274,7 @@ export function createMessageMediaOptions(
     onFindWorkspaceFile: opts.onFindWorkspaceFile,
     resolveArtifactDownload: opts.resolveArtifactDownload,
   };
+  return options;
 }
 
 export function messageMarkdownRenderOptions(
@@ -370,6 +441,7 @@ export function prepareGroupedMessage(
     opts,
     { images, orderedContent, supplementalImages, supplementalAttachments },
     renderInOrder,
+    bodyMarkdown,
   );
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.

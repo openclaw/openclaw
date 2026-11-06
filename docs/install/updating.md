@@ -53,6 +53,11 @@ backup.
 
 ## Update implementation contract
 
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. Probe batching, backup refusal, and rollback safety
+are unchanged. This diagnostic requires the updater performing discovery to
+contain the fix; a candidate cannot change an older installed updater's probe.
+
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
 post-plugin Doctor without an unprepared-source refusal blocking later state
@@ -399,6 +404,18 @@ plugin changes, unresolved migrations, and new findings still require the full
 pass. An explicit `openclaw doctor` continues to run the full pass. This correction
 must be in the candidate Doctor; the installed updater must already support
 retirement-only requests. Older updaters keep their existing full-pass selection.
+
+Standing advice about a custom Codex executable or enabled Computer Use remains
+visible in Doctor output and update warnings without preventing that narrow pass.
+Invalid inline command arguments, unfinished repairs, and access-policy warnings
+still require the full pass. This distinction must be in the candidate Doctor;
+it does not require another updater change.
+
+When a retirement-only request needs the full pass, the candidate Doctor writes a
+fixed `Retirement-only Doctor widened:` reason to stderr. Updated updaters retain
+that reason in the step diagnostics and compacted update history. The candidate
+and installed updater must both contain this diagnostic fix to retain it there;
+older updaters still run the same repairs.
 
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
 the candidate contains the legacy database-generation adapter. Under maintenance
@@ -1498,9 +1515,13 @@ installation records, and matching settings until candidate activation is verifi
 If activation fails, rollback restores that cohort before restarting the previous
 Gateway. Backups precede plugin maintenance. After an interrupted update,
 `openclaw update repair` resumes the recorded plugin settlement under current
-ownership. It preserves later independent changes; conflicting records, settings,
-or artifacts leave recovery unfinished instead of overwriting those changes or
-reporting the old Gateway ready. The updater performing the operation must contain
+ownership. It preserves later independent changes. When a plugin's install
+record, data/settings upgrade obligation, package files, source snapshot, or a
+config file the update wrote changed after the update, rollback keeps that later
+change, restores everything that still matches, and completes. It records the
+kept items in an update warning that repair prints and `openclaw doctor` shows.
+Recovery still stops for a config file whose path was replaced, for config that
+fails validation or secret resolution, and for a corrupt recovery journal. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
 When recovery stays pending, the update prints the first failure below the
 unfinished-recovery refusal and names `openclaw update repair` when it can settle

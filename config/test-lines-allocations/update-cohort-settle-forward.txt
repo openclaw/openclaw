@@ -1,0 +1,7 @@
+# PR #193132: update repair settles a verified candidate's plugin cohort forward.
+# Real SQLite fixtures cover the reported pending and refused-rollback shapes (also
+# under a later repair build), completed and unfinished npm activations, a rollback
+# that restored migrations before a config conflict, and the refusals that keep
+# rollback selected: original core installed or not provably absent, candidate never
+# verified serving, a remaining activation record, and a settled publication.
+331

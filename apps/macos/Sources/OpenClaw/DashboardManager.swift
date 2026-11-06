@@ -10,13 +10,13 @@ private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: 
 @MainActor
 @Observable
 final class DashboardManager {
-    @ObservationIgnored private var controller: DashboardWindowController?
+    @ObservationIgnored private(set) var controller: DashboardWindowController?
     @ObservationIgnored let alertPresenter = DashboardAlertPresenter()
-    @ObservationIgnored private var mainTarget: DashboardGatewayTarget
+    @ObservationIgnored private(set) var mainTarget: DashboardGatewayTarget
     @ObservationIgnored private let selection: MacGatewaySelectionPreferences
     @ObservationIgnored private var pendingInitialSelection: String?
-    @ObservationIgnored private var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
-    @ObservationIgnored private var auxiliaryWindowOrder: [UUID] = []
+    @ObservationIgnored private(set) var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
+    @ObservationIgnored private(set) var auxiliaryWindowOrder: [UUID] = []
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
     @ObservationIgnored private var presentationTask: (task: Task<Void, Error>, userGesture: Bool)?
     @ObservationIgnored private var remotePreloadPending = false
@@ -30,7 +30,7 @@ final class DashboardManager {
     @ObservationIgnored private(set) var endpointGeneration: UInt64 = 0
     @ObservationIgnored private var presentationGeneration: UInt64 = 0
     @ObservationIgnored private var windowLifetime: UInt64 = 0
-    @ObservationIgnored private weak var lastFrontmostWindow: NSWindow?
+    @ObservationIgnored private(set) weak var lastFrontmostWindow: NSWindow?
     @ObservationIgnored private var gatewaySnapshotGeneration: UInt64 = 0
     @ObservationIgnored private var profileCredentialsNeedRefresh = false
     @ObservationIgnored private var profileObservations: [DashboardGatewayTarget: ProfileObservation] = [:]
@@ -413,34 +413,6 @@ final class DashboardManager {
         }
     }
 
-    var currentNativeStartupCredentials: DashboardNativeGatewayAuth.LegacyCredentials? {
-        self.controller?.documentHost.legacyNativeCredentials
-    }
-
-    func immediateResolvedDashboardAuth(
-        url: URL,
-        endpoint: GatewayConnection.EndpointSnapshot) -> DashboardWindowAuth?
-    {
-        guard let controller = self.controller, controller.currentURL == url,
-              controller.auth.usesNativeDevice,
-              controller.documentHost.hasCurrentNativeStartupCredentials,
-              controller.auth.token == endpoint.config.token,
-              controller.auth.password == endpoint.config.password
-        else { return nil }
-        return controller.auth
-    }
-
-    /// Reopen restores the last focused Dashboard window instead of raising the main window over it.
-    /// A closed main window is still reopened by an explicit presentation.
-    private var lastFocusedDashboardToReopen: DashboardWindowController? {
-        guard let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController
-        else { return nil }
-        if previous.isHiddenForExperience { return previous }
-        guard previous !== self.controller, previous.isWindowOpen, self.controller?.isWindowOpen == true
-        else { return nil }
-        return previous
-    }
-
     @discardableResult
     func showConfiguredWindowIfPossible() -> Bool {
         if self.lastFocusedDashboardToReopen != nil { return false }
@@ -781,11 +753,6 @@ final class DashboardManager {
         }
     }
 
-    private func snapshot(for target: DashboardGatewayTarget) -> DashboardGatewaySnapshot? {
-        guard !self.gatewayEntries.isEmpty else { return nil }
-        return DashboardGatewaySnapshot(gateways: self.gatewayEntries, currentId: target.bridgeID)
-    }
-
     func refreshGatewaySnapshots() async {
         let state = AppStateStore.shared
         if state.connectionMode != .remote || !state.hostsLocalGatewayWithRemotePrimary {
@@ -890,19 +857,6 @@ final class DashboardManager {
                 instance.controller.updateGatewaySnapshot(snapshot)
             }
         }
-    }
-
-    func target(for source: DashboardWindowController) -> DashboardGatewayTarget? {
-        if self.controller === source {
-            return self.mainTarget
-        }
-        return self.auxiliaryWindows.values.first { $0.controller === source }?.target
-    }
-
-    private func controller(in window: NSWindow, for target: DashboardGatewayTarget) -> DashboardWindowController? {
-        guard let controller = window.windowController as? DashboardWindowController,
-              self.target(for: controller) == target else { return nil }
-        return controller
     }
 }
 
@@ -1345,18 +1299,6 @@ extension DashboardManager {
         updateFrontmostDashboardTarget()
         return presented
     }
-
-    private func availableAutosaveName(
-        for target: DashboardGatewayTarget,
-        replacing source: DashboardWindowController? = nil) -> String
-    {
-        let base = self.autosaveName(for: target)
-        let mainOwnsTarget = self.controller !== source && self.mainTarget == target
-        let auxiliaryOwnsTarget = self.auxiliaryWindows.values.contains {
-            $0.controller !== source && $0.target == target
-        }
-        return mainOwnsTarget || auxiliaryOwnsTarget ? "\(base)-\(UUID().uuidString)" : base
-    }
 }
 
 extension DashboardManager {
@@ -1630,42 +1572,11 @@ extension DashboardManager {
         return self.openWindow(for: target)
     }
 
-    func dashboardControllers() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
-        var result: [(DashboardGatewayTarget, DashboardWindowController)] = []
-        if let controller, controller.hasRetainedWindow {
-            result.append((self.mainTarget, controller))
-        }
-        result += self.auxiliaryWindowOrder.compactMap { windowID in
-            guard let instance = self.auxiliaryWindows[windowID],
-                  instance.controller.hasRetainedWindow else { return nil }
-            return (instance.target, instance.controller)
-        }
-        return result
-    }
-
-    func openWindowCount(for target: DashboardGatewayTarget) -> Int {
-        // A launch preload nobody has opened is not a window the user has.
-        self.dashboardControllers().count(where: { $0.target == target && !$0.controller.isUnshownPreload })
-    }
-
     private func updateFrontmostDashboardTarget() {
         self.synchronizeProfileObservations()
         let frontmost = self.frontmostDashboard()
         self.frontmostDashboardTarget = frontmost?.target
         if let window = frontmost?.controller.window { self.lastFrontmostWindow = window }
-    }
-
-    private func dashboardController(for target: DashboardGatewayTarget) -> DashboardWindowController? {
-        if let frontmost = frontmostDashboard(), frontmost.target == target {
-            return frontmost.controller
-        }
-        if self.mainTarget == target, let controller, controller.hasRetainedWindow {
-            return controller
-        }
-        return self.auxiliaryWindowOrder.reversed().lazy
-            .compactMap { self.auxiliaryWindows[$0] }
-            .first { $0.target == target && $0.controller.hasRetainedWindow }?
-            .controller
     }
 
     func configure(updater: UpdaterProviding) {

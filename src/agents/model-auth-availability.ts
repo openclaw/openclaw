@@ -523,7 +523,7 @@ export function createModelAuthAvailabilityResolver(
       if (!modeAllowed(provider, target, configuredBearerMode)) {
         return withMode(configuredBearerMode, binding.evidence, false);
       }
-      if (hasUsableCustomProviderApiKey(params.cfg, provider, env)) {
+      if (hasUsableCustomProviderApiKey(params.cfg, provider, env, sourceConfig)) {
         return withMode(configuredBearerMode, binding.evidence, true);
       }
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
@@ -710,7 +710,8 @@ export function createModelAuthAvailabilityResolver(
     const configuredAuth = pinned ? undefined : configured?.auth;
     const binding = pinned ? { kind: "none" as const } : providerBinding(provider);
     const markerUsable =
-      binding.kind === "marker" && hasUsableCustomProviderApiKey(params.cfg, provider, env);
+      binding.kind === "marker" &&
+      hasUsableCustomProviderApiKey(params.cfg, provider, env, sourceConfig);
     const hasDirectMaterial = binding.kind === "literal" || markerUsable || apiKeyRef !== null;
     const required =
       configuredAuth === "aws-sdk" ||
@@ -736,13 +737,12 @@ export function createModelAuthAvailabilityResolver(
       authorization:
         evaluation.evidence === "environment" && !hasDirectMaterial ? "ambient" : "declared",
     });
-    const hasDirectFallback = hasDirectMaterial || (!pinned && direct.evidence !== "none");
     return {
       binding,
       direct,
       evaluation,
       hasDirectMaterial,
-      hasDirectFallback,
+      hasDirectFallback: hasDirectMaterial || (!pinned && direct.evidence !== "none"),
       markerUsable,
       required,
     };

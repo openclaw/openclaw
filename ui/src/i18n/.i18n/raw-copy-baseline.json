@@ -96,6 +96,48 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "AWS"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Azure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Daytona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Google Cloud"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Hetzner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Machine0"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/components/command-palette-catalog-search.ts",
       "text": "/verbose"
     },
@@ -161,48 +203,6 @@
       "name": "placeholder",
       "path": "ui/src/components/mcp-servers-form.tsx",
       "text": "npx some-mcp-server"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "AWS"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Azure"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Daytona"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Google Cloud"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Hetzner"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Machine0"
     },
     {
       "count": 1,

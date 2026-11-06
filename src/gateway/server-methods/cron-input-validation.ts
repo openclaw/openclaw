@@ -16,6 +16,7 @@ import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
+import { resolveCronDeliveryDefaultsScope } from "../../cron/delivery-defaults.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import {
@@ -234,14 +235,11 @@ export async function assertValidCronUpdatePatch(params: {
   const failureAlertRoutingPatched =
     failureAlertPatch &&
     ("channel" in failureAlertPatch || "to" in failureAlertPatch || "mode" in failureAlertPatch);
-  const currentAlert = resolveFailureAlert(
-    { deps: { cronConfig: params.cfg.cron } },
-    params.currentJob,
-  );
-  const nextAlert = resolveFailureAlert(
-    { deps: { cronConfig: params.cfg.cron } },
-    { ...nextJob, delivery: effectiveDelivery },
-  );
+  const alertDeps = {
+    deps: { cronConfig: params.cfg.cron, defaultAgentId: params.defaultAgentId },
+  };
+  const currentAlert = resolveFailureAlert(alertDeps, params.currentJob);
+  const nextAlert = resolveFailureAlert(alertDeps, { ...nextJob, delivery: effectiveDelivery });
   const alertNewlyEnabled = currentAlert === null && nextAlert !== null;
   const alertRouteChanged =
     currentAlert?.mode !== nextAlert?.mode ||
@@ -258,6 +256,8 @@ export async function assertValidCronUpdatePatch(params: {
       cfg: params.cfg,
       failureAlert: nextJob.failureAlert,
       delivery: effectiveDelivery,
+      owner: nextJob,
+      defaultAgentId: params.defaultAgentId,
     });
   }
   return nextJob;
@@ -406,6 +406,18 @@ export async function captureCronCreatorSession(
   return {
     ...inference,
     ...(operatorSource ? { operatorSource } : {}),
+    operatorSourceUnavailable: Boolean(
+      callerScope &&
+      loaded &&
+      creatorSession &&
+      operatorAuthority &&
+      job.payload.kind === "agentTurn" &&
+      isCronOperatorSourceParent(
+        { sessionTarget: job.sessionTarget, sourceConversation },
+        loaded.canonicalKey,
+      ) &&
+      !operatorSource,
+    ),
     assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
@@ -536,7 +548,10 @@ export async function cronRunQueuesBehindCaller(params: {
   ) {
     return true;
   }
-  const delivery = resolveCronDeliveryPlan(job);
+  const delivery = resolveCronDeliveryPlan(
+    job,
+    resolveCronDeliveryDefaultsScope(cfg.cron, job, params.resolveDefaultAgentId()),
+  );
   if (!delivery.requested) {
     return false;
   }
