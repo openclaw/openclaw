@@ -1,5 +1,15 @@
 import SwiftUI
 
+/// Allow a small bottom-layout tolerance without treating a deliberate 15–40-point scroll as following.
+/// Negative distances are bottom overscroll and remain at the live edge.
+func chatReaderIsAtLiveEdge(distanceFromBottom: CGFloat) -> Bool {
+    #if os(iOS)
+    distanceFromBottom <= 12
+    #else
+    distanceFromBottom <= 48
+    #endif
+}
+
 /// The view's own one-shot positioning always runs in a nil-animation transaction, so
 /// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
 /// avoidance). Not releasing there lets the next timeline tick yank the reader back down.

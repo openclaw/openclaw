@@ -167,7 +167,6 @@ public struct OpenClawChatView: View {
     private enum Layout {
         static let outerPaddingHorizontal: CGFloat = 6
         static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
-        static let liveEdgeThreshold: CGFloat = 48
         #if os(macOS)
         static let outerPaddingVertical: CGFloat = 0
         static let composerPaddingHorizontal: CGFloat = 0
@@ -488,7 +487,7 @@ extension OpenClawChatView {
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentSize.height - geometry.visibleRect.maxY
             } action: { _, distanceFromBottom in
-                let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
+                let isAtLiveEdge = chatReaderIsAtLiveEdge(distanceFromBottom: distanceFromBottom)
                 guard self.scroll.isAtLiveEdge != isAtLiveEdge else { return }
                 self.scroll.isAtLiveEdge = isAtLiveEdge
                 guard self.hasPerformedInitialScroll else { return }
