@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import OpenClawKit
 
@@ -98,5 +99,29 @@ extension SharedDraftInboxTests {
         let linkedDatabase = SharedDraftInbox(directoryURL: foreign)
         await #expect(throws: SharedDraftError.self) { try await linkedDatabase.pending() }
         #expect(try await reopened.pending().map(\.id) == [id])
+    }
+}
+
+extension SharedDraftInboxTests {
+    @Test @MainActor func `rejects invalid stored UTF 8 without deleting the share`() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inbox = SharedDraftInbox(directoryURL: directory)
+        let target = SharedDraftTarget(gatewayID: "gateway", agentID: "main", sessionKey: "main")
+        let now = Date(timeIntervalSince1970: 1000)
+        let id = try await inbox.save(text: "Original", target: target, files: [], now: now)
+        var opened: OpaquePointer?
+        try #require(sqlite3_open(directory.appendingPathComponent("inbox.sqlite").path, &opened) == SQLITE_OK)
+        let database = try #require(opened)
+        defer { sqlite3_close(database) }
+        // SQLite permits invalid UTF-8 in TEXT; the Swift producer never emits it.
+        try #require(sqlite3_exec(database, "UPDATE imports SET text=CAST(X'80' AS TEXT)", nil, nil, nil) == SQLITE_OK)
+        await #expect(throws: SharedDraftError.self) { try await inbox.pending(now: now) }
+        try #require(sqlite3_exec(database, "UPDATE imports SET text='restored'", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_changes(database) == 1)
+        let retained = try #require(try await inbox.pending(now: now).first)
+        #expect(retained.id == id)
+        #expect(retained.text == "restored")
+        #expect(retained.target == target)
     }
 }

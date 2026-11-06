@@ -84,7 +84,7 @@ public actor SharedDraftInbox {
         let statement = try db.prepare("SELECT gateway,agent,session FROM destination")
         defer { sqlite3_finalize(statement) }
         guard try db.step(statement) else { return nil }
-        return db.target(statement)
+        return try db.target(statement)
     }
 
     /// Files are extension-owned copies, not provider URLs whose lifetime has ended.
@@ -124,7 +124,8 @@ public actor SharedDraftInbox {
                 remaining -= data.count
                 try db.run(
                     "INSERT INTO attachments VALUES (?,?,?,?)",
-                    [id, String(index), url.lastPathComponent], data: data)
+                    [id, String(index), url.lastPathComponent],
+                    data: data)
             }
         }
         return id
@@ -137,21 +138,22 @@ public actor SharedDraftInbox {
         defer { sqlite3_finalize(statement) }
         var result: [SharedDraftImport] = []
         while try db.step(statement) {
-            let id = db.text(statement, 0)
+            let id = try db.text(statement, 0)
             let names = try db.prepare("SELECT name FROM attachments WHERE import_id=? ORDER BY position")
             defer { sqlite3_finalize(names) }
             try db.bind(id, to: names, index: 1)
             var fileNames: [String] = []
             while try db.step(names) {
-                fileNames.append(db.text(names, 0))
+                try fileNames.append(db.text(names, 0))
             }
-            result.append(SharedDraftImport(
+            try result.append(SharedDraftImport(
                 id: id,
                 target: SharedDraftTarget(
                     gatewayID: db.text(statement, 1),
                     agentID: db.text(statement, 2),
                     sessionKey: db.text(statement, 3)),
-                text: db.text(statement, 4), fileNames: fileNames,
+                text: db.text(statement, 4),
+                fileNames: fileNames,
                 expiresAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))))
         }
         return result
@@ -177,7 +179,7 @@ public actor SharedDraftInbox {
                 let folder = directory.appendingPathComponent(
                     String(sqlite3_column_int(statement, 0)), isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let name = (db.text(statement, 1) as NSString).lastPathComponent
+                let name = try (db.text(statement, 1) as NSString).lastPathComponent
                 guard !name.isEmpty, name != ".", name != ".." else { throw SharedDraftError.unreadable }
                 let url = folder.appendingPathComponent(name)
                 guard let bytes = sqlite3_column_blob(statement, 2) else { throw SharedDraftError.unreadable }
@@ -335,15 +337,20 @@ private final class Connection {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
-    func text(_ statement: OpaquePointer, _ column: Int32) -> String {
-        guard let bytes = sqlite3_column_text(statement, column) else { return "" }
-        return String(
-            decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))),
-            as: UTF8.self)
+    func text(_ statement: OpaquePointer, _ column: Int32) throws -> String {
+        // Producers bind Swift UTF-8 with an explicit byte count (including NULs).
+        // Reject corrupt stored text through the existing storage error path;
+        // repairing it lossily could retarget a draft or change its content.
+        guard let bytes = sqlite3_column_text(statement, column),
+              let value = String(
+                  bytes: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))),
+                  encoding: .utf8)
+        else { throw SharedDraftError.unavailable }
+        return value
     }
 
-    func target(_ statement: OpaquePointer) -> SharedDraftTarget {
-        SharedDraftTarget(
+    func target(_ statement: OpaquePointer) throws -> SharedDraftTarget {
+        try SharedDraftTarget(
             gatewayID: self.text(statement, 0),
             agentID: self.text(statement, 1),
             sessionKey: self.text(statement, 2))

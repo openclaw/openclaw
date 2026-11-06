@@ -39,9 +39,11 @@ extension OpenClawChatViewModel {
                 try Task.checkCancellation()
                 guard self.isCurrentSession(session), isDestinationCurrent() else { throw CancellationError() }
                 let attachment = try await self.prepareFileAttachment(
-                    url: file, fileName: file.lastPathComponent,
+                    url: file,
+                    fileName: file.lastPathComponent,
                     mimeType: Self.mimeType(for: file) ?? "application/octet-stream",
-                    advertisedLimits: limits, expectedSession: session)
+                    advertisedLimits: limits,
+                    expectedSession: session)
                 guard self.validateAttachmentBudget(prepared + [attachment], limits: limits ?? .legacyClientFallback)
                 else { throw ChatAttachmentReadError.tooLarge }
                 prepared.append(attachment)
@@ -288,8 +290,12 @@ extension OpenClawChatViewModel {
     {
         do {
             let attachment = try await self.prepareImageAttachment(
-                url: url, data: data, fileName: fileName, mimeType: mimeType,
-                advertisedLimits: advertisedLimits, expectedSession: expectedSession)
+                url: url,
+                data: data,
+                fileName: fileName,
+                mimeType: mimeType,
+                advertisedLimits: advertisedLimits,
+                expectedSession: expectedSession)
             guard self.ownsAttachmentSession(expectedSession) else { return nil }
             return self.stageAttachment(attachment, limits: advertisedLimits ?? .legacyClientFallback) ? nil : .tooLarge
         } catch {
@@ -391,12 +397,18 @@ extension OpenClawChatViewModel {
     }
 
     private func addFileAttachment(
-        url: URL, fileName: String, mimeType: String, advertisedLimits: GatewayAttachmentLimits?,
+        url: URL,
+        fileName: String,
+        mimeType: String,
+        advertisedLimits: GatewayAttachmentLimits?,
         expectedSession: SessionSnapshot?) async throws
     {
         let attachment = try await self.prepareFileAttachment(
-            url: url, fileName: fileName, mimeType: mimeType,
-            advertisedLimits: advertisedLimits, expectedSession: expectedSession)
+            url: url,
+            fileName: fileName,
+            mimeType: mimeType,
+            advertisedLimits: advertisedLimits,
+            expectedSession: expectedSession)
         guard self.ownsAttachmentSession(expectedSession) else { return }
         guard self.stageAttachment(attachment, limits: advertisedLimits ?? .legacyClientFallback)
         else { throw ChatAttachmentReadError.tooLarge }
@@ -421,8 +433,12 @@ extension OpenClawChatViewModel {
         guard self.ownsAttachmentSession(expectedSession) else { throw CancellationError() }
         if isImage {
             return try await self.prepareImageAttachment(
-                url: url, data: data, fileName: fileName, mimeType: mimeType,
-                advertisedLimits: advertisedLimits, expectedSession: expectedSession)
+                url: url,
+                data: data,
+                fileName: fileName,
+                mimeType: mimeType,
+                advertisedLimits: advertisedLimits,
+                expectedSession: expectedSession)
         }
 
         var thumbnailData: Data?
