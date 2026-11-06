@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
+import { COMMAND_RESERVATION_ENV } from "../process/command-reservation-census.js";
 import type {
   CommandProcessCustody,
   CommandProcessIdentity,
 } from "../process/command-process-custody.types.js";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
-import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
+import {
+  managedCommandCustody,
+  managedCommandUnsettled,
+} from "./update-managed-service-handoff-children.js";
 import {
   prepareManagedHandoffLeaseDatabaseIdentity,
   type ManagedUpdateLeaseDatabaseIdentity,
@@ -133,6 +137,7 @@ export async function createManagedCommandProcessCustody(options: {
       }
       let bound = false;
       return {
+        env: { [COMMAND_RESERVATION_ENV]: child },
         spawned(identity) {
           options.assertCurrent?.();
           // The original spawner still joins this child's close and group extinction.
@@ -218,6 +223,16 @@ export async function createManagedCommandProcessCustody(options: {
           throw new Error(
             `Native command custody for PID ${lease.executor.pid} belongs to another Doctor`,
           );
+        }
+        // A dead Doctor's reservation closes once no process carries its marker.
+        if (managedCommandCustody(lease) === "reserved") {
+          if (managedCommandUnsettled(lease, store.processState)) {
+            throw new Error(
+              `Native command reservation ${lease.key} may still have a running process`,
+            );
+          }
+          leases.push(lease);
+          continue;
         }
         const namespace = roots.find((root) => {
           const prefix = `${root}/`;

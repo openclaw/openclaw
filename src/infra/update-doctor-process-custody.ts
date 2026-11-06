@@ -176,6 +176,7 @@ export async function retainUpdateDoctorProcesses(
         throw error;
       }
       return {
+        env: retained.env,
         spawned(identity: CommandProcessIdentity) {
           // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;
@@ -287,6 +288,8 @@ export async function createUpdateDoctorProcessCustody(
       const admitted =
         (rootExtinct && (receipt !== undefined || legacyCompletion)) || inputWithheld;
       let diagnostics: string[] = [];
+      // Native settlement accounts for every durable reservation; a slot without one retired.
+      let reservationsResolved = pending === 0;
       const cleanup = (async () => {
         const pids = [...identities.map((identity) => identity.pid), ...(pid ? [pid] : [])];
         if (!admitted || pid === undefined) {
@@ -300,8 +303,9 @@ export async function createUpdateDoctorProcessCustody(
           // Snapshot exact native handles before joining; mutable IPC never selects this namespace.
           const prepared = nativeCustody?.prepareSettlement(pid, identities);
           diagnostics = prepared?.diagnostics ?? [];
+          reservationsResolved ||= prepared !== undefined;
           const groups = await settleCommandProcessGroups(identities);
-          if (groups.settled && pending === 0) {
+          if (groups.settled && reservationsResolved) {
             prepared?.retire();
           }
           return groups;
@@ -310,10 +314,12 @@ export async function createUpdateDoctorProcessCustody(
         }
       })();
       retainCommandProcessCleanup(
-        cleanup.then((groups) => (groups.settled && pending === 0 ? "normal" : "uncertain")),
+        cleanup.then((groups) =>
+          groups.settled && reservationsResolved ? "normal" : "uncertain",
+        ),
       );
       const groups = await cleanup;
-      const settled = admitted && pending === 0 && groups.settled;
+      const settled = admitted && reservationsResolved && groups.settled;
       mayRemove = settled;
       const step: UpdateStepResult = {
         name: "doctor process settlement",
@@ -338,7 +344,7 @@ export async function createUpdateDoctorProcessCustody(
       ];
       const message = settled
         ? "Doctor did not finish normally, but every tracked process group stopped. Preserving migrated state; run `openclaw update repair` to finish deferred maintenance."
-        : `Doctor processes remain unsettled, data-at-risk. PIDs/process groups: ${pids.join(", ") || "unavailable"}; ${!receipt ? "custody receipt unavailable" : pending > 0 ? `${pending} spawn reservations lack a process identity` : (groups.reason ?? "process extinction could not be proven")}. Keep the Gateway stopped and preserve ${descriptor.path}; resolve retained process custody before retrying \`openclaw update repair\`. Repeating repair alone cannot clear unknown reservations.`;
+        : `Doctor processes remain unsettled, data-at-risk. PIDs/process groups: ${pids.join(", ") || "unavailable"}; ${!receipt ? "custody receipt unavailable" : (groups.reason ?? (pending > 0 ? `${pending} spawn reservations lack a process identity` : "process extinction could not be proven"))}. Keep the Gateway stopped and preserve ${descriptor.path}; stop those processes, then run \`openclaw update repair\` to settle custody.`;
       return {
         ...step,
         ...(settled

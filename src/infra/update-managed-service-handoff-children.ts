@@ -1,5 +1,6 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
+import { findCommandReservationHolders } from "../process/command-reservation-census.js";
 import type {
   createManagedHandoffLeaseDatabase,
   LeaseTable,
@@ -16,19 +17,47 @@ import type {
   ManagedHandoffLeasePayload,
 } from "./update-managed-service-handoff-schema.js";
 
+type ManagedHandoffProcessState = ReturnType<
+  typeof createManagedHandoffProcessIdentityReader
+>["processState"];
+
 export function managedCommandCustody(
   lease: ManagedHandoffParent | ManagedHandoffLeasePayload | null,
 ) {
   return lease?.version === 2 && lease.action.kind === "update" ? lease.action.custody : undefined;
 }
 
-/** Tracked command reservations outlive their helper; only group extinction closes a binding. */
-export function managedCommandUnsettled(lease: ManagedHandoffLease): boolean {
-  return (
-    managedCommandCustody(lease) !== "bound" ||
-    process.platform === "win32" ||
-    isChildProcessTreeAlive(lease.executor)
-  );
+function reservationAbandoned(
+  lease: ManagedHandoffLease,
+  processState: ManagedHandoffProcessState,
+): boolean {
+  if (processState(lease.helper) !== "dead") {
+    return false;
+  }
+  try {
+    const reservation = lease.key.slice(lease.key.lastIndexOf("/") + 1);
+    return findCommandReservationHolders(reservation).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Only group extinction closes a binding. A reservation has no process identity, so
+ * it closes when its spawner is dead and no process carries its marker. Reservations
+ * from releases without the marker close on spawner death alone: repair must not stay
+ * fenced forever by a child that could only have started in the instant before a kill.
+ */
+export function managedCommandUnsettled(
+  lease: ManagedHandoffLease,
+  processState: ManagedHandoffProcessState,
+): boolean {
+  if (process.platform === "win32") {
+    return true;
+  }
+  return managedCommandCustody(lease) === "bound"
+    ? isChildProcessTreeAlive(lease.executor)
+    : !reservationAbandoned(lease, processState);
 }
 
 export function managedCommandAllowsBinding(
@@ -75,7 +104,7 @@ export function createManagedHandoffChildReader(
           child.executor.pid === child.helper.pid &&
           child.executor.startIdentity === child.helper.startIdentity;
         return managedCommandCustody(child)
-          ? managedCommandUnsettled(child)
+          ? managedCommandUnsettled(child, deps.processState)
           : child.version === 3 ||
               child.version === 4 ||
               deps.processState(child.helper) !== "dead" ||
