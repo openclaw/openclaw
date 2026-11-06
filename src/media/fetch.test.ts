@@ -254,6 +254,102 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it.each([readMedia, saveMedia])(
+    "recovers a rate-limited attachment through %s",
+    async (consume) => {
+      const sleep = vi.fn(async () => {});
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "2" },
+          }),
+        )
+        .mockResolvedValueOnce(new Response("attachment", { status: 200 }));
+      const result = await consume({
+        fetchImpl,
+        retry: { attempts: 2, minDelayMs: 10, maxDelayMs: 3000, jitter: 0, sleep },
+      });
+      const buffer = "buffer" in result ? result.buffer : await fs.readFile(result.path);
+      expect(buffer).toEqual(Buffer.from("attachment"));
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(2000);
+    },
+  );
+
+  it.each([
+    [undefined, 10],
+    ["malformed", 10],
+  ])("retries media with generic backoff when Retry-After is %s", async (retryAfter, delay) => {
+    const sleep = vi.fn(async () => {});
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("rate limited", {
+          status: 429,
+          headers: retryAfter ? { "retry-after": retryAfter } : {},
+        }),
+      )
+      .mockResolvedValueOnce(new Response("attachment"));
+    await expect(
+      readMedia({
+        fetchImpl,
+        retry: { attempts: 2, minDelayMs: 10, maxDelayMs: 3000, jitter: 0, sleep },
+      }),
+    ).resolves.toMatchObject({ buffer: Buffer.from("attachment") });
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(delay);
+  });
+
+  it.each([100, undefined])(
+    "preserves explicit caller pacing %s for rate-limited media",
+    async (delay) => {
+      const sleep = vi.fn(async () => {});
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "60" },
+          }),
+        )
+        .mockResolvedValueOnce(new Response("attachment"));
+      await expect(
+        readMedia({
+          fetchImpl,
+          retry: {
+            attempts: 2,
+            minDelayMs: 10,
+            maxDelayMs: 3000,
+            jitter: 0,
+            sleep,
+            retryAfterMs: () => delay,
+          },
+        }),
+      ).resolves.toMatchObject({ buffer: Buffer.from("attachment") });
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(delay ?? 10);
+    },
+  );
+
+  it("does not retry rate-limited media earlier than an over-budget Retry-After", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("rate limited", {
+          status: 429,
+          headers: { "retry-after": "60" },
+        }),
+    );
+    const sleep = vi.fn(async () => {});
+    await expect(
+      readMedia({
+        fetchImpl,
+        retry: { attempts: 3, minDelayMs: 10, maxDelayMs: 3000, jitter: 0, sleep },
+      }),
+    ).rejects.toMatchObject({ code: "http_error", status: 429 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("cancels retry backoff for store writes", async () => {
     const controller = new AbortController();
     const fetchImpl = vi.fn(async () => new Response("busy", { status: 503 }));
