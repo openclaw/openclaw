@@ -560,6 +560,7 @@ export class PaletteSessionDraft {
     };
     showToast({
       message,
+      dedupeKey: `session-create:${result.agentId}:${result.key}`,
       severity: result.initialRun.status === "rejected" ? "error" : "success",
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,

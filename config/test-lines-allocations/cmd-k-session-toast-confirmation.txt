@@ -1,3 +1,3 @@
-# Cmd+K accepted-session feedback: success/error copy, severity, and icon/action spacing.
-# Reuses existing browser scenarios; net test growth is 27 lines.
-27
+# Cmd+K confirmations, spacing, and distinct actionable notices for concurrent sessions.
+# Reuses the browser start/retry flow; adds one focused toast-identity contract.
+55

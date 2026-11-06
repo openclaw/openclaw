@@ -342,6 +342,7 @@ describe("PaletteSessionDraft", () => {
     await host.draft.submit();
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
       message,
+      dedupeKey: "session-create:main:agent:main:dashboard:created",
       severity: "success",
       actionLabel: "Open session",
       onAction: expect.any(Function),
@@ -410,6 +411,7 @@ describe("PaletteSessionDraft", () => {
       const notice = showToast.mock.calls.at(-1)?.[0];
       expect(notice).toMatchObject({
         message: "Session created, but couldn't start: Initial turn rejected",
+        dedupeKey: "session-create:main:agent:main:dashboard:rejected",
         severity: "error",
       });
       context.gateway.snapshot.phase = "reconnecting";
