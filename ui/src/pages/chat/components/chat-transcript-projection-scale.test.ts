@@ -19,6 +19,7 @@ import {
 } from "../chat-view.test-helpers.ts";
 import { createRealtimeTalkConversationState } from "../talk/conversation-state.ts";
 import { updateRealtimeTalkConversation } from "../talk/conversation.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -69,15 +70,17 @@ async function mountLiveThread(
   transcript: ReturnType<typeof createTranscript>,
   makeProps: () => Parameters<typeof createChatViewFrame>[0],
 ) {
-  const view = mountSolid(() => {
-    const props = makeProps();
-    const viewFrame = createChatViewFrame(
-      props,
-      () => undefined,
-      createAsyncQuestionPresentation(getTranscriptState(paneId), props),
-    );
-    return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
-  });
+  const view = settleChatMount(() =>
+    mountSolid(() => {
+      const props = makeProps();
+      const viewFrame = createChatViewFrame(
+        props,
+        () => undefined,
+        createAsyncQuestionPresentation(getTranscriptState(paneId), props),
+      );
+      return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
+    }),
+  );
   onTestFinished(view.unmount);
   transcript.start();
   transcript.update();

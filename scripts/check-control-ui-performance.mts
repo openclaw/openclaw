@@ -57,7 +57,8 @@ const controlUiPerformanceBudgets = {
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
   // PR #194017 (L294): 1,288,049 B CI-measured with the shared-boot window receipt, plus 64 B headroom.
   // Ayaan Zaidi approved +1 KiB for naming a failed reply's provider cause (#193996, 2026-11-06).
-  chatBootJsGzipBytes: 1_289_482,
+  // Campaign coordinator accepted the two-phase mount trade; measured head plus 64 B.
+  chatBootJsGzipBytes: 1_289_172,
   newBootJsGzipBytes: 797_620,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
