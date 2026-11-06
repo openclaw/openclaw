@@ -55,7 +55,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  chatBootJsGzipBytes: 1_288_198,
+  // PR #194017 (L294): 1,288,049 B CI-measured with the shared-boot window receipt, plus 64 B headroom.
+  chatBootJsGzipBytes: 1_288_113,
   newBootJsGzipBytes: 797_620,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

@@ -80,7 +80,7 @@ function AppSidebarContent(
     host,
     () => props.navigationVisible,
   );
-  const scroll = createSidebarScroll(owner);
+  const scroll = (owner.scroll = createSidebarScroll(owner));
   const contextual = createMemo(() => {
     const router = props.router;
     return router
