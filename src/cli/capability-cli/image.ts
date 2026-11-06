@@ -108,13 +108,21 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             targetIds: getModelsCommandSecretTargetIds(),
             agent,
           });
-          const { readFile } = await import("node:fs/promises");
+          const { realpath } = await import("node:fs/promises");
           const inputImages =
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
                     const resolvedPath = path.resolve(filePath);
-                    const buffer = await readFile(resolvedPath);
+                    const { readRegularFile } = await import("../../infra/fs-safe.js");
+                    const { buffer } = await realpath(resolvedPath)
+                      .then((realFilePath) => readRegularFile({ filePath: realFilePath }))
+                      .catch((error: unknown) => {
+                        throw new Error(
+                          `Cannot read image edit input: ${resolvedPath}. Use a readable regular file and retry.`,
+                          { cause: error },
+                        );
+                      });
                     return {
                       buffer,
                       fileName: path.basename(resolvedPath),

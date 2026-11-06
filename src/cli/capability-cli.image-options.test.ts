@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -23,6 +24,11 @@ vi.mock("../image-generation/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../image-generation/runtime.js")>()),
   generateImage: mocks.generateImage,
 }));
+
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=",
+  "base64",
+);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -77,10 +83,6 @@ it("passes a numeric aspect ratio outside the tool list to the image runtime", a
 });
 
 it.each([false, true])("passes image edit options and respects cancellation=%s", async (cancel) => {
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=",
-    "base64",
-  );
   const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
   const scope = new AsyncWorkScope();
   mocks.generateImage.mockImplementationOnce(async () => {
@@ -99,7 +101,13 @@ it.each([false, true])("passes image edit options and respects cancellation=%s",
   const referencePath = path.join(directory, "reference.gif");
   const outputPath = path.join(directory, "output.png");
   await fs.writeFile(inputPath, png);
-  await fs.writeFile(referencePath, gif);
+  if (process.platform === "win32") {
+    await fs.writeFile(referencePath, gif);
+  } else {
+    const referenceTarget = path.join(directory, "reference-target.gif");
+    await fs.writeFile(referenceTarget, gif);
+    await fs.symlink(referenceTarget, referencePath);
+  }
   if (cancel) {
     await fs.writeFile(outputPath, gif);
   }
@@ -161,3 +169,43 @@ it.each([false, true])("passes image edit options and respects cancellation=%s",
     outputs: [expect.objectContaining({ path: outputPath, mimeType: "image/png" })],
   });
 });
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "rejects FIFO image edits before generation (symlink: %s)",
+  async (symlink) => {
+    const directory = tempDirs.make("capability-image-fifo-");
+    const fifo = path.join(directory, "input.pipe");
+    execFileSync("mkfifo", [fifo]);
+    const input = symlink ? `${fifo}.link` : fifo;
+    if (symlink) {
+      await fs.symlink(fifo, input);
+    }
+    // Release a regressed reader so the assertion fails without stranding the runner.
+    const writer = spawn(
+      process.execPath,
+      [
+        "-e",
+        "require('node:fs').writeFileSync(process.argv[1], Buffer.from(process.argv[2], 'base64'))",
+        fifo,
+        png.toString("base64"),
+      ],
+      { stdio: "ignore" },
+    );
+    const closed = new Promise((resolve) => {
+      writer.once("close", resolve);
+    });
+    try {
+      await expect(
+        runCapability("image", "edit", "--file", input, "--prompt", "edit", "--json"),
+      ).rejects.toThrow("exit 1");
+      expect(mocks.runtime.error.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
+        `Cannot read image edit input: ${input}. Use a readable regular file and retry.`,
+      );
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect((await fs.stat(fifo)).isFIFO()).toBe(true);
+    } finally {
+      writer.kill("SIGKILL");
+      await closed;
+    }
+  },
+);
