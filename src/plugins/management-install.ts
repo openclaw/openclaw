@@ -5,8 +5,11 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { buildNpmResolutionFields, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  buildNpmResolutionFields,
+  parseRegistryNpmSpec,
+  type NpmSpecResolution,
+} from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCompatibilityHostVersion, VERSION } from "../version.js";

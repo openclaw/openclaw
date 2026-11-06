@@ -5,7 +5,6 @@ import {
   type SemVer,
   valid as validSemver,
 } from "semver";
-import type { NpmSpecResolution } from "./install-source-utils.js";
 import {
   compareOpenClawSemver,
   compareValidSemver,
@@ -14,6 +13,16 @@ import {
 } from "./semver.js";
 
 export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
+
+export type NpmSpecResolution = {
+  name?: string;
+  version?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+  packageOpenClaw?: Record<string, unknown>;
+};
 
 type NpmResolutionFields = {
   resolvedName?: string;

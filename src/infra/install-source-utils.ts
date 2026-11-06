@@ -25,6 +25,7 @@ import {
   isExactSemverVersion,
   parseRegistryNpmSpec,
   resolveNpmJsonEntries,
+  type NpmSpecResolution,
 } from "./npm-registry-spec.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -45,16 +46,6 @@ export function formatNpmCommandFailureOutput(result: SpawnResult): string {
   }
   return `termination ${result.termination} (no output from npm)`;
 }
-
-export type NpmSpecResolution = {
-  name?: string;
-  version?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-  packageOpenClaw?: Record<string, unknown>;
-};
 
 type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
 
