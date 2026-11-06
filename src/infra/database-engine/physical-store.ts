@@ -5,6 +5,7 @@ import {
   StateDatabaseOfflineMaintenanceError,
 } from "../gateway-state-owner-errors.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { isSqliteLockError } from "../sqlite-error-diagnostics.js";
 import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "../sqlite-lifecycle-errors.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../sqlite-readonly-inspection.js";
 import { prepareSqliteReadOnlyCopyInProcess } from "../sqlite-readonly-location.js";
@@ -63,11 +64,12 @@ export async function readBackupEngineInProcess(
         return inspected.value;
       }
     } catch (error) {
-      // Offline custody cannot lend its native source to this child. A private
-      // read keeps the established inspection contract without borrowing that custody.
+      // Offline custody and exclusive source locks can prevent native inspection.
+      // A private read keeps the established committed-image inspection contract.
       if (
         !(error instanceof StateDatabaseAdmissionPendingError) &&
-        !(error instanceof StateDatabaseOfflineMaintenanceError)
+        !(error instanceof StateDatabaseOfflineMaintenanceError) &&
+        !isSqliteLockError(error)
       ) {
         throw error;
       }

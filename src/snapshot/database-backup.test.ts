@@ -54,7 +54,7 @@ it.each(["sqlite", "postgres"] as const)(
   },
 );
 
-it.each(["hot-journal", "missing-shm", "offline-owner"])(
+it.each(["hot-journal", "missing-shm", "offline-owner", "locked-source"])(
   "reads the committed anchor through private %s inspection without changing source bytes",
   async (recovery) => {
     const root = directories.make("backup-engine-recovery-");
@@ -78,10 +78,12 @@ it.each(["hot-journal", "missing-shm", "offline-owner"])(
       await fs.copyFile(path.join(root, "writer.sqlite-wal"), `${source}-wal`);
     }
     const files =
-      recovery === "offline-owner"
+      recovery === "offline-owner" || recovery === "locked-source"
         ? [source]
         : [source, `${source}-${recovery === "hot-journal" ? "journal" : "wal"}`];
     const before = await Promise.all(files.map((file) => fs.readFile(file)));
+    using locked = recovery === "locked-source" ? openNodeSqliteDatabase(source) : undefined;
+    locked?.exec("BEGIN EXCLUSIVE");
     const owner =
       recovery === "offline-owner" ? acquireGatewayStateOwner({ databasePath: source }) : undefined;
     try {
@@ -96,6 +98,7 @@ it.each(["hot-journal", "missing-shm", "offline-owner"])(
       owner?.release();
     }
   },
+  45_000,
 );
 
 it.each(["empty", "duplicate", "invalid-namespace", "unreadable"])(
