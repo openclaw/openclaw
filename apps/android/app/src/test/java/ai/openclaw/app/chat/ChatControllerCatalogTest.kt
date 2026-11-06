@@ -323,23 +323,31 @@ class ChatControllerCatalogTest {
       advanceUntilIdle()
       assertEquals(200, controller.sessions.value.size)
       assertTrue(controller.sessionRosterHasMore.value)
+      // A recent-scope continuation must refuse while the archive is listed:
+      // the recent sidebar shares this slot and must not page hidden rows.
+      val requestsBeforeRefusal = requests.size
+      assertFalse(controller.loadMoreSessions(archived = false))
+      assertEquals(requestsBeforeRefusal, requests.size)
       nextPageUnavailable = true
-      assertFalse(controller.loadMoreSessions())
+      assertFalse(controller.loadMoreSessions(archived = true))
       assertTrue(controller.sessionRosterLoadFailed.value)
       assertEquals(200, controller.sessions.value.size)
 
+      // A fresh same-scope page supersedes the failed continuation's caption,
+      // then the retry completes the archive window.
       nextPageUnavailable = false
-      assertTrue(controller.loadMoreSessions())
+      controller.refreshSessions(limit = 200, archived = true)
+      advanceUntilIdle()
+      assertFalse(controller.sessionRosterLoadFailed.value)
+      assertTrue(controller.sessionRosterHasMore.value)
+      assertEquals(200, controller.sessions.value.size)
+      assertTrue(controller.loadMoreSessions(archived = true))
       assertFalse(controller.sessionRosterLoadFailed.value)
       assertFalse(controller.sessionRosterHasMore.value)
       assertEquals(201, controller.sessions.value.size)
       assertTrue(controller.sessions.value.all { it.archived == true })
       val continuation = requests.last { it.first == "sessions.list" }.second!!
       assertEquals(JsonPrimitive(200), chatControllerTestJson.parseToJsonElement(continuation).jsonObject["offset"])
-
-      controller.refreshSessions(limit = 200, archived = true)
-      advanceUntilIdle()
-      assertEquals(201, controller.sessions.value.size)
     }
 
   @Test

@@ -108,6 +108,7 @@ internal fun SessionsScreen(
   val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
   val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
   val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
+  val rosterListedArchived by viewModel.sessionRosterListedArchived.collectAsState()
   val coroutineScope = rememberCoroutineScope()
   val searchFocusRequester = remember { FocusRequester() }
   val keyboardController = LocalSoftwareKeyboardController.current
@@ -414,7 +415,13 @@ internal fun SessionsScreen(
             )
           }
         }
-        if (rosterHasMore) {
+        // Only the Recent and Archived tabs page the full roster of their own
+        // scope, and only while the listed scope matches the visible filter;
+        // other tabs and search results project rows the continuation cannot add.
+        val rosterScopeMatches =
+          (filter == SessionFilter.Archived) == rosterListedArchived &&
+            (filter == SessionFilter.Recent || filter == SessionFilter.Archived)
+        if (rosterHasMore && rosterScopeMatches) {
           if (rosterLoadFailed) {
             item(key = "sessions-load-more-error") {
               Text(
@@ -426,9 +433,12 @@ internal fun SessionsScreen(
             }
           }
           item(key = "sessions-load-more") {
+            val archivedScope = filter == SessionFilter.Archived
             ClawSecondaryButton(
               text = nativeString(if (rosterLoadingMore) "Loading" else "Load more sessions"),
-              onClick = { if (!rosterLoadingMore) coroutineScope.launch { viewModel.loadMoreChatSessions() } },
+              onClick = {
+                if (!rosterLoadingMore) coroutineScope.launch { viewModel.loadMoreChatSessions(archived = archivedScope) }
+              },
               enabled = !rosterLoadingMore,
               icon = Icons.Default.KeyboardArrowDown,
               modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
