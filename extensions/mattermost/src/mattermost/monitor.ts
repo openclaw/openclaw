@@ -246,7 +246,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
     serializeImmediate: true,
     shouldDebounce: (entry) => {
-      // Typed posts are dropped downstream; batching would let their text or type affect a user post.
+      // Typed posts must stay separate so batching cannot change their type or admission.
       if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
         return false;
       }
