@@ -127,16 +127,13 @@
   line-height: 1;
 }
 
-.sidebar-rail
-  :is(
-    .sidebar-rail__button,
-    .nav-item,
-    .sidebar-brand__icon,
-    .sidebar-issues-button,
-    .sidebar-agent-card__main,
-    .sidebar-workspace-header__main,
-    .sidebar-identity-card
-  ) {
+.sidebar-rail .sidebar-rail__button,
+.sidebar-rail .nav-item,
+.sidebar-rail .sidebar-brand__icon,
+.sidebar-rail .sidebar-issues-button,
+.sidebar-rail .sidebar-agent-card__main,
+.sidebar-rail .sidebar-workspace-header__main,
+.sidebar-rail .sidebar-identity-card {
   --sidebar-rail-control-surface: var(--sidebar-rail-background);
   display: flex;
   align-items: center;

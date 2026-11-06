@@ -209,6 +209,11 @@ export type ReplyToolAuthorityPreparation = {
 export type ReplyBackendMessageInjectionV2 = {
   readonly version: 2;
   isAvailable(): boolean;
+  /** Tool-only interruption for an exact message still owned by the steering queue. */
+  steerNow?: {
+    read(queueIdentity: string): ReplySteerNowState | undefined;
+    send(queueIdentity: string): ReplySteerNowResult;
+  };
   /** @deprecated Use queueMessageAsync with fresh policy preparation. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   queueMessage(
     text: string,
@@ -246,6 +251,16 @@ export type ReplyBackendMessageInjectionV2 = {
     preparation: ReplyToolAuthorityPreparation,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
+};
+
+export type ReplySteerNowState = {
+  status: "available" | "blocked";
+  tools: string[];
+};
+
+export type ReplySteerNowResult = {
+  status: "interrupted" | "idle" | "blocked" | "settled" | "unavailable";
+  tools: string[];
 };
 
 export type ReplyBackendHandle = {

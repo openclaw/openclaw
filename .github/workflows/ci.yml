@@ -161,6 +161,7 @@ jobs:
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
+      skills_python_targets_json: ${{ steps.manifest.outputs.skills_python_targets_json }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_built_source_verifiers: ${{ steps.manifest.outputs.run_built_source_verifiers }}
@@ -787,6 +788,7 @@ jobs:
                   "scripts/lib/actions-artifact-archive.mjs",
                   "scripts/lib/ci-test-observations.mjs",
                   "scripts/lib/ci-ios-smoke-plan.mjs",
+                  "scripts/lib/ci-skills-python-plan.mjs",
                   "scripts/lib/release-context.mjs",
                   "scripts/lib/release-version.mjs",
               )
@@ -4838,6 +4840,8 @@ jobs:
         run: pnpm run --workspace-concurrency=2 --no-bail '/^(format:docs:check|check:docs:content)$/'
 
   skills-python:
+    env:
+      SKILLS_PYTHON_TARGETS_JSON: ${{ needs.preflight.outputs.skills_python_targets_json }}
     permissions:
       contents: read
     needs: [preflight]
@@ -4867,11 +4871,21 @@ jobs:
 
       - name: Lint Python skill scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
-        run: python -m ruff check --config skills/pyproject.toml skills
+        run: |
+          python - <<'PYTHON'
+          import json, os, subprocess, sys
+          targets = json.loads(os.environ.get("SKILLS_PYTHON_TARGETS_JSON") or '["skills"]')
+          subprocess.run([sys.executable, "-m", "ruff", "check", "--config", "skills/pyproject.toml", *targets], check=True)
+          PYTHON
 
       - name: Test skill Python scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
-        run: python -m pytest -q -c skills/pyproject.toml skills
+        run: |
+          python - <<'PYTHON'
+          import json, os, subprocess, sys
+          targets = json.loads(os.environ.get("SKILLS_PYTHON_TARGETS_JSON") or '["skills"]')
+          subprocess.run([sys.executable, "-m", "pytest", "-q", "-c", "skills/pyproject.toml", *targets], check=True)
+          PYTHON
 
   checks-windows:
     permissions:

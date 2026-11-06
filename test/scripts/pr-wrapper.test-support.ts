@@ -138,6 +138,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "typebox",
     "typescript",
     "undici",
+    "ws",
     "yaml",
     "zod",
   ]) {
