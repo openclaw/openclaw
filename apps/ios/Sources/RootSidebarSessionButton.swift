@@ -1,5 +1,4 @@
 import OpenClawChatUI
-import OpenClawProtocol
 import SwiftUI
 
 /// Value equality isolates the session button from unrelated roster changes.
