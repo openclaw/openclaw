@@ -17,8 +17,8 @@ import {
 } from "../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processGroups from "../process/child-process-tree.js";
-import { runUtf8CommandWithTimeout } from "../process/exec-runner.js";
 import * as reservationCensus from "../process/command-reservation-census.js";
+import { runUtf8CommandWithTimeout } from "../process/exec-runner.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { createManagedCommandProcessCustody } from "./update-managed-command-custody.js";

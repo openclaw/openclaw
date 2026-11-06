@@ -77,7 +77,7 @@ export function findCommandReservationCandidates(reservedAtMs: number): number[]
   // The inspecting command's own launchers are not the reserved command.
   const byPid = new Map(births.map((birth) => [birth.pid, birth]));
   const inspector = new Set<number>();
-  for (let pid: number | undefined = process.pid; pid && !inspector.has(pid); ) {
+  for (let pid: number | undefined = process.pid; pid && !inspector.has(pid);) {
     inspector.add(pid);
     pid = byPid.get(pid)?.ppid;
   }
