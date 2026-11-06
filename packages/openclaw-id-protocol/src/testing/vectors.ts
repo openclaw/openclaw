@@ -15,7 +15,11 @@ import {
   type KeyFingerprint,
 } from "../keys.js";
 import { deriveRootSeed, encodeKit } from "../kit.js";
-import { buildNodeJoinLink, computeNodeRedemptionProof } from "../node-invites.js";
+import {
+  buildNodeJoinLink,
+  computeNodeRedemptionProof,
+  nodeVerificationCode,
+} from "../node-invites.js";
 import { signingInput, signStatement } from "../statements/envelope.js";
 import type { BindingEvidence, ClawPin } from "../statements/pin.js";
 import {
@@ -93,7 +97,13 @@ export type StatementVectors = {
   valid: StatementVector[];
   invalid: InvalidStatementVector[];
   pins: PinVector[];
-  node_invite: { secret_hex: string; proof_key_hex: string; proof: string; link: string };
+  node_invite: {
+    secret_hex: string;
+    proof_key_hex: string;
+    proof: string;
+    link: string;
+    verification_code: string;
+  };
 };
 
 const KEY_NAMES = [
@@ -300,14 +310,20 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       invite_id: nodeParts.invite_id,
       label: "build node",
       created_at: VECTOR_ISSUED_AT,
-      expires_at: VECTOR_NOW + 3600,
+      expires_at: VECTOR_ISSUED_AT + 600,
       secret_hash: await inviteSecretHash(nodeProofKey),
     },
     signers["device-1"],
   );
+  const description = {
+    display_name: "Build node",
+    platform: "linux",
+    commands: ["system.run"],
+    caps: ["system"],
+  };
   const nodeRedemption = await signStatement(
     "NodeRedemption",
-    { ...nodeParts, proof: nodeProof, requested_at: VECTOR_NOW },
+    { ...nodeParts, description, proof: nodeProof, requested_at: VECTOR_NOW },
     signers.node,
   );
   const nodeChange = await signStatement(
@@ -414,6 +430,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       "OpenClaw ID signed statement vectors. Regenerate with buildStatementVectors(); never edit by hand.",
     now: VECTOR_NOW,
     node_invite: {
+      verification_code: await nodeVerificationCode(nodeRedemption.body),
       secret_hex: bytesToHex(nodeSecret),
       proof_key_hex: bytesToHex(nodeProofKey),
       proof: nodeProof,

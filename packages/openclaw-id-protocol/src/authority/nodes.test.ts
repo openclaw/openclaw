@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { deriveInviteProofKey, inviteSecretHash, MAX_INVITE_LIFETIME_SECONDS } from "../invites.js";
+import { deriveInviteProofKey, inviteSecretHash } from "../invites.js";
 import { fingerprint, formatIrohEndpointKey } from "../keys.js";
-import { computeNodeRedemptionProof } from "../node-invites.js";
+import { computeNodeRedemptionProof, MAX_NODE_INVITE_LIFETIME_SECONDS } from "../node-invites.js";
 import { signStatement } from "../statements/envelope.js";
 import { MAX_INVITES, MAX_NODES } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
@@ -34,6 +34,12 @@ let pending: AuthorityState;
 let admitted: AuthorityState;
 let peer: ReturnType<typeof formatIrohEndpointKey>;
 const inviteId = "ab".repeat(16);
+const description = {
+  display_name: "Build node",
+  platform: "linux",
+  commands: ["system.run"],
+  caps: ["system"],
+};
 
 function stateOf(result: AuthorityResult): AuthorityState {
   if (!result.ok) {
@@ -59,7 +65,12 @@ async function nodeRedemption(id = inviteId, key = peer) {
   const parts = { claw_id: world.state.claw_id, invite_id: id, peer_key: key };
   return signStatement(
     "NodeRedemption",
-    { ...parts, requested_at: WORLD_NOW, proof: await computeNodeRedemptionProof(proofKey, parts) },
+    {
+      ...parts,
+      description,
+      requested_at: WORLD_NOW,
+      proof: await computeNodeRedemptionProof(proofKey, parts),
+    },
     world.invitee.signer,
   );
 }
@@ -92,6 +103,7 @@ describe("node authority boundary", () => {
   it("requires pending W possession and owner approval, then admits only a node", async () => {
     expect(isAdmitted(registered, peer, WORLD_NOW)).toBe(false);
     expect(isAdmitted(pending, peer, WORLD_NOW)).toBe(false);
+    expect(pending.node_invites[inviteId]?.pending?.description).toEqual(description);
     expect(await approve(registered)).toMatchObject({ ok: false, code: "invite_not_pending" });
     expect(await approve(pending, inviteId, world.mallory.peer)).toMatchObject({
       ok: false,
@@ -105,6 +117,7 @@ describe("node authority boundary", () => {
       members: [],
     });
     expect(admitted.nodes[peer]).toMatchObject({
+      description,
       listed_seq: admitted.seq,
       invite_id: inviteId,
       added_by: await fingerprint(world.device1.pub),
@@ -203,6 +216,54 @@ describe("node authority boundary", () => {
     }
   });
 
+  it("validates bounded signed descriptions before reserving an invite", async () => {
+    for (const invalid of [
+      { ...description, display_name: "x".repeat(129) },
+      { ...description, platform: "x".repeat(65) },
+      { ...description, commands: Array.from({ length: 65 }, (_, i) => `command.${i}`) },
+      { ...description, caps: Array.from({ length: 65 }, (_, i) => `cap.${i}`) },
+      { ...description, commands: ["x".repeat(129)] },
+      { ...description, caps: ["system", "system"] },
+      { ...description, platform: "linux\nowner approved" },
+      { ...description, display_name: "" },
+      { ...description, trusted: true },
+    ]) {
+      expect(
+        await submitNodeRedemption(
+          registered,
+          {
+            ...redemption,
+            body: { ...redemption.body, description: invalid },
+          },
+          WORLD_NOW,
+        ),
+      ).toMatchObject({ ok: false, code: "malformed", state: registered });
+    }
+    expect(
+      await submitNodeRedemption(
+        registered,
+        {
+          ...redemption,
+          body: { ...redemption.body, description: { ...description, commands: ["camera.snap"] } },
+        },
+        WORLD_NOW,
+      ),
+    ).toMatchObject({ ok: false, code: "bad_signature", state: registered });
+    const replacement = await signStatement(
+      "NodeRedemption",
+      {
+        ...redemption.body,
+        description: { ...description, commands: ["camera.snap"] },
+      },
+      world.invitee.signer,
+    );
+    expect(await submitNodeRedemption(pending, replacement, WORLD_NOW)).toMatchObject({
+      ok: false,
+      code: "invite_used",
+      state: pending,
+    });
+  });
+
   it("denies a pending node invite without admission, and enforces shared invite limits", async () => {
     const denied = stateOf(
       await submitStatement(
@@ -220,7 +281,7 @@ describe("node authority boundary", () => {
     });
     const tooLong = await signStatement(
       "NodeInviteCap",
-      { ...cap.body, expires_at: WORLD_NOW + MAX_INVITE_LIFETIME_SECONDS + 301 },
+      { ...cap.body, expires_at: WORLD_NOW + MAX_NODE_INVITE_LIFETIME_SECONDS + 1 },
       world.device1.signer,
     );
     expect(await registerNodeInvite(world.state, tooLong, proofKey, context)).toMatchObject({
@@ -282,6 +343,7 @@ describe("node authority boundary", () => {
       "NodeRedemption",
       {
         ...parts,
+        description,
         requested_at: WORLD_NOW,
         proof: await computeNodeRedemptionProof(proofKey, parts),
       },

@@ -2,7 +2,7 @@
 import { hexToBytes } from "../bytes.js";
 import { inviteSecretHash } from "../invites.js";
 import { fingerprint, formatIrohEndpointKey, rawPublicKey, type IrohEndpointKey } from "../keys.js";
-import { verifyNodeRedemption } from "../node-invites.js";
+import { MAX_NODE_INVITE_LIFETIME_SECONDS, verifyNodeRedemption } from "../node-invites.js";
 import {
   MAX_INVITES,
   MAX_NODES,
@@ -12,7 +12,7 @@ import {
 import { parseStatement } from "../statements/validate.js";
 import { verifyOwnerStatement, type Authority } from "../statements/verify.js";
 import type { WriteContext } from "./apply.js";
-import { inviteLifetimeError, withoutSpentInvites } from "./invite-retention.js";
+import { withoutSpentInvites } from "./invite-retention.js";
 import {
   applied,
   ownerLookup,
@@ -51,9 +51,15 @@ export async function registerNodeInvite(
   if ((await inviteSecretHash(proofKey)) !== cap.secret_hash) {
     return refuse(state, "bad_proof", "proof key does not match secret_hash");
   }
-  const lifetime = inviteLifetimeError(cap.expires_at, context.now);
-  if (lifetime) {
-    return refuse(state, lifetime.code, lifetime.detail);
+  if (cap.expires_at <= context.now) {
+    return refuse(state, "expired", "invite expired");
+  }
+  if (
+    cap.expires_at <= cap.created_at ||
+    cap.expires_at - cap.created_at > MAX_NODE_INVITE_LIFETIME_SECONDS ||
+    cap.expires_at - context.now > MAX_NODE_INVITE_LIFETIME_SECONDS
+  ) {
+    return refuse(state, "limit_reached", "a node invite lasts at most one hour");
   }
   const kept = withoutSpentInvites(state, context.now).state;
   if (kept.invites[cap.invite_id] || kept.node_invites[cap.invite_id]) {
@@ -115,7 +121,7 @@ export async function submitNodeRedemption(
         [body.invite_id]: {
           ...invite,
           status: "pending",
-          pending: { peer_key: body.peer_key, requested_at: now },
+          pending: { peer_key: body.peer_key, requested_at: now, description: body.description },
         },
       },
     },
@@ -160,6 +166,7 @@ export async function addNode(
         ...state.nodes,
         [target.peer_key]: {
           label: target.label,
+          description: invite.pending.description,
           listed_seq: existing?.listed_seq ?? state.seq,
           added_by: authority.kind === "root" ? "root" : await fingerprint(authority.device_pub),
           last_seen: existing?.last_seen ?? now,

@@ -338,7 +338,7 @@ for request authentication.
 | Type             | Body                                                           | Signer / authority                                                |
 | ---------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `NodeInviteCap`  | claw_id, invite_id, label, created_at, expires_at, secret_hash | R or current owner device with `invite`; direct registration only |
-| `NodeRedemption` | claw_id, invite_id, peer_key, proof, requested_at              | the named W, represented as ed25519: in signer; pending only      |
+| `NodeRedemption` | claw_id, invite_id, peer_key, description, proof, requested_at | the named W, represented as ed25519: in signer; pending only      |
 
 `MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
 `remove_node { peer_key }`; both require R or a current owner with `manage_members`.
@@ -355,4 +355,8 @@ bound (about 19 KiB additional JSON at capacity). Every node records its listing
 replaying an old revocation cannot remove a node approved anew at a later seq.
 
 The deterministic fixture also includes NodeInviteCap, NodeRedemption, add/remove operations,
-a snapshot with node keys, wrong-signer cases, and `node_invite` proof-key/HMAC/link vectors.
+a snapshot with node keys, wrong-signer cases, and `node_invite` proof-key/HMAC/link/code vectors.
+`NodeRedemption.description` is the strict bounded `NodeDescription` described in enrollment.md,
+signed by W and retained with pending and approved nodes. Its reported commands/caps confer
+no authority without explicit owner approval. Node invites default to ten minutes and are
+bounded to one hour; member-invite limits are unchanged.
