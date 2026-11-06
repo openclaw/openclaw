@@ -47,9 +47,10 @@ const scopes = resolveGlobalSingleton(Symbol.for("openclaw.sqliteReusableSnapsho
 }));
 
 /**
- * Doctor's one-shot processes read far more often than they commit. An image holds its
- * staging resources until retired, so reuse exists only inside this scope: never in a
- * long-lived Gateway, and never across the package swap in an update's driver.
+ * Doctor and update processes read far more often than they commit. An image holds its
+ * disk space until retired, so reuse exists only inside this scope, never in a long-lived
+ * Gateway. Only producers that leave no child behind seed it: a retained child would keep
+ * the process group unsettled for as long as the image lived.
  */
 export async function withSqliteSnapshotReuse<T>(operation: () => Promise<T>): Promise<T> {
   scopes.depth += 1;
@@ -64,6 +65,10 @@ export async function withSqliteSnapshotReuse<T>(operation: () => Promise<T>): P
       await Promise.allSettled(scopes.retiring);
     }
   }
+}
+
+export function isSqliteSnapshotReuseActive(): boolean {
+  return scopes.depth > 0;
 }
 
 function completed<T>(value: T): RetainedOperation<T> {
@@ -202,7 +207,10 @@ export function captureReusableSqliteSource(pathname: string): SqliteSnapshotSou
   return source && Date.now() - source.newestMs >= SOURCE_QUIESCENT_MS ? source : undefined;
 }
 
-function captureFamily(prepared: Pick<PreparedSqliteReadOnlyLocation, "location" | "cleanupRoot">) {
+/** Borrowers may fork this image, so its family is bound before any of them can read it. */
+export function captureFamily(
+  prepared: Pick<PreparedSqliteReadOnlyLocation, "location" | "cleanupRoot">,
+) {
   try {
     return captureSqlitePrivateSnapshotFamily(
       prepared.location,

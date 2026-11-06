@@ -6,6 +6,7 @@ import {
 import { retireOwnedSessionSqliteRecovery } from "../commands/doctor-session-sqlite-retirement.js";
 import { cleanupCompletedUpdateRecovery } from "../commands/update-automatic-cleanup.js";
 import { createConfigIO } from "../config/io.js";
+import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import {
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
@@ -35,7 +36,7 @@ serveWorkerTasks<UpdateStepResult | RecoveryCleanupReport | undefined, Automatic
       );
     };
     try {
-      return await control.runNativeSection(async () => {
+      return await control.runNativeSection(() => withSqliteSnapshotReuse(async () => {
         if (input.runId) {
           return cleanupCompletedUpdateRecovery(input.runId, input.env, assertCurrent);
         }
@@ -64,7 +65,7 @@ serveWorkerTasks<UpdateStepResult | RecoveryCleanupReport | undefined, Automatic
               },
               { assertCurrent },
             );
-      });
+      }));
     } finally {
       input.authority.close();
     }
