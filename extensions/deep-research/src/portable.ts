@@ -13,12 +13,13 @@ export type ResearchIO = {
   complete: (
     prompt: string,
     signal: AbortSignal,
-  ) => Promise<{ text: string; tokens?: number; model?: string }>;
+  ) => Promise<{ text: string; tokens?: number; model?: string; route?: ResearchResult["route"] }>;
   search: (query: string, signal: AbortSignal) => Promise<Array<{ url: string; title: string }>>;
   fetch: (
     url: string,
     signal: AbortSignal,
-  ) => Promise<{ url: string; title: string; text: string }>;
+  ) => Promise<{ url: string; title: string; text: string; retrievedAt?: string }>;
+  documentRetrievedAt?: string;
   assertCurrent: () => void;
   progress: (message: string) => void;
 };
@@ -164,7 +165,10 @@ export async function runPortableResearch(
   let pendingRoundGaps: string[] = [];
   const seenUrls = new Set<string>();
   const seenQueries = new Set<string>();
-  let selectedModel = request.model ?? "host-default";
+  let route: ResearchResult["route"] = {
+    model: request.model ?? "host-default",
+    runtime: "unobserved",
+  };
   let status: ResearchResult["status"] = "completed";
   const current = () => {
     signal.throwIfAborted();
@@ -188,8 +192,20 @@ export async function runPortableResearch(
       throw new ModelUnavailable("The model did not produce a complete response.");
     }
     current();
-    if (result.model) {
-      selectedModel = result.model;
+    if (result.route) {
+      if (
+        route.runtime !== "unobserved" &&
+        (route.runtime !== result.route.runtime ||
+          route.owner?.id !== result.route.owner?.id ||
+          route.model !== result.route.model)
+      ) {
+        gaps.push(
+          "Model execution changed between research steps; route shows the last observed execution.",
+        );
+      }
+      route = result.route;
+    } else if (result.model) {
+      route = { model: result.model, runtime: "unobserved" };
     }
     if (result.tokens === undefined) {
       usage.tokensComplete = false;
@@ -202,7 +218,7 @@ export async function runPortableResearch(
       throw new ModelUnavailable("The model returned malformed JSON; no repair call was made.");
     }
   };
-  const addSource = (source: Omit<ResearchSource, "id" | "fingerprint" | "retrievedAt">) => {
+  const addSource = (source: Omit<ResearchSource, "id" | "fingerprint">) => {
     // Bound the entire retained corpus, not only individual pages. Keep whole UTF-8 characters.
     const remaining = 60_000 - retainedBytes;
     const originalBytes = Buffer.byteLength(source.text);
@@ -237,7 +253,6 @@ export async function runPortableResearch(
       text,
       fingerprint,
       id: `S${sources.length + 1}`,
-      retrievedAt: new Date().toISOString(),
     });
   };
   const fetchUrl = async (raw: string) => {
@@ -266,6 +281,7 @@ export async function runPortableResearch(
         requestedUrl: url,
         title: page.title,
         text: page.text.slice(0, 12_000),
+        ...(page.retrievedAt ? { retrievedAt: page.retrievedAt } : {}),
         extraction: "web-fetch-text-v1" as const,
       };
     } catch (error) {
@@ -322,7 +338,12 @@ export async function runPortableResearch(
   try {
     current();
     for (const document of request.sources?.documents ?? []) {
-      addSource({ title: document.title, text: document.text, extraction: "supplied-text-v1" });
+      addSource({
+        title: document.title,
+        text: document.text,
+        extraction: "supplied-text-v1",
+        retrievedAt: io.documentRetrievedAt ?? new Date().toISOString(),
+      });
     }
     io.progress("Planning research");
     const plan = parseValue(
@@ -470,6 +491,6 @@ export async function runPortableResearch(
       "Source policy filters selected evidence; it is not a network firewall.",
     ],
     usage,
-    route: { model: selectedModel, runtime: "direct-provider" },
+    route,
   };
 }

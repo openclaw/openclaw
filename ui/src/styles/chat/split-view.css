@@ -874,26 +874,10 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     color: var(--muted);
   }
 
+  /* The row owns switch semantics; the shared indicator draws it. */
   & .chat-pane__sharing-switch {
+    display: inline-flex;
     justify-self: center;
-  }
-
-  /* The row owns switch semantics; the shared native control owns its geometry. */
-  & .chat-pane__sharing-public-toggle[aria-checked="true"] .settings-toggle__control {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-
-  & .chat-pane__sharing-public-toggle[aria-checked="true"] .settings-toggle__control::before {
-    transform: translateX(var(--settings-toggle-travel));
-    background: var(--bg);
-  }
-
-  &
-    .chat-pane__sharing-public-toggle[aria-checked="true"]
-    .settings-toggle:dir(rtl)
-    .settings-toggle__control::before {
-    transform: translateX(calc(var(--settings-toggle-travel) * -1));
   }
 
   & .chat-pane__sharing-disclosure {

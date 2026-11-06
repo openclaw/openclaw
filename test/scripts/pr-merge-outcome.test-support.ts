@@ -1,5 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
@@ -330,7 +339,9 @@ export function createMergeOutcomeFixtureHarness() {
     const clockPath = join(root, "clock");
     writeFileSync(clockPath, "0\n");
     const save = (state: typeof initial) => {
-      writeFileSync(statePath, JSON.stringify(state));
+      const temporary = `${statePath}.${randomUUID()}.tmp`;
+      writeFileSync(temporary, JSON.stringify(state));
+      renameSync(temporary, statePath);
       if (!state.review || !state.ready) {
         const file = join(worktree, ".local/review.json");
         const review = JSON.parse(readFileSync(file, "utf8"));
@@ -350,7 +361,12 @@ export function createMergeOutcomeFixtureHarness() {
 const file=process.env.FIXTURE_STATE;
 const s=JSON.parse(fs.readFileSync(file,"utf8"));
 const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","core.hooksPath=/dev/null",...args],{cwd:process.env.FIXTURE_REPO,env:process.env,input,encoding:"utf8"}).trim();
-const save=()=>fs.writeFileSync(file,JSON.stringify(s));
+// A dispatch crash can interrupt the final save after its explicit checkpoint.
+const save=()=>{
+  const temporary=file+"."+require("node:crypto").randomUUID()+".tmp";
+  fs.writeFileSync(temporary,JSON.stringify(s));
+  fs.renameSync(temporary,file);
+};
 const out=(value)=>{
   const body=typeof value==="string"?value:JSON.stringify(value);
   const writerQuery=args.includes("--include")&&args.includes("graphql")&&args.some(arg=>/^query=\\s*query\\b/.test(arg));
