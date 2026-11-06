@@ -167,61 +167,67 @@ export function sidebarPresentationProbe() {
           avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
           images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
         })),
-        rows: rows.map((row) => ({
-          key: row.getAttribute("data-session-key") ?? "",
-          ...avatarFacts(row),
-          avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
-          images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
-          ownerAvatars: row.querySelectorAll('.sidebar-session-indicator [class*="avatar"]').length,
-          presenceAvatars: row.querySelectorAll(
-            '.sidebar-recent-session__details-endcap [class*="avatar"]',
-          ).length,
-          glyphs: [
-            ...[...row.querySelectorAll(".session-glyph")].flatMap((glyph) => {
-              const content = [
-                ...glyph.querySelectorAll(
-                  ".session-glyph__content svg,.session-glyph__content .session-css-icon",
+        rows: rows.map((row) =>
+          Object.assign(avatarFacts(row), {
+            key: row.getAttribute("data-session-key") ?? "",
+            avatars: [...row.querySelectorAll('[class*="avatar"]')].map(
+              (avatar) => avatar.className,
+            ),
+            images: [...row.querySelectorAll("img")].map(
+              (image) => image.getAttribute("src") ?? "",
+            ),
+            ownerAvatars: row.querySelectorAll('.sidebar-session-indicator [class*="avatar"]')
+              .length,
+            presenceAvatars: row.querySelectorAll(
+              '.sidebar-recent-session__details-endcap [class*="avatar"]',
+            ).length,
+            glyphs: [
+              ...[...row.querySelectorAll(".session-glyph")].flatMap((glyph) => {
+                const content = [
+                  ...glyph.querySelectorAll(
+                    ".session-glyph__content svg,.session-glyph__content .session-css-icon",
+                  ),
+                ]
+                  .filter((svg) => !svg.closest(".viewer-avatar, .identity-avatar"))
+                  .map(artwork);
+                const running = glyph.classList.contains("session-glyph--running");
+                const badge = glyph.querySelectorAll(".session-glyph__badge--unread").length;
+                // Avatar shape is separate; its run/unread decoration still belongs in the gate.
+                return content.length || running || badge
+                  ? [
+                      JSON.stringify({
+                        content,
+                        running,
+                        badge,
+                        queued: Boolean(
+                          glyph.querySelector(
+                            ".session-glyph__ring--queued,.session-glyph__trace--queued",
+                          ),
+                        ),
+                      }),
+                    ]
+                  : [];
+              }),
+              ...[
+                ...row.querySelectorAll(
+                  ".sidebar-session-team-state__status svg,.sidebar-child-session__status svg,.sidebar-session-team-state__status .session-css-icon,.sidebar-child-session__status .session-css-icon",
                 ),
               ]
-                .filter((svg) => !svg.closest(".viewer-avatar, .identity-avatar"))
-                .map(artwork);
-              const running = glyph.classList.contains("session-glyph--running");
-              const badge = glyph.querySelectorAll(".session-glyph__badge--unread").length;
-              // Avatar shape is separate; its run/unread decoration still belongs in the gate.
-              return content.length || running || badge
-                ? [
-                    JSON.stringify({
-                      content,
-                      running,
-                      badge,
-                      queued: Boolean(
-                        glyph.querySelector(
-                          ".session-glyph__ring--queued,.session-glyph__trace--queued",
-                        ),
-                      ),
-                    }),
-                  ]
-                : [];
-            }),
-            ...[
-              ...row.querySelectorAll(
-                ".sidebar-session-team-state__status svg,.sidebar-child-session__status svg,.sidebar-session-team-state__status .session-css-icon,.sidebar-child-session__status .session-css-icon",
-              ),
-            ]
-              .filter((svg) => !svg.closest(".session-glyph"))
-              .map(artwork),
-          ],
-          unread: row.querySelectorAll(
-            ".session-glyph__badge--unread,.session-unread-dot,.sidebar-agent-roster__unread",
-          ).length,
-          badges: [...row.querySelectorAll(".session-row-badge")].map((badge) =>
-            JSON.stringify({
-              classes: badge.className,
-              state: badge.getAttribute("data-pull-request-state"),
-              count: badge.textContent?.trim(),
-            }),
-          ),
-        })),
+                .filter((svg) => !svg.closest(".session-glyph"))
+                .map(artwork),
+            ],
+            unread: row.querySelectorAll(
+              ".session-glyph__badge--unread,.session-unread-dot,.sidebar-agent-roster__unread",
+            ).length,
+            badges: [...row.querySelectorAll(".session-row-badge")].map((badge) =>
+              JSON.stringify({
+                classes: badge.className,
+                state: badge.getAttribute("data-pull-request-state"),
+                count: badge.textContent?.trim(),
+              }),
+            ),
+          }),
+        ),
         issues: {
           present: Boolean(sidebar.querySelector(".sidebar-issues-button")),
           count:

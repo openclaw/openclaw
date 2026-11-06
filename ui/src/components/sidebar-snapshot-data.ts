@@ -258,9 +258,9 @@ export function removeSidebarSnapshotSession(
   const next = {
     ...model,
     windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
-    onlineUsers: model.onlineUsers.map((user) => ({
-      ...user,
-      watchedSessions: user.watchedSessions.filter((key) => retain({ key })),
+    onlineUsers: model.onlineUsers.map((viewer) => ({
+      ...viewer,
+      watchedSessions: viewer.watchedSessions.filter((sessionKey) => retain({ key: sessionKey })),
     })),
     pinnedSessions: prune(model.pinnedSessions),
     pages: prune(model.pages),
