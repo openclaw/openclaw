@@ -131,19 +131,15 @@ suite.define(() => {
               await new Promise(requestAnimationFrame);
               return Reflect.get(window, "childActivityReloadFrames") as DetailsFrame[];
             });
-          const activityRequested = Promise.withResolvers<void>();
+          const activityRequested = page.waitForRequest(
+            "**/assets/chat-subagent-activity-live-*.js",
+          );
           const activityRelease = Promise.withResolvers<void>();
-          await page.route("**/assets/chat-subagent-activity-live-*.js", async (route) => {
-            activityRequested.resolve();
-            if (failActivity) {
-              await route.abort();
-              return;
-            }
-            await activityRelease.promise;
-            await route.continue();
-          });
+          await page.route("**/assets/chat-subagent-activity-live-*.js", (route) =>
+            failActivity ? route.abort() : activityRelease.promise.then(() => route.continue()),
+          );
           await page.reload({ waitUntil: "domcontentloaded" });
-          await activityRequested.promise;
+          await activityRequested;
           await gateway.waitForRequest("connect");
           if (failActivity) {
             await details.locator('[data-details-group="outputs"]').waitFor();
@@ -183,25 +179,18 @@ suite.define(() => {
           });
           const frames = await readFrames();
           const final = frames.at(-1)!;
-          expect(final.sections.map((section) => section.id)).toEqual([
-            "subagents",
-            "outputs",
-            "automations",
-          ]);
+          const sectionIds = ["subagents", "outputs", "automations"];
+          expect(final.sections.map((section) => section.id)).toEqual(sectionIds);
           for (const frame of frames) {
             expect(frame.rows).toBe(2);
-            expect(frame.sections.map((section) => section.id)).toEqual(
-              final.sections.map((section) => section.id),
-            );
+            expect(frame.sections.map((section) => section.id)).toEqual(sectionIds);
             frame.sections.forEach((section, index) => {
-              expect(
-                Math.abs(section.height - final.sections[index]!.height),
-                section.id,
-              ).toBeLessThanOrEqual(1);
-              expect(
-                Math.abs(section.top - final.sections[index]!.top),
-                section.id,
-              ).toBeLessThanOrEqual(1);
+              for (const dimension of ["height", "top"] as const) {
+                expect(
+                  Math.abs(section[dimension] - final.sections[index]![dimension]),
+                  `${section.id} ${dimension}`,
+                ).toBeLessThanOrEqual(1);
+              }
             });
           }
         },
