@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -121,7 +120,6 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
 export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(reply);
   const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
   const sendableParts = resolveSendableOutboundReplyParts(reply);
   const richParts = [
     reply.presentation ? "presentation" : undefined,
@@ -135,10 +133,7 @@ export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string 
     `error=${reply.isError === true}`,
     `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
     `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
-    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].join(" ");
 }
 
 async function maybeApplyTtsToReplyPayload(
