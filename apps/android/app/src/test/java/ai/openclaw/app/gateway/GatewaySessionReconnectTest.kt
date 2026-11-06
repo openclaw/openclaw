@@ -963,7 +963,14 @@ class GatewaySessionReconnectTest {
         assertTrue(legacyAbort.exceptionOrNull() is GatewayRequestRejected)
         assertTrue(replacement.isCurrent())
         val closes = server.requestFrames.filter { it["method"]?.jsonPrimitive?.content == "talk.session.close" }
-        assertEquals(listOf("abort", "detach", null), closes.map { it.getValue("params").jsonObject["disposition"]?.jsonPrimitive?.content })
+        assertEquals(
+          listOf("abort", "detach", null),
+          closes.map {
+            it.getValue("params").jsonObject["disposition"]
+              ?.jsonPrimitive
+              ?.content
+          },
+        )
       } finally {
         shutdownReconnectHarness(harness, server)
       }
