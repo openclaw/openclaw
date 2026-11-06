@@ -1409,29 +1409,19 @@ button.chat-reply-attribution__target:disabled {
      declare. Tool cards and the action row keep their own stacking.
      GitHub reference chips reset their link positioning; lift them too. */
   :where(.chat-group-messages)
-    :where(a):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(button):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(summary):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where([role="button"]):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where([data-openable]):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(input:not(.oc-sensitive-input > input)):where(
-      :not(.chat-tool-card *, .chat-message-actions-row *)
-    ),
-  :where(.chat-group-messages)
-    :where(select):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(textarea):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(label):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(video):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
-  :where(.chat-group-messages)
-    :where(audio):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
+    :where(
+      a,
+      button,
+      summary,
+      [role="button"],
+      [data-openable],
+      input:not(.oc-sensitive-input > input),
+      select,
+      textarea,
+      label,
+      video,
+      audio
+    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
   .chat-group-messages .chat-text a.markdown-github-item {
     position: relative;
     z-index: 1;
