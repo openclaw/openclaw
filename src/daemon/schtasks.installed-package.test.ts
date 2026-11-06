@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createNestedGitEnv } from "../../test/helpers/temp-repo.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
@@ -18,6 +19,7 @@ import {
   type InstalledTask,
 } from "./schtasks.installed-diagnostics.test-support.js";
 import { verifyInstalledFingerprintSource } from "./schtasks.installed-fingerprint-observer.test-support.mts";
+import { readInstalledLifecycleEvents } from "./schtasks.installed-lifecycle-log.test-support.js";
 import * as installedPackage from "./schtasks.installed-package.test-support.js";
 import { boundedEnv, installedStatusSchema } from "./schtasks.installed-package.test-support.js";
 import * as nativeObservation from "./schtasks.integration-observation.test-support.js";
@@ -62,6 +64,63 @@ function commandFixture(extraEnv: NodeJS.ProcessEnv = {}) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("retains the pre-cancellation leader and pipe facts when the installed update times out", async () => {
+  vi.spyOn(managedChild, "runManagedCommand").mockImplementation(async (options) => {
+    options.onTimeout?.({
+      elapsedMs: 360_000,
+      exit: null,
+      stdout: { bytes: 0, closed: false, lastDataElapsedMs: null },
+      stderr: { bytes: 12, closed: false, lastDataElapsedMs: 350_000 },
+    });
+    throw new Error("Synthetic command timeout");
+  });
+  const fixture = commandFixture();
+  await expect(fixture.run("", { commandBudget: "published-update" })).rejects.toThrow("timeout");
+  expect(fixture.records[0]).toMatchObject({
+    budgetMs: 360_000,
+    startedAtMs: expect.any(Number),
+    timeoutObservation: {
+      capturedAtMs: expect.any(Number),
+      elapsedMs: 360_000,
+      exit: null,
+      stdout: { bytes: 0, closed: false },
+      stderr: { bytes: 12, closed: false },
+    },
+  });
+});
+
+it("exports scalar lifecycle timings while withholding grants and raw log content", async () => {
+  const rootDir = temporary.make("installed-lifecycle-");
+  const event = {
+    phase: "windows.task-stop",
+    event: "start",
+    timestamp: "2026-11-06T00:00:00Z",
+    elapsedMs: 0,
+    pid: 123,
+    action: "restart",
+    grant: secret,
+    token: secret,
+    argv: [secret],
+  };
+  fs.writeFileSync(
+    path.join(rootDir, "lifecycle-selected.log"),
+    [
+      JSON.stringify({ "0": "token=" + secret }),
+      JSON.stringify({ "0": "update-phase " + JSON.stringify(event) }),
+      '{"0":"update-phase ',
+    ].join("\n"),
+  );
+  const result = await readInstalledLifecycleEvents({ rootDir, stateDir: rootDir, env: {} });
+  expect(result).toMatchObject({
+    events: [
+      { phase: "windows.task-stop", event: "start", elapsedMs: 0, pid: 123, action: "restart" },
+    ],
+    malformed: 1,
+  });
+  expect(JSON.stringify(result)).not.toContain(secret);
+  expect(result.events[0]).not.toHaveProperty("grant");
 });
 
 it.each(["stdout"] as const)("sanitizes colored %s before clipping diagnostics", async (stream) => {
@@ -491,9 +550,9 @@ describe("published installed update progress", () => {
   });
 
   it.each([false, true])(
-    "bounds and sanitizes unfinished update snapshots (native failure=%s)",
+    "reserves a sanitized restart snapshot after earlier progress polls (native failure=%s)",
     async (failed) => {
-      vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([active]);
+      const progress = vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([active]);
       const processFacts = {
         pid: 1234,
         parentPid: 1200,
@@ -523,6 +582,9 @@ describe("published installed update progress", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(census).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(15_000);
+      expect(census).toHaveBeenCalledTimes(1);
+      progress.mockResolvedValue([{ ...active, phase: "restarting" }]);
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(census).toHaveBeenCalledTimes(2);
       const diagnostic = failed
         ? { unavailable: expect.stringContaining("observation failed") }
@@ -530,11 +592,11 @@ describe("published installed update progress", () => {
       expect(fixture.observations.updateSettlementProcesses).toMatchObject(
         [
           { capturedAtMs: invokedAt + 300_000, reason: "elapsed-300s" },
-          { capturedAtMs: invokedAt + 315_000, reason: "follow-up" },
+          { capturedAtMs: invokedAt + 330_000, reason: "restarting", phase: "restarting" },
         ].map((sample) =>
           Object.assign(
-            sample,
             { runId: active.runId, phase: "verifying", status: "running" },
+            sample,
             diagnostic,
           ),
         ),
@@ -544,10 +606,16 @@ describe("published installed update progress", () => {
       expect(retained.length).toBeLessThan(5000);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(census).toHaveBeenCalledTimes(2);
-      expect(fixture.recordProgress).toHaveBeenCalledTimes(1);
+      expect(fixture.recordProgress).toHaveBeenCalledTimes(3);
+      expect(fixture.observations.updateProgress).toMatchObject({ phase: "restarting" });
       fixture.command.resolve(JSON.stringify(success));
       await expect(fixture.pending).resolves.toEqual(success);
-      expect(fixture.phases()).toEqual(["published-update:completed-step", "command:update"]);
+      expect(fixture.phases()).toEqual([
+        "published-update:completed-step",
+        "published-update:phase",
+        "published-update:phase",
+        "command:update",
+      ]);
     },
   );
 });

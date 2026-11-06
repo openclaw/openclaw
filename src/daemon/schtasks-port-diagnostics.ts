@@ -1,6 +1,7 @@
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortUsageStatus } from "../infra/ports-types.js";
+import { startUpdatePhase } from "../infra/update-phase-diagnostics.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { sleep } from "../utils.js";
 
@@ -36,10 +37,12 @@ export async function waitForGatewayPortRelease(
   port: number,
   probeHosts: readonly string[],
 ): Promise<boolean> {
+  const finish = startUpdatePhase("gateway-port-release");
   const deadline = Date.now() + 5_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5_000);
   let status: PortUsageStatus = "unknown";
+  let failed = false;
   try {
     while (Date.now() < deadline) {
       const diagnostics = await inspectPortUsage(port, {
@@ -59,7 +62,11 @@ export async function waitForGatewayPortRelease(
       );
     }
     return false;
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
     clearTimeout(timer);
+    finish({ status, outcome: failed ? "error" : "ok" });
   }
 }

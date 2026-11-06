@@ -7,6 +7,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
+import { logUpdatePhase } from "./update-phase-diagnostics.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
 import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
@@ -65,6 +66,12 @@ export function applyUpdateRunPhase(
     (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
   ) {
     const now = Date.now();
+    const previous = record.steps.find((step) => step.step === record.phase);
+    logUpdatePhase(record.phase, "end", previous?.startedAtMs ?? record.createdAtMs, {
+      operationId: record.runId,
+      outcome: "ok",
+    });
+    logUpdatePhase(phase, "start", now, { operationId: record.runId });
     upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
     record.phase = phase;
     upsertStep(record, {
@@ -346,6 +353,11 @@ export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpda
       (result.status === "failed"
         ? record.steps.find((step) => step.step === record.phase)
         : undefined);
+    const active = record.steps.find((step) => step.step === record.phase);
+    logUpdatePhase(record.phase, "end", active?.startedAtMs ?? record.createdAtMs, {
+      operationId: record.runId,
+      outcome: result.status,
+    });
     finishUpdateRunRecord(record, result);
     if (result.status === "failed" || result.status === "rolled-back") {
       const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);

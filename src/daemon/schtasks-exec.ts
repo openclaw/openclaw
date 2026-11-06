@@ -1,3 +1,4 @@
+import { startUpdatePhase } from "../infra/update-phase-diagnostics.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import {
   buildEncodedPowerShellArgs,
@@ -14,10 +15,22 @@ export async function execSchtasks(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   assertGatewayServiceUpdateCurrent();
-  const result = await runCommandWithTimeout(["schtasks", ...args], {
-    baseEnv: resolveServiceManagerEnv(),
-    timeoutMs: SCHTASKS_TIMEOUT_MS,
-  });
+  // Keep operation names closed: task names and native arguments are private.
+  const nativeOperation = ["/query", "/end", "/create", "/run", "/change", "/delete"].find(
+    (operation) => operation === args[0]?.toLowerCase(),
+  );
+  const finish = startUpdatePhase(`schtasks-${nativeOperation?.slice(1) ?? "other"}`);
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+  try {
+    result = await runCommandWithTimeout(["schtasks", ...args], {
+      baseEnv: resolveServiceManagerEnv(),
+      timeoutMs: SCHTASKS_TIMEOUT_MS,
+    });
+    finish({ code: result.code, termination: result.termination, cleanup: result.cleanup });
+  } catch (error) {
+    finish({ outcome: "error" });
+    throw error;
+  }
   const operation = [args[0], args.find((arg) => /^\/(?:DISABLE|ENABLE)$/i.test(arg))]
     .filter(Boolean)
     .join(" ");
@@ -59,13 +72,19 @@ export async function execScheduledTaskEnabledChange(
     "exit 1",
     "}",
   ].join("\n");
-  const result = await execFileUtf8(
-    getWindowsPowerShellExePath(),
-    buildEncodedPowerShellArgs(script),
-    {
+  const finish = startUpdatePhase("schtasks-enabled-change", {
+    action: enabled ? "enable" : "disable",
+  });
+  let result: Awaited<ReturnType<typeof execFileUtf8>>;
+  try {
+    result = await execFileUtf8(getWindowsPowerShellExePath(), buildEncodedPowerShellArgs(script), {
       timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
-    },
-  );
+    });
+    finish({ code: result.code, termination: result.termination });
+  } catch (error) {
+    finish({ outcome: "error" });
+    throw error;
+  }
   const nativeCode = result.stdout.trim();
   const hresult = Number(nativeCode);
   return {
