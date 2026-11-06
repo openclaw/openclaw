@@ -1,0 +1,3 @@
+42
+# Extend the existing saved-display owner proof to the durable transcript worker
+# and concurrent requester isolation, reusing the incognito scenario and fixture.

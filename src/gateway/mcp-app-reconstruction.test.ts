@@ -74,7 +74,7 @@ beforeEach(() => {
   mocks.getMcpAppViewLease.mockReturnValue(view);
 });
 
-async function restoreFromMessages(messages: unknown[], viewId: string) {
+async function restoreFromMessages(messages: unknown[], viewId: string, requesterId?: string) {
   mocks.visitSessionMessagesAsync.mockImplementation(
     (_scope: unknown, visit: (message: unknown) => void) => {
       for (const message of messages) {
@@ -82,7 +82,7 @@ async function restoreFromMessages(messages: unknown[], viewId: string) {
       }
     },
   );
-  return await restoreMcpAppView({ cfg: {}, sessionKey: "agent:main:main", viewId });
+  return await restoreMcpAppView({ cfg: {}, sessionKey: "agent:main:main", viewId, requesterId });
 }
 
 function descriptor(viewId: string, toolCallId: string) {
@@ -276,18 +276,19 @@ describe("MCP App transcript reconstruction", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("restores saved App-only content without reading the original tool again", async () => {
+  it("restores saved App-only content while isolating concurrent requesters", async () => {
     const savedDisplay = {
       version: 1,
       descriptor: descriptor("mcp-app-saved", "call-1"),
       html: "<!doctype html><main>Saved synthetic diagram</main>",
+      requesterId: "alice",
       toolInput: { city: "Paris" },
       toolResult: {
         content: [{ type: "text", text: "created once" }],
         _meta: { checkpoint: "synthetic-checkpoint", diagram: ["choose", "add", "chat"] },
       },
     };
-    const restored = await restoreFromMessages(
+    const restoration = restoreFromMessages(
       [
         {
           role: "assistant",
@@ -301,8 +302,21 @@ describe("MCP App transcript reconstruction", () => {
         toolResult("mcp-app-saved", "call-1", { resultMetaState: "unavailable" }),
       ],
       "mcp-app-saved",
+      "alice",
     );
+    const [restored, otherRequester] = await Promise.all([
+      restoration,
+      restoreMcpAppView({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        viewId: "mcp-app-saved",
+        requesterId: "bob",
+      }),
+    ]);
     expect(restored).toEqual({ runtime, view });
+    expect(otherRequester).toBeUndefined();
+    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledOnce();
+    expect(mocks.fetchMcpAppView).toHaveBeenCalledOnce();
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
       expect.objectContaining({
         savedDisplay,
