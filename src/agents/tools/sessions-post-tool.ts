@@ -17,6 +17,7 @@ import {
   resolveSessionToolCreatorReadAccess,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
+import { sendFailure } from "./sessions-send-helpers.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
 /** Posting is a transcript mutation, deliberately separate from send/steer preparation. */
@@ -41,10 +42,10 @@ export async function executeSessionPost(
   });
   const session = described?.session;
   if (!isRecord(session) || !isSessionToolRequesterCreator(session.createdActor)) {
-    return jsonResult({
-      status: "forbidden",
-      error: "Posts require a session created by the authenticated requesting human.",
-    });
+    return sendFailure(
+      "forbidden",
+      "Posts require a session created by the authenticated requesting human.",
+    );
   }
   const targetRow = readDescribedSessionVisibilityRow(session);
   if (!targetRow || typeof session.sessionId !== "string") {
@@ -81,13 +82,13 @@ export async function executeSessionPost(
     callGateway,
   });
   if (!access.allowed) {
-    return jsonResult({
-      status: "forbidden",
-      error: formatSessionToolAccessDenial(access, {
+    return sendFailure(
+      "forbidden",
+      formatSessionToolAccessDenial(access, {
         action: "send",
         targetSessionKey: targetRow.key,
       }),
-    });
+    );
   }
   // Reuse the send decision so explicit outbound denials and native-child exceptions agree.
   // Preserve only the authenticated creator's tree exception; this never admits a turn.
@@ -112,13 +113,13 @@ export async function executeSessionPost(
   };
   const outbound = checkOutbound();
   if (!outbound.allowed) {
-    return jsonResult({
-      status: "forbidden",
-      error: formatSessionToolAccessDenial(outbound, {
+    return sendFailure(
+      "forbidden",
+      formatSessionToolAccessDenial(outbound, {
         action: "send",
         targetSessionKey: targetRow.key,
       }),
-    });
+    );
   }
   const receipt = await callGateway({
     method: "sessions.post",

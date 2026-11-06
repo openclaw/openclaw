@@ -3,6 +3,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { sessionManagerReadInitialContext } from "../agents/sessions/session-manager-current-turn.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  resolveToolSearchConfig,
+} from "../agents/tool-search.js";
 import { withGatewayPersonalToolUser } from "../agents/tools/gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { createSessionStatusTool } from "../agents/tools/session-status-tool.js";
@@ -97,14 +103,31 @@ it("discovers and reads an independent session created by the requesting human",
           user: alice.profileId,
         }),
       ).resolves.toMatchObject({ details: { status: "forbidden" } });
-      await expect(
-        createSessionsSendTool(options).execute("foreign-created-post", {
-          sessionKey: foreign,
-          user: alice.profileId,
-          mode: "post",
-          message: "Foreign session must not be writable",
-        }),
-      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({
+        catalogRef,
+        tools: [createSessionsSendTool(options)],
+        hookContext: { runId: "post-denials" },
+      });
+      const postCatalog = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
+      for (const target of [foreign, "agent:main:dashboard:missing-post-target"]) {
+        await expect(
+          postCatalog.callValue(
+            "sessions_send",
+            {
+              sessionKey: target,
+              user: alice.profileId,
+              mode: "post",
+              message: "Foreign session must not be writable",
+            },
+            { parentToolCallId: "post-denials" },
+          ),
+        ).resolves.toMatchObject({
+          status: "forbidden",
+          runId: expect.any(String),
+          error: expect.any(String),
+        });
+      }
       expect(
         JSON.stringify(
           await loadTranscriptEvents({
@@ -312,12 +335,23 @@ it.each<ExplicitPolicyCase>([
           agentSessionKey: REQUESTER,
           requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
         };
-        const post = await createSessionsSendTool(options).execute("policy-post", {
-          sessionKey: key,
-          user: alice.profileId,
-          mode: "post",
-          message: "Must not bypass explicit policy",
+        const catalogRef = createToolSearchCatalogRef();
+        registerHeadlessToolSearchCatalog({
+          catalogRef,
+          tools: [createSessionsSendTool(options)],
+          hookContext: { runId: "policy-post" },
         });
+        const postCatalog = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
+        const post = await postCatalog.callValue(
+          "sessions_send",
+          {
+            sessionKey: key,
+            user: alice.profileId,
+            mode: "post",
+            message: "Must not bypass explicit policy",
+          },
+          { parentToolCallId: "policy-post" },
+        );
         const list = await createSessionsListTool(options).execute("policy-list", {
           relationship: "created",
           user: alice.profileId,
@@ -327,14 +361,23 @@ it.each<ExplicitPolicyCase>([
           user: alice.profileId,
         });
         expect({
-          post: post.details,
+          post,
           listed: JSON.stringify(list.details).includes(key),
           history: history.details,
         }).toMatchObject({
-          post: { status: "forbidden" },
+          post: { status: "forbidden", runId: expect.any(String), error: expect.any(String) },
           listed: false,
           history: { status: "forbidden" },
         });
+        expect(
+          JSON.stringify(
+            await loadTranscriptEvents({
+              agentId: targetAgent,
+              sessionKey: key,
+              sessionId: "own-policy-target-id",
+            }),
+          ),
+        ).not.toContain("Must not bypass explicit policy");
       },
       { visibility, agentToAgent },
     );
@@ -505,14 +548,34 @@ it("keeps reads allowed while enforcing explicit outbound post denial", async ()
           messages: [expect.objectContaining({ content: "Readable despite outbound denial" })],
         },
       });
+      const catalogRef = createToolSearchCatalogRef();
+      registerHeadlessToolSearchCatalog({
+        catalogRef,
+        tools: [createSessionsSendTool(options)],
+        hookContext: { runId: "outbound-post" },
+      });
+      const postCatalog = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig());
       await expect(
-        createSessionsSendTool(options).execute("outbound-post", {
-          sessionKey: key,
-          user: alice.profileId,
-          mode: "post",
-          message: "Must respect explicit outbound denial",
-        }),
-      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+        postCatalog.callValue(
+          "sessions_send",
+          {
+            sessionKey: key,
+            user: alice.profileId,
+            mode: "post",
+            message: "Must respect explicit outbound denial",
+          },
+          { parentToolCallId: "outbound-post" },
+        ),
+      ).resolves.toMatchObject({
+        status: "forbidden",
+        runId: expect.any(String),
+        error: expect.any(String),
+      });
+      expect(
+        JSON.stringify(
+          await loadTranscriptEvents({ agentId: "other", sessionKey: key, sessionId }),
+        ),
+      ).not.toContain("Must respect explicit outbound denial");
     },
     { visibility: "all", mainSend: [] },
   );
