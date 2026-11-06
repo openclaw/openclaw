@@ -115,6 +115,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     pages: { type: "boolean", default: false },
     "page-phases": { type: "string", default: "visit,action,leave" },
+    "page-origin": { type: "string", default: "new-session" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
@@ -134,6 +135,10 @@ if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRou
 }
 const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
 const pagePhases = values["page-phases"].split(",");
+const pageOrigin = values["page-origin"];
+if (pageOrigin !== "new-session" && pageOrigin !== "chat") {
+  throw new Error("page-origin must be new-session or chat");
+}
 if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes(phase))) {
   throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
@@ -218,7 +223,7 @@ const needsWorkboard =
       (id) =>
         id.startsWith("workboard-") ||
         id.startsWith("noop-workboard-") ||
-        /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
+        /^page-(?:workboard|plugin)-(?:visit|revisit|action|leave)$/u.test(id),
     );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
   throw new Error("Workboard comparisons require a source root for each bundle");
@@ -367,7 +372,7 @@ try {
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEnginePageScenarios(),
+    ...createEnginePageScenarios(0, pageOrigin),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -397,11 +402,19 @@ try {
   ) {
     throw new Error("Unknown or empty --steps selection");
   }
+  if (pageOrigin === "chat" && scenarios.some((scenario) => scenario.fixture?.workboardResources)) {
+    throw new Error("Workboard/plugin resource fixtures require --page-origin new-session");
+  }
   if (
     networkProfiles.some(({ name }) => name !== "localhost") &&
-    scenarios.some(({ id }) => id !== "cold-boot" && id !== "warm-boot")
+    scenarios.some(
+      ({ id }) =>
+        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+    )
   ) {
-    throw new Error("Nonlocal --network-profiles require --steps cold-boot,warm-boot");
+    throw new Error(
+      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+    );
   }
   planned =
     scenarios.length *
@@ -471,6 +484,7 @@ try {
     pairs,
     viewports,
     networkProfiles,
+    pageOrigin,
     configurations,
     trace: values.trace,
     observerOrigins: values["observer-origins"],
@@ -543,6 +557,11 @@ try {
               createEngineCompletedRunScenarios(slot.server.baseUrl).find(
                 ({ id }) => id === item.id,
               ) ??
+              (item.id.startsWith("page-")
+                ? createEnginePageScenarios(networkProfile.gatewayLatencyMs, pageOrigin).find(
+                    ({ id }) => id === item.id,
+                  )
+                : undefined) ??
               item;
             const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}-${configuration.name.replaceAll(":", "-")}`;
             const observation: Observation = {
@@ -895,6 +914,12 @@ try {
               observation.pageMetrics = await readControlUiPageObserver(
                 page,
                 observation.actionTiming?.startMs,
+                typeof observation.evidence?.visitReadyAtMs === "number"
+                  ? observation.evidence.visitReadyAtMs
+                  : undefined,
+                typeof observation.evidence?.visitStartedAtMs === "number"
+                  ? observation.evidence.visitStartedAtMs
+                  : undefined,
               );
               if (values["native-audit"]) {
                 await writeJson(`${artifactPrefix}.native.json`, captured);
@@ -936,8 +961,6 @@ try {
                 );
               }
               if (scenario.id.startsWith("page-")) {
-                // The earlier reset counts initial DOM outside CPU collection. Exclude
-                // CDP/profiler setup from long tasks and shifts using the actual action boundary.
                 observation.evidence = {
                   ...observation.evidence,
                   ...(await collectEnginePageStructure(page)),
@@ -1192,6 +1215,10 @@ const summary = [...cells.values()].map((cell) => {
           "allShiftSum",
           "elementsBefore",
           "elementsAfter",
+          "assetRequests",
+          "assetRequestsCompletedByReady",
+          "assetEncodedBytesCompletedByReady",
+          "http1AssetConnectionWavesByReady",
         ] as const
       ).map((metric) => [
         metric,
@@ -1366,15 +1393,15 @@ await writeFile(
               return `| ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumReady)} | ${format(webkitReady)} | ${routeReadyRatio?.toFixed(2) ?? "—"} |`;
             }),
           "",
-          "| Engine | Viewport | Phase | Bundle | Passed/failed | Route ready median/p95 ms | Content complete median/p95 ms | Wall median/p95 ms | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| Engine | Viewport | Phase | Network | Bundle | Passed/failed | Route ready median/p95 ms | Content complete median/p95 ms | Wall median/p95 ms | Ready assets / HTTP/1.1 wave floor | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
           ...summary
             .filter(({ step }) => step.startsWith("page-"))
             .map((row) => {
               const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
               const readyTiming = row.evidence.visitReadyMs ?? row.evidence.leaveReadyMs;
               const completeTiming = row.evidence.contentReadyMs;
-              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(readyTiming?.median)}/${number(readyTiming?.p95)} | ${number(completeTiming?.median)}/${number(completeTiming?.p95)} | ${number(row.wallMs?.median)}/${number(row.wallMs?.p95)} | ${number(row.pageMetrics.longestLongTaskMs?.p95)} | ${number(row.metrics.scriptMs?.median)}/${number(row.metrics.styleMs?.median)}/${number(row.metrics.layoutMs?.median)} | ${number(row.pageMetrics.cls?.max)} | ${number(row.pageMetrics.allShiftSum?.max)} | ${number(row.pageMetrics.elementsAfter?.median)} |`;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(readyTiming?.median)}/${number(readyTiming?.p95)} | ${number(completeTiming?.median)}/${number(completeTiming?.p95)} | ${number(row.wallMs?.median)}/${number(row.wallMs?.p95)} | ${number(row.pageMetrics.assetRequestsCompletedByReady?.median)}/${number(row.pageMetrics.http1AssetConnectionWavesByReady?.median)} | ${number(row.pageMetrics.longestLongTaskMs?.p95)} | ${number(row.metrics.scriptMs?.median)}/${number(row.metrics.styleMs?.median)}/${number(row.metrics.layoutMs?.median)} | ${number(row.pageMetrics.cls?.max)} | ${number(row.pageMetrics.allShiftSum?.max)} | ${number(row.pageMetrics.elementsAfter?.median)} |`;
             }),
         ]
       : []),
