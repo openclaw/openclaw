@@ -4810,7 +4810,7 @@ function createCompactNodeTestShardBundles(
   const groupsByRunner = new Map<string, [NodeTestShardGroup, ...NodeTestShardGroup[]]>();
   const synthesizedSplitSeconds = new Map<string, number>();
   const selectedToolingTimings =
-    selectedToolingFiles && options.runnerBackend === "hybrid"
+    selectedToolingFiles && (isBlacksmithProfile || options.runnerBackend === "hybrid")
       ? readToolingFileTimings("blacksmith")
       : undefined;
   const runnerRank = (group: Pick<NodeTestShardGroup, "runner">) =>

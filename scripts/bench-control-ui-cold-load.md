@@ -83,6 +83,19 @@ invalidations or proof that every pixel in that rectangle changed.
 
 ## Cross-flow CPU census
 
+The opt-in `provider-model-picker-artwork-cycles` engines scenario checks the
+custom provider artwork path omitted by the ordinary model fixtures. It opens,
+filters and reopens a 1,000-model picker whose rows share one synthetic image,
+checks that the images decode and selection stays unchanged, and reports image
+requests, blob reads and object URL lifetimes. Run it against a build supporting
+custom provider artwork; its instrumented timings are not performance evidence.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --steps provider-model-picker-artwork-cycles --engines chromium,webkit,firefox \
+  --viewport both --output .artifacts/provider-artwork
+```
+
 Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
 costs shared across its existing route and interaction workloads. It uses V8
 sampling without Playwright/Timeline tracing and writes source-mapped

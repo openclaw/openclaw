@@ -437,6 +437,8 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
   "scripts/preflight-frozen-target-contracts.mjs!",
+  // The documented stable-to-candidate Goal upgrade proof runs as a standalone CLI.
+  "scripts/proof-control-ui-goal-upgrade.ts!",
   // #175328 invokes this real agent-exec streaming proof by path.
   "scripts/proof-final-answer-stream.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
