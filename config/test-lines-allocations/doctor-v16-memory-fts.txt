@@ -1,0 +1,2 @@
+# Legal lazy memory FTS must survive the published beta.6 v16 Doctor repair.
+70

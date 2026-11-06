@@ -24,6 +24,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  buildSqliteMemoryBodyFtsSchema,
+  buildSqliteMemoryPathFtsSchema,
+} from "./database-engine/sqlite-memory-search-fragments.js";
+import { ensureMemoryPathFtsTriggers } from "./database-engine/sqlite-search-schema.js";
+import {
   completeGatewayBootLifecycle,
   inspectGatewayCrashLoopBreakerAsync,
   beginGatewayBootLifecycle,
@@ -288,6 +293,11 @@ function createHistoricalFixture() {
 
 it.each([
   "valid",
+  "valid-fts-shadow",
+  "valid-fts-trigram",
+  "drifted-memory-fts",
+  "fake-fts-shadow",
+  "unknown-fts",
   "invalid-entry",
   "unknown-column",
   "unknown-table",
@@ -345,20 +355,78 @@ it.each([
           `CREATE TRIGGER session_nodes_entry_valid_after_insert AFTER INSERT ON session_nodes BEGIN DELETE FROM session_nodes WHERE session_key = NEW.session_key; END`,
         );
       }
+      if (scenario === "valid-fts-shadow" || scenario === "valid-fts-trigram") {
+        const tokenizer = scenario === "valid-fts-trigram" ? "trigram" : "unicode61";
+        db.prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', 'synthetic-hash', 1000, 64)",
+        ).run("notes/synthetic.md");
+        db.prepare(
+          `INSERT INTO memory_index_chunks
+            (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+            VALUES ('chunk-1', 'notes/synthetic.md', 'memory', 1, 2, 'synthetic-hash', 'synthetic-model', ?, '[]', 1000)`,
+        ).run("synthetic memory token");
+        db.exec(
+          buildSqliteMemoryBodyFtsSchema({ tableName: "memory_index_chunks_fts", tokenizer }),
+        );
+        db.exec(buildSqliteMemoryPathFtsSchema({ tokenizer }));
+        // Current chunk triggers address chunk_rowid, which this published v16
+        // chunks table does not have. The lazy index is the virtual tables.
+        ensureMemoryPathFtsTriggers(db);
+        db.prepare(
+          `INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line)
+            VALUES ('synthetic memory token', 'chunk-1', 'notes/synthetic.md', 'memory', 'synthetic-model', 1, 2)`,
+        ).run();
+        db.prepare(
+          "INSERT INTO memory_index_paths_fts (path, source) VALUES ('notes/synthetic.md', 'memory')",
+        ).run();
+      }
+      if (scenario === "drifted-memory-fts") {
+        db.exec("CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(text)");
+      }
+      if (scenario === "fake-fts-shadow") {
+        db.exec("CREATE TABLE memory_index_chunks_fts_data (id INTEGER PRIMARY KEY, block BLOB)");
+      }
+      if (scenario === "unknown-fts") {
+        db.exec("CREATE VIRTUAL TABLE unknown_fts USING fts5(text)");
+      }
     }
     registerOpenClawAgentDatabase({ agentId: "main", env, path: dbPath, schemaVersion: 16 });
     const result = await migrateLegacyMediaPersistence({ env });
     using db = openFixtureDatabase(dbPath, true);
-    if (scenario === "valid") {
+    if (
+      scenario === "valid" ||
+      scenario === "valid-fts-shadow" ||
+      scenario === "valid-fts-trigram"
+    ) {
       expect(result.warnings).toEqual([]);
       expectVersion(db, OPENCLAW_AGENT_SCHEMA_VERSION);
       expect(get(db, "SELECT entry_json FROM session_nodes")).toEqual({ entry_json: entry });
       expect(get(db, "SELECT event_json FROM transcript_events")).toEqual({ event_json: event });
+      if (scenario !== "valid") {
+        expect(get(db, "SELECT text FROM memory_index_chunks")).toEqual({
+          text: "synthetic memory token",
+        });
+        expect(
+          get(
+            db,
+            "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'synthetic'",
+          ),
+        ).toEqual({ text: "synthetic memory token" });
+        expect(
+          get(
+            db,
+            "SELECT path FROM memory_index_paths_fts WHERE memory_index_paths_fts MATCH 'synthetic'",
+          ),
+        ).toEqual({ path: "notes/synthetic.md" });
+      }
       expect(get(db, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
       expect(all(db, "PRAGMA foreign_key_check")).toEqual([]);
       expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
     } else {
       const refusal = {
+        "drifted-memory-fts": "drifted memory FTS table memory_index_chunks_fts",
+        "fake-fts-shadow": "unexpected table memory_index_chunks_fts_data",
+        "unknown-fts": "unexpected table unknown_fts",
         "invalid-entry": "invalid session entry identity or JSON",
         "unknown-column": "column definitions differ for session_nodes",
         "unknown-table": "unexpected table unknown_table",
