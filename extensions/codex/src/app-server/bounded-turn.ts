@@ -19,6 +19,7 @@ import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./c
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
+import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
 import { readCodexAppServerConfigOptions, resolveCodexPrivateLauncher } from "./launch-args.js";
 import { readModelListResult, type CodexAppServerModel } from "./models.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
@@ -45,6 +46,8 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
+
+const loadInferenceRouting = createLazyRuntimeModule(() => import("./inference-routing.js"));
 
 const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
 
@@ -120,6 +123,8 @@ type CodexBoundedTurnParams = {
   threadConfig?: JsonObject;
   historyItems?: JsonValue[];
   requireNoExternalCapabilities?: boolean;
+  /** Preserve a prepared API destination through the owned OAuth/API relay. */
+  requireInferenceRoute?: boolean;
   /** Preserve a completed turn when the caller's contract accepts no visible answer. */
   allowEmptyText?: boolean;
 };
@@ -203,6 +208,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     }),
   );
   const abortController = new AbortController();
+  let releaseInferenceContext: (() => void) | undefined;
   let activeThreadId: string | undefined;
   let activeTurnId = "";
   let interruptPromise: Promise<boolean> | undefined;
@@ -275,17 +281,45 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         abortController.signal,
       ));
     }
-    const threadConfig = buildCodexRuntimeThreadConfig(
+    let threadConfig = buildCodexRuntimeThreadConfig(
       resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames, enableManagedHooks),
       { nativeCodeModeEnabled: false },
     );
+    const inference = params.requireInferenceRoute
+      ? await (
+          await loadInferenceRouting()
+        ).prepareCodexInferenceThreadConfig({
+          client,
+          clientId: client.getInstanceId(),
+          binding: undefined,
+          cwd: workspace.cwd,
+          config: threadConfig,
+          modelProvider: params.modelProvider,
+          boundedModel: modelSelection.model,
+          signal: abortController.signal,
+          assertCurrent: () => {
+            abortController.signal.throwIfAborted();
+            params.assertCurrent?.();
+          },
+        })
+      : undefined;
+    if (params.requireInferenceRoute && !inference) {
+      throw new Error(
+        "Prepared Codex API route requires an owned inference relay; no direct fallback was attempted.",
+      );
+    }
+    threadConfig = inference?.config ?? threadConfig;
+    const modelProvider =
+      typeof threadConfig.model_provider === "string"
+        ? threadConfig.model_provider
+        : params.modelProvider;
     params.assertCurrent?.();
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
         {
           model: modelSelection.model,
-          ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+          ...(modelProvider ? { modelProvider } : {}),
           cwd: workspace.cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
@@ -322,6 +356,18 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         requestOptions,
       );
     }
+    const registration = await inference?.route.context.register({
+      threadId: thread.thread.id,
+      text: "",
+      signal: abortController.signal,
+      assertCurrent: () => {
+        abortController.signal.throwIfAborted();
+        params.assertCurrent?.();
+      },
+      retainPrefix: false,
+      denyToolCalls: params.requireNoExternalCapabilities,
+    });
+    releaseInferenceContext = registration?.release;
     params.assertCurrent?.();
     const collector = new CodexEphemeralTurn(client, thread.thread.id, {
       textMode: "all",
@@ -336,6 +382,13 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           {
             threadId: thread.thread.id,
             input: params.input,
+            ...(registration
+              ? {
+                  responsesapiClientMetadata: {
+                    [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+                  },
+                }
+              : {}),
             approvalPolicy: "on-request",
             effort:
               params.thinkLevel === undefined
@@ -426,6 +479,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       },
     ];
   } finally {
+    releaseInferenceContext?.();
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
