@@ -30,6 +30,7 @@ export const defaultControlUiFeatureMethods = [
   "config.patch",
   "config.schema",
   "config.set",
+  "cron.modelImpact",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
   "session.members.add",
@@ -110,6 +111,7 @@ export function createControlUiDefaultResponses(scenario: {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   return {
+    "cron.modelImpact": { model: null, jobs: [], issues: [] },
     // Unbound catalog fixtures retain native identity; bound/error scenarios
     // supply explicit outcomes without materializing sessions during a read.
     "sessions.catalog.resolve": null,

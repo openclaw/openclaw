@@ -5,6 +5,7 @@ import {
   type CronInferenceBinding,
   describeCronInferenceBinding,
   resolveCronRuntimeSessionEntry,
+  resolveCronInferenceCandidateMismatch,
 } from "./inference-binding.js";
 
 export type CronRunInference = {
@@ -44,10 +45,11 @@ function incompatibleCandidateError(params: {
   cause?: unknown;
 }): Error {
   const { binding } = params;
+  const mismatch = resolveCronInferenceCandidateMismatch(binding, params);
   const reason =
-    params.provider !== binding.provider
+    mismatch === "provider"
       ? "The selected model uses a different provider from this job's stored account. "
-      : binding.runtime && params.runtime && params.runtime !== binding.runtime
+      : mismatch === "runtime"
         ? `The account was captured for runtime ${binding.runtime}, which this run can no longer use. `
         : params.cliExecution
           ? "The selected runtime uses a CLI login that cannot use this job's stored account. "
@@ -95,10 +97,7 @@ export async function prepareCronRunInference(params: {
     runtimeSessionEntry: (entry) => resolveCronRuntimeSessionEntry(binding, entry),
     assertCandidate(provider, cliExecution, runtime) {
       // A binding without a captured runtime keeps the runtime its run derives.
-      if (
-        provider !== binding.provider ||
-        (binding.runtime && runtime && runtime !== binding.runtime)
-      ) {
+      if (resolveCronInferenceCandidateMismatch(binding, { provider, runtime })) {
         throw incompatibleCandidateError({ binding, provider, runtime, cliExecution });
       }
       candidateRuntime = runtime ?? candidateRuntime;

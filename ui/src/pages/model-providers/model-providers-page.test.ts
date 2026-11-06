@@ -608,8 +608,8 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
   });
 
-  it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
-    const { settingsAgentSelection, context, notifySelection, runtimeConfig } =
+  it("keeps the newer draft and retires an unassessed model change after an agent switch", async () => {
+    const { settingsAgentSelection, context, notifySelection, runtimeConfig, request } =
       createHarness("main");
     const gate = deferred();
     const replacementGate = deferred();
@@ -626,7 +626,8 @@ describe("ModelProvidersPage agent scope", () => {
     runtimeConfig.ensureLoaded.mockImplementationOnce(() => replacementGate.promise);
     page.view.props.onUtilityChange("openai/gpt-4.1-mini");
     gate.resolve();
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await drainPageUpdates(page);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     await drainPageUpdates(page);
 
     expect(page.view.props.defaultModels).toMatchObject({
@@ -634,8 +635,12 @@ describe("ModelProvidersPage agent scope", () => {
       utilityModel: "openai/gpt-4.1-mini",
     });
     expect(page.view.props.messages.defaults).toBeUndefined();
+    expect(request).not.toHaveBeenCalledWith("cron.modelImpact", expect.anything());
     replacementGate.resolve();
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(request.mock.calls.filter(([method]) => method === "cron.modelImpact")).toEqual([
+      ["cron.modelImpact", { model: "openai/gpt-5" }],
+    ]);
   });
 
   it("cancels a queued key save when the selected agent changes", async () => {

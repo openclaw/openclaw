@@ -31,13 +31,13 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
+import { resolveModelCatalogAuthRef } from "./model-catalog-auth-ref.js";
 import { createUnlistedClaudeCliWildcardCheck } from "./model-catalog-cli-wildcard.js";
 import { resolveCatalogDecisionRuntime } from "./model-catalog-decision-runtime.js";
 import { createCatalogPluginAuth } from "./model-catalog-decisions.plugin-auth.js";
 import type { ModelCatalogDecisionParams } from "./model-catalog-decisions.types.js";
 import {
   createModelCatalogSnapshotView,
-  listModelCatalogObservedRoutes,
   prepareModelCatalogView,
   selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
@@ -46,10 +46,7 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
-import {
-  createModelCatalogIdentityKeyResolver,
-  openAIModelCatalogRoutePolicy,
-} from "./openai-model-routes.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -343,14 +340,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     routeVariants?: readonly ModelCatalogEntry[],
     runtimeId?: string,
   ): ModelAuthAvailabilityEvaluation => {
-    const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const observedRoutes = listModelCatalogObservedRoutes(routeVariants ?? [entry]);
+    const authRef = resolveModelCatalogAuthRef(entry, routeVariants);
     const cacheKey = JSON.stringify([
       modelKeyOf(entry),
       runtimeId,
       entry.api,
       entry.baseUrl,
-      observedRoutes,
+      authRef.observedRoutes,
     ]);
     const pluginAuth = isPluginAuthProvider(entry.provider);
     const cached = pluginAuth ? undefined : evaluations.get(cacheKey);
@@ -367,14 +363,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       runtimeId ?? (sameProvider && profileProvider ? params.runtimeOverride : undefined);
     const resolved = {
       ...authResolver.evaluateRuntimeModelAuth(entry.provider, {
-        modelId: identity?.id ?? entry.id,
+        ...authRef,
         runtimeId: requestedRuntimeId,
-        ...(normalizeProviderId(entry.provider) === "openai"
-          ? {}
-          : { api: entry.api, baseUrl: entry.baseUrl }),
         ...(preferredProfileId ? { preferredProfileId } : {}),
         ...(pinnedProfileId ? { pinnedProfileId } : {}),
-        observedRoutes,
       }),
       ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
     };
@@ -385,7 +377,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       !requestedRuntimeId &&
       resolved.availability === true &&
       resolved.evidence === "runtime" &&
-      isUnlistedWildcardCliModel(provider, identity?.id ?? entry.id)
+      isUnlistedWildcardCliModel(provider, authRef.modelId ?? entry.id)
         ? { ...resolved, availability: false }
         : resolved;
     // Stored credentials prove presence, not acceptance. Apply the live rejection only to the

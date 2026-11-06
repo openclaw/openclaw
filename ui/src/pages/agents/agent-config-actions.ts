@@ -5,8 +5,11 @@ import { resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import {
   currentConfigObject,
   type AgentConfigEntryTarget,
+  currentConfigConnectionEpoch,
+  isCurrentConfigConnection,
 } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { reviewAutomationModelChange } from "../../lib/cron/model-impact.ts";
 import { isWorkshopSkill } from "../../lib/skills-shared.ts";
 
 export function createAgentConfigActions(params: {
@@ -14,7 +17,10 @@ export function createAgentConfigActions(params: {
   getReport: () => SkillStatusReport | null;
   canUpdate: (agentId: string) => boolean;
   onPrimaryChanged: () => void;
+  modelChangeScope: () => Promise<void>;
+  onModelImpact: (notice: string | null) => void;
 }) {
+  let modelChange = 0;
   function edit(
     agentId: string,
     ensure: boolean,
@@ -40,11 +46,39 @@ export function createAgentConfigActions(params: {
   }
   return {
     models: {
-      onModelChange: (agentId: string, modelId: string | null) => {
+      onModelChange: async (agentId: string, modelId: string | null) => {
+        if (!params.canUpdate(agentId)) {
+          return;
+        }
+        const config = params.getRuntimeConfig();
+        const client = config.state.client;
+        if (!client) {
+          return;
+        }
+        const epoch = currentConfigConnectionEpoch(config.state);
+        const scope = params.modelChangeScope();
+        const intent = ++modelChange;
+        const isCurrent = () =>
+          intent === modelChange &&
+          scope === params.modelChangeScope() &&
+          params.getRuntimeConfig() === config &&
+          isCurrentConfigConnection(config.state, client, epoch) &&
+          params.canUpdate(agentId);
+        params.onModelImpact(null);
         if (
-          edit(agentId, Boolean(modelId), (config, target) => {
+          !(await reviewAutomationModelChange(
+            client,
+            { model: modelId, agentId },
+            { isCurrent, onNotice: params.onModelImpact, retired: scope },
+          )) ||
+          !isCurrent()
+        ) {
+          return;
+        }
+        if (
+          edit(agentId, Boolean(modelId), (current, target) => {
             stage(
-              config,
+              current,
               [...target.path, "model"],
               modelShape(modelId, existingModelParts(target.entry.model).fallbacks),
             );

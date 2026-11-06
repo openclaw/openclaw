@@ -99,6 +99,33 @@ async function waitForCronRunCompletion(params: {
 }
 
 export function registerCronSimpleCommands(cron: Command) {
+  addGatewayClientOptions(
+    createCronOutputCommand(cron, "model-impact")
+      .description("Preview automation compatibility before changing a default model (read-only)")
+      .addOption(new Option("--model <model>", "Proposed default model").conflicts("clearModel"))
+      .option("--clear-model", "Preview clearing the primary while preserving fallbacks")
+      .option("--agent <id>", "Target agent primary (omit for global default)")
+      .action(async (opts) => {
+        try {
+          const model = typeof opts.model === "string" ? opts.model.trim() : undefined;
+          const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
+          if ((!opts.clearModel && !model) || (opts.agent !== undefined && !agentId)) {
+            throw new CronCliError(
+              "Supply --model <model> or --clear-model, and a nonblank --agent if selected.",
+            );
+          }
+          printCronJson(
+            await callGatewayFromCli("cron.modelImpact", opts, {
+              model: opts.clearModel ? null : model,
+              ...(agentId ? { agentId } : {}),
+            }),
+          );
+        } catch (error) {
+          handleCronCliError(error);
+        }
+      }),
+  );
+
   for (const [name, description, method] of [
     ["rm", "Remove an automation", "cron.remove"],
     ["enable", "Enable an automation", "cron.update"],

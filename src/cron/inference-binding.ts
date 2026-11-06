@@ -62,6 +62,19 @@ export function resolveCronRuntimeSessionEntry<
   return binding?.runtime ? { agentRuntimeOverride: binding.runtime } : entry;
 }
 
+/** Shared drift decision for execution and read-only model-change previews. */
+export function resolveCronInferenceCandidateMismatch(
+  binding: CronInferenceBinding,
+  candidate: { provider: string; runtime?: string },
+): "provider" | "runtime" | undefined {
+  if (candidate.provider !== binding.provider) {
+    return "provider";
+  }
+  return binding.runtime && candidate.runtime && candidate.runtime !== binding.runtime
+    ? "runtime"
+    : undefined;
+}
+
 /** Names a binding's account and captured runtime for scheduled-run errors. */
 export function describeCronInferenceBinding(binding: CronInferenceBinding): string {
   return binding.runtime

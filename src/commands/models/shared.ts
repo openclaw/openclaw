@@ -61,6 +61,7 @@ export async function loadValidConfigSnapshotOrThrow(): Promise<ConfigFileSnapsh
 }
 
 type UpdateConfigContext = {
+  configPath: string;
   runtimeConfig: OpenClawConfig;
   providerRegistryAvailable?: boolean;
   canonicalModelKeys?: ReadonlyMap<string, string | undefined>;
@@ -104,6 +105,7 @@ export async function updateConfig(
       const sourceConfig = structuredClone(currentConfig);
       let authoredModels: Record<string, unknown> | undefined;
       const context: UpdateConfigContext = {
+        configPath: snapshot.path,
         runtimeConfig: snapshot.runtimeConfig,
         restoreSourceEntry: (from, to, entry) => {
           // Equal runtime values can still move an authored key; record that write intent.
@@ -366,10 +368,15 @@ export function requireKnownModelProvider(
 export async function updateDefaultModelPrimaryConfig(params: {
   modelRaw: string;
   field: "model" | "imageModel";
+  beforeSave?: (selection: {
+    config: OpenClawConfig;
+    configPath: string;
+    model: string;
+  }) => Promise<void>;
 }): Promise<{ updated: OpenClawConfig; warning?: string }> {
   let warning: string | undefined;
   const updated = await updateConfig(
-    (cfg, context) => {
+    async (cfg, context) => {
       const resolvedTarget = resolveDefaultModelPrimaryTarget({
         cfg,
         resolveCfg: context.runtimeConfig,
@@ -386,6 +393,11 @@ export async function updateDefaultModelPrimaryConfig(params: {
       } else if (inspection.status === "uncatalogued-provider") {
         warning = `Note: Provider "${inspection.provider}" has no local model catalog, so "${inspection.ref}" could not be checked offline. The selection was saved.`;
       }
+      await params.beforeSave?.({
+        config: context.runtimeConfig,
+        configPath: context.configPath,
+        model: modelKey(resolvedTarget.provider, resolvedTarget.model),
+      });
       return applyDefaultModelPrimaryUpdate({
         cfg,
         resolveCfg: context.runtimeConfig,

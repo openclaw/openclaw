@@ -43,6 +43,21 @@ Default-model, alias, and fallback changes resolve provider-owned model aliases 
 
 An explicit `provider/model` that matches a configured provider model keeps its literal identity, even when another model has a colliding alias. Bare aliases and noncolliding `provider/alias` selections still resolve normally.
 
+### Automation impact before changing defaults
+
+Before changing a primary model, inspect existing automations with
+`openclaw automations model-impact --model <model-or-alias>`. Use `--agent <id>`
+when previewing an agent-specific change. The shared read-only assessment reports
+effective model sources, known compatibility blockers, and unknowns; it never
+changes jobs or account ownership. See the [model-change checklist](/automation/cron-jobs/payloads#before-changing-a-default-model).
+
+`models set` also requests this assessment before saving when a running local
+Gateway is verified to use the same config path. It prints the advisory to stderr
+without changing the existing stdout result. Offline, remote, mismatched-config,
+or unavailable assessments are explicitly reported as unknown; the existing
+local config save still proceeds. The preview is not atomic with saving and does
+not authorize account or policy repairs.
+
 ### Status
 
 Bare `openclaw models` is equivalent to `openclaw models status`.

@@ -252,6 +252,8 @@ export function createHarness(initialScopeId: string) {
           ],
         };
       }
+      case "cron.modelImpact":
+        return { model: "fixture/next", jobs: [], issues: [] };
       case "models.list":
         return { models: [] };
       case "models.probe":

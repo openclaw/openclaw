@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import type { CronModelImpactResult } from "../../../packages/gateway-protocol/src/schema/cron-model-impact.js";
 import {
   readConfigFileSnapshot,
   resetConfigRuntimeState,
@@ -9,6 +10,8 @@ import {
 } from "../../config/config.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import * as gateway from "../../gateway/call.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import {
   loadOpenClawPlugins,
   resetPluginLoaderTestStateForTest,
@@ -91,6 +94,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetConfigRuntimeState();
   resetPluginLoaderTestStateForTest();
@@ -388,4 +392,130 @@ it("rejects an invalid fallback target before activating existing providers", as
   writeConfig();
   await expect(fallback("remove", "/invalid")).rejects.toThrow("Invalid model reference: /invalid");
   expect(fs.existsSync(marker)).toBe(false);
+});
+
+function mockImpactGateway(result: CronModelImpactResult, gatewayConfigPath = configPath) {
+  vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+    pid: 123,
+    port: 19001,
+    createdAt: "fixture",
+  });
+  const request = vi.fn().mockResolvedValue(result);
+  const transport = vi.spyOn(gateway, "callGateway").mockImplementation(async (options) => {
+    await options.onResponse?.(request, new AbortController().signal);
+    return { path: gatewayConfigPath, valid: true };
+  });
+  return { request, transport };
+}
+
+it("previews canonical automation impact before saving without changing fallbacks or stdout", async () => {
+  config.agents!.defaults!.model = { primary: "fixture/old", fallbacks: ["fixture/backup"] };
+  config.agents!.defaults!.models = { "fixture/legacy": { alias: "friendly" } };
+  writeConfig();
+  const { request, transport } = mockImpactGateway({
+    model: "fixture/current",
+    issues: [{ code: "snapshot", severity: "info", message: "Prepared facts only." }],
+    jobs: (["blocked", "unknown", "no-known-blocker"] as const).map((status, index) => ({
+      id: "job-" + index,
+      name: "Morning report",
+      enabled: true,
+      effectiveAgentId: "probe",
+      before:
+        index === 1 ? { model: null, source: null } : { model: "fixture/old", source: "default" },
+      after:
+        index === 1
+          ? { model: null, source: null }
+          : { model: "fixture/current", source: "default" },
+      changed: index !== 1,
+      status,
+      issues:
+        index === 0
+          ? [
+              {
+                code: "runtime",
+                severity: "blocker",
+                message: "Required runtime unavailable.",
+                recovery: "Enable the runtime plugin.",
+              },
+            ]
+          : [],
+    })),
+  });
+  let modelAtPreview: unknown;
+  vi.mocked(runtime.error).mockImplementation((message) => {
+    if (String(message).startsWith("Automation impact before save")) {
+      modelAtPreview = defaults()?.model;
+    }
+  });
+  await setModel("friendly");
+  expect(modelAtPreview).toEqual({ primary: "fixture/old", fallbacks: ["fixture/backup"] });
+  expectModel({ primary: "fixture/current", fallbacks: ["fixture/backup"] });
+  expect(request).toHaveBeenCalledExactlyOnceWith("cron.modelImpact", { model: "fixture/current" });
+  expect(transport).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "config.get",
+      localPortOverride: 19001,
+      ignoreEnvUrlOverride: true,
+      sharedStateMode: "read-only",
+      scopes: ["operator.read"],
+    }),
+  );
+  const output = vi
+    .mocked(runtime.error)
+    .mock.calls.map(([line]) => line)
+    .join("\n");
+  expect(output).toContain("3 visible jobs, 2 model changes, 1 blocked, 1 unknown");
+  expect(output).toContain("fixture/old [default] -> fixture/current [default]; blocked");
+  expect(output).toContain("unknown [unknown] -> unknown [unknown]; unknown");
+  expect(output).toContain("; no-known-blocker");
+  expect(output).toContain("Prepared facts only.");
+  expect(output).toContain("Next: Enable the runtime plugin.");
+  expect(output).toContain("No known blocker is not a compatibility guarantee.");
+  expect(runtime.log).toHaveBeenLastCalledWith("Default model: fixture/current");
+  expect(vi.mocked(runtime.log).mock.calls.flat().join("\n")).not.toContain("Automation impact");
+});
+
+it.each(["offline", "unavailable", "different-config", "remote", "url-override"] as const)(
+  "reports automation impact unknown before a nonbreaking %s local save",
+  async (scenario) => {
+    if (scenario === "remote") {
+      config.gateway = { mode: "remote", remote: { url: "wss://remote.example.invalid" } };
+    }
+    if (scenario === "url-override") {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://remote.example.invalid");
+    }
+    writeConfig();
+    const { transport } = mockImpactGateway(
+      { model: "fixture/current", jobs: [], issues: [] },
+      scenario === "different-config" ? path.join(root, "other.json") : configPath,
+    );
+    if (scenario === "offline") {
+      vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    } else if (scenario === "unavailable") {
+      transport.mockRejectedValue(new Error("synthetic unavailable Gateway"));
+    }
+    let modelAtWarning: unknown = "warning not shown";
+    vi.mocked(runtime.error).mockImplementation((message) => {
+      if (String(message).startsWith("Automation impact: unknown.")) {
+        modelAtWarning = defaults()?.model;
+      }
+    });
+    await setModel("fixture/legacy");
+    expect(modelAtWarning).toBeUndefined();
+    expectModel({ primary: "fixture/current" });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("automations model-impact"));
+    if (["remote", "url-override", "offline"].includes(scenario)) {
+      expect(transport).not.toHaveBeenCalled();
+    }
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("0 changed"));
+  },
+);
+
+it("does not assess text-model automation impact when saving an image model", async () => {
+  writeConfig();
+  const { transport } = mockImpactGateway({ model: "fixture/current", jobs: [], issues: [] });
+  await setModel("fixture/legacy", "imageModel");
+  expect(defaults()?.imageModel).toEqual({ primary: "fixture/current" });
+  expect(transport).not.toHaveBeenCalled();
+  expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("Automation impact"));
 });

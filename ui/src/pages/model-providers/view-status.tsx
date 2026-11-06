@@ -169,6 +169,7 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
         tone={
           message.kind === "error" ? "danger" : message.kind === "warning" ? "warning" : "success"
         }
+        style={{ "white-space": "pre-line" }}
       >
         {message.text}
       </InlineAlert>

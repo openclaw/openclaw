@@ -249,6 +249,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "exec.approval.request",
   "plugin.approval.request",
   "wake",
+  "cron.modelImpact",
   "cron.list",
   "cron.get",
   "cron.add",

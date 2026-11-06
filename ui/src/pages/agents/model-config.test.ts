@@ -3,20 +3,26 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createAgentConfigActions } from "./agent-config-actions.ts";
 
-function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
+function createRuntimeConfig(
+  sourceConfig: Record<string, unknown>,
+  preview?: (params: unknown) => Promise<unknown>,
+) {
   const client = {
-    request: vi.fn(async (method: string) =>
-      method === "config.get"
-        ? {
-            sourceConfig,
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          }
-        : { hash: "hash-2" },
+    request: vi.fn(async (method: string, params?: unknown) =>
+      method === "cron.modelImpact"
+        ? (preview?.(params) ?? { model: "fixture/next", jobs: [], issues: [] })
+        : method === "config.get"
+          ? {
+              sourceConfig,
+              hash: "hash-1",
+              valid: true,
+              issues: [],
+            }
+          : { hash: "hash-2" },
     ),
   } as unknown as GatewayBrowserClient;
   const snapshot = {
@@ -36,10 +42,96 @@ function modelActionsFor(runtimeConfig: ReturnType<typeof createRuntimeConfig>) 
     getReport: () => null,
     canUpdate: () => true,
     onPrimaryChanged: () => undefined,
+    modelChangeScope: () => lifetime,
+    onModelImpact: () => undefined,
   }).models;
 }
 
+const lifetime = Promise.withResolvers<void>().promise;
+
 describe("agent model config", () => {
+  it.each(["scope", "connection"])(
+    "assesses before autosave staging and ignores a retired %s",
+    async (retired) => {
+      const pending = Promise.withResolvers<unknown>();
+      const preview = vi.fn(() => pending.promise);
+      const runtimeConfig = createRuntimeConfig(
+        {
+          agents: { entries: { main: { model: "fixture/old" } } },
+        },
+        preview,
+      );
+      await runtimeConfig.ensureLoaded();
+      let scope = Promise.withResolvers<void>().promise;
+      const notice = vi.fn();
+      const actions = createAgentConfigActions({
+        getRuntimeConfig: () => runtimeConfig,
+        getReport: () => null,
+        canUpdate: () => true,
+        onPrimaryChanged: () => undefined,
+        modelChangeScope: () => scope,
+        onModelImpact: notice,
+      }).models;
+      try {
+        const change = actions.onModelChange("main", "fixture/next");
+        expect(preview).toHaveBeenLastCalledWith({
+          model: "fixture/next",
+          agentId: "main",
+        });
+        expect(runtimeConfig.state.configFormDirty).toBe(false);
+        if (retired === "scope") {
+          scope = Promise.withResolvers<void>().promise;
+        } else {
+          invalidateConfigConnection(runtimeConfig.state);
+        }
+        pending.resolve({ model: "fixture/next", jobs: [], issues: [] });
+        await change;
+        expect(runtimeConfig.state.configForm).toEqual({
+          agents: { entries: { main: { model: "fixture/old" } } },
+        });
+        expect(notice.mock.calls).toEqual([[null], ["Checking automation impact…"]]);
+      } finally {
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
+  it("retains unrelated drafts when assessment fails and allows a fresh compatible retry", async () => {
+    const preview = vi.fn(async () => ({ model: "fixture/next", jobs: [], issues: [] }));
+    const runtimeConfig = createRuntimeConfig(
+      {
+        agents: { entries: { main: { model: "fixture/old" } } },
+      },
+      preview,
+    );
+    await runtimeConfig.ensureLoaded();
+    const notice = vi.fn();
+    const actions = createAgentConfigActions({
+      getRuntimeConfig: () => runtimeConfig,
+      getReport: () => null,
+      canUpdate: () => true,
+      onPrimaryChanged: () => undefined,
+      modelChangeScope: () => lifetime,
+      onModelImpact: notice,
+    }).models;
+    try {
+      runtimeConfig.patchForm(["agents", "entries", "main", "name"], "Draft name");
+      preview.mockRejectedValueOnce(new Error("Synthetic unavailable preview"));
+      await actions.onModelChange("main", "fixture/next");
+      expect(runtimeConfig.state.configForm).toMatchObject({
+        agents: { entries: { main: { model: "fixture/old", name: "Draft name" } } },
+      });
+      expect(notice).toHaveBeenLastCalledWith(
+        expect.stringContaining("Synthetic unavailable preview"),
+      );
+      await actions.onModelChange("main", "fixture/next");
+      expect(runtimeConfig.state.configForm).toMatchObject({
+        agents: { entries: { main: { model: "fixture/next", name: "Draft name" } } },
+      });
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
   it("rechecks the current agent and permissions before editing the current config", async () => {
     const original = createRuntimeConfig({ agents: { entries: { main: {} } } });
     const replacement = createRuntimeConfig({ agents: { entries: { scout: {} } } });
@@ -53,21 +145,23 @@ describe("agent model config", () => {
       getReport: () => null,
       canUpdate: (agentId) => allowed && agentId === selected,
       onPrimaryChanged,
+      modelChangeScope: () => lifetime,
+      onModelImpact: () => undefined,
     }).models;
     current = replacement;
     selected = "scout";
-    actions.onModelChange("main", "fixture/chat");
+    await actions.onModelChange("main", "fixture/chat");
     actions.onDecisionModelChange("main", "typesafe/jev-latest");
     actions.onModelFallbacksChange("main", ["fixture/fallback"]);
     allowed = false;
-    actions.onModelChange("scout", "fixture/chat");
+    await actions.onModelChange("scout", "fixture/chat");
     actions.onDecisionModelChange("scout", "typesafe/jev-latest");
     actions.onModelFallbacksChange("scout", ["fixture/fallback"]);
     expect(original.state.configFormDirty).toBe(false);
     expect(replacement.state.configFormDirty).toBe(false);
     expect(onPrimaryChanged).not.toHaveBeenCalled();
     allowed = true;
-    actions.onModelChange("scout", "fixture/chat");
+    await actions.onModelChange("scout", "fixture/chat");
     actions.onDecisionModelChange("scout", "");
     actions.onModelFallbacksChange("scout", ["fixture/fallback"]);
     expect(replacement.state.configForm).toEqual({
@@ -112,7 +206,7 @@ describe("agent model config", () => {
     });
     await runtimeConfig.ensureLoaded();
 
-    modelActionsFor(runtimeConfig).onModelChange("main", "anthropic/claude-sonnet-4-6");
+    await modelActionsFor(runtimeConfig).onModelChange("main", "anthropic/claude-sonnet-4-6");
     modelActionsFor(runtimeConfig).onModelFallbacksChange("main", ["openai/gpt-5.4"]);
 
     expect(runtimeConfig.state.configForm).toEqual({
@@ -228,7 +322,7 @@ describe("agent model config", () => {
       });
       await runtimeConfig.ensureLoaded();
 
-      modelActionsFor(runtimeConfig).onModelChange("main", null);
+      await modelActionsFor(runtimeConfig).onModelChange("main", null);
 
       expect(runtimeConfig.state.configForm).toEqual({
         agents: {
@@ -250,7 +344,7 @@ describe("agent model config", () => {
     });
     await runtimeConfig.ensureLoaded();
 
-    modelActionsFor(runtimeConfig).onModelChange("main", null);
+    await modelActionsFor(runtimeConfig).onModelChange("main", null);
 
     expect(runtimeConfig.state.configForm).toEqual({
       agents: { entries: { main: {} } },

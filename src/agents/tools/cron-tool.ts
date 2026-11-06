@@ -57,7 +57,7 @@ import {
   resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import { buildCronToolDescription } from "./cron-tool-description.js";
-import { createCronToolGatewayCaller } from "./cron-tool-gateway.js";
+import { createCronToolGatewayCaller, isOlderGatewayRejectingParam } from "./cron-tool-gateway.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
 import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
 import {
@@ -127,15 +127,6 @@ function assertCronSelfRemoveScope(
     }
   }
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-}
-
-function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
-  return (
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes(`invalid ${method} params`) &&
-    error.message.includes(`unexpected property '${param}'`)
-  );
 }
 
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
@@ -317,6 +308,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         };
         return await withGatewayToolCallerIdentity(callerIdentity, async () => {
           switch (action) {
+            case "model_impact":
+              return jsonResult(
+                await callGateway("cron.modelImpact", gatewayOpts, {
+                  model:
+                    readToolStringParam(params, "model", { required: params.model !== null }) ??
+                    null,
+                  agentId: readToolStringParam(params, "agentId"),
+                }),
+              );
             case "status": {
               const result = await callGateway("cron.status", gatewayOpts, {});
               return jsonResult(
