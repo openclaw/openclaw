@@ -88,6 +88,9 @@ suite.define(() => {
       await expect.poll(() => inner.locator("output").textContent()).toBe("1");
       const retainedFrame = await outer.elementHandle();
       expect(retainedFrame).not.toBeNull();
+      const originalOwner = await widgets.evaluate((element) =>
+        element.closest(".chat-bubble")?.getAttribute("data-entry-id"),
+      );
       const originalRow = await widgets.evaluate((element) =>
         element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
       );
@@ -169,7 +172,14 @@ suite.define(() => {
         await widgets.evaluate((element) =>
           element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
         ),
-      ).not.toBe(originalRow);
+      ).toBe(originalRow);
+      // The virtual run frame stays stable; ownership moves between its semantic parts.
+      expect(
+        await widgets.evaluate((element) =>
+          element.closest(".chat-bubble")?.getAttribute("data-entry-id"),
+        ),
+      ).toBe("widget-final");
+      expect(originalOwner).not.toBe("widget-final");
       expect(await outer.evaluate((frame, original) => frame === original, retainedFrame)).toBe(
         true,
       );
