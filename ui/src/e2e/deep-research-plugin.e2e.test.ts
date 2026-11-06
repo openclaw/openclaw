@@ -371,6 +371,12 @@ suite.define(() => {
         });
         expect(startKeys[1]).toBe(startKeys[2]);
         expect(startKeys[0]).not.toBe(startKeys[1]);
+        await pw(open).toContainText("1 source");
+        const progressed = { ...running, counts: { ...running.counts, sources: 2 } };
+        await gateway.setMethodResponse(method("list"), list(progressed));
+        await gateway.setMethodResponse(method("read"), read(progressed));
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(open).toContainText("2 sources");
         await capture("desktop-running", pane, [pane.getByText("Gathering evidence (round 1)")]);
         await pane.getByRole("button", { name: "Cancel research", exact: true }).click();
         await gateway.waitForRequest(method("cancel"), {

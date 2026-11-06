@@ -97,7 +97,9 @@ function ResearchAccessory(props: {
           ? `Research · ${snapshot().job!.phase}`
           : "Deep research"}
       <Show when={snapshot().job?.counts}>
-        {(counts) => ` · ${counts().sources} ${counts().sources === 1 ? "source" : "sources"}`}
+        {(counts) => (
+          <span>{` · ${counts().sources} ${counts().sources === 1 ? "source" : "sources"}`}</span>
+        )}
       </Show>
     </button>
   );
