@@ -232,9 +232,9 @@ or credentials.
 For a non-publishing notes/archive contention comparison, run
 `node scripts/bench-ios-release-note-overlap.mjs --root CLEAN_SOURCE --plan PLAN.json --output IGNORED_DIR --samples 5`
 with `OPENAI_API_KEY` available. The plan schema is documented in the helper;
-freeze the source SHA and release identity before running. It interleaves warm
-serial and overlapping samples using the same generated inputs and isolated
-compilation caches. Results include timings, task counts, compilation replay
+freeze the source SHA and release identity before running. After warming the
+archive and notes generator, it interleaves warm serial and overlapping samples
+using the same generated inputs and isolated compilation caches. Results include timings, task counts, compilation replay
 hits/misses, and resource samples. Archives are unsigned: this does not validate
 signing, export, upload, or hosted-runner performance.
 

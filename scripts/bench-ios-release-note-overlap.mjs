@@ -340,6 +340,9 @@ try {
       !fs.existsSync(rowsPath),
       "Use a new output directory after a started measurement campaign.",
     );
+    console.log(JSON.stringify({ phase: "notes-warmup-start" }));
+    const notesWarmupSeconds = await notes("warmup");
+    console.log(JSON.stringify({ phase: "notes-warmup-complete", notesWarmupSeconds }));
     const rows = [];
     fs.writeFileSync(rowsPath, "[]\n", { mode: 0o600, flag: "wx" });
     for (let sample = 1; sample <= samples; sample++) {
@@ -401,7 +404,7 @@ try {
     );
     fs.writeFileSync(
       path.join(output, "summary.json"),
-      JSON.stringify({ identity, summary }, null, 2) + "\n",
+      JSON.stringify({ identity, notesWarmupSeconds, summary }, null, 2) + "\n",
       { mode: 0o600, flag: "wx" },
     );
     console.log(JSON.stringify({ summary }));
