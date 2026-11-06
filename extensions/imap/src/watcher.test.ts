@@ -8,6 +8,7 @@ import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
 import { createImapAuthResult, createImapTestRuntime } from "./imap-test-support.js";
+import type { MailAuthenticator } from "./sender-gate.js";
 import { ImapAccountWatcher } from "./watcher.js";
 
 type MailFixture = { uid: number; raw: string };
@@ -209,7 +210,7 @@ async function startWatcher(
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     serviceHealth: { clearFailure: vi.fn(), reportFailure: vi.fn() },
   };
-  const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+  const authenticator = vi.fn<MailAuthenticator>(async () => createImapAuthResult("pass"));
   const watcher = new ImapAccountWatcher({
     accountId: "inbox",
     account,
@@ -477,15 +478,13 @@ describe("IMAP watcher protocol boundary", () => {
         await vi.importActual<typeof import("mailauth")>("mailauth");
       const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
       const unsigned = "From: trusted@example.com\r\nSubject: DNS recovery\r\n\r\nMail";
-      const signed = await dkimSign(unsigned, {
-        signatureData: [
-          {
-            signingDomain: "example.com",
-            selector: "test",
-            privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
-          },
-        ],
-      });
+      const signature = {
+        signingDomain: "example.com",
+        selector: "test",
+        privateKey: privateKey.export({ type: "pkcs8", format: "pem" }),
+      };
+      const signingOptions = { ...signature, signatureData: [signature] };
+      const signed = await dkimSign(unsigned, signingOptions);
       expect(signed.errors).toEqual([]);
       const key = publicKey.export({ type: "spki", format: "der" }).toString("base64");
       let resolveRetry!: () => void;
