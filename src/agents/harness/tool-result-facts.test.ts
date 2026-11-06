@@ -4,6 +4,9 @@ import {
   collectMessagingMediaUrlsFromToolResult,
 } from "../embedded-agent-tool-media.js";
 import { resolveAgentHarnessToolResultPresentation } from "./tool-result-facts.js";
+import { appendUnscheduledReminderNote } from "../../auto-reply/reply/agent-runner-reminder-guard.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { recordTelemetry, textToolResult } from "./tool-result-facts.test-support.js";
 
 it.each(["rejected", "plugin-defined-outcome"])(
@@ -82,6 +85,22 @@ it("does not count a failed or non-add scheduler call as a committed reminder", 
     const telemetry = recordTelemetry({ toolName, args, isError });
     expect(telemetry.successfulCronAdds, `${toolName} ${args.action}`).toBeUndefined();
   }
+});
+
+it("suppresses the reminder guard note for an MCP-exposed automations add", () => {
+  // Production shape: the CLI child names the loopback tool mcp__openclaw__automations and
+  // cli-backend-dispatch normalizes it before telemetry sees it.
+  const toolName = normalizeToolPolicyName(stripOpenClawMcpToolPrefix("mcp__openclaw__automations"));
+  const telemetry = recordTelemetry({
+    toolName,
+    args: { action: "add", schedule: { kind: "at", at: "2026-11-08T09:00:00Z" }, text: "register for X" },
+    result: textToolResult("Scheduled reminder.", { job: { id: "job-1", enabled: true } }),
+  });
+  const reply = [{ text: "I'll remind you Sunday at 9." }];
+  const payloads = telemetry.successfulCronAdds ? reply : appendUnscheduledReminderNote(reply);
+
+  expect(toolName).toBe("automations");
+  expect(payloads).toEqual(reply);
 });
 
 it("records messaging tool side effects", () => {
