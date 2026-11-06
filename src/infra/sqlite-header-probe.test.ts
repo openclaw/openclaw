@@ -45,23 +45,26 @@ it.each(["ETIMEDOUT", "ENOENT"] as const)(
 
 it("splits a batch that misses its deadline so slow storage still gets an answer", () => {
   const error = Object.assign(new Error("spawnSync node ETIMEDOUT"), { code: "ETIMEDOUT" });
-  const sizes: number[] = [];
-  vi.spyOn(childProcess, "spawnSync").mockImplementation(((_file, _argv, options) => {
-    const batch = JSON.parse(options?.input as string) as string[];
-    sizes.push(batch.length);
-    const base = { pid: 1, output: [], stderr: "" };
-    return batch.length > 2
-      ? { ...base, stdout: "", status: null, signal: "SIGTERM", error }
-      : {
-          ...base,
-          stdout: JSON.stringify(batch.map((pathname) => pathname.endsWith("db"))),
-          status: 0,
-          signal: null,
-        };
-  }) as typeof childProcess.spawnSync);
+  const base = { pid: 1, output: [], stderr: "" };
+  const timedOut = { ...base, stdout: "", status: null, signal: "SIGTERM" as const, error };
+  const answered = (...answers: boolean[]) => ({
+    ...base,
+    stdout: JSON.stringify(answers),
+    status: 0,
+    signal: null,
+  });
+  const spawn = vi
+    .spyOn(childProcess, "spawnSync")
+    .mockReturnValueOnce(timedOut)
+    .mockReturnValueOnce(timedOut)
+    .mockReturnValueOnce(answered(false, true))
+    .mockReturnValueOnce(answered(false))
+    .mockReturnValueOnce(answered(false, true));
   const paths = ["/backup/a", "/backup/b.db", "/backup/c", "/backup/d", "/backup/e.db"];
   expect([...probeSqliteDatabaseHeaders(paths)]).toEqual(
     paths.map((pathname) => [pathname, pathname.endsWith("db")]),
   );
-  expect(sizes).toEqual([5, 3, 2, 1, 2]);
+  expect(spawn.mock.calls.map((call) => JSON.parse(call[2]?.input as string).length)).toEqual([
+    5, 3, 2, 1, 2,
+  ]);
 });
