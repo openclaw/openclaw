@@ -143,6 +143,8 @@ export async function createCopilotSessionSetup(params: {
               controlToolsAvailable:
                 input.disableTools !== true &&
                 (callableTools.has("openclaw") || callableTools.has("gateway")),
+              secretsToolName:
+                input.disableTools !== true && callableTools.has("secrets") ? "secrets" : undefined,
             }),
             workspaceBootstrapInstructions?.trim(),
             extraSystemPrompt
