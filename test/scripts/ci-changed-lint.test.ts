@@ -303,12 +303,17 @@ describe("CI changed lint", () => {
   it.each(["hybrid", "github", "blacksmith"])(
     "keeps complete selected-file lint with the existing %s owners",
     async (runnerProfile) => {
-      const paths = [
+      const lintPaths = [
         "src/utils.ts",
         "ui/src/app-navigation.ts",
         "extensions/telegram/src/send.ts",
         "scripts/lib/arg-utils.mts",
         "test/scripts/ci-check-plan.test.ts",
+      ];
+      const paths = [
+        ...lintPaths,
+        "docs/ci/scope-and-routing/selection.md",
+        "config/test-lines-allocations/ci-budget-selected-lint.txt",
       ];
       const result = detectChangedLanes(paths);
       const plan = await createChangedCiLintPlan(result, { runnerProfile });
@@ -341,7 +346,9 @@ describe("CI changed lint", () => {
         ),
       ];
       const selectedFiles = selections.flatMap(({ files }) => files).toSorted();
-      expect(selectedFiles).toEqual(paths.filter((file) => !file.startsWith("test/")).toSorted());
+      expect(selectedFiles).toEqual(
+        lintPaths.filter((file) => !file.startsWith("test/")).toSorted(),
+      );
       const expected = [
         `${coreConfig}:src/utils.ts`,
         `${coreConfig}:ui/src/app-navigation.ts`,
@@ -419,9 +426,12 @@ describe("CI changed lint", () => {
     "unowned/source.ts",
   ])("retains the original full lint layout for %s", async (file) =>
     expect(
-      await createChangedCiLintPlan(detectChangedLanes([file]), {
-        runnerProfile: "hybrid",
-      }),
+      await createChangedCiLintPlan(
+        detectChangedLanes([file, "config/test-lines-allocations/ci-budget-selected-lint.txt"]),
+        {
+          runnerProfile: "hybrid",
+        },
+      ),
     ).toBeNull(),
   );
 
