@@ -6,7 +6,49 @@ import {
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
-import { handleChatInputHistoryKey } from "./input-history.ts";
+import { handleChatInputHistoryKey, type ChatInputHistoryState } from "./input-history.ts";
+
+it("caps recall at 100 user inputs rather than assistant and tool activity", () => {
+  const state: ChatInputHistoryState = {
+    sessionKey: "main",
+    chatLoading: false,
+    chatMessage: "Reserved draft",
+    chatMessages: [],
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+  };
+  state.chatMessages = Array.from({ length: 101 }, (_, index) => [
+    { role: "user", content: `Prompt ${index + 1}`, timestamp: index * 3 },
+    { role: "assistant", content: "Checking", timestamp: index * 3 + 1 },
+    { role: "toolResult", content: "Done", timestamp: index * 3 + 2 },
+  ]).flat();
+  const press = (key: "ArrowUp" | "ArrowDown") =>
+    handleChatInputHistoryKey(state, {
+      key,
+      selectionStart: 0,
+      selectionEnd: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    });
+  const recalled: string[] = [];
+  for (let index = 0; index < 100; index++) {
+    expect(press("ArrowUp").handled).toBe(true);
+    recalled.push(state.chatMessage);
+  }
+  expect(press("ArrowUp").handled).toBe(false);
+  expect(recalled).toEqual(Array.from({ length: 100 }, (_, index) => `Prompt ${101 - index}`));
+  for (let index = 0; index < 100; index++) {
+    expect(press("ArrowDown").handled).toBe(true);
+  }
+  expect(state.chatMessage).toBe("Reserved draft");
+});
 
 it("refreshes composer recall after leaving a round", async () => {
   const request = vi.fn(async () => ({
