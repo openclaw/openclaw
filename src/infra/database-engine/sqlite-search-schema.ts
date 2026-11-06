@@ -279,6 +279,15 @@ export function admitSqliteMemoryTextSearch(
   };
 }
 
+function isTablePresent(db: DatabaseSync, tableName: string): boolean {
+  try {
+    db.prepare(`SELECT 1 FROM ${tableName} LIMIT 0`).run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enabled: boolean): void {
   if (enabled) {
     return;
@@ -289,14 +298,7 @@ export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enable
   dropMemoryPathFtsTriggers(db);
   db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE}`);
 
-  let cjkExists = false;
-  try {
-    db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_CJK_FTS_TABLE} LIMIT 0`).run();
-    cjkExists = true;
-  } catch {
-    cjkExists = false;
-  }
-  if (cjkExists) {
+  if (isTablePresent(db, MEMORY_INDEX_CJK_FTS_TABLE)) {
     db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
   }
 
@@ -358,25 +360,12 @@ export function ensureMemoryCjkBigramFtsSchema(params: {
 }): void {
   const { db } = params;
   if (!params.enabled) {
-    let tableExists = false;
-    try {
-      db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_CJK_FTS_TABLE} LIMIT 0`).run();
-      tableExists = true;
-    } catch {
-      tableExists = false;
-    }
-    if (tableExists) {
+    if (isTablePresent(db, MEMORY_INDEX_CJK_FTS_TABLE)) {
       db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
     }
     return;
   }
-  let tableExists = false;
-  try {
-    db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_CJK_FTS_TABLE} LIMIT 0`).run();
-    tableExists = true;
-  } catch {
-    tableExists = false;
-  }
+  const tableExists = isTablePresent(db, MEMORY_INDEX_CJK_FTS_TABLE);
   const canonicalRow = db
     .prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CHUNKS_TABLE}`)
     .get();
