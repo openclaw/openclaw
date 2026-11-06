@@ -15,7 +15,7 @@ export type ResearchAdapterRequest = { version: 1 } & (
   | { action: "start"; question: string; output?: string; asOf?: string }
   | { action: "poll" | "cancel"; handle: ResearchAdapterSnapshot["handle"] }
 );
-export type ResearchAdapterDescriptor = {
+type ResearchAdapterDescriptor = {
   version: 1;
   kind: "managed-research";
   provider: string;
