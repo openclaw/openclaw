@@ -11,10 +11,19 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "../../../gateway/device-revocation.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { sharingPolicyClient } from "../../../gateway/session-sharing.test-utils.js";
+import { createTalkClientAgentConsultRunner } from "../../../gateway/talk/client-agent-consult.js";
+import { retainTalkClientRunAuthority } from "../../../gateway/talk/client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "../../../gateway/talk/client-tool-authority.js";
+import { prepareTalkSessionTarget } from "../../../gateway/talk/session-target.js";
 import { placementTurnOwner } from "../../../gateway/worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { advancePlacementFixtureToActive } from "../../../gateway/worker-environments/placement-test-fixtures.js";
@@ -25,19 +34,33 @@ import {
 import { withTimeout } from "../../../infra/fs-safe.js";
 import {
   bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSource,
+  getRpcSourceIdentity,
+} from "../../../sessions/session-controller.rpc-sources.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import {
+  createOrResumeClientVoiceSession,
+  flushClientVoiceSessionWrites,
+} from "../../../talk/client-voice-session.js";
+import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import {
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  readAdmittedRunOperatorAuthority,
+  resolvePreparedRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
+import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import type { RequesterOrigin } from "../../requester-origin.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
@@ -45,6 +68,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
@@ -472,3 +496,217 @@ export type RequestCustodySpawnCaseOptions = Pick<
   parentRunId: string;
   assertNoModelExecution: () => void;
 };
+
+/** Exercise Talk admission itself; the ordinary spawn fixture manually binds its caller. */
+export async function runTalkSpawnBoundaryCase(
+  options: Omit<NativePluginSpawnTestOptions, "settleRootWork">,
+  change: "authorized" | "caller revoked" | "Gateway replaced",
+) {
+  const {
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    waitForEmbeddedRun,
+    runEmbeddedAgent,
+    throwBoundFailures,
+  } = options;
+  const bound = await createBoundParent();
+  const { parentSessionKey } = bound;
+  // Reuse Gateway/storage infrastructure, not its manually bound parent admission.
+  bound.admission.close();
+  bound.parent.cleanup();
+  const { context, runtime } = await createBoundGateway(bound);
+  const createFacade = vi.spyOn(context, "createAgentTurnFacade");
+  const replacementFacade = vi.fn(
+    (principal: Parameters<typeof runtime.createAgentTurnFacade>[0]) =>
+      runtime.createAgentTurnFacade(principal),
+  );
+  const profile = ensureProfileForEmail("talk-spawn-operator@example.test");
+  const scopes = ["operator.admin"];
+  const client = sharingPolicyClient({
+    user: profile.id,
+    deviceId: "talk-spawn-caller",
+    scopes,
+  });
+  const source = captureGatewayDeviceRevocation(
+    context,
+    { deviceId: "talk-spawn-caller", role: "operator" },
+    () => true,
+    new AbortController().signal,
+    { isCurrent: () => true, subscribe: () => () => {}, dependencies: { client, context } },
+  );
+  const retained = await retainTalkClientRunAuthority({
+    client,
+    context,
+    hasCurrentClientAuthority: source.isCurrent,
+  });
+  expect(retained.operatorAuthority).toMatchObject({ profileId: profile.id, scopes });
+  retained.accept();
+  const sessionTarget = await prepareTalkSessionTarget(bound.cfg, parentSessionKey);
+  const voiceSessionId = await createOrResumeClientVoiceSession({
+    agentId: "main",
+    sessionKey: parentSessionKey,
+    origin: "client",
+    transcriptCapable: true,
+  });
+  await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
+  const modelResult = createDeferred<EmbeddedAgentRunResult>();
+  const childStarted = createDeferred();
+  let childRunId: string | undefined;
+  let childSessionKey: string | undefined;
+  let dispatches = 0;
+  spawnTesting.setDepsForTest({
+    dispatchGatewayMethodInProcess: async <T>(
+      method: string,
+      params: Record<string, unknown>,
+      dispatchOptions?: Parameters<typeof dispatchGatewayMethodInProcess>[2],
+    ) => {
+      if (method === "agent") {
+        dispatches += 1;
+        childSessionKey = String(params.sessionKey);
+        childRunId = String(params.idempotencyKey);
+        // Tool preparation is complete; real dispatch/admission below decides.
+        expect(
+          loadSessionEntry({ storePath: bound.storePath, sessionKey: childSessionKey }),
+        ).toMatchObject({ createdVia: "spawn", spawnedBy: parentSessionKey });
+        if (change === "caller revoked") {
+          invalidateGatewayDeviceRevocation(context, "talk-spawn-caller", "operator");
+        } else if (change === "Gateway replaced") {
+          bound.gatewayBinding.current = {
+            ...context,
+            createAgentTurnFacade: replacementFacade,
+          };
+        }
+      }
+      return await dispatchGatewayMethodInProcess<T>(method, params, dispatchOptions);
+    },
+  });
+  runEmbeddedAgent.mockImplementation(async (params) => {
+    try {
+      const admitted = await resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
+      if (params.sessionKey !== parentSessionKey) {
+        expect(admitted.operationalRunInstance.runId).toBe(childRunId);
+        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+        const childSource = expectDefined(getRpcSource(params.runId), "admitted Talk child source");
+        expect(getRpcSourceIdentity(childSource)).toMatchObject({ sessionKey: childSessionKey });
+        expect(childSource.adapter).toMatchObject({
+          operationalRunInstance: { runId: childRunId },
+        });
+        expect(params).toMatchObject({ provider: "custom", model: "test-model" });
+        childStarted.resolve();
+        const result = await modelResult.promise;
+        await recordSpawnBoundaryFinal({
+          storePath: bound.storePath,
+          sessionKey: expectDefined(params.sessionKey, "child session"),
+          runId: params.runId,
+          text: "Talk child complete",
+        });
+        return result;
+      }
+      expect(admitted).not.toBe(bound.admitted);
+      expect(admitted.operationalRunInstance.runId).toBe(params.runId);
+      expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+      const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
+      expect(operatorAuthority).toMatchObject({ profileId: profile.id, scopes });
+      // No ambient request may hide a missing binding on Talk's admission.
+      expect(getPluginRuntimeGatewayRequestScope()?.context).toBeUndefined();
+      expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext).toBeUndefined();
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey: parentSessionKey,
+      });
+      expect(caller?.operatorAuthority).toBe(operatorAuthority);
+      const tool = createSessionsSpawnTool({
+        config: bound.cfg,
+        agentSessionKey: parentSessionKey,
+        expectedParentSessionId: params.sessionId,
+        requesterRunId: params.runId,
+        requesterTurnRunId: params.runId,
+      });
+      const result = await withGatewayToolCallerIdentity(caller, () =>
+        tool.execute!("talk-spawn", { task: "bounded Talk child", context: "isolated" }),
+      );
+      if (change === "authorized") {
+        expect(result.details, JSON.stringify(result)).toMatchObject({
+          status: "accepted",
+          runId: childRunId,
+          childSessionKey,
+        });
+        expect(
+          createFacade,
+          "Talk child admission requires its owning Gateway binding, not an unbound RPC fallback",
+        ).toHaveBeenCalledTimes(1);
+        await waitForEmbeddedRun(
+          bound,
+          expectDefined(childRunId, "child run"),
+          childStarted.promise,
+          2,
+        );
+        expect(
+          loadSessionEntry({ storePath: bound.storePath, sessionKey: childSessionKey! }),
+        ).toMatchObject({ spawnedBy: parentSessionKey, spawnDepth: 2 });
+      } else {
+        expect(result.details, JSON.stringify(result)).toMatchObject({
+          status: "error",
+          error:
+            change === "caller revoked"
+              ? "operator source authority is no longer active"
+              : "In-process gateway dispatch requires a gateway request scope or instance binding (method: agent).",
+        });
+        expect(createFacade).not.toHaveBeenCalled();
+        expect(getRpcSource(expectDefined(childRunId, "rejected child run"))).toBeUndefined();
+        expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+        expect(subagentRuns.has(childRunId!)).toBe(false);
+      }
+      expect(dispatches).toBe(1);
+      expect(replacementFacade).not.toHaveBeenCalled();
+      return {
+        payloads: [{ text: "Talk consult complete" }],
+        meta: {
+          durationMs: 1,
+          terminalReply: { disposition: "visible", text: "Talk consult complete" },
+        },
+      };
+    } catch (error) {
+      if (params.sessionKey !== parentSessionKey) {
+        childStarted.reject(error);
+      }
+      throw error;
+    }
+  });
+  const failures: unknown[] = [];
+  try {
+    const runner = createTalkClientAgentConsultRunner({
+      config: bound.cfg,
+      context,
+      sessionTarget,
+      authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+      runAuthority: retained,
+      getVoiceSessionId: () => voiceSessionId,
+      initialItems: [],
+    });
+    await expect(runner.runArgs({ question: "Delegate bounded work" })).resolves.toEqual({
+      text: "Talk consult complete",
+    });
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    modelResult.resolve({
+      payloads: [{ text: "Talk child complete" }],
+      meta: {
+        durationMs: 1,
+        terminalReply: { disposition: "visible", text: "Talk child complete" },
+      },
+    });
+    spawnTesting.setDepsForTest();
+    bound.gatewayBinding.current = context;
+    createFacade.mockRestore();
+    retained.release();
+    source.release();
+    await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });
+    clientVoiceSessionTesting.reset();
+    failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
+    throwBoundFailures(failures);
+  }
+}

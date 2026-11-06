@@ -1,6 +1,7 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
@@ -99,6 +100,9 @@ export function createTalkClientAgentRuntime(params: {
             operationalRunInstance,
             assertSourceCurrent: retained?.assertSourceCurrent,
             operatorAuthority: retained?.authority,
+            onAdmitted: (context) => {
+              bindGatewayContextResolver(context, params.resolveGatewayContext);
+            },
             facts: {
               runId: runParams.runId,
               agentId,
