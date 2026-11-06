@@ -6,6 +6,7 @@ import {
 } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { isErrno } from "../../infra/errno.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { CronCliError } from "./cron-cli-error.js";
 
 const MAX_CRON_TRIGGER_SCRIPT_BYTES = 65_536;
@@ -23,9 +24,14 @@ async function readCronInput(
   stdin: AsyncIterable<unknown> | undefined,
   options: ReadByteStreamWithLimitOptions,
 ): Promise<Buffer> {
+  const signal = getAsyncWorkSignal();
   const stream = source === "-" ? (stdin ?? process.stdin) : createReadStream(source);
   try {
-    return await readByteStreamWithLimit(stream, options);
+    const bytes = await readByteStreamWithLimit(stream, { ...options, signal });
+    // Reject accepted cancellation that lands after EOF but before the caller
+    // turns the bytes into a cron mutation RPC.
+    signal?.throwIfAborted();
+    return bytes;
   } catch (error) {
     // Filesystem read failures are operator input errors; byte-stream contract
     // violations and other unexpected exceptions keep their original identity.
