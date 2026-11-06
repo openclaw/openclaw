@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
+  copyFileSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -172,6 +173,19 @@ function payloadManifest(ipa, caseDir, archive) {
           : { mode: file.stat.mode & 0o777, sha256: sha(readFileSync(file.absolute)) },
       ]),
   );
+  // Keep generated resources for investigating byte differences. These are
+  // diagnostic evidence only; no differences are excluded from the comparison.
+  for (const file of walk(unpacked)) {
+    if (file.stat.isSymbolicLink() || !/\.(car|lzfse|symbols)$/.test(file.relative)) {
+      continue;
+    }
+    const retained = path.join(caseDir, "generated-resources", file.relative);
+    mkdirSync(path.dirname(retained), { recursive: true });
+    copyFileSync(file.absolute, retained);
+    if (file.relative.endsWith(".car")) {
+      json(`${retained}.json`, JSON.parse(run("xcrun", ["assetutil", "--info", file.absolute])));
+    }
+  }
   rmSync(unpacked, { recursive: true });
   return { info, signatures, manifest };
 }
@@ -231,6 +245,9 @@ if (phase === "prepare") {
   };
   json(path.join(probe, "report.json"), report);
   console.log(JSON.stringify(report, null, 2));
+  if (report.pairs.some((pair) => !pair.payloadIdentical)) {
+    throw new Error("Exported baseline/candidate payload or entitlements differ; see comparisons");
+  }
 } else {
   const caseDir = path.join(probe, `${phase}-${sample}`);
   mkdirSync(caseDir);
@@ -330,9 +347,22 @@ if (phase === "prepare") {
   if (phase === "candidate") {
     const baseline = load(path.join(probe, `baseline-${sample}/summary.json`));
     const same = equal(baseline.payload, payload);
-    json(path.join(caseDir, "comparison.json"), { payloadIdentical: same, metadata });
+    const changedFiles = [
+      ...new Set([...Object.keys(baseline.payload.manifest), ...Object.keys(payload.manifest)]),
+    ].filter((file) => !equal(baseline.payload.manifest[file], payload.manifest[file]));
+    json(path.join(caseDir, "comparison.json"), {
+      payloadIdentical: same,
+      metadataIdentical: equal(baseline.payload.info, payload.info),
+      signaturesIdentical: equal(baseline.payload.signatures, payload.signatures),
+      changedFiles,
+      metadata,
+    });
+    // Finish collecting the predeclared five pairs, then fail the report if any
+    // payload differs. A fast build never overrides the correctness requirement.
     if (!same) {
-      throw new Error("Exported baseline/candidate payload or entitlements differ");
+      console.error(
+        `Payload comparison failed for sample ${sample}: ${changedFiles.length} files differ`,
+      );
     }
     for (const target of ["OpenClawProtocol", "OpenClawKit", "OpenClawChatUI"]) {
       if (!replay[target]?.hit) {

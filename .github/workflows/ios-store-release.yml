@@ -235,6 +235,7 @@ jobs:
             ${{ runner.temp }}/ios-archive-cache-probe/*/run.json
             ${{ runner.temp }}/ios-archive-cache-probe/*/summary.json
             ${{ runner.temp }}/ios-archive-cache-probe/*/comparison.json
+            ${{ runner.temp }}/ios-archive-cache-probe/*/generated-resources/**
             ${{ runner.temp }}/ios-archive-cache-probe/*/archive.log
             ${{ runner.temp }}/ios-archive-cache-probe/*/build-log.json
             ${{ runner.temp }}/ios-archive-cache-probe/*/resource-timeline.jsonl
