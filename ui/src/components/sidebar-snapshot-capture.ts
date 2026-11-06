@@ -140,7 +140,7 @@ export function captureSidebarSnapshotModel(
   ): SidebarSnapshotSession["archivedBy"] => {
     const { type, id, identity, label, avatarUrl: profileAvatarUrl } = actor ?? {};
     if (type !== "human" || !id || identity?.type !== "profile") {
-      return;
+      return undefined;
     }
     const avatar = resolveAvatar(
       profileDirectory(context.gateway).avatarIdentity({ identity, name: label, profileAvatarUrl }),
