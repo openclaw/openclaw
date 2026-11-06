@@ -603,25 +603,21 @@ describe("Search configuration lifecycle", () => {
       apiKey: { type: "string", title: "Example API key" },
     });
     if (options.advanced) {
+      const group = (title: string, properties: JsonSchema["properties"]): JsonSchema => ({
+        type: "object",
+        title,
+        additionalProperties: false,
+        properties,
+      });
       Object.assign(
         (schema.properties ??= {}),
         schemaAt(searchPath, {
           enabled: { type: "boolean" },
           provider: { type: "string" },
           maxResults: { type: "integer", title: "Result limit", default: 5 },
-          openaiCodex: {
-            type: "object",
-            title: "OpenAI Codex",
-            additionalProperties: false,
-            properties: {
-              userLocation: {
-                type: "object",
-                title: "User location",
-                additionalProperties: false,
-                properties: { city: { type: "string", title: "City" } },
-              },
-            },
-          },
+          openaiCodex: group("OpenAI Codex", {
+            userLocation: group("User location", { city: { type: "string", title: "City" } }),
+          }),
         }).properties,
       );
     }
