@@ -239,9 +239,7 @@ internal fun GatewayAdditionDialog(
           Text(nativeString("Add Gateway"), style = ClawTheme.type.title)
         }
         when (val current = step) {
-          is GatewayAdditionStep.NodeEnrollment -> {
-            Unit
-          }
+          is GatewayAdditionStep.NodeEnrollment -> {}
 
           GatewayAdditionStep.Scan, is GatewayAdditionStep.ScanError -> {
             (current as? GatewayAdditionStep.ScanError)?.let { Text(it.message, color = ClawTheme.colors.warning) }

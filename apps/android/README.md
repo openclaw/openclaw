@@ -239,7 +239,10 @@ cd apps/android
 ### OpenClaw ID native transport
 
 Native packaging is **off by default**. Existing Android lanes compile the checked-in
-Kotlin bindings and Android helper without requiring Rust or the NDK. OpenClaw ID
+Kotlin bindings and Android helper in the dedicated `:openclaw-iroh` library
+without requiring Rust or the NDK. Only that library allows compiler warnings:
+UniFFI 0.31.2 generates unused expressions under Kotlin 2.4.21, and generated
+sources must not be edited. The app retains its warnings-as-errors gate. OpenClaw ID
 node connections fail closed with “native transport not packaged” in these builds;
 ordinary Gateway connections are unaffected.
 

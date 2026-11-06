@@ -408,8 +408,6 @@ android {
     getByName("test").kotlin.directories.add("src/testShared/java")
     getByName("androidTest").kotlin.directories.add("src/testShared/java")
     getByName("main") {
-      kotlin.directories.add(openClawIrohDirectory.dir("generated").asFile.path)
-      kotlin.directories.add(openClawIrohDirectory.dir("android").asFile.path)
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
       assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
       assets.directories.add("../../shared/mermaid/assets")
@@ -593,6 +591,7 @@ ktlint {
 }
 
 dependencies {
+  implementation(project(":openclaw-iroh"))
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
