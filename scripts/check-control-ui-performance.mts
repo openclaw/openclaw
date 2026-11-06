@@ -72,8 +72,8 @@ const controlUiPerformanceBudgets = {
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  totalCssGzipBytes: 324_134,
-  totalCssRawBytes: 1_673_914,
+  totalCssGzipBytes: 324_169,
+  totalCssRawBytes: 1_674_059,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

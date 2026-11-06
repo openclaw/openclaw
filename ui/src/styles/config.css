@@ -160,6 +160,17 @@
   padding-top: 0;
 }
 
+/* Tabs sit between the route introduction and the active section. Remove the
+   generic lead inset; the workspace gap plus 4px content inset then matches
+   the 24px introduction-to-tabs rhythm. */
+.config-lead:has(.config-sections-hub-tabs) {
+  padding-top: 0;
+}
+
+.config-lead:has(.config-sections-hub-tabs) + .config-content {
+  padding-top: var(--space-1);
+}
+
 .config-content > .settings-page {
   padding-top: 0;
 }
