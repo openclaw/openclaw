@@ -10,10 +10,10 @@ import {
   createControlUiE2eSuite,
 } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
-  installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { button, createWorkboardProof, makeCard, moved } from "./workboard.e2e.test-support.ts";
 
@@ -234,7 +234,7 @@ suite.define(() => {
       updatedAt: editedAt,
     };
     const page = await newPage();
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       ...workboardUi,
       methodResponses: {
         "config.get": configSnapshot("execution-linked-workboard-e2e-config"),
@@ -288,7 +288,7 @@ suite.define(() => {
         ? { dir: proof.directory, size: { height: 900, width: 1280 } }
         : undefined,
     });
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       ...workboardUi,
       methodResponses: {
         "config.get": configSnapshot("workboard-e2e-config"),
