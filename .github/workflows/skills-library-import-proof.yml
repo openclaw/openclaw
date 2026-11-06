@@ -1,6 +1,8 @@
 name: Skills Library Real Import Proof
 
 on:
+  push:
+    branches: ["openclaw/nimble-claw-2"]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
@@ -17,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: skills-library-proof-${{ github.event.pull_request.number }}
+  group: skills-library-proof-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -25,15 +27,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PROOF_HEAD: ${{ github.event.pull_request.head.sha }}
-      PROOF_PUBLIC_DIR: ${{ runner.temp }}/skill-import-proof/public
-      PROOF_STABLE_MANIFEST: ${{ runner.temp }}/skill-import-proof/private/stable.json
-      PROOF_PRIVATE_DIR: ${{ runner.temp }}/skill-import-proof/private
+      PROOF_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      - name: Set isolated proof paths
+        run: |
+          printf '%s\n' \
+            "PROOF_PUBLIC_DIR=$RUNNER_TEMP/skill-import-proof/public" \
+            "PROOF_STABLE_MANIFEST=$RUNNER_TEMP/skill-import-proof/private/stable.json" \
+            "PROOF_PRIVATE_DIR=$RUNNER_TEMP/skill-import-proof/private" \
+            >> "$GITHUB_ENV"
       - name: Checkout exact PR head, not the merge ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Verify source qualification
@@ -67,7 +73,7 @@ jobs:
         if: always() && steps.proof.outcome != 'skipped'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: skills-library-proof-${{ github.event.pull_request.head.sha }}
+          name: skills-library-proof-${{ github.event.pull_request.head.sha || github.sha }}
           retention-days: 7
           if-no-files-found: error
           path: |
