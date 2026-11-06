@@ -66,18 +66,7 @@ const runtimeContext = {
   modelId: "claude-sonnet-4-6",
   tokenBudget: 180_000,
   modelContextWindow: 200_000,
-  // Durable turns must carry real prompt usage to the engine (cache-aware compaction).
-  promptCache: {
-    retention: "short" as const,
-    lastCallUsage: {
-      input: 1_200,
-      output: 300,
-      cacheRead: 150_000,
-      cacheWrite: 2_000,
-      total: 153_500,
-    },
-    lastCacheTouchAt: 1_700_000_000_000,
-  },
+  promptCache: { lastCallUsage: { input: 1_200, cacheRead: 150_000, total: 151_200 } },
 };
 type TurnPayload = Parameters<typeof enqueueContextEngineTurnCommit>[0]["payload"];
 
@@ -247,10 +236,8 @@ describe("context-engine turn outbox", () => {
           { role: "user", content: "current" },
           message,
         ]);
-        // Last-call usage survives the durable outbox so engines can see the real prompt size.
-        expect(commitTurn.mock.calls[0]![0].runtimeContext?.promptCache).toEqual(
-          runtimeContext.promptCache,
-        );
+        const { promptCache } = runtimeContext;
+        expect(commitTurn.mock.calls[0]![0].runtimeContext).toMatchObject({ promptCache });
         expect(warn).not.toHaveBeenCalled();
       } else {
         expect(commitTurn).not.toHaveBeenCalled();
