@@ -22,6 +22,11 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+On desktop, drag the sidebar divider to change its width. Double-click the divider,
+or focus it and press **Enter**, to restore the default width. The chosen width
+is saved across reloads. Arrow keys adjust the width; **Home** and **End** select
+the minimum and maximum widths.
+
 Chat portraits keep a fixed frame while images load. Previously verified
 same-origin portrait URLs reuse the browser image cache within the admitted
 operator's connection scope when using ambient authentication. Unknown URLs and

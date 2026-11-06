@@ -5,6 +5,7 @@ import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
+import { NAV_WIDTH_DEFAULT } from "./settings.ts";
 import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
 
 /** Stable child bindings resolve current owners when invoked, without invalidating every paint. */
@@ -31,6 +32,7 @@ export function createShellViewCallbacks(host: {
       }
     },
     toggleSidebar: () => host.toggleNavigationSurface(),
+    resetNavigationWidth: () => host.context?.navigation.update({ navWidth: NAV_WIDTH_DEFAULT }),
     updateSidebarEntries: (entries: string[]) =>
       host.context?.navigation.update({ sidebarEntries: entries }),
     openDevicePairSetup: () => void host.context?.overlays.openDevicePairSetup(),
