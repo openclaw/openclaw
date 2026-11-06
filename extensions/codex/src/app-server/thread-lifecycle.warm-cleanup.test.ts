@@ -141,9 +141,7 @@ describe("Codex warm subscription cleanup", () => {
       });
       try {
         await vi.waitFor(() => {
-          if (failure) {
-            throw failure;
-          }
+          expect(failure).toBeUndefined();
           return rotating
             ? expect(pluginBuilds).toBeGreaterThan(buildsBefore)
             : expect(fixture.request.mock.calls.map(([method]) => method)).toContain("thread/read");

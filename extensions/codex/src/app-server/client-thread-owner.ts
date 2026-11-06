@@ -270,11 +270,11 @@ export function acquireThreadProtection(
   let held = true;
   return () => {
     if (!held) {
-      return;
+      return undefined;
     }
     held = false;
     if (runtime.closed) {
-      return;
+      return undefined;
     }
     return releaseThreadProtection(runtime, threadId, clientId, owner);
   };
