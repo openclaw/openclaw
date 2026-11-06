@@ -7,6 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.ts";
 import type { DevicePairingList } from "../../src/gateway/device-pairing-list.types.ts";
 import { PORTAL_PANEL_TOGGLE_EVENT } from "../../ui/src/components/panel-toggle-contract.ts";
+import type { PortalsPage } from "../../ui/src/pages/portals/portals-page.tsx";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
@@ -21,6 +22,8 @@ import {
   type InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
 import { workboardResourceResponses } from "./control-ui-workboard-resource-fixture.ts";
+
+type PortalsPageHost = Extract<Parameters<typeof PortalsPage>[0]["ref"], HTMLElement>;
 
 const retainedRows = new WeakMap<Page, JSHandle<{ rows: Element[]; text: string[] }>>();
 
@@ -333,6 +336,7 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
       return { ...(await rowEvidence(page)), unchangedOwnerReads: methods.length };
     },
   };
+  let activityList: ((params: unknown) => unknown) | undefined;
   const activityFallback: EngineScenario = {
     ...activity,
     id: "noop-activity-facets-fallback",
@@ -341,6 +345,11 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
     rowSelector: ".activity-feed__session-row",
     expected:
       "After a reconciled receipt, Activity's real 60-second fallback and debounce reload unchanged facets.",
+    createRequestHandlers: (defaults) => {
+      const handlers = activity.createRequestHandlers?.(defaults) ?? {};
+      activityList = handlers["sessions.list"] ?? defaults["sessions.list"];
+      return handlers;
+    },
     prepare: async (page, gateway) => {
       await activity.prepare(page, gateway);
       const row = await gateway.getSessionRow("agent:main:data-activity-0");
@@ -351,14 +360,25 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
         ancestorSessions: [],
       });
       await settle(page);
+      assert.equal(await page.locator(".activity-feed__session-row").count(), 100);
       await retainRows(page, ".activity-feed__session-row");
     },
     run: async (page, gateway) => {
+      assert(activityList, "Missing Activity list handler");
       const match = { source: "activity" };
       const after = await gateway.deferNext("sessions.list", match);
       // The shared owner adds its normal 4–5s debounce after the 60s fallback.
       await waitForPoll(page, "sessions.list", after, 65_000, match);
-      await releasePoll(page, "sessions.list");
+      const request = (await gateway.getRequests("sessions.list", match))[after];
+      assert(request, "Missing deferred Activity list request");
+      const payload = await activityList(request.params);
+      await page.evaluate((response) => {
+        const transport = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+        window.openclawEngineMarkGatewayInput?.();
+        transport.resolveDeferred("sessions.list", response, { match: { source: "activity" } });
+      }, payload);
+      await settle(page);
+      assert.equal(await page.locator(".activity-feed__session-row").count(), 100);
       return { ...(await rowEvidence(page)), unchangedActivitySnapshot: true, fallbackMs: 60000 };
     },
   };
@@ -383,7 +403,7 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
       await portals.prepare(page, gateway);
       await page.evaluate(
         ({ type, environmentId }) => {
-          const host = document.querySelector("openclaw-portals-page");
+          const host = document.querySelector<PortalsPageHost>("openclaw-portals-page");
           if (!host) {
             throw new Error("Missing Portals host");
           }

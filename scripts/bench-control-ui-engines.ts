@@ -210,6 +210,7 @@ const needsWorkboard =
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
     );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {

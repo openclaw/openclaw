@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { JSHandle, Page } from "playwright";
 import type { PresenceEntry } from "../../ui/src/api/types.ts";
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
@@ -77,6 +78,7 @@ export function createNoopPushScenarios(): readonly EngineScenario[] {
   if (!sessions || !activity || !picker) {
     throw new Error("Missing shared no-op push fixtures");
   }
+  let sessionsList: ((params: unknown) => unknown) | undefined;
   return [
     ...([false, true] as const).map((changeOne): EngineScenario =>
       Object.assign({}, sessions, {
@@ -125,24 +127,37 @@ export function createNoopPushScenarios(): readonly EngineScenario[] {
       explicitOnly: true,
       rowSelector: ".session-data-row",
       expected: "An explicit same-data session refresh retains row presentation.",
+      createRequestHandlers: (defaults) => {
+        const handlers = sessions.createRequestHandlers?.(defaults) ?? {};
+        sessionsList = handlers["sessions.list"] ?? defaults["sessions.list"];
+        return handlers;
+      },
       prepare: async (page, gateway) => {
         await sessions.prepare(page, gateway);
         await retainRows(page, ".session-data-row");
       },
       run: async (page, gateway) => {
+        assert(sessionsList, "Missing Sessions list handler");
+        const rowsBefore = await page.locator(".session-data-row").count();
         const after = await gateway.deferNext("sessions.list", { source: "sessions-page" });
         await page.locator(".sessions-toolbar__refresh").click();
-        await gateway.waitForRequest("sessions.list", {
+        const request = await gateway.waitForRequest("sessions.list", {
           after,
           match: { source: "sessions-page" },
         });
-        await gateway.resolveDeferred("sessions.list", undefined, {
-          match: { source: "sessions-page" },
-        });
+        const payload = await sessionsList(request.params);
+        await page.evaluate((response) => {
+          const transport = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          window.openclawEngineMarkGatewayInput?.();
+          transport.resolveDeferred("sessions.list", response, {
+            match: { source: "sessions-page" },
+          });
+        }, payload);
         await page.waitForFunction(
           () => !document.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled,
         );
         await frames(page);
+        assert.equal(await page.locator(".session-data-row").count(), rowsBefore);
         return { ...(await rowEvidence(page)), updatedRows: 0, explicitRefreshes: 1 };
       },
     },
