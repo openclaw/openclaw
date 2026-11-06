@@ -3,6 +3,9 @@ import { omit } from "solid-js";
 import { Icon, type IconName } from "./icon.tsx";
 import "../tooltip.ts";
 
+/** Mask-glyph stroke (24-unit Lucide grid) that renders at 1px at the 15px row glyph size. */
+export const ROW_GLYPH_STROKE = 1.6;
+
 export type IconButtonSize = 28 | 32 | 36;
 export type IconButtonStyle = {
   size?: IconButtonSize;
