@@ -473,7 +473,7 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
-  --shell-viewport-base: 100vh;
+  --shell-viewport-base: 100dvh;
   --shell-safe-area-bottom: var(--safe-area-bottom);
   --shell-canvas-height: min(
     var(--shell-viewport-base),
@@ -1035,12 +1035,6 @@ openclaw-app {
 /* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
 openclaw-plugin-contributions {
   display: contents;
-}
-
-@supports (height: 100dvh) {
-  :root {
-    --shell-viewport-base: 100dvh;
-  }
 }
 
 @media (display-mode: standalone) {

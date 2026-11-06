@@ -3826,12 +3826,6 @@ html.openclaw-native-web-chrome
   white-space: nowrap;
 }
 
-.page-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .grid {
   display: grid;
   gap: 20px;

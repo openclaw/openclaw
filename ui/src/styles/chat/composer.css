@@ -429,8 +429,7 @@
 }
 
 .agent-chat__capability-menu-panel .agent-chat__capability-menu-item > .oc-menu-item__label,
-.agent-chat__capability-menu-panel .agent-chat__capability-menu-label,
-.agent-chat__capability-menu-panel .agent-chat__capability-menu-link {
+.agent-chat__capability-menu-panel .agent-chat__capability-menu-label {
   min-width: 0;
   color: inherit;
   font-size: inherit;
@@ -523,7 +522,6 @@
 }
 
 .agent-chat__capability-menu-switch-button,
-.agent-chat__capability-menu-icon-button,
 .agent-chat__capability-menu-text-action {
   display: inline-flex;
   align-items: center;
@@ -538,11 +536,6 @@
 .agent-chat__capability-menu-switch-button {
   min-width: 28px;
   min-height: 24px;
-}
-.agent-chat__capability-menu-icon-button {
-  width: 24px;
-  height: 24px;
-  color: var(--muted);
 }
 .agent-chat__capability-menu-emoji {
   font-size: 17px;
