@@ -1153,6 +1153,7 @@
         --mount-fallback-divider: #36373c;
         --mount-fallback-edge: #1d1f24;
         --mount-fallback-text: var(--text-strong, #f4f4f5);
+        --mount-fallback-heading: var(--text, #bcbcc0);
         --mount-fallback-muted: var(--muted, #8e8e97);
         --mount-fallback-glyph: rgba(188, 188, 192, 0.484);
         --mount-fallback-selected: #222429;
@@ -1368,16 +1369,15 @@
         display: flex;
         flex: none;
         align-items: center;
-        height: 52px;
-        padding: 0 24px;
-        padding-top: env(safe-area-inset-top);
+        height: 53px;
+        padding: 0 12px;
         color: var(--mount-fallback-text);
       }
 
       .mount-fallback__wordmark {
         display: block;
-        width: auto;
-        height: 25px;
+        width: 140px;
+        height: 32px;
       }
 
       .mount-fallback__stage {
@@ -1446,11 +1446,11 @@
 
       .mount-fallback__panel h1 {
         margin: 0;
-        color: inherit;
-        font-size: clamp(30px, 3.2vw, 44px);
+        color: var(--mount-fallback-heading);
+        font-size: clamp(24px, 2.5vw, 32px);
         font-weight: 600;
         letter-spacing: -0.035em;
-        line-height: 1.15;
+        line-height: 1.2;
         text-wrap: balance;
       }
 
@@ -1533,6 +1533,7 @@
         --mount-fallback-divider: #d1d1d1;
         --mount-fallback-edge: #ededed;
         --mount-fallback-text: var(--text-strong, #202020);
+        --mount-fallback-heading: var(--text, #353535);
         --mount-fallback-muted: var(--muted, #5e5e5e);
         --mount-fallback-glyph: rgba(53, 53, 53, 0.6);
         --mount-fallback-selected: #e5e5e5;
@@ -1566,8 +1567,9 @@
         }
 
         .mount-fallback__topbar {
+          align-items: flex-start;
           justify-content: center;
-          height: 53px;
+          padding-top: max(14.5px, env(safe-area-inset-top));
         }
 
         .mount-fallback__stage {
