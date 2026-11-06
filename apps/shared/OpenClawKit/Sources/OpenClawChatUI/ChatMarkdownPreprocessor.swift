@@ -25,7 +25,8 @@ enum ChatMarkdownPreprocessor {
 
     private static let messageIdHintPattern = #"^\s*\[message_id:\s*[^\]]+\]\s*$"#
     private static let markdownLiteralPunctuation = CharacterSet(
-        charactersIn: "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+        charactersIn: "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    )
 
     private struct MarkdownImageOccurrence {
         let range: Range<String.Index>
@@ -64,37 +65,38 @@ enum ChatMarkdownPreprocessor {
         }
 
         func range(for sourceRange: SourceRange) -> Range<String.Index>? {
-            guard let lowerBound = self.index(for: sourceRange.lowerBound),
-                  let upperBound = self.index(for: sourceRange.upperBound),
+            guard let lowerBound = index(for: sourceRange.lowerBound),
+                  let upperBound = index(for: sourceRange.upperBound),
                   lowerBound <= upperBound
             else {
                 return nil
             }
-            return lowerBound..<upperBound
+            return lowerBound ..< upperBound
         }
 
         private func index(for location: SourceLocation) -> String.Index? {
             guard location.line > 0,
                   location.column > 0,
-                  self.lineStarts.indices.contains(location.line - 1)
+                  lineStarts.indices.contains(location.line - 1)
             else {
                 return nil
             }
 
-            let bytes = self.markdown.utf8
-            guard let lineStart = self.lineStarts[location.line - 1].samePosition(in: bytes),
+            let bytes = markdown.utf8
+            guard let lineStart = lineStarts[location.line - 1].samePosition(in: bytes),
                   let byteIndex = bytes.index(
                       lineStart,
                       offsetBy: location.column - 1,
-                      limitedBy: bytes.endIndex),
-                  let stringIndex = String.Index(byteIndex, within: self.markdown)
+                      limitedBy: bytes.endIndex
+                  ),
+                  let stringIndex = String.Index(byteIndex, within: markdown)
             else {
                 return nil
             }
 
             // A malformed dependency range must not spill into the next line.
-            if self.lineStarts.indices.contains(location.line),
-               stringIndex >= self.lineStarts[location.line]
+            if lineStarts.indices.contains(location.line),
+               stringIndex >= lineStarts[location.line]
             {
                 return nil
             }
@@ -107,19 +109,20 @@ enum ChatMarkdownPreprocessor {
         private(set) var images: [MarkdownImageOccurrence] = []
 
         init(markdown: String) {
-            self.sourceMap = MarkdownSourceMap(markdown)
+            sourceMap = MarkdownSourceMap(markdown)
         }
 
         mutating func visitImage(_ image: Markdown.Image) {
             guard let sourceRange = image.range,
-                  let range = self.sourceMap.range(for: sourceRange)
+                  let range = sourceMap.range(for: sourceRange)
             else {
                 return
             }
-            self.images.append(MarkdownImageOccurrence(
+            images.append(MarkdownImageOccurrence(
                 range: range,
                 label: image.plainText,
-                source: image.source ?? ""))
+                source: image.source ?? ""
+            ))
         }
     }
 
@@ -135,15 +138,15 @@ enum ChatMarkdownPreprocessor {
     }
 
     static func preprocess(markdown raw: String) -> Result {
-        let withoutEnvelope = self.stripEnvelope(raw)
-        let withoutMessageIdHints = self.stripMessageIdHints(withoutEnvelope)
-        let withoutContextBlocks = self.stripInboundContextBlocks(withoutMessageIdHints)
-        let withoutTimestamps = self.stripPrefixedTimestamps(withoutContextBlocks)
+        let withoutEnvelope = stripEnvelope(raw)
+        let withoutMessageIdHints = stripMessageIdHints(withoutEnvelope)
+        let withoutContextBlocks = stripInboundContextBlocks(withoutMessageIdHints)
+        let withoutTimestamps = stripPrefixedTimestamps(withoutContextBlocks)
         // cmark replaces NUL with U+FFFD before computing UTF-8 source columns.
         // Use those same bytes for range mapping and the downstream renderer.
         let markdown = withoutTimestamps.replacingOccurrences(of: "\0", with: "\u{FFFD}")
         guard markdown.contains("![") else {
-            return Result(cleaned: self.normalize(markdown), images: [])
+            return Result(cleaned: normalize(markdown), images: [])
         }
 
         // Only structural CommonMark images are renderable. A document-wide
@@ -151,7 +154,7 @@ enum ChatMarkdownPreprocessor {
         var collector = MarkdownImageCollector(markdown: markdown)
         collector.visit(Document(parsing: markdown))
         guard !collector.images.isEmpty else {
-            return Result(cleaned: self.normalize(markdown), images: [])
+            return Result(cleaned: normalize(markdown), images: [])
         }
 
         var images: [InlineImage] = []
@@ -159,20 +162,21 @@ enum ChatMarkdownPreprocessor {
 
         for occurrence in collector.images.reversed() {
             let range = NSRange(occurrence.range, in: markdown)
-            if let inlineImage = self.inlineImage(
+            if let inlineImage = inlineImage(
                 label: occurrence.label,
-                source: occurrence.source)
-            {
+                source: occurrence.source
+            ) {
                 images.append(inlineImage)
                 cleaned.replaceCharacters(in: range, with: "")
             } else {
                 cleaned.replaceCharacters(
                     in: range,
-                    with: self.fallbackImageLabel(occurrence.label))
+                    with: fallbackImageLabel(occurrence.label)
+                )
             }
         }
 
-        return Result(cleaned: self.normalize(cleaned as String), images: images.reversed())
+        return Result(cleaned: normalize(cleaned as String), images: images.reversed())
     }
 
     private static func inlineImage(label: String, source: String) -> InlineImage? {
@@ -180,7 +184,8 @@ enum ChatMarkdownPreprocessor {
         guard let comma = trimmed.firstIndex(of: ","),
               trimmed[..<comma].range(
                   of: #"^data:image\/[^;]+;base64$"#,
-                  options: [.regularExpression, .caseInsensitive]) != nil
+                  options: [.regularExpression, .caseInsensitive]
+              ) != nil
         else {
             return nil
         }
@@ -192,14 +197,14 @@ enum ChatMarkdownPreprocessor {
 
     private static func fallbackImageLabel(_ label: String) -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return self.markdownEscapedLiteral(trimmed.isEmpty ? "image" : trimmed)
+        return markdownEscapedLiteral(trimmed.isEmpty ? "image" : trimmed)
     }
 
     private static func markdownEscapedLiteral(_ value: String) -> String {
         var escaped = ""
         escaped.reserveCapacity(value.utf8.count)
         for scalar in value.unicodeScalars {
-            if self.markdownLiteralPunctuation.contains(scalar) {
+            if markdownLiteralPunctuation.contains(scalar) {
                 escaped.append("\\")
             }
             escaped.unicodeScalars.append(scalar)
@@ -213,8 +218,8 @@ enum ChatMarkdownPreprocessor {
         else {
             return raw
         }
-        let header = String(raw[raw.index(after: raw.startIndex)..<closeIndex])
-        guard self.looksLikeEnvelopeHeader(header) else {
+        let header = String(raw[raw.index(after: raw.startIndex) ..< closeIndex])
+        guard looksLikeEnvelopeHeader(header) else {
             return raw
         }
         return String(raw[raw.index(after: closeIndex)...])
@@ -227,7 +232,7 @@ enum ChatMarkdownPreprocessor {
         if header.range(of: #"\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b"#, options: .regularExpression) != nil {
             return true
         }
-        return self.envelopeChannels.contains(where: { header.hasPrefix("\($0) ") })
+        return envelopeChannels.contains(where: { header.hasPrefix("\($0) ") })
     }
 
     private static func stripMessageIdHints(_ raw: String) -> String {
@@ -236,8 +241,9 @@ enum ChatMarkdownPreprocessor {
         }
         let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").split(
             separator: "\n",
-            omittingEmptySubsequences: false)
-        let insideFences = self.fencedCodeLineFlags(lines)
+            omittingEmptySubsequences: false
+        )
+        let insideFences = fencedCodeLineFlags(lines)
         let filtered = lines.enumerated().filter { index, line in
             insideFences[index]
                 || String(line).range(of: self.messageIdHintPattern, options: .regularExpression) == nil
@@ -279,7 +285,9 @@ enum ChatMarkdownPreprocessor {
             else { continue }
             let info = trimmed.dropFirst(fenceRun.count)
             // Backtick fences cannot contain backticks in the info string.
-            if fenceRun.first == "`" && info.contains("`") { continue }
+            if fenceRun.first == "`", info.contains("`") {
+                continue
+            }
             fenceCharacter = fenceRun.first
             fenceLength = fenceRun.count
             flags[index] = true
@@ -288,7 +296,7 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {
-        guard raw.contains(self.inboundContextMarker) else {
+        guard raw.contains(inboundContextMarker) else {
             return raw
         }
 
@@ -297,15 +305,19 @@ enum ChatMarkdownPreprocessor {
         var outputLines: [String] = []
         while let currentLine = lines.next() {
             let trimmed = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed == self.contextHeader { break }
-            if trimmed.count > self.inboundContextMarker.count, trimmed.hasSuffix(self.inboundContextMarker) {
+            if trimmed == contextHeader {
+                break
+            }
+            if trimmed.count > inboundContextMarker.count, trimmed.hasSuffix(inboundContextMarker) {
                 let firstBodyLine = lines.next()?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let terminator = firstBodyLine == "```json" ? "```" : ""
                 // A context body owns every line through its closing fence or
                 // first prose blank, including any marker-looking text inside.
                 if firstBodyLine != terminator {
                     while let bodyLine = lines.next() {
-                        if bodyLine.trimmingCharacters(in: .whitespacesAndNewlines) == terminator { break }
+                        if bodyLine.trimmingCharacters(in: .whitespacesAndNewlines) == terminator {
+                            break
+                        }
                     }
                 }
             } else {
@@ -321,15 +333,18 @@ enum ChatMarkdownPreprocessor {
     private static func stripPrefixedTimestamps(_ raw: String) -> String {
         guard raw.contains("[") else { return raw }
         let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
-        let insideFences = self.fencedCodeLineFlags(lines)
+        let insideFences = fencedCodeLineFlags(lines)
         var changed = false
         let stripped = lines.enumerated().map { index, line -> Substring in
             guard !insideFences[index] else { return line }
             let replaced = line.replacingOccurrences(
                 of: #"\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(?:GMT|UTC)[+-]?\d{0,2}\]\s*"#,
                 with: "",
-                options: .regularExpression)
-            if replaced != line { changed = true }
+                options: .regularExpression
+            )
+            if replaced != line {
+                changed = true
+            }
             return replaced[...]
         }
         guard changed else { return raw }

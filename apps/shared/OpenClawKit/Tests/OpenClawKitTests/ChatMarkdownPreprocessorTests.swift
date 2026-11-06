@@ -1,5 +1,5 @@
-import Testing
 @testable import OpenClawChatUI
+import Testing
 
 @Suite("ChatMarkdownPreprocessor")
 struct ChatMarkdownPreprocessorTests {
@@ -401,9 +401,9 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == "Hello there\nActual message")
     }
 
-    // Unfenced prose bodies (chat history/window) end at the first blank line, unlike the
-    // fenced JSON blocks above. Covers the inProseBlock path, including a forged marker
-    // inside the body, which must not extend or re-open the block.
+    /// Unfenced prose bodies (chat history/window) end at the first blank line, unlike the
+    /// fenced JSON blocks above. Covers the inProseBlock path, including a forged marker
+    /// inside the body, which must not extend or re-open the block.
     @Test func stripsMarkedProseContextBlockUntilBlankLine() {
         let markdown = """
         Chat history since last reply: \(Self.ctx)
