@@ -162,6 +162,7 @@ async function census(page: Page) {
       const active = document.querySelector(".chat-pane-cache__pane--active");
       const style = active ? getComputedStyle(active) : null;
       return {
+        documentId: Reflect.get(window, "__agedDocumentId"),
         timeOrigin: performance.timeOrigin,
         ageMs: performance.now(),
         visibility: document.visibilityState,
@@ -201,6 +202,7 @@ async function createTab(browser: Browser, nativeContext?: BrowserContext) {
   await page.addInitScript("globalThis.__name = (fn) => fn");
   await page.addInitScript(installControlUiResourceCounts);
   await page.addInitScript(() => {
+    Reflect.set(window, "__agedDocumentId", crypto.randomUUID());
     const changes = [{ at: performance.now(), state: document.visibilityState }];
     document.addEventListener("visibilitychange", () => {
       changes.push({ at: performance.now(), state: document.visibilityState });
@@ -272,7 +274,7 @@ async function createTab(browser: Browser, nativeContext?: BrowserContext) {
     page,
     gateway,
     errors,
-    timeOrigin: await page.evaluate(() => performance.timeOrigin),
+    documentId: await page.evaluate(() => String(Reflect.get(window, "__agedDocumentId"))),
   };
 }
 const shared = (id: string) => {
@@ -428,7 +430,16 @@ async function sample(
   if (tab.errors.length) {
     throw new Error(tab.errors.join("\n"));
   }
-  if ((await tab.page.evaluate(() => performance.timeOrigin)) !== tab.timeOrigin) {
+  const documentId = await tab.page.evaluate(() => String(Reflect.get(window, "__agedDocumentId")));
+  if (documentId !== tab.documentId) {
+    const prefix = `${engine}-${stage}-${role}-${index}-${action.id}-reload`;
+    await tab.page.screenshot({ path: path.join(output, `${prefix}.png`) });
+    await json(`${prefix}.json`, {
+      expectedDocumentId: tab.documentId,
+      documentId,
+      ...(await census(tab.page)),
+      errors: tab.errors,
+    });
     throw new Error("Measured tab reloaded");
   }
   return row;
