@@ -12,6 +12,7 @@ import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
+import { sleep } from "../utils/sleep.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
   createManagedCommandProcessCustody,
@@ -19,6 +20,8 @@ import {
 } from "./update-managed-command-custody.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+const RESERVATION_SETTLEMENT_ATTEMPTS = 5;
 
 const receiptSchema = z.object({
   nonce: z.string(),
@@ -300,7 +303,19 @@ export async function createUpdateDoctorProcessCustody(
         }
         try {
           // Snapshot exact native handles before joining; mutable IPC never selects this namespace.
-          const prepared = nativeCustody?.prepareSettlement(pid, identities);
+          let prepared: ReturnType<NonNullable<typeof nativeCustody>["prepareSettlement"]> | undefined;
+          for (let attempt = 1; ; attempt++) {
+            try {
+              prepared = nativeCustody?.prepareSettlement(pid, identities);
+              break;
+            } catch (error) {
+              // An unrelated short-lived process born near a reservation clears itself.
+              if (pending === 0 || attempt >= RESERVATION_SETTLEMENT_ATTEMPTS) {
+                throw error;
+              }
+              await sleep(1_000);
+            }
+          }
           diagnostics = prepared?.diagnostics ?? [];
           reservationsResolved ||= prepared !== undefined;
           const groups = await settleCommandProcessGroups(identities);
