@@ -39,7 +39,16 @@
       "talk.voiceAliases",
       "talk.modelId",
       "talk.outputFormat",
-      "talk.apiKey"
+      "talk.apiKey",
+      "tts.providers.elevenlabs.model",
+      "tts.personas.*.providers.elevenlabs.model",
+      "agents.entries.*.tts.providers.elevenlabs.model",
+      "agents.entries.*.tts.personas.*.providers.elevenlabs.model",
+      "channels.*.tts.providers.elevenlabs.model",
+      "channels.*.voice.tts.providers.elevenlabs.model",
+      "channels.*.accounts.*.tts.providers.elevenlabs.model",
+      "channels.*.accounts.*.voice.tts.providers.elevenlabs.model",
+      "talk.providers.elevenlabs.model"
     ]
   },
   "configSchema": {
