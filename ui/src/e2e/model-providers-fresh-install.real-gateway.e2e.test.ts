@@ -58,9 +58,9 @@ suite.define(() => {
         await page.locator('[data-model-readiness="model-required"]').waitFor();
         // Let catalog discovery settle so a late failure alert has time to appear.
         await page.waitForTimeout(8_000);
-        const text = await page.locator("main, .settings-workspace, body").first().innerText();
-        const alerts = await page.locator("[role='alert']:visible").allInnerTexts();
-        expect(text).not.toContain("subtitles.modelProviders");
+        const text = (await page.locator(".page-subtitle").first().textContent()) ?? "";
+        const alerts = await page.locator("[role='alert']:visible").allTextContents();
+        expect(text).toContain("Global model defaults and provider access for your agents.");
         expect(alerts.join(" ")).not.toMatch(/Couldn’t load models/u);
 
         await page.getByRole("button", { name: "Add account", exact: true }).first().click();
@@ -71,7 +71,7 @@ suite.define(() => {
           .first()
           .click();
         const form = page.getByRole("dialog", { name: "Add provider" });
-        const title = await form.locator(".oc-dialog__title").innerText();
+        const title = (await form.locator(".oc-dialog__title").textContent()) ?? "";
         expect(title.trim()).not.toBe("tencent-tokenhub");
       },
     );

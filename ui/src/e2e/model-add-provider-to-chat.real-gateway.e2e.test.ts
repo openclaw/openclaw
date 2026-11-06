@@ -123,7 +123,7 @@ suite.define(() => {
         clicks++;
         const form = page.getByRole("dialog", { name: "Add provider" });
         // A provider with config still shows its display name, not its config id.
-        expect((await form.locator(".oc-dialog__title").innerText()).trim()).toBe(
+        expect((await form.locator(".oc-dialog__title").textContent())?.trim()).toBe(
           "Tencent Tokenhub",
         );
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-first-provider");
