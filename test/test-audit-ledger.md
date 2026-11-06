@@ -215,13 +215,18 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch111, pinned main `60a0ffc99caf`: qualify removal of the redundant Swift
-AnyCodable portability adapter and its dedicated case. The canonical source
-already imports CoreFoundation; the sole artifact writer receives that exact
-source. Preserve the three CLI/schema/public-package cases and the actual Swift
-compilation and decode harness. This ledger-only draft provisions the native
-validation checkout; original source remains unchanged and runtime proof is
-pending. Source dispositions were already recorded; no census marks are added.
+Batch111, pinned main `60a0ffc99caf`: remove the redundant Swift AnyCodable
+portability adapter and its dedicated case. The unchanged four-case baseline
+passes; the candidate passes all three retained CLI/schema/public-package cases,
+whose bodies remain byte-identical. Invoking the old helper on the actual 6,457-byte
+canonical Swift source returns exactly those bytes, including its existing
+CoreFoundation import; the sole writer now uses that source directly. The actual
+Swift compilation/decode harness and canonical source remain unchanged; no new
+Swift platform run is claimed. The change removes 10 test and five support lines.
+Types, typed lint, formatting, ledger compilation, whitespace, the line ratchet
+and every dependency/unused-file/export removal phase pass. Fresh review and
+exact-head hosted admission are recorded in the PR. Source dispositions were
+already recorded; this adds no census marks.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
