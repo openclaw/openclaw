@@ -133,6 +133,9 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
             ? { assertCurrent: this.docker.assertCurrent }
             : { abortSignal: this.startupAbort.signal }),
           stderrDestination: this.stderrStream,
+          // Normal close() ends stdin explicitly; a lost host must retire the
+          // server decisively instead of waiting for a lineage-close receipt.
+          terminateOnHostLoss: true,
         }),
       );
       this.process = child;

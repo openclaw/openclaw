@@ -120,6 +120,11 @@ describe("OpenClawStdioClientTransport", () => {
     },
   );
 
+  it("arms host-loss termination for owned stdio custody", async () => {
+    await startedFixture();
+    expect(spawnMock).toHaveBeenCalledWith(expect.objectContaining({ terminateOnHostLoss: true }));
+  });
+
   it("binds an exact environment without importing MCP default variables", async () => {
     await startedFixture({
       exactEnv: true,
