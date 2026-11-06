@@ -51,13 +51,10 @@ import {
   readEngineConfigurationObservation,
 } from "./lib/control-ui-engine-configuration-observer.ts";
 import { resolveEngineConfigurations } from "./lib/control-ui-engine-configurations.ts";
-import { captureEngineIdleAnimationPhases } from "./lib/control-ui-engine-idle-animation-capture.ts";
 import {
   createEngineIdleControls,
-  isEngineIdleControl,
-} from "./lib/control-ui-engine-idle-controls.ts";
-import {
   createEngineIdleScenarios,
+  isEngineIdleControl,
   isEngineIdleScenario,
   readEngineIdleState,
   verifyEngineIdleClocks,
@@ -137,7 +134,6 @@ const { values } = parseArgs({
     "mutation-audit": { type: "boolean", default: false },
     "cpu-throttle": { type: "string", default: "1" },
     "idle-warmup-ms": { type: "string" },
-    "idle-animation-phases": { type: "boolean", default: false },
     "memory-soak-rounds": { type: "string", default: "10" },
   },
 });
@@ -479,8 +475,6 @@ try {
           "./lib/control-ui-engine-boot-scenarios.ts",
           "./lib/control-ui-engine-completed-run-scenarios.ts",
           "./lib/control-ui-engine-idle-scenarios.ts",
-          "./lib/control-ui-engine-idle-controls.ts",
-          "./lib/control-ui-engine-idle-animation-capture.ts",
           "./lib/control-ui-resource-counts.ts",
           "./lib/control-ui-talk-fixture.ts",
           "./lib/control-ui-long-session-probe.ts",
@@ -537,7 +531,6 @@ try {
     cpuProfile: values["cpu-profile"],
     nativeAudit: values["native-audit"],
     idleWarmupOverrideMs: idleWarmupOverrideMs ?? null,
-    idleAnimationPhases: values["idle-animation-phases"],
     mutationAudit: values["mutation-audit"],
     cpuThrottle,
     memorySoakRounds,
@@ -1155,14 +1148,6 @@ try {
                   });
                 }
                 observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway!);
-              }
-              if (
-                values["idle-animation-phases"] &&
-                observation.idle &&
-                !idleControl &&
-                pair === 0
-              ) {
-                await captureEngineIdleAnimationPhases(page, artifactDir, artifactPrefix);
               }
               if (scenario.id === "sidebar-running-clock-scroll-resize") {
                 observation.evidence = {
