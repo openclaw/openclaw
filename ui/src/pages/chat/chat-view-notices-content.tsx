@@ -419,6 +419,7 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
             <ChatErrorNotice
               error={error().summary}
               action={refresh}
+              onDismiss={props.onDismissRunError}
               tone={contention() ? "warn" : "danger"}
               summary={
                 error().kind === "stop"

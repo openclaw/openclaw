@@ -50,12 +50,16 @@ openclaw-pending-session-create {
   }
 }
 
-/* Touch has no hover, and a persistent error needs a visible way to dismiss it. */
-@media (hover: none) {
-  .chat-error > .app-toast__dismiss {
-    opacity: 1;
-    scale: 1;
-  }
+/* Persistent errors do not time out, so their dismiss control stays visible
+ * instead of waiting for hover. */
+.chat-error > .app-toast__dismiss {
+  opacity: 1;
+  scale: 1;
+}
+
+/* Leave the corner badge room beside a trailing recovery action. */
+.chat-error.app-toast--action {
+  padding-right: 22px;
 }
 
 @media (max-width: 560px) {

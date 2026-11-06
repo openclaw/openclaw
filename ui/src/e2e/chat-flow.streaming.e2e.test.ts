@@ -215,7 +215,7 @@ suite.define(() => {
       );
       expect(await chatTranscript(page).getByText(partialText, { exact: true }).count()).toBe(1);
       expect(await chatTranscript(page).getByText(`Error: ${gatewayErrorText}`).count()).toBe(0);
-      expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
+      expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(1);
       expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       await expectRequestCountStable(gateway, "chat.send", 1);
       await sendMessage(page, "retry after error");

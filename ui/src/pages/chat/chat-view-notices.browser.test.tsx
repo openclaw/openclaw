@@ -83,7 +83,8 @@ it("keeps diagnostic details redacted, open across refreshes, and reset for a di
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
 });
 
-it("keeps the recovery action beside the title when details open", async () => {
+it("keeps the recovery action beside the title and offers a visible dismiss", async () => {
+  const dismiss = vi.fn();
   const view = mountSolid(() => (
     <ChatComposerNoticesContent
       sessionKey="agent:main:main"
@@ -94,6 +95,7 @@ it("keeps the recovery action beside the title when details open", async () => {
         summary: "Error: Restore failed.\nprovider reported lease destroyed",
       }}
       onRefresh={() => {}}
+      onDismissRunError={dismiss}
     />
   ));
   await waitForSolid(() =>
@@ -106,4 +108,8 @@ it("keeps the recovery action beside the title when details open", async () => {
   expect(Math.abs(closed)).toBeLessThan(8);
   view.container.querySelector("details")!.open = true;
   await waitForSolid(() => expect(offset()).toBe(closed));
+  const close = view.container.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
+  expect(getComputedStyle(close).opacity).toBe("1");
+  close.click();
+  expect(dismiss).toHaveBeenCalledOnce();
 });
