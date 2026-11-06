@@ -151,6 +151,12 @@ export async function finalizeCompletedCronRunOutcomes(
           if (quietTrigger) {
             eventContext = { ...eventContext, quietTrigger: true };
           }
+          if (outcome.admissionDeferredReason) {
+            eventContext = {
+              ...eventContext,
+              admissionDeferredReason: outcome.admissionDeferredReason,
+            };
+          }
           // The terminal event publishes this wake time; only a different resident
           // schedule (or a quiet evaluation without an event) still needs publication.
           state.durableNextRunAtMsByJobId.set(plan.job.id, plan.job.state.nextRunAtMs);

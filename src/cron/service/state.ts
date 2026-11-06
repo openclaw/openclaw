@@ -57,6 +57,8 @@ export type { CronAddOptions } from "./job-options.types.js";
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
   runNotStarted?: boolean;
+  /** Expected scheduling deferral (outside active hours, or idle-only while busy). */
+  admissionDeferredReason?: "busy" | "active-hours";
   quietTrigger?: boolean;
   failureNotificationDetail?: CronFailureNotificationDetail;
 };

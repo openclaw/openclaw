@@ -568,6 +568,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
   runNotStarted?: boolean;
+  admissionDeferredReason?: "busy" | "active-hours";
   quietTrigger?: boolean;
   resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
@@ -578,6 +579,9 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     params.job &&
     params.resolveCronAgent &&
     !params.quietTrigger &&
+    // Active-hours and idle-only deferrals are scheduled behavior, not a failure to resolve.
+    // In a job's own session the notice would also feed the next run's context.
+    !params.admissionDeferredReason &&
     (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
   ) {
     const job = params.job;
