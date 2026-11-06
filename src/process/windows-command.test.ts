@@ -107,6 +107,22 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
       "",
     ],
   ].flat();
+  it.each(["fixture", "./bin/fixture"])(
+    "launches %s beneath a cwd containing a literal semicolon",
+    (command) =>
+      withTempDir("openclaw-command;literal-", async (cwd) => {
+        await mkdir(path.join(cwd, "bin"));
+        await writeFile(path.join(cwd, "bin", "fixture.cmd"), "@echo semicolon-fixture-ok\r\n");
+        const result = await runCommandWithTimeout([command], {
+          cwd,
+          env: { PATH: "bin", PATHEXT: ".CMD" },
+          timeoutMs: 5_000,
+        });
+        expect(result).toMatchObject({ code: 0, termination: "exit" });
+        expect(result.stdout.trim()).toBe("semicolon-fixture-ok");
+      }),
+  );
+
   it.each(["argv.cmd", "argv with spaces.cmd", "argv with ^caret.cmd"])(
     "preserves literal, empty and quoted argv through %s",
     (file) =>
