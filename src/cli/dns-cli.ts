@@ -207,11 +207,61 @@ function flushPrivileged(targetPath: string): void {
   assertSpawnSucceeded(`privileged flush ${targetPath}`, flushed);
 }
 
+/**
+ * Resolve the publication destination and read its metadata as root.
+ *
+ * The privileged fallback runs when the invoking account cannot reach the
+ * destination - a root-owned 0700 conf.d hides the Corefile from unprivileged
+ * lstat and readlink entirely - so the resolution, metadata and access-policy
+ * capture all have to run under the same privilege as the publication itself.
+ * One script returns everything; a capture failure aborts the fallback with
+ * the operator's file untouched instead of dropping its policy.
+ */
+function inspectPrivilegedDestination(filePath: string): {
+  target: string;
+  existing: { uid: number; gid: number; mode: number } | undefined;
+  aclEntries: string[];
+} {
+  const script = [
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    "let cur = path.resolve(process.argv[1]);",
+    "for (let hops = 0; hops < 32; hops += 1) {",
+    "  let st;",
+    '  try { st = fs.lstatSync(cur); } catch (error) { if (error && error.code === "ENOENT") break; throw error; }',
+    "  if (!st.isSymbolicLink()) break;",
+    "  const link = fs.readlinkSync(cur);",
+    "  cur = path.isAbsolute(link) ? link : path.join(path.dirname(cur), link);",
+    "}",
+    "let existing;",
+    "try {",
+    "  const st = fs.statSync(cur);",
+    "  existing = { uid: st.uid, gid: st.gid, mode: st.mode & 0o7777 };",
+    "} catch (error) {}",
+    'const listed = require("node:child_process").spawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });',
+    "if (listed.status !== 0) {",
+    '  process.stderr.write((listed.stderr || "ls -lde failed") + "\\n");',
+    "  process.exit(1);",
+    "}",
+    'const acl = String(listed.stdout || "").split("\\n").map((line) => line.trim()).filter((line) => /^\\d+:\\s/.test(line)).map((line) => line.replace(/^\\d+:\\s*/, ""));',
+    "process.stdout.write(JSON.stringify({ target: cur, existing, acl }));",
+  ].join("");
+  const inspected = spawnSync("sudo", [process.execPath, "-e", script, filePath], {
+    encoding: "utf-8",
+  });
+  assertSpawnSucceeded("privileged destination inspection", inspected);
+  // SAFETY: the inspected runtime writes exactly this JSON shape on success.
+  const parsed = JSON.parse(inspected.stdout) as {
+    target: string;
+    existing: { uid: number; gid: number; mode: number } | undefined;
+    acl: string[];
+  };
+  return { target: parsed.target, existing: parsed.existing, aclEntries: parsed.acl };
+}
+
 /** Publish through a privileged staging file when the operator's path is not writable. */
 function publishConfigFileWithSudo(filePath: string, content: string): void {
-  const target = resolvePublicationTarget(filePath);
-  const existing = fs.statSync(target, { throwIfNoEntry: false });
-  const aclEntries = existing ? readMacOsAclEntries(target) : [];
+  const { target, existing, aclEntries } = inspectPrivilegedDestination(filePath);
   const tempPath = path.join(
     path.dirname(target),
     `.${path.basename(target)}.openclaw-${process.pid}.tmp`,

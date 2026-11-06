@@ -112,15 +112,79 @@ function failCorefilePublicationWithNoSpace(targetDir: string): void {
 
 describe("dns-cli probe bounds", () => {
   let brewPrefix: string;
+  // Assigned in beforeEach; every test runs after it, so the mock layering
+  // below can delegate to it through optional chaining.
+  let baseSpawnImplementation:
+    | ((cmd: string, args: string[], opts?: { input?: string }) => ReturnType<typeof spawnOk>)
+    | undefined;
 
   beforeEach(() => {
     // Real writes stay in a writable prefix, including on Linux CI.
     brewPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dns-cli-test-"));
     testState.zonePath = path.join(brewPrefix, "test.zone");
     spawnSyncMock.mockReset();
-    spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
+    baseSpawnImplementation = (cmd: string, args: string[], opts?: { input?: string }) => {
       if (isBrewPrefixProbe([cmd, args])) {
         return spawnOk(`${brewPrefix}\n`);
+      }
+      // The privileged fallback resolves and inspects the destination, and
+      // flushes staged bytes, through a root runtime. The tests replay the
+      // script effects against the real filesystem; the access policy is
+      // captured through the real ls on macOS and emulated elsewhere.
+      if (cmd === "sudo" && args[0] === process.execPath && args[1] === "-e") {
+        const script = args[2];
+        if (typeof script !== "string") {
+          return spawnOk();
+        }
+        if (script.includes("fsyncSync")) {
+          return spawnOk();
+        }
+        if (script.includes("lstatSync")) {
+          const requested = args[3];
+          if (typeof requested !== "string") {
+            return spawnOk();
+          }
+          try {
+            let cur = path.resolve(requested);
+            for (let hops = 0; hops < 32; hops += 1) {
+              const st = fs.lstatSync(cur, { throwIfNoEntry: false });
+              if (!st?.isSymbolicLink()) {
+                break;
+              }
+              const link = fs.readlinkSync(cur);
+              cur = path.isAbsolute(link) ? link : path.join(path.dirname(cur), link);
+            }
+            const inspected = fs.statSync(cur, { throwIfNoEntry: false });
+            let acl: string[] = [];
+            if (realPlatform === "darwin") {
+              const listed = actualSpawnSync("/bin/ls", ["-lde", cur], { encoding: "utf-8" });
+              if (listed.status !== 0) {
+                return { ...spawnOk(), status: 1, stderr: listed.stderr ?? "" };
+              }
+              acl = String(listed.stdout ?? "")
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => /^\d+:\s/.test(line))
+                .map((line) => line.replace(/^\d+:\s*/, ""));
+            }
+            return spawnOk(
+              JSON.stringify({
+                target: cur,
+                existing: inspected
+                  ? {
+                      uid: inspected.uid,
+                      gid: inspected.gid,
+                      mode: inspected.mode & 0o7777,
+                    }
+                  : undefined,
+                acl,
+              }),
+            );
+          } catch {
+            return spawnOk(JSON.stringify({ target: requested, existing: undefined, acl: [] }));
+          }
+        }
+        return spawnOk();
       }
       // The access policy is read and restored through the real ls and chmod:
       // the command boundary under test is the publication, not these tools.
@@ -189,7 +253,10 @@ describe("dns-cli probe bounds", () => {
         return spawnOk();
       }
       return spawnOk();
-    });
+    };
+    spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) =>
+      baseSpawnImplementation?.(cmd, args, opts),
+    );
   });
 
   afterEach(() => {
@@ -503,7 +570,9 @@ describe("dns-cli probe bounds", () => {
         .map((call, index) => ({ call, index }))
         .filter(
           ({ call }) =>
-            (call[1] as string[])[0] === process.execPath && (call[1] as string[])[1] === "-e",
+            (call[1] as string[])[0] === process.execPath &&
+            (call[1] as string[])[1] === "-e" &&
+            String((call[1] as string[])[2] ?? "").includes("fsyncSync"),
         )
         .map(({ index }) => index);
       const moveIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "mv");
@@ -554,14 +623,11 @@ describe("dns-cli probe bounds", () => {
     const error = timeout
       ? Object.assign(new Error("spawnSync brew ETIMEDOUT"), { code: "ETIMEDOUT" })
       : undefined;
-    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+    spawnSyncMock.mockImplementation((cmd: string, args: string[], opts?: { input?: string }) => {
       if (timeout ? isBrewPrefixProbe([cmd, args]) : cmd === "sudo" && args[0] === "brew") {
         return { ...spawnOk(), status: null, signal, ...(error ? { error } : {}) };
       }
-      if (cmd === "brew" && args[0] === "--prefix") {
-        return spawnOk(`${brewPrefix}\n`);
-      }
-      return spawnOk();
+      return baseSpawnImplementation?.(cmd, args, opts);
     });
     return expect(runDnsSetupApply()).rejects.toThrow(
       timeout
