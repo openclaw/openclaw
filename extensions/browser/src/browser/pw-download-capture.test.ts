@@ -131,8 +131,8 @@ describe("Playwright download capture cancellation", () => {
       const saving = stage === "saving";
       const openFile = fs.open.bind(fs);
       const openSpy = saving
-        ? vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-            const handle = await openFile(file, flags, mode);
+        ? vi.spyOn(fs, "open").mockImplementation(async (file, flags, openMode) => {
+            const handle = await openFile(file, flags, openMode);
             if (flags !== "w" || !String(file).endsWith(".part")) {
               return handle;
             }
