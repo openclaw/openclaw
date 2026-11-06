@@ -189,11 +189,14 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         });
         expect((await paint(control)).outline[0], `${id} normal focus outline`).toBe("none");
         await control.evaluate((element) => element.setAttribute("disabled", ""));
-        expect(await paint(control), `${id} disabled while hovered`).toMatchObject({
-          border: "rgb(18, 52, 86)",
-          opacity: "0.5",
-          cursor: "not-allowed",
-        });
+        // Chromium blurs a newly disabled element at its next rendering update, not at once.
+        await expect
+          .poll(() => paint(control), { message: `${id} disabled while hovered` })
+          .toMatchObject({
+            border: "rgb(18, 52, 86)",
+            opacity: "0.5",
+            cursor: "not-allowed",
+          });
         await control.evaluate((element) => element.removeAttribute("disabled"));
       }
       expect(
