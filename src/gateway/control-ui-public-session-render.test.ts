@@ -256,7 +256,9 @@ describe("public session document", () => {
     expect(pending).toContain(
       "[data-entry-pending] .app-skeleton{display:none}</style></noscript>",
     );
-    // The wordmark stays in the top bar beside the skeleton.
+    // The sidebar header carries the wordmark; the top bar keeps it for narrow screens.
+    expect(skeleton.querySelector(".app-list > svg.list-brand")).not.toBeNull();
+    expect(skeleton.querySelector(".rail-disc")).not.toBeNull();
     expect(pendingMain.querySelector(".topbar .brand svg.wordmark")).not.toBeNull();
     // Readers and settled unavailable pages are not entering the app.
     expect(render([], { entryUrl })).not.toContain('class="app-skeleton"');
