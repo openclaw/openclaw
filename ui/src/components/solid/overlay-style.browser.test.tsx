@@ -52,6 +52,8 @@ function color(value: string) {
 }
 
 function expectWithinViewport(element: HTMLElement) {
+  // Measure settled geometry, not WebKit's in-flight entry scale.
+  finishElementAnimations(element);
   const box = element.getBoundingClientRect();
   expect(box.width).toBeGreaterThan(0);
   expect(box.height).toBeGreaterThan(0);
@@ -156,8 +158,6 @@ describe("native overlay presentation", () => {
       });
       positionTrigger({ left: "200px", top: "50px" });
       await openMenu();
-      // Measure the consumer budget, not WebKit's in-flight entry scale.
-      finishElementAnimations(surface());
       expect(expectWithinViewport(surface()).height).toBe(500);
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(item("Action 24"));
@@ -194,15 +194,12 @@ describe("native overlay presentation", () => {
           : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
       );
       await openMenu();
-      // Native open state can precede WebKit's entry-scale transition.
-      finishElementAnimations(surface());
       const parentBox = expectWithinViewport(surface());
       if (position === "bottom") {
         expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
       }
       await openMenu("people-actions");
       const child = surface("people-actions");
-      finishElementAnimations(child);
       const last = item(`Action ${count}`, "people-actions");
       expectWithinViewport(child);
       if (!enlarged) {
