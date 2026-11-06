@@ -24,7 +24,7 @@ import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
-import type { MemberProfileDisplay, OpenClawIdMemberProfiles } from "./member-profiles.js";
+import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
 
 const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
@@ -33,7 +33,7 @@ export const nowSeconds = () => Math.floor(Date.now() / 1000);
 /** A claw record store kept in memory. */
 export function memoryStore() {
   let record: StoredClaw | undefined;
-  const profiles = new Map<string, MemberProfileDisplay>();
+  const profiles = new Map<string, Awaited<ReturnType<OpenClawIdMemberProfiles["read"]>>[string]>();
   return {
     profiles: {
       save: async (input: { accountId: string; name?: string | null; email?: string | null }) => {
