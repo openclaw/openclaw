@@ -259,7 +259,9 @@
   }
 }
 
-:root[data-theme-mode="dark"] :is(.chat-footer, .agent-chat__composer-shell, .agent-chat__input) {
+:root[data-theme-mode="dark"] .chat-footer,
+:root[data-theme-mode="dark"] .agent-chat__composer-shell,
+:root[data-theme-mode="dark"] .agent-chat__input {
   --chat-composer-hairline: color-mix(in srgb, var(--text-strong) 9%, transparent);
 }
 
@@ -662,7 +664,8 @@
 }
 
 /* A quantitative gauge needs a clear track and arc at this compact size. */
-.agent-chat__composer-footer :is(.context-ring__track, .context-ring__fill) {
+.agent-chat__composer-footer .context-ring__track,
+.agent-chat__composer-footer .context-ring__fill {
   stroke-width: var(--chat-composer-context-stroke);
 }
 

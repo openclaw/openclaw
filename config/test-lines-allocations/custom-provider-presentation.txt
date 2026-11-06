@@ -1,4 +1,4 @@
 # Provider presentation: schema/wire, secure assets, and UI metadata/lifecycle regression coverage.
 # Includes held/rejected optional imports, focus retention, and model-less catalog presentation.
-# The additional 48 lines cover the configured-catalog privacy matrix and mounted loader refresh.
-1048
+# Matches retained feature test lines after consolidating overlapping provider-cache proof.
+1046

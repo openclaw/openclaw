@@ -40,11 +40,13 @@ New sessions, including managed worktree sessions, inherit the configured global
 
 For attended sessions created directly by a profiled operator, you can opt in to
 an explicit per-agent default with `agents.entries.<agentId>.newSessionPermissionMode`.
-Choose `read-only`, `guarded`, `workspace`, or `full`. Explicit request modes win, and
-`full` still requires current `operator.admin` authority. Existing sessions, forks,
+Choose `read-only`, `guarded`, `workspace`, or `full`. A configured `full` default
+resolves to `workspace` for creators with `operator.write` but no `operator.admin`.
+Explicit request modes win; an explicit `full` request still requires current
+`operator.admin` authority. Existing sessions, forks,
 catalog sessions, delegated callers, and autonomous runs do not receive this
 creation-only default. Changing it does not alter already-created sessions.
-The New Session picker displays this configured mode in its **Default** label;
+The New Session picker displays this caller-specific mode in its **Default** label;
 leaving Default selected lets the Gateway apply it with current authorization.
 Existing sessions keep their tool-policy-based Default label and clearing behavior.
 

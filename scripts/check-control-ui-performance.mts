@@ -55,7 +55,9 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  chatBootJsGzipBytes: 1_288_198,
+  // PR #194017 (L294): 1,288,049 B CI-measured with the shared-boot window receipt, plus 64 B headroom.
+  // Ayaan Zaidi approved +1 KiB for naming a failed reply's provider cause (#193996, 2026-11-06).
+  chatBootJsGzipBytes: 1_289_137,
   newBootJsGzipBytes: 797_620,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
@@ -72,7 +74,8 @@ const controlUiPerformanceBudgets = {
   largestCssGzipBytes: 58_315,
   // Header-local notice matching adds 13 B and lowers 400-message 4x scroll CPU 5–7%.
   totalCssGzipBytes: 324_685,
-  totalCssRawBytes: 1_676_828,
+  // Ranked selector splits: measured raw CSS plus 64 B headroom.
+  totalCssRawBytes: 1_678_428,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
