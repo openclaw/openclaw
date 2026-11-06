@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
@@ -45,6 +46,8 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
+  // Coordinator-approved full locale hints: measured document plus 64 B headroom.
+  documentGzipBytes: 13_893,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -214,6 +217,7 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
   }
   return {
     schemaVersion: 2 as const,
+    document: { rawBytes: Buffer.byteLength(html), gzipBytes: gzipSync(html).byteLength },
     startup,
     routeBoot,
     total: {
@@ -242,6 +246,7 @@ function collectControlUiPerformanceBudgetChecks(
     ].map((asset) => asset.file),
   );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
+    ["document gzip", metrics.document.gzipBytes, budgets.documentGzipBytes, "bytes"],
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
     ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsLimit, "bytes"],
@@ -482,6 +487,7 @@ export function formatControlUiPerformanceReport(
   const lines = [
     "Control UI performance:",
     `  measurement: generated asset hashes normalized for budgets; served sizes retain sidecars with identity fallback; Node ${process.version}`,
+    `  document: ${metrics.document.rawBytes} B raw, ${metrics.document.gzipBytes} B gzip (limit: ${budgets.documentGzipBytes} B)`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {

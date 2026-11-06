@@ -148,23 +148,33 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
           rtl: RTL_LOCALES,
           fallback: DEFAULT_LOCALE,
         }).replaceAll("<", "\\u003c");
-        // These six late Chat namespaces leave at most one unhinted batch on a
-        // six-connection origin. Keep per-locale hashes, not repeated asset URLs,
-        // in the document paid for by English users too.
+        // Start Chat's catalogs before locale execution can enqueue a second wave.
+        // Generated asset hashes are eight characters; keep only those hashes in
+        // the document paid for by English users too.
         const namespaces = [
-          "chat",
-          "attention",
-          "profilePage",
+          "runtimeErrors",
+          "filePreview",
+          "mcpApp",
+          "worktrees",
+          "newSession",
+          "sessionsView",
           "mcpServers",
           "mcpPage",
-          "sessionsView",
+          "profilePage",
+          "connection",
+          "attention",
+          "chat",
         ];
         const files = Object.values(context.bundle ?? {}).map((output) => output.fileName);
         const hashes: Record<string, string> = {};
         for (const locale of locales) {
           const prefixes = [
             locale,
-            ...namespaces.map((name) => `locale-namespace-${locale}-${name}`),
+            ...namespaces.map((name) =>
+              name === "runtimeErrors"
+                ? `locale-errors-${locale}`
+                : `locale-namespace-${locale}-${name}`,
+            ),
           ];
           const row = prefixes.map((prefix) =>
             files
@@ -172,13 +182,13 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
               ?.slice(`assets/${prefix}-`.length, -3),
           );
           if (row.every(Boolean)) {
-            hashes[locale] = row.join(" ");
+            hashes[locale] = row.join("");
           }
         }
         const helper = files.find((file) => /^assets\/lazy-catalog-[\w-]+\.js$/.test(file));
         const hints =
           helper && Object.keys(hashes).length
-            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==p.fallback&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){const names=${JSON.stringify(namespaces)};const files=hashes.split(" ").map((hash,i)=>"assets/"+(i?"locale-namespace-"+locale+"-"+names[i-1]:locale)+"-"+hash+".js");files.splice(1,0,${JSON.stringify(helper)});for(const file of files){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
+            ? `const base=document.documentElement.getAttribute("data-openclaw-control-ui-base-path")||"";if(locale!==p.fallback&&(location.pathname===base+"/chat"||location.pathname.startsWith(base+"/chat/"))){const hashes=(${JSON.stringify(hashes)})[locale];if(hashes){const names=${JSON.stringify(namespaces)};const files=hashes.match(/.{8}/g).map((hash,i)=>"assets/"+(i?names[i-1]==="runtimeErrors"?"locale-errors-"+locale:"locale-namespace-"+locale+"-"+names[i-1]:locale)+"-"+hash+".js");files.splice(1,0,${JSON.stringify(helper)});for(const file of files){const link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=base+"/"+file;document.head.append(link)}}}`
             : "";
         return [
           {

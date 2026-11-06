@@ -264,19 +264,36 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
 
 it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
   const config = createConfig();
-  const namespaces = ["chat", "attention", "profilePage", "mcpServers", "mcpPage", "sessionsView"];
+  const namespaces = [
+    "runtimeErrors",
+    "filePreview",
+    "mcpApp",
+    "worktrees",
+    "newSession",
+    "sessionsView",
+    "mcpServers",
+    "mcpPage",
+    "profilePage",
+    "connection",
+    "attention",
+    "chat",
+  ];
+  const filename = (locale: string, namespace: string) =>
+    namespace === "runtimeErrors"
+      ? `locale-errors-${locale}`
+      : `locale-namespace-${locale}-${namespace}`;
   await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
   for (const locale of ["de", "ar"]) {
     for (const namespace of namespaces) {
       await writeRoot(
-        `locale-namespace-${locale}-${namespace}.js`,
+        `${filename(locale, namespace)}.js`,
         `export default "${locale}/${namespace}";`,
       );
     }
     await writeRoot(
       `${locale}.js`,
       `import { createCatalog } from "./lazy-catalog.js";
-export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./locale-namespace-${locale}-${namespace}.js")`).join(",")}});`,
+export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./${filename(locale, namespace)}.js")`).join(",")}});`,
     );
   }
   await writeRoot(
@@ -315,7 +332,7 @@ export default createCatalog({${namespaces.map((namespace) => `${namespace}: () 
       const beforeBody = Reflect.get(page.window, "beforeBody");
       expect(beforeBody.body).toBeNull();
       const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
-      expect(hints).toHaveLength(expected ? 8 : 0);
+      expect(hints).toHaveLength(expected ? 14 : 0);
       for (const href of hints) {
         expect(href.startsWith(`${base}/assets/`)).toBe(true);
         const file = href.slice(base.length + 1);
@@ -323,6 +340,7 @@ export default createCatalog({${namespaces.map((namespace) => `${namespace}: () 
         expect(
           file.startsWith(`assets/${expected}-`) ||
             file.startsWith(`assets/locale-namespace-${expected}-`) ||
+            file.startsWith(`assets/locale-errors-${expected}-`) ||
             file.startsWith("assets/lazy-catalog-"),
         ).toBe(true);
       }
