@@ -22,15 +22,16 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
   it.each([
-    { face: "chat", archived: false, delayedEnvironment: false },
-    { face: "dashboard", archived: false, delayedEnvironment: false },
-    { face: "chat", archived: true, delayedEnvironment: false },
-    { face: "chat", archived: false, delayedEnvironment: true },
+    { face: "chat", archived: false, delayedEnvironment: false, closedDetails: false },
+    { face: "dashboard", archived: false, delayedEnvironment: false, closedDetails: false },
+    { face: "chat", archived: true, delayedEnvironment: false, closedDetails: false },
+    { face: "chat", archived: false, delayedEnvironment: true, closedDetails: false },
+    { face: "dashboard", archived: false, delayedEnvironment: false, closedDetails: true },
   ] as const)(
-    "restores final Details geometry on $face (archived=$archived, delayedEnvironment=$delayedEnvironment) until live facts differ",
-    async ({ face, archived, delayedEnvironment }) => {
+    "restores final Details geometry on $face (archived=$archived, delayedEnvironment=$delayedEnvironment, closedDetails=$closedDetails) until live facts differ",
+    async ({ face, archived, delayedEnvironment, closedDetails }) => {
       await suite.withPage(
-        { viewport: { width: 2200, height: 1180 }, serviceWorkers: "block" },
+        { viewport: { width: closedDetails ? 1720 : 2200, height: 1180 }, serviceWorkers: "block" },
         async ({ page }) => {
           const fixture = createControlUiTeamScaleFixture({
             baseUrl: suite.server.baseUrl,
@@ -227,7 +228,36 @@ suite.define(() => {
                 ].map((source) => holdModuleResponse(page, controlUiE2eBuiltModuleRequest(source))),
               )
             : [];
+          const requestedComposition: string[] = [];
+          const compositionRequest = controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/chat/components/chat-details-session.tsx",
+          );
+          if (closedDetails) {
+            page.on("request", (request) => {
+              if (compositionRequest.test(request.url())) {
+                requestedComposition.push(request.url());
+              }
+            });
+          }
           await page.reload({ waitUntil: "domcontentloaded" });
+          if (closedDetails) {
+            await gateway.waitForRequest("connect");
+            await gateway.resolveDeferred("connect");
+            await page.locator(".chat-pane-cache__pane--active .chat-pane__header").waitFor();
+            await page.evaluate(async () => {
+              await new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              });
+            });
+            await page
+              .locator(".chat-pane-cache__pane--active .chat-details:not([data-open])")
+              .waitFor({ state: "attached" });
+            expect(requestedComposition).toEqual([]);
+            await openChatDetails(page);
+            await details.getByText("feature/verification", { exact: true }).waitFor();
+            expect(requestedComposition).toHaveLength(1);
+            return;
+          }
           if (environmentModule && compositionModule) {
             // Let the pane paint after Desktop arrives while Environment is still in flight.
             await compositionModule.request;

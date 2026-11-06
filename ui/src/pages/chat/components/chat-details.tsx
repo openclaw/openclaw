@@ -131,7 +131,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       (props.chat?.cachedDetails?.docking?.layout === props.dockingLayout &&
         props.chat?.cachedDetails?.docking?.wide === true),
   );
-  const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
+  const canDock = (wide = wideEnough()) => !isMobile() && isConversationAnchor() && wide;
   const opened = () =>
     isPresented() &&
     (props.mobileHost
@@ -251,7 +251,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
     setWideEnough(wide);
     if (isDesktop && props.dockingLayout) {
-      props.chat?.onDetailsSnapshot?.({ docking: { layout: props.dockingLayout, wide } });
+      // Hidden conversation widths must not prewarm a closed destination.
+      props.chat?.onDetailsSnapshot?.({
+        docking: { layout: props.dockingLayout, wide: canDock(wide) },
+      });
     }
     if (!open) {
       return;
@@ -576,6 +579,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       surface.remove();
     };
   });
+  const hideProgress = () => {
+    // The top-layer inspector must not cover the Undo toast.
+    if (!docked()) {
+      close(true);
+    }
+  };
   function SessionContent(content: { children: Element; onLoading?: (loading: boolean) => void }) {
     return (
       <Show when={sessionOpened()}>
@@ -602,11 +611,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
               progressMenuRef={(menu) => {
                 progressMenu = menu;
               }}
-              onHideProgress={() => {
-                if (!docked()) {
-                  close(true);
-                }
-              }}
+              onHideProgress={hideProgress}
             />
           </SessionContent>
         )}
@@ -694,12 +699,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         >
                           <ChatLazyBoundary>
                             <ChatDetailsProgress
-                              onHideProgress={() => {
-                                // The top-layer inspector must not cover the Undo toast.
-                                if (!docked()) {
-                                  close(true);
-                                }
-                              }}
+                              onHideProgress={hideProgress}
                               menuRef={(menu) => {
                                 progressMenu = menu;
                               }}

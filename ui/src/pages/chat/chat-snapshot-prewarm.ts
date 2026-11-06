@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { loadChatDetailsDesktopComposition } from "./components/chat-details-desktop-loader.ts";
 import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
@@ -54,8 +55,11 @@ export function prewarmChatSnapshot(cacheKey: string): Promise<void> {
         if (entry.cancelled || generation !== snapshotStoreGeneration) {
           return undefined;
         }
-        // Warm the renderer on a cache hit; validation still owns display admission.
-        if (record !== undefined) {
+        const snapshot = asOptionalRecord(asOptionalRecord(record)?.snapshot);
+        const details = asOptionalRecord(snapshot?.details);
+        const docking = asOptionalRecord(details?.docking);
+        // Placement supplies this prefetch hint; validation still owns display admission.
+        if (docking?.wide === true) {
           void loadChatDetailsDesktopComposition().catch(() => undefined);
         }
         return record;
