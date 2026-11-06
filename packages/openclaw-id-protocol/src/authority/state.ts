@@ -13,6 +13,7 @@ import type {
   UnixSeconds,
 } from "../statements/types.js";
 import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
  * How a write reached the Gateway.
@@ -267,6 +268,10 @@ export function snapshotBody(
         peer_keys: member.peer_keys,
       }))
       .toSorted((a, b) => a.account_id.localeCompare(b.account_id)),
+    protocols: {
+      statement: [...SUPPORTED_STATEMENT_VERSIONS],
+      descriptor: [...SUPPORTED_DESCRIPTOR_VERSIONS],
+    },
     issued_at: now,
   };
 }
