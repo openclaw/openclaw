@@ -57,10 +57,11 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Generated-name-normalized main measurement plus 64 B toolchain headroom.
-  // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
-  chatBootJsGzipBytes: 1_287_197,
-  newBootJsGzipBytes: 796_484,
+  // Owner-approved #187742: retain scroll snapshots and native menu behavior.
+  // Matched Chat/New gzip is 1,288,561/796,552 B; each cap adds 64 B headroom.
+  // Paired-base Chat was 1,288,347 B, already 1,150 B above the prior cap.
+  chatBootJsGzipBytes: 1_288_625,
+  newBootJsGzipBytes: 796_616,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -69,8 +70,9 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Normalized shared application chunk plus 64 B toolchain headroom.
-  largestJsGzipBytes: 559_544,
+  // Owner-approved #187742: measured shared gzip 560,062 B plus 64 B headroom.
+  // Paired-base shared gzip was 559,828 B, already 284 B above the prior cap.
+  largestJsGzipBytes: 560_126,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
