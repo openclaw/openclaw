@@ -120,7 +120,12 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
           action: "register",
           gatewayNamespace: options.gatewayNamespace,
           environmentId: record.environmentId,
-          ...workspace,
+          preparationKey: workspace.preparationKey,
+          cacheKey: workspace.cacheKey,
+          workspaceDir: workspace.workspaceDir,
+          homeDir: workspace.homeDir,
+          sourceManifestRef: workspace.sourceManifestRef,
+          preparedManifestRef: workspace.preparedManifestRef,
         },
       });
     },

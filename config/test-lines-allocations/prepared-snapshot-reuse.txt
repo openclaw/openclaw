@@ -1,2 +1,4 @@
 # Prepared-base, first-binding, native code reuse/launch, stable-wire and CLI transport regressions.
-346
+# Own allowance: 416 existing PR regression lines + 39 strengthened lines; no inherited-debt credit.
+# Coherent process-script extraction overhead is not additionally allocated.
+455

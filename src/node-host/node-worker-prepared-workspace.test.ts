@@ -25,6 +25,7 @@ import type {
   NodeWorkerPreparedWorkspaceInput,
 } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
+import { preparedWorkspaceChildArgs } from "./node-worker-prepared-script.test-support.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test-support.js";
@@ -197,69 +198,75 @@ function manifestPath(homeDir: string, manifestRef: string) {
 }
 
 describe("prepared node workspace ownership", () => {
-  it("reuses checkpoint hashes across registration and bind processes, falling back for missing or corrupt memos", async () => {
+  it("defers registration hashing and reuses verified checkpoint memos across binding processes", async () => {
     const f = await fixture(true);
     const reads = path.join(f.root, "content-reads");
     const memo = manifestPath(f.homeDir, f.registration.preparedManifestRef).replace(
       /\.json$/u,
       ".memo",
     );
-    const prepare = async (input: NodeWorkerPreparedWorkspaceInput = f.registration) => {
+    const run = async (
+      action: "prepare" | "capture",
+      input: NodeWorkerPreparedWorkspaceInput = f.registration,
+    ) => {
       await fsp.writeFile(reads, "");
       const result = await processExec.runCommandWithTimeout(
-        [
-          resolveTestNodeExecPath(),
-          "--import",
-          "./scripts/tsx.mjs",
-          "--import",
-          "./src/node-host/node-worker-prepared-workspace.process.test-support.ts",
-          "--input-type=module",
-          "-e",
-          `
-          import fs from 'node:fs';
-          import { NodeWorkerWorkspaceRuntime } from './src/node-host/node-worker-workspace.ts';
-          import { closeOpenClawStateDatabaseAsync } from './src/state/openclaw-state-db.ts';
-          try {
-            await new NodeWorkerWorkspaceRuntime({ env: process.env, ephemeral: true }).prepare(JSON.parse(fs.readFileSync(0, 'utf8')));
-          } catch (error) { console.error(error.message); process.exitCode = 1; }
-          finally { await closeOpenClawStateDatabaseAsync(); }
-        `,
-        ],
+        [resolveTestNodeExecPath(), ...preparedWorkspaceChildArgs],
         {
           baseEnv: {
             ...f.env,
             OPENCLAW_PREPARED_TEST_WORKSPACE: f.workspaceDir,
             OPENCLAW_PREPARED_TEST_READS: reads,
           },
-          input: JSON.stringify(input),
+          input: JSON.stringify({ action, input }),
           timeoutMs: 30_000,
         },
       );
       const count = (await fsp.readFile(reads, "utf8")).split("\n").filter(Boolean).length;
       return { result, count };
     };
-    const first = await prepare();
+    const registered = await run("prepare");
+    expect(registered.result.code, registered.result.stderr).toBe(0);
+    expect(registered.count).toBe(0);
+    const sourceFile = path.join(f.workspaceDir, "source.txt");
+    const original = await fsp.readFile(sourceFile, "utf8");
+    await fsp.rm(memo, { force: true });
+    await fsp.writeFile(sourceFile, "changed checkpoint\n");
+    const rejected = await run("prepare", binding);
+    expect(rejected.result.code, rejected.result.stderr).toBe(1);
+    expect(rejected.result.stderr).toContain("does not match its manifest");
+    expect(rejected.count).toBe(5);
+    await fsp.writeFile(sourceFile, original);
+    await fsp.rm(memo, { force: true });
+    const first = await run("prepare", binding);
     expect(first.result.code, first.result.stderr).toBe(0);
     expect(first.count).toBe(5);
-    const restored = await prepare();
+    const restored = await run("capture");
     expect(restored.result.code, restored.result.stderr).toBe(0);
+    expect(restored.result.stdout.trim()).toBe(f.registration.preparedManifestRef);
     expect(restored.count).toBe(0);
-    await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "changed checkpoint\n");
-    const changed = await prepare();
-    expect(changed.result.stderr).toContain("does not match its manifest");
+    await fsp.writeFile(sourceFile, "changed checkpoint\n");
+    const changed = await run("capture");
+    expect(changed.result.code, changed.result.stderr).toBe(0);
+    expect(changed.result.stdout.trim()).not.toBe(f.registration.preparedManifestRef);
     expect(changed.count).toBe(1);
-    await fsp.writeFile(path.join(f.workspaceDir, "source.txt"), "setup changed source\n");
+    const replay = await run("prepare", binding);
+    expect(replay.result.code, replay.result.stderr).toBe(0);
+    expect(replay.count).toBe(0);
+    expect(await fsp.readFile(sourceFile, "utf8")).toBe("changed checkpoint\n");
+    await fsp.writeFile(sourceFile, original);
     for (const corrupt of [false, true]) {
       if (corrupt) {
         await fsp.writeFile(memo, "not a memo");
       } else {
         await fsp.unlink(memo);
       }
-      const fallback = await prepare();
+      const fallback = await run("capture");
       expect(fallback.result.code, fallback.result.stderr).toBe(0);
+      expect(fallback.result.stdout.trim()).toBe(f.registration.preparedManifestRef);
       expect(fallback.count).toBe(5);
     }
-    const bound = await prepare(binding);
+    const bound = await run("prepare", binding);
     expect(bound.result.code, bound.result.stderr).toBe(0);
     expect(bound.count).toBe(0);
   });

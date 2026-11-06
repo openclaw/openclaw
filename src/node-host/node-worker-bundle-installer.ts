@@ -29,7 +29,7 @@ import {
 import { sameWorkerBuild } from "../worker/worker-build-identity.js";
 import {
   publishExpandedBundle,
-  readReceipt,
+  readWorkerBundleCacheReceipt,
   validateInstalledBundle,
   verifyBundleArchive,
 } from "./node-worker-bundle-cache.js";
@@ -512,7 +512,7 @@ export class NodeWorkerBundleInstaller {
         "bundles",
         params.bundleHash,
       );
-      const receipt = await readReceipt(bundleDir);
+      const receipt = await readWorkerBundleCacheReceipt(bundleDir);
       const installed =
         receipt?.bundleHash === params.bundleHash &&
         (await validateInstalledBundle(bundleDir, receipt));
