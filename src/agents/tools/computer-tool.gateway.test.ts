@@ -46,6 +46,45 @@ function createHostedComputerTool(options: Parameters<typeof createVisionCompute
 }
 
 describe("computer Gateway and node targets", () => {
+  it("guides recovery when an explicitly selected Gateway is unavailable", async () => {
+    const [nodes, computer] = await Promise.all([
+      vi.importActual<typeof import("./nodes-utils.js")>("./nodes-utils.js"),
+      vi.importActual<typeof import("./computer-tool-gateway.js")>("./computer-tool-gateway.js"),
+    ]);
+    listNodesMock.mockImplementation(nodes.listNodes);
+    gatewayComputerStatusMock.mockImplementation(computer.loadGatewayComputerStatus);
+    const invokeMock = callGatewayToolMock.getMockImplementation()!;
+    callGatewayToolMock.mockImplementation(async (method, options, request, ...rest) => {
+      if (method === "computer.status") {
+        return { configured: false, available: false };
+      }
+      if (method === "node.list") {
+        return {
+          nodes: [macComputerNode({ computerUse: v2Descriptor(["screenshot"]) })],
+        };
+      }
+      return invokeMock(method, options, request, ...rest);
+    });
+    const tool = createHostedComputerTool();
+
+    await expect(
+      tool.execute("explicit-gateway", { action: "screenshot", target: "gateway" }),
+    ).rejects.toThrow(
+      'Gateway computer is unavailable; omit target for automatic host selection, or retry with target: "node" for a paired node.',
+    );
+    expect(listNodesMock).not.toHaveBeenCalled();
+    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual(["computer.status"]);
+    expect(tool.description).toContain("Omit target for automatic host selection");
+    expect(tool.parameters).toHaveProperty(
+      "properties.target.description",
+      expect.stringContaining("Omit target for automatic host selection"),
+    );
+
+    const recovered = await tool.execute("automatic-node-retry", { action: "screenshot" });
+    expect(recovered.details).toMatchObject({ node: "mac-1" });
+    expect(listNodesMock).toHaveBeenCalledOnce();
+  });
+
   it("advertises a cold Gateway without probing and binds input to the probed generation", async () => {
     const computer = await vi.importActual<typeof import("./computer-tool-gateway.js")>(
       "./computer-tool-gateway.js",
@@ -388,7 +427,9 @@ describe("computer Gateway and node targets", () => {
 
     await expect(
       tool.execute("unconfigured-gateway", { action: "screenshot", target: "gateway" }),
-    ).rejects.toThrow(/Gateway computer is not configured.*Omit target, or use target: node/);
+    ).rejects.toThrow(
+      'Gateway computer is unavailable; omit target for automatic host selection, or retry with target: "node" for a paired node.',
+    );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
