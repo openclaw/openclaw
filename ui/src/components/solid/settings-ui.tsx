@@ -3,8 +3,8 @@ import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { liveChecked } from "../../lib/reactive/live-checked.ts";
 import { Icon } from "./icon.tsx";
+import { Switch, type SwitchSize } from "./switch.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
 
@@ -265,84 +265,14 @@ export function SettingsNavRow(
   );
 }
 
-function ToggleControl(
-  props: SettingsToggleControl & {
-    inputLabel?: string;
-    label?: JSX.Element;
-    labelledBy?: string;
-    inputRef?: (element: HTMLInputElement) => void;
-  },
-) {
-  const labelId = nextSettingsRadioName();
-  return (
-    <span class="settings-toggle">
-      <input
-        ref={[liveChecked(() => props.checked), (element) => props.inputRef?.(element)]}
-        class="settings-toggle__input"
-        type="checkbox"
-        role="switch"
-        disabled={props.disabled}
-        aria-disabled={props.saving ? "true" : undefined}
-        aria-label={props.inputLabel}
-        aria-labelledby={props.inputLabel === undefined ? (props.labelledBy ?? labelId) : undefined}
-        onClick={(event) => {
-          const input = event.currentTarget;
-          if (props.disabled || props.saving) {
-            // Busy switches keep focus (aria-disabled), so cancel the native toggle here.
-            event.preventDefault();
-          } else if (!input.matches(":disabled") && input.checked !== props.checked) {
-            props.onAct?.(input.checked);
-          }
-        }}
-        onChange={(event) => {
-          const input = event.currentTarget;
-          if (
-            input.matches(":disabled") ||
-            props.disabled ||
-            props.saving ||
-            props.onChange(input.checked) === false
-          ) {
-            input.checked = props.checked;
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-            return;
-          }
-          const input = event.currentTarget;
-          if (input.matches(":disabled") || props.disabled || props.saving) {
-            return;
-          }
-          event.preventDefault();
-          const checked =
-            (event.key === "ArrowRight") !== (getComputedStyle(input).direction === "rtl");
-          if (checked === input.checked) {
-            return;
-          }
-          input.checked = checked;
-          props.onAct?.(checked);
-          if (props.onChange(checked) === false) {
-            input.checked = props.checked;
-          }
-        }}
-      />
-      <span class="settings-toggle__control" aria-hidden="true" />
-      <Show when={props.inputLabel === undefined && !props.labelledBy}>
-        <span id={labelId} class="settings-control__sr-label">
-          {props.label}
-        </span>
-      </Show>
-    </span>
-  );
-}
-
 export function SettingsToggle(
   props: SettingsToggleControl & {
     ariaLabel: string;
+    size?: SwitchSize;
     inputRef?: (element: HTMLInputElement) => void;
   },
 ) {
-  return <ToggleControl {...props} inputLabel={props.ariaLabel} />;
+  return <Switch {...props} />;
 }
 
 export function SettingsToggleRow(
@@ -378,11 +308,12 @@ export function SettingsToggleRow(
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
         {props.actions}
-        <ToggleControl
+        <Switch
           {...props}
+          ariaLabel={undefined}
           inputRef={(element) => (input = element)}
           label={props.ariaLabel}
-          labelledBy={props.ariaLabel == null ? titleId : undefined}
+          ariaLabelledBy={props.ariaLabel == null ? titleId : undefined}
         />
       </div>
     </div>

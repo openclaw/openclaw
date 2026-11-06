@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createProjection, createSignal, mapArray, merge, onSettled } from "solid-js";
 import type { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import {
   Menu,
   type MenuEntry,
@@ -95,11 +96,9 @@ function PageEntries(props: {
             {entry.type === "checkbox" ? <Icon name="eye" /> : entry.icon}
             <span>{plainLabel(entry.label)}</span>
             {entry.type === "checkbox" ? (
-              <span
-                class="session-actions-page__switch"
-                data-checked={entry.checked ? "true" : "false"}
-                aria-hidden="true"
-              />
+              <span class="session-actions-page__switch">
+                <SwitchIndicator checked={Boolean(entry.checked)} size="md" />
+              </span>
             ) : entry.checked ? (
               <Icon name="check" />
             ) : entry.id.startsWith("compact:open-") ? (
