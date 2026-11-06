@@ -82,6 +82,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       historyMessages: [
         {
           role: "assistant",
+          __openclaw: { seq: 1 },
           content: [
             {
               type: "text",

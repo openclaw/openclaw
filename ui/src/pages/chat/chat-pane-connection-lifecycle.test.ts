@@ -188,7 +188,9 @@ describe("chat pane connection lifecycle", () => {
     async (retryable) => {
       vi.useFakeTimers();
       let recovered = false;
-      const recoveredMessages = [{ role: "assistant", content: "Recovered shared history" }];
+      const recoveredMessages = [
+        { role: "assistant", content: "Recovered shared history", __openclaw: { seq: 1 } },
+      ];
       const h = reconnectPane(
         { messages: recoveredMessages, sessionId: "foreground-retry" },
         {
@@ -228,8 +230,14 @@ describe("chat pane connection lifecycle", () => {
         expect(await chatHistoryRequests(h.state).subscriptionReady).toBe(true);
         expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
         expect(chatHistoryRequests(h.state).subscriptionError).toBeUndefined();
+        const historyLoad = chatHistoryRequests(h.state).historyLoad;
+        if (historyLoad.phase === "in-flight") {
+          await historyLoad.promise;
+        }
         expect(h.state.chatMessages).toEqual(recoveredMessages);
         expect(chatHistoryRequests(h.state).historyLoad.phase).toBe("committed");
+        expect(requestCalls(h.request, "chat.startup")).toHaveLength(1);
+        expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
       }
     },
   );
