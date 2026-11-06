@@ -1,2 +1,0 @@
-# Preserve row selection and off-window descriptors.
-39
