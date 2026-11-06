@@ -126,24 +126,14 @@ describe("AppSidebar catalog row lifecycle", () => {
         trigger.click();
       }
       await sidebar.updateComplete;
-      const originalPopup = query("openclaw-catalog-session-menu");
+      expect(query("openclaw-catalog-session-menu") !== null).toBe(menuState === "open");
       await update({ sessionKey: key });
       await Promise.resolve();
       await sidebar.updateComplete;
       const adoptedMenu = query<HTMLAnchorElement>(
         `[data-session-key="${key}"] .sidebar-recent-session__link`,
       );
-      const popup = query<HTMLElement & { trigger?: HTMLElement }>("openclaw-catalog-session-menu");
-      if (menuState === "open") {
-        expect(popup).not.toBeNull();
-        expect(popup).toBe(originalPopup);
-        expect(popup?.trigger).toBe(adoptedMenu);
-        popup?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-        await sidebar.updateComplete;
-      } else {
-        expect(popup).toBeNull();
-      }
+      expect(query("openclaw-catalog-session-menu")).toBeNull();
       expect(document.activeElement).toBe(adoptedMenu);
 
       if (menuState === "open") {
@@ -157,39 +147,27 @@ describe("AppSidebar catalog row lifecycle", () => {
         );
         await sidebar.updateComplete;
       }
-      const adoptedPopup = query("openclaw-catalog-session-menu");
+      expect(query("openclaw-session-menu") !== null).toBe(menuState === "open");
       await update({ sessionKey: undefined });
       await Promise.resolve();
       await sidebar.updateComplete;
       const releasedLink = query<HTMLAnchorElement>(
         "[data-catalog-session-key] .sidebar-recent-session__link",
       );
-      const releasedMenu = query<HTMLButtonElement>("[data-catalog-session-menu]");
       expect(releasedLink).not.toBe(adoptedMenu);
-      if (menuState === "open") {
-        const releasedPopup = query<HTMLElement & { trigger?: HTMLElement }>(
-          "openclaw-catalog-session-menu",
-        );
-        expect(releasedPopup).toBe(adoptedPopup);
-        expect(releasedPopup?.trigger).toBe(releasedMenu);
-        releasedPopup?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-        await sidebar.updateComplete;
-        expect(document.activeElement).toBe(releasedMenu);
-      } else {
-        expect(query("openclaw-catalog-session-menu")).toBeNull();
-        expect(document.activeElement).toBe(releasedLink);
-      }
+      expect(query("openclaw-session-menu")).toBeNull();
+      expect(query("openclaw-catalog-session-menu")).toBeNull();
+      expect(document.activeElement).toBe(releasedLink);
     },
   );
 
   it.each([
-    { catalog: false, session: true, canRemove: false },
-    { catalog: true, session: false, canRemove: false },
-    { catalog: true, session: true, canRemove: true },
+    { catalog: false, session: true },
+    { catalog: true, session: false },
+    { catalog: true, session: true },
   ])(
-    "preserves native menus when catalog archive=$catalog and session archive=$session",
-    async ({ catalog, session, canRemove }) => {
+    "keeps native actions independent of catalog archive=$catalog and source archive=$session",
+    async ({ catalog, session }) => {
       const { sidebar, query } = await fixture(
         { canArchive: session, canOpenTerminal: true },
         {},
@@ -206,14 +184,13 @@ describe("AppSidebar catalog row lifecycle", () => {
       ]) {
         row!.dispatchEvent(event);
         await sidebar.updateComplete;
-        const menu = query("openclaw-catalog-session-menu");
-        expect(menu?.querySelector('[data-value="viewer"]')).not.toBeNull();
-        const terminal = menu?.querySelector('[data-value="terminal"]');
-        expect(terminal?.hasAttribute("disabled")).toBe(false);
-        expect(menu?.querySelector('[data-value="delete"]') !== null).toBe(canRemove);
+        const menu = query("openclaw-session-menu");
+        expect(menu?.querySelector('[data-value="rename"]')).not.toBeNull();
+        expect(menu?.querySelector('[data-value="toggle-archived"]')).not.toBeNull();
+        expect(query("openclaw-catalog-session-menu")).toBeNull();
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
         await sidebar.updateComplete;
-        expect(query("openclaw-catalog-session-menu")).toBeNull();
+        expect(query("openclaw-session-menu")).toBeNull();
       }
     },
   );

@@ -139,7 +139,9 @@ it("refuses a native update without a live authority check", async () => {
   flush();
   expect(postMessage).not.toHaveBeenCalled();
   expect(startGatewayUpdate).not.toHaveBeenCalled();
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("You need admin access");
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+    "You need admin access to change update settings or start an update.",
+  );
   findButton("Cancel").click();
   await settled;
 });

@@ -47,6 +47,7 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   iconLoading?: (url: string) => boolean;
   pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
+  installTitle?: string;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
   /** Installed inventory; publishes local state before catalog pages are read again. */
@@ -175,6 +176,7 @@ function CatalogCard(props: {
                       }
                       pluginName={props.plugin.catalog.name}
                       busy={busy()}
+                      title={props.state.installTitle}
                       disabled={!canInstall()}
                       progress={progress()}
                       onInstall={() => props.state.onInstall(props.plugin.id)}

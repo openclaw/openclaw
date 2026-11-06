@@ -265,7 +265,10 @@ export class ShellGatewayOwner {
       event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
     const commandsChanged = metadataChange?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
-      invalidateModelAuthStatusRequests(client);
+      invalidateModelAuthStatusRequests(
+        client,
+        typeof metadataChange?.agentId === "string" ? metadataChange.agentId : undefined,
+      );
     }
     if (
       client &&

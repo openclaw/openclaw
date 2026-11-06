@@ -3,6 +3,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import * as toast from "../../lib/toast.ts";
 import {
   expectAbsent,
   expectContent,
@@ -19,11 +20,9 @@ import {
 } from "./profiles-view.tsx";
 import { ProviderRow } from "./provider-row.tsx";
 import { card as viewCard, props } from "./view.test-support.tsx";
-const toastSpy = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/toast.ts", () => ({ showToast: toastSpy }));
 
 it("keeps visible sign-out success quiet and preserves warnings", () => {
-  toastSpy.mockClear();
+  const toastSpy = vi.spyOn(toast, "showToast").mockReturnValue(true);
   showProfileLogoutSuccess();
   expect(toastSpy).not.toHaveBeenCalled();
   showProfileLogoutSuccess("A shared account is still in use.");

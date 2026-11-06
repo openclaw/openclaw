@@ -229,8 +229,8 @@ describe("renderUsage", () => {
       queryDraft: "missing-session",
     });
 
-    const providers = insightCard(container, "Top Providers");
-    expect(providers?.textContent).toContain("No provider data");
+    const providers = insightCard(container, "Top providers");
+    expect(providers?.textContent).toContain("No provider data yet.");
     expect(providers?.textContent).not.toContain("openai");
   });
 

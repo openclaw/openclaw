@@ -81,6 +81,12 @@ limit. `contextRingFrames` retains changed composer/ring display samples, and
 in the first visible composer DOM sample. Inspect the correlated compositor frame
 and its predecessor before claiming first-paint presence.
 
+Add `--composer-controls` for the bundled Anthropic model's nondefault 200K window
+and High effort. It uses synthetic credentials and the static catalog without
+model requests. Preparation opens the real picker and requires its final values
+and persisted composer snapshot. Per-frame samples retain control x/width/text;
+use `--active-targets` for active chat and omit it for the archived secondary.
+
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
 accessory, and a board-like module that awaits two lazy chunks before registering

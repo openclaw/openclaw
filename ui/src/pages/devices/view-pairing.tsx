@@ -412,7 +412,10 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                               void handleCopyButton(event, code, copyLabel(), { label }).then(
                                 (copied) => {
                                   if (!copied && props.open) {
-                                    showToast({ message: t("devices.pairing.copyFailed") });
+                                    showToast({
+                                      severity: "error",
+                                      message: t("devices.pairing.copyFailed"),
+                                    });
                                   }
                                 },
                               );

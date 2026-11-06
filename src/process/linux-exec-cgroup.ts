@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getHostExecMemoryBudget } from "./child-memory.js";
 
 const cgroupMount = "/sys/fs/cgroup";
 const controllers = ["cpu", "io", "memory"];
@@ -62,6 +63,42 @@ export function resolveGatewayServiceCgroupDirectory(): string | undefined {
   return root;
 }
 
+/** Bound ordinary file cache without adding another command-cancellation owner. */
+export async function applyAgentExecMemoryBudget(): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
+  }
+  try {
+    const root = resolveGatewayServiceCgroupDirectory();
+    const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];
+    // A nested Gateway or helper in agent-exec must not resize its parent's budget.
+    if (!root || path.join(cgroupMount, relative ?? "") !== path.join(root, "gateway")) {
+      return;
+    }
+    const directory = path.join(root, "agent-exec");
+    if (fs.readFileSync(path.join(directory, "cpu.weight"), "utf8").trim() !== "10") {
+      return;
+    }
+    const budget = getHostExecMemoryBudget();
+    if (!budget) {
+      return;
+    }
+    const { memoryBytes } = budget;
+    const file = path.join(directory, "memory.high");
+    if (fs.readFileSync(file, "utf8").trim() !== String(memoryBytes)) {
+      // Recent kernels skip writer-side reclaim with O_NONBLOCK. On older ones,
+      // asynchronous I/O still keeps reclaim off the Gateway event loop.
+      await fs.promises.writeFile(file, String(memoryBytes), {
+        flag: fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
+      });
+    }
+  } catch (error) {
+    process.emitWarning(
+      `Agent exec cache protection unavailable; continuing with shared sampled memory protection: ${String(error)}`,
+    );
+  }
+}
+
 /** Helpers discover the same delegated subtree even with an exact application environment. */
 export function getAgentExecCgroup(scopeKey?: string): string | undefined {
   if (process.platform !== "linux") {
@@ -78,12 +115,13 @@ export function getAgentExecCgroup(scopeKey?: string): string | undefined {
     const directory = path.join(root, "agent-exec");
     fs.accessSync(directory, fs.constants.W_OK | fs.constants.X_OK);
     fs.accessSync(path.join(directory, "cgroup.procs"), fs.constants.W_OK);
-    // Startup writes a finite memory.high last, after every controller policy succeeds.
-    const memoryHigh = Number(fs.readFileSync(path.join(directory, "memory.high"), "utf8"));
+    // Delegation retains IO policy; the shared sampler owns command cancellation.
+    const ioPolicy = fs.readFileSync(path.join(directory, "io.max"), "utf8").trim();
+    const cpuWeight = fs.readFileSync(path.join(directory, "cpu.weight"), "utf8").trim();
     if (
       controllers.every((controller) => enabled.has(controller)) &&
-      memoryHigh > 0 &&
-      Number.isFinite(memoryHigh)
+      ioPolicy &&
+      cpuWeight === "10"
     ) {
       const delegated = new Set(
         fs

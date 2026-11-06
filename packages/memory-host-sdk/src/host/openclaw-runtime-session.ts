@@ -131,7 +131,7 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
-export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
+export { readSessionArchiveText } from "../../../../src/config/sessions/archive-compression.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export {

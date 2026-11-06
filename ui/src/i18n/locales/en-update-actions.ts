@@ -91,7 +91,7 @@ const enUpdateActions = {
     sidebar: {
       campaignTarget: "{status} · {target}",
       checking: "Checking for updates…",
-      checkFailed: "Could not check the latest update. Try again.",
+      checkFailed: "Couldn’t check for updates. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
       availableBadge: "Available",

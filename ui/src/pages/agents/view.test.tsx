@@ -1,11 +1,11 @@
 import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, ToolsCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import { zh_CN } from "../../i18n/locales/zh-CN.ts";
+import { loadLazyLocaleTranslation } from "../../i18n/lib/registry.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
@@ -603,12 +603,28 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".hub-tab__badge--count")).toBeNull();
   });
 
-  it("localizes agent tabs and falls back to the current English channel subtitle", async () => {
+  it("localizes mounted agent tabs and falls back for an untranslated channel subtitle", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const chinese = await loadLazyLocaleTranslation("zh-CN");
     vi.stubGlobal("localStorage", createStorageMock());
-    await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
 
     try {
+      await i18n.setLocale("en");
+      // Leave the subtitle untranslated so generated catalog coverage cannot remove the fallback.
+      i18n.registerTranslation("zh-CN", {
+        agents: {
+          tabs: {
+            overview: "概览",
+            files: "文件",
+            tools: "工具",
+            skills: "技能",
+            channels: "渠道",
+            cronJobs: "定时任务",
+            memory: "记忆",
+          },
+        },
+      });
       renderView(
         {
           channels: { ...createProps().channels },
@@ -623,25 +639,35 @@ describe("renderAgents", () => {
         },
         container,
       );
-      await Promise.resolve();
-
-      const tabLabels = Array.from(
-        container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"),
-      ).map((button) => button.textContent?.trim());
-
-      const chinese = flattenTranslations(zh_CN);
-      const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
-      expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
+      const tabLabels = () =>
+        Array.from(container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"), (button) =>
+          button.textContent?.trim(),
+        );
       await waitForSolid(() =>
+        expect(tabLabels()).toEqual([
+          "Overview",
+          "Files",
+          "Tools",
+          "Skills",
+          "Channels",
+          "Automations",
+          "Memory",
+        ]),
+      );
+
+      await i18n.setLocale("zh-CN");
+      await waitForSolid(() => {
+        expect(tabLabels()).toEqual(["概览", "文件", "工具", "技能", "渠道", "定时任务", "记忆"]);
         expect(
           Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
             desc.textContent?.replace(/\s+/gu, " ").trim(),
           ),
-        ).toContain("Channel status across OpenClaw."),
-      );
+        ).toContain("Channel status across OpenClaw.");
+      });
     } finally {
-      await i18n.setLocale("en");
+      i18n.registerTranslation("zh-CN", chinese ?? {});
       vi.unstubAllGlobals();
+      await restoreI18n();
     }
   });
 });

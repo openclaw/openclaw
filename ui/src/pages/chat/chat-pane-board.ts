@@ -174,11 +174,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }
       // The session capability publishes the acknowledged metadata. Never turn
       // its value into a personal override or rearrange any active viewer.
-      showToast({ message: t("chat.sidePanel.defaultSaved"), anchor: this.element });
+      showToast({
+        severity: "success",
+        message: t("chat.sidePanel.defaultSaved"),
+        anchor: this.element,
+      });
     } catch (error) {
       if (isCurrent()) {
         this.publishHeaderError(error, scope.headerOutcomeOwner);
         showToast({
+          severity: "error",
           message: t("chat.sidePanel.defaultSaveError"),
           detail: error,
           anchor: this.element,

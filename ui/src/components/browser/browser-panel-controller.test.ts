@@ -181,7 +181,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
     expect(controller.activeTargetId).toBe("stable-tab");
     expect(controller.view).toBe(previousView);
     expect(controller.errorText).toBe(
-      "Couldn’t complete this browser request. Try again. The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+      "Couldn’t complete the browser action. Try again.\nThe current browser navigation rules block this address. Select another tab or enter an allowed address.",
     );
     expect(controller.loading).toBe(false);
   });
@@ -268,7 +268,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
       committed.resolve({ targetId: "raw-stable", url });
       await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
       expect(controller).toMatchObject({
-        errorText: "Couldn’t complete this browser request. Try again. " + error,
+        errorText: "Couldn’t complete the browser action. Try again.\n" + error,
         loading: false,
       });
       if (succeeds) {
@@ -320,7 +320,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
     expect(controller.view?.url).toBe(committedUrl);
     expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
     expect(controller.errorText).toBe(
-      "Couldn’t complete this browser request. Try again. Latest navigation rejected",
+      "Couldn’t complete the browser action. Try again.\nLatest navigation rejected",
     );
 
     previousSnapshot.resolve({ running: true, tabs: [] });

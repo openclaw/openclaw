@@ -105,7 +105,7 @@ const enDreaming = {
       insightsTab: "Imported insights",
       wikiTab: "Memory wiki",
       insightsExplainer:
-        "Imported chats by topic, to review before any of it becomes durable memory.",
+        "Imported conversations by topic, to review before any of it becomes durable memory.",
       wikiExplainer:
         "Compiled pages, claims, open questions, and contradictions the system can search.",
       copyArchivePath: "Copy archive path",
@@ -148,8 +148,8 @@ const enDreaming = {
         openQuestions: "{count} open questions",
         contradictionOne: "{count} contradiction",
         contradictions: "{count} contradictions",
-        chatOne: "{count} chat",
-        chats: "{count} chats",
+        chatOne: "{count} conversation",
+        chats: "{count} conversations",
         sensitive: "{count} sensitive",
         signalOne: "{count} signal",
         signals: "{count} signals",

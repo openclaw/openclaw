@@ -1,8 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
-import { de } from "../i18n/locales/de.ts";
 import * as clipboard from "../lib/clipboard.ts";
 import "../lib/toast-host.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -70,6 +68,7 @@ it.each([
   pending.resolve(copied);
   await waitForSolid(() => {
     expect(host.querySelector(".app-toast")?.textContent).toContain(message);
+    expect(host.querySelector(".app-toast")?.classList.contains("app-toast--error")).toBe(!copied);
   });
 });
 
@@ -78,11 +77,10 @@ it("rerenders open actions when the locale changes", async () => {
   const surface = menu.querySelector('[role="menu"]');
   await i18n.setLocale("de");
   await menu.updateComplete;
-  const german = flattenTranslations(de);
   await vi.waitFor(() =>
-    expect(surface?.getAttribute("aria-label")).toBe(german.get("nativeLinkMenu.label")),
+    expect(surface?.getAttribute("aria-label")).toBe(i18n.t("nativeLinkMenu.label")),
   );
-  expect(labels()).toContain(german.get("nativeLinkMenu.copy"));
+  expect(labels()).toContain(i18n.t("nativeLinkMenu.copy"));
 });
 
 it.each([

@@ -781,7 +781,10 @@ describe("chat pane session menu boundary", () => {
         expect(pane.context.navigation.snapshot.sidebarEntries).toEqual([]);
       } else if (current === "removed") {
         expect(patch).not.toHaveBeenCalled();
-        expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
+        expect(showToast).toHaveBeenCalledWith({
+          severity: undefined,
+          message: t("common.refresh"),
+        });
       } else {
         expect(patch).toHaveBeenCalledWith(original.key, expectedPatch, {
           agentId: "main",

@@ -54,6 +54,14 @@ Shared-state schema 39 adds nullable lifecycle custody after disk-authority sche
 Older environments remain unretained. Package-only downgrade is refused; restore the
 matching pre-upgrade backup and binary only after settling retained operations and cleanup.
 
+On Gateway restart, local workspace recovery journals settle before readiness.
+Remote provider reconciliation and Git publication recovery run in the background,
+so an unavailable cloud provider does not block the Gateway from becoming ready.
+Restart recovery may interrupt only placement turn claims captured before startup;
+newly admitted or replaced claims keep their live execution ownership. Gateway
+shutdown drains accepted recovery work before stopping the environment service.
+Gateway readiness does not imply that every retained worker is ready to execute.
+
 ## Dispatch a session
 
 `sessions.dispatch` rejects a busy session without interrupting its active work. Wait for the current turn to finish, then retry. For an idle session, dispatch closes local turn admission, validates the workspace source, provisions the lease for the selected execution mode, and runs setup. With project warm images enabled, it prepares the committed checkout and node runtime and captures any needed image before enrollment. It then enrolls the node, installs the required pinned Gateway bundle, applies the session workspace, and returns once the placement reaches `active` ownership. Gateway-source inventory validation happens before provider allocation. Repository-only inventory is captured on the enrolled node after fetching the pinned source; either path reports actionable size or entry limits. Budget several minutes for the first cloud dispatch, including capture when needed; later dispatches can reuse the image, project seed, and runtime installs. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.
@@ -300,7 +308,7 @@ Recovery requested for one worker inspects that environment and resumes only its
 
 If a turn reports `Cloud worker finished, but its workspace result could not be reconciled`, inspect the cause after the colon. A failed node manifest capture includes its bounded, redacted stderr, or its termination status when stderr is empty. Node cleanup preserves manifests needed between upload and verification, including when other workers finish simultaneously; increasing transfer timeouts does not repair a missing manifest.
 
-Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. Results support up to 500,000 before/after records across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
+Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. New results support up to 50,000 changed paths (including deletions and directories) across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. A result above the changed-path limit reports the count and asks you to exclude generated output or split the work. Add unwanted output to `.gitignore`; files already tracked by Git must also be removed from the index. Previously accepted receipts remain recoverable under their original record limits. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
 
 ## What survives a dead machine
 
@@ -319,6 +327,8 @@ Worker-turn live previews are snapshots of the current assistant message. Correc
 With default mirrored durability, workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud device…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
 
 For repository-only sessions, the Gateway retains complete base/current file manifests, changed file contents, and bounded worker Git delta packs in immutable checkpoints. The packs exclude the pinned base and its ancestors: the Gateway does not keep a full copy of upstream Git history or unchanged base files. Replacement workers therefore need the pinned upstream commit to be fetchable or already present in the node's verified seed cache. An explicit Gateway move needs that commit available to its project clone. A moved or deleted remote branch does not change the pinned commit, but losing access to that commit can prevent restoration.
+
+The initial repository checkpoint is accepted before activation, including when adopting a prepared worker, so eligible setup output survives a lost machine before the first turn. Checkpoint capture verifies the uploaded files at the transfer boundary, then checks the remote workspace and Git HEAD before accepting the staged result. It does not rescan the remote workspace between upload and staging.
 
 After the first repository checkpoint, node transfers use the last accepted manifest as their baseline. The Gateway reuses unchanged checkpoint blobs while retaining the original pinned source in recovery metadata. An unchanged file manifest reuses the accepted checkpoint only when its publication snapshot and Git lineage also match; empty commits and changed publication bytes still create a new checkpoint. Stale or missing accepted parents are rejected.
 

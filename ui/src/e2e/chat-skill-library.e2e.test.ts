@@ -109,6 +109,7 @@ suite.define(() => {
           source: "skill",
           scope: "both",
           acceptsArgs: true,
+          skillReferenceable: true,
           skillModelVisible: true,
           textAliases: [`/${alice.entry.name}`],
         },
@@ -191,7 +192,7 @@ suite.define(() => {
       expect(await item("release-notes").count()).toBe(1);
       await waitForControlUiProofSurface(menuPanel, [
         readAction,
-        menu.getByText("Alice's library", { exact: true }),
+        menu.getByText("Alice’s library", { exact: true }),
       ]);
       const actionBounds = await menuPanel.evaluate((node) =>
         node.getBoundingClientRect().toJSON(),

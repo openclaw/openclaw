@@ -13,6 +13,14 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "(FRV 41800680256 run kova-261104-084310-8bd049); crash, correctness, isolation, " +
       "data-integrity, and install/update failures stay blocking and are checked in the report.",
   },
+  {
+    targetVersion: "2026.11.1",
+    childRole: "releaseChecksIndependent",
+    jobName: "Run repo/live E2E validation / validate_release_live_cache",
+    reason:
+      "OpenRouter returned HTTP 402 for the release key (FRV 41881174354 job on C 3a4983e15f96); " +
+      "billing failure at the last provider, tracked in the 2026.11.1 release handoff.",
+  },
 ];
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
@@ -171,11 +179,15 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
 
 // Aggregates also enforce integrity and dispatch identity. A waived test must
 // not excuse a second failure in that same aggregate job.
+export class ReleaseAggregateValidationError extends Error {}
+
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
     if (matches.length !== 1 || matches[0].status !== "completed") {
-      throw new Error(`Required release aggregate is missing or incomplete: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Required release aggregate is missing or incomplete: ${aggregate.jobName}`,
+      );
     }
     const job = matches[0];
     if (job.conclusion === "success") {
@@ -189,7 +201,9 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       failedSteps?.length !== 1 ||
       failedSteps[0].name !== aggregate.stepName
     ) {
-      throw new Error(`Release aggregate has a non-policy failure: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Release aggregate has a non-policy failure: ${aggregate.jobName}`,
+      );
     }
     const log = String(await getJobLog(job.id));
     const causes = log
@@ -200,7 +214,9 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
         return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
       });
     if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
-      throw new Error(`Release aggregate has an unwaived failure: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
+      );
     }
   }
 }

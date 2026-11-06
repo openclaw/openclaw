@@ -56,6 +56,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         return;
       }
       showToast({
+        severity: result.complete && result.importedItems > 0 ? "success" : undefined,
         message: t(
           !result.complete
             ? "chat.catalog.importIncomplete"

@@ -456,7 +456,7 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const warning = "Some models could not be refreshed. Open Models to try again.";
+    const warning = "Couldn’t refresh some models. Open Models to try again.";
     try {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await page.goto(browserUrl);

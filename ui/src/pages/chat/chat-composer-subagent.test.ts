@@ -310,13 +310,11 @@ it.each([
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
     if (restricted) {
       assert(pane.chatProps);
-      expect(pane.chatProps.modelRequiredReason).toBe(
-        "No models are permitted by your administrator.",
-      );
+      expect(pane.chatProps.modelRequiredReason).toBe("No models are permitted by your admin.");
       const container = createComposerContainer();
       renderComposerInto(container, pane.chatProps);
       expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
-        "No models are permitted by your administrator.",
+        "No models are permitted by your admin.",
       );
       expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
       disposeComposer(container);
@@ -444,7 +442,7 @@ it.each([
         !restricted && !cachedDefault ? "Set up a model" : undefined,
       );
       if (restricted) {
-        expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
+        expect(settled.modelRequiredReason).toBe("No models are permitted by your admin.");
         expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
         expect(container.textContent).not.toContain("primary-model");
         expect(container.textContent).not.toContain("cached-default");

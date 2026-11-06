@@ -150,7 +150,7 @@ suite.define(() => {
         );
         await issue.locator("summary").click();
         await issue.locator(".sidebar-update-card__action").click();
-        const modal = modalFor(page, "Update Gateway");
+        const modal = modalFor(page, "Update and restart?");
         for (const width of [1440, 390, 320]) {
           await page.setViewportSize({ width, height: 1000 });
           await inspectActions(page, modal, "openclaw-modal-actions");

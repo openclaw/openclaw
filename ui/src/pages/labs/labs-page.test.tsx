@@ -214,7 +214,7 @@ describe("LabsPage", () => {
       experimental({ templates: null }),
     ],
     [
-      "This computer’s desktop",
+      "Desktop on the computer running OpenClaw",
       "hostDesktop",
       false,
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
@@ -232,7 +232,13 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
     ["Templates", "templates", true, {}, experimental({ templates: true })],
-    ["This computer’s desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
+    [
+      "Desktop on the computer running OpenClaw",
+      "hostDesktop",
+      true,
+      hostEnabled(false),
+      hostEnabled(true),
+    ],
     ["Cloud device desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
     ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
     ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],

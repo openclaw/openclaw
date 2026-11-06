@@ -260,6 +260,31 @@ describe("renderModelProviders", () => {
     expect(retry?.disabled).toBe(false);
   });
 
+  it("keeps listing failures quiet until something is set up", async () => {
+    const failure = "Couldn’t load models from acp-opencode, openai. Try again.";
+    const alert = (container: HTMLElement) =>
+      container.querySelector('.model-providers__catalog-progress[role="alert"]');
+    // Providers that failed discovery still get a row; none is connected on a fresh install.
+    const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
+    const fresh = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    const configured = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
+    // Both views settled the same way; only the set-up one reports the failure.
+    expect(alert(fresh)).toBeNull();
+  });
+
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
     const onThinkingReset = vi.fn();
     const onFastModeReset = vi.fn();
@@ -337,7 +362,7 @@ describe("renderModelProviders", () => {
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
     expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
-      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; chat models are not used as a fallback.",
+      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; conversational models aren’t used as a fallback.",
     );
   });
 
@@ -950,6 +975,15 @@ describe("renderModelProviders", () => {
             logoutTargets: [{ provider: "openai-codex", profileIds: ["openai-codex:work"] }],
           }),
         ],
+        // Removal keeps defaults, so the confirmation names the ones this provider serves.
+        configuredModels: [
+          { id: "gpt-main", provider: "openai", name: "GPT Main", selectionRef: "main" },
+        ],
+        defaultModels: {
+          primary: "main",
+          fallbacks: ["anthropic/claude", "openai/gpt-backup"],
+          utilityModel: null,
+        },
         onRequestLogout,
       }),
     );
@@ -957,6 +991,7 @@ describe("renderModelProviders", () => {
     expect(onRequestLogout).toHaveBeenCalledWith(
       expect.objectContaining({
         cardId: "openai",
+        defaultModels: "GPT Main, openai/gpt-backup",
         // A provider-wide sign-out keeps config keys, so the key needs its own API-key target.
         removeTargets: [
           { provider: "openai-codex" },

@@ -136,7 +136,7 @@ describe("markdown sidebar", () => {
     try {
       await panel.updateComplete;
       const rawButton = Array.from(panel.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "View Raw Text",
+        (button) => button.textContent?.trim() === "View raw text",
       );
       expect(rawButton).toBeDefined();
       rawButton!.click();
@@ -171,7 +171,7 @@ describe("markdown sidebar", () => {
       expect(panel.querySelector(".sidebar-markdown-reader h2")?.textContent).toBe("Fresh preview");
       expect(
         panel.querySelector(".sidebar-markdown-shell__toolbar button")?.textContent?.trim(),
-      ).toBe("View Raw Text");
+      ).toBe("View raw text");
     } finally {
       for (const [index, [, delay]] of schedule.mock.calls.entries()) {
         if (delay === 1_500) {

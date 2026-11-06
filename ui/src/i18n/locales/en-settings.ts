@@ -816,6 +816,17 @@ const enSettings = {
       devcontainer: "Dev container",
       detected: "Detected",
       phases: {
+        retainedGit: "Verify retained Git identity",
+        retainedManifest: "Verify retained manifest",
+        inspection: "Inspect retained workspace",
+        seedPreparation: "Prepare seed paths",
+        seedTransfer: "Import seed objects",
+        seedVerification: "Verify seed",
+        seedCheckout: "Check out seed",
+        seedManifest: "Read seed manifest",
+        gitUpdate: "Copy or update workspace",
+        toolchainPreparation: "Prepare toolchain",
+        preparedManifest: "Capture prepared manifest",
         onCreate: "onCreateCommand",
         updateContent: "updateContentCommand",
         detectedInstall: "Install dependencies",
@@ -1155,6 +1166,14 @@ const enSettings = {
       replace: "Replace",
       replaceNamed: "Replace API key",
       saved: "API key saved.",
+      verified: "API key saved and verified.",
+      checking: "Checking…",
+      checkFailed:
+        "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkInconclusive:
+        "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
+      checkUnavailable:
+        "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
     probe: {
@@ -1200,6 +1219,8 @@ const enSettings = {
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
       kept: "Kept: {source}. Remove account access at its source to stop using it fully.",
+      defaults:
+        "Defaults for all agents keep using {models}. Choose another model or add an account again so replies keep working.",
       secretReferences: "Secret references in {keys}",
       accessChanged:
         "The connection, agent, or access changed. No further credentials were removed.",
@@ -1214,6 +1235,8 @@ const enSettings = {
       selectProvider: "Select a provider",
       save: "Save provider",
       saved: "Added {provider}",
+      verified: "Added {provider}. Access verified.",
+      ready: "Added {provider}. {model} is ready to chat.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1992,7 +2015,7 @@ const enSettings = {
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
     open: "Open",
-    fileOpenFailed: "Failed to open config file",
+    fileOpenFailed: "Couldn’t open the config file. Open the file manually on the Gateway device.",
     filePathCopied: "File path copied to clipboard: {path}",
     filePath: "File path: {path}",
     fileOpenedOnGateway: en.configView.fileOpenedOnGateway,

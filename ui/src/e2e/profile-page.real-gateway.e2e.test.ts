@@ -255,7 +255,7 @@ suite.define(() => {
             await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("promoted-profile.png", "#settings-profile-access");
             await access.getByRole("button", { name: "Request admin", exact: true }).click();
-            await access.getByText(/Approve this browser by running/u).waitFor();
+            await access.getByText(/Ask an admin to approve this browser/u).waitFor();
             const pending = (await listPairing()).pending;
             expect(pending).toHaveLength(1);
             expect(pending[0]?.scopes).toContain("operator.admin");

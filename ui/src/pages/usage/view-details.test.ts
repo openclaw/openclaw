@@ -387,7 +387,7 @@ it("aggregates selected tokens while counting actual loaded message roles", () =
   const breakdown = texts(container, ".timeseries-breakdown .legend-item").map((value) =>
     value?.replaceAll(/\s+/g, " "),
   );
-  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
+  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache write 5", "Cache read 12"]);
   expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain("47");
 
   const full = mount(points, data);
@@ -502,8 +502,8 @@ it("renders detail request failure messages without retry buttons", () => {
   });
 
   for (const [kind, message] of [
-    ["timeline", "Could not load usage over time: timeline unavailable"],
-    ["conversation", "Could not load conversation: logs unavailable"],
+    ["timeline", "Couldn’t load usage over time. Try again. timeline unavailable"],
+    ["conversation", "Couldn’t load conversation. Try again. logs unavailable"],
   ]) {
     const error = container.querySelector(`.usage-detail-error--${kind}`);
     expect(error?.textContent).toContain(message);

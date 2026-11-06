@@ -1,5 +1,5 @@
 import { compareParityBehavior, stableHash } from "./parity-shared.js";
-import type { RuntimeParityCell, RuntimeParityDrift } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityDrift } from "./runtime-parity.types.js";
 
 export type HarnessParityDrift =
   | RuntimeParityDrift

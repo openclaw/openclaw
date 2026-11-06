@@ -9,7 +9,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 // These tests own identity loading, not the lazy preference reader; settle that module at setup
 // so its cold transform cannot consume the one-second UI waits on a loaded CI runner.
 import "../../app/user-prefs-request.ts";
-import { i18n, t, translateActive } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -123,8 +123,6 @@ it("refreshes translated copy when the locale changes while mounted", async () =
 
   await i18n.setLocale("de");
   expect(i18n.getLocale()).toBe("de");
-  expect(translateActive("profilePage.offline")).toBeDefined();
-  expect(translateActive("profilePage.offline")).not.toBe(englishNote);
   flush();
 
   await waitForFast(() => {

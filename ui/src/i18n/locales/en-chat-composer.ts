@@ -14,7 +14,7 @@ const catalog = {
       predictionShortcut: "Tab",
       dismissPrediction: "Dismiss suggestion",
       predictionAvailable:
-        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
+        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",
@@ -64,7 +64,7 @@ const catalog = {
         },
         offlineBlocked: "Reconnect to change tools for this session.",
         adminBlocked: "You need admin access to manage MCP servers.",
-        savingBlocked: "Saving… try again in a moment.",
+        savingBlocked: "Saving… Try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
@@ -84,6 +84,7 @@ const catalog = {
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
+        quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
         usageCredits: "Usage credits",

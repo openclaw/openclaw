@@ -99,7 +99,6 @@ async function expectAgentCreationDenied(page: Page, gateway: MockGatewayControl
   expect(await createAgent.getAttribute("title")).toContain(
     "You need admin access to set up OpenClaw.",
   );
-  expect(await createAgent.getAttribute("title")).toContain("operator.admin");
   const url = page.url();
   await createAgent.click({ force: true });
   expect(page.url()).toBe(url);

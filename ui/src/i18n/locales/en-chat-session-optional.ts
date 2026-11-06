@@ -272,7 +272,7 @@ const catalog = {
       readPlain: "Open plain source",
       fileTree: "Changed files tree",
       searchFiles: "Search changed files",
-      noMatchingFiles: "No files match your search.",
+      noMatchingFiles: "No files match this view.",
       cycleMode: "Diff mode: {mode}. Switch to next mode",
       editFile: "Edit file",
       collapseContext: "Hide {count} unmodified lines",

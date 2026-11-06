@@ -362,7 +362,8 @@ const startupEnglish = {
       "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
     socketRefused:
       "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
-    socketCreateFailed: "Could not create the Gateway WebSocket: {message}",
+    socketCreateFailed:
+      "Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: {message}",
     socketTimeout: "gateway websocket opening timed out after {milliseconds}ms",
   },
   pluginUi: {
@@ -956,7 +957,7 @@ const startupEnglish = {
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
     settingsSearchPlaceholder: "Search settings…",
-    settingsSearchNoResults: "No matching settings.",
+    settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
     exitSettings: "Back to app",
@@ -1195,7 +1196,7 @@ const startupEnglish = {
   },
   labsPage: {
     sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
+      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
@@ -1296,7 +1297,7 @@ const startupEnglish = {
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
   },
   githubConnections: {
-    title: "GitHub connections",
+    title: "GitHub accounts",
     mine: "My GitHub",
     system: "System GitHub",
     forMe: "For me",
@@ -1426,8 +1427,8 @@ const startupEnglish = {
       approx: "≈ {value}",
     },
     loading: {
-      title: "Usage Overview",
-      badge: "Loading",
+      title: "Usage overview",
+      badge: "Loading usage…",
     },
     metrics: {
       tokens: "Tokens",
@@ -1436,8 +1437,8 @@ const startupEnglish = {
       sessions: "sessions",
     },
     heatmap: {
-      title: "Token Activity",
-      subtitle: "Daily token intensity for the selected range, up to one year.",
+      title: "Token activity",
+      subtitle: "Daily token intensity in this range, up to one year.",
       cellTokens: "{tokens} tokens",
       less: "Less",
       more: "More",
@@ -1455,14 +1456,14 @@ const startupEnglish = {
     breakdown: {
       output: "Output",
       input: "Input",
-      cacheWrite: "Cache Write",
-      cacheRead: "Cache Read",
+      cacheWrite: "Cache write",
+      cacheRead: "Cache read",
       total: "Total",
-      tokensByType: "Tokens by Type",
-      costByType: "Cost by Type",
+      tokensByType: "Tokens by type",
+      costByType: "Cost by type",
     },
     overview: {
-      title: "Usage Overview",
+      title: "Usage overview",
     },
     sessions: {},
     // Sidebar collapse stays eager; Usage registers the remaining detail copy.
@@ -1558,6 +1559,9 @@ const startupEnglish = {
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
       failedTitle: "Couldn’t finish this reply",
+      credentialsRejected: "{provider} didn’t accept the saved credentials",
+      billingProblem: "{provider} reports a billing problem",
+      openModels: "Open Models",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
@@ -1686,7 +1690,7 @@ const startupEnglish = {
     catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
     commandPaletteTitle: "Search or jump to… (⌘K)",
-    openCommandPalette: "Command palette",
+    openCommandPalette: "Search",
 
     actions: {
       copyAsMarkdown: "Copy as markdown",
@@ -1876,8 +1880,7 @@ const startupEnglish = {
         "Used when anyone opens this dashboard. Personal layout choices still apply.",
       savingDefault: "Saving default…",
       defaultSaved: "Dashboard default saved for future opens.",
-      defaultSaveFailed:
-        "Could not save the dashboard default. Check the connection and try again.",
+      defaultSaveFailed: "Couldn’t save the dashboard default. Check the connection and try again.",
       defaultSaveError: "Couldn’t save the dashboard default. Try again.",
       swap: "Swap {main} and {side}",
       layout: "Layout",

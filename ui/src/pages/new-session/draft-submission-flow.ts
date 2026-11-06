@@ -4,6 +4,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -81,8 +82,7 @@ export class DraftSubmissionFlow {
   private readonly startedSession = new StartedSessionNavigation();
   private readonly backgroundPreview = new BackgroundCreatePreview();
   error: string | null = null;
-  private submitRequest = new AbortController();
-  private readonly sessionStartup: DraftSessionStartup;
+  readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerDraft = createComposerDraftSource(() => ({
@@ -116,7 +116,13 @@ export class DraftSubmissionFlow {
       callbacks.changed,
       () => (this.startedSession.current = null),
     );
-    this.sessionStartup = new DraftSessionStartup(gateway);
+    this.sessionStartup = new DraftSessionStartup(gateway, () => ({
+      context: this.read().context,
+      client: this.gateway.client,
+      params: this.buildDraftSessionCreateParams(),
+      access: this.submissionAccess(),
+      changed: this.callbacks.changed,
+    }));
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
         message: this.messageText,
@@ -165,7 +171,7 @@ export class DraftSubmissionFlow {
   openSubmittedSession() {
     return this.startedSession.openSubmission(this.read().context, this.completedSubmission, {
       capture: () => {
-        const requestSignal = this.captureSubmitRequest();
+        const requestSignal = this.sessionStartup.captureRequest();
         return () => !requestSignal.aborted;
       },
       publish: (message, error) => {
@@ -328,14 +334,9 @@ export class DraftSubmissionFlow {
       pendingPlacement: this.pendingPlacement,
     });
 
-  private captureSubmitRequest(): AbortSignal {
-    this.submitRequest.abort();
-    this.submitRequest = new AbortController();
-    return this.submitRequest.signal;
-  }
-
   invalidate(outcomeUnknown: SubmissionOutcomeReason | null = null) {
-    this.submitRequest.abort();
+    this.sessionStartup.clearPreparation();
+    this.sessionStartup.abortRequest();
     this.startedSession.current = null;
     const creating = this.activeSubmission?.phase === "creating";
     const interrupted = outcomeUnknown !== null && creating && this.sessionStartup.interrupt();
@@ -426,7 +427,7 @@ export class DraftSubmissionFlow {
       return;
     }
     const preparedTitle = this.callbacks.takePreparedTitle?.();
-    const requestSignal = this.captureSubmitRequest();
+    const requestSignal = this.sessionStartup.captureRequest();
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedMessage = this.startedSession.messageForTurn(context, input.agentId, input.turn);
     const retainSubmittedSession = this.startedSession.captureSubmission(
@@ -558,18 +559,14 @@ export class DraftSubmissionFlow {
           retry: () => void this.submit(undefined, true),
         });
       }
-      const createRequest =
-        input.pendingPlacement && pending.phase !== "creating"
-          ? Promise.resolve({ key: pending.sessionKey, initialRun: { status: "idle" as const } })
-          : context.sessions.createResult(
-              placementCreateParams ??
-                startup?.params ??
-                this.sessionStartup.start(createParams, background),
-              {
-                reconciliation: "background",
-                signal: requestSignal,
-              },
-            );
+      const createRequest = this.sessionStartup.create(context, createParams, {
+        pendingKey:
+          input.pendingPlacement && pending.phase !== "creating" ? pending.sessionKey : undefined,
+        resumedParams: placementCreateParams ?? startup?.params,
+        background,
+        allowPrepared: !placementTarget,
+        signal: requestSignal,
+      });
       instant = beginInstant?.();
       const result = await createRequest;
       if (result && !placementTarget && result.initialRun.status !== "rejected") {
@@ -667,7 +664,7 @@ export class DraftSubmissionFlow {
     } catch (error) {
       if (!requestSignal.aborted && this.gateway.client === input.client) {
         this.sessionStartup.clear();
-        this.error = error instanceof Error ? error.message : String(error);
+        this.error = formatUiError(error);
         if (instant) {
           await instant.rollback();
         }
@@ -694,7 +691,7 @@ export class DraftSubmissionFlow {
       capture: (client) => {
         this.blockedSubmitAttempt = false;
         this.error = null;
-        const requestSignal = this.captureSubmitRequest();
+        const requestSignal = this.sessionStartup.captureRequest();
         const submitted = this.draftPersistence.captureSubmission();
         const isRequestCurrent = () => !requestSignal.aborted;
         return {
@@ -731,7 +728,7 @@ export class DraftSubmissionFlow {
   }
 
   disconnect() {
-    this.submitRequest.abort();
+    this.sessionStartup.abortRequest();
     this.backgroundPreview.clear();
     this.creationComposerValue?.releaseDraft();
     this.pendingPlacement.releaseClaim();

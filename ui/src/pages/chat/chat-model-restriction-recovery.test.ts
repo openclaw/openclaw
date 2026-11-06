@@ -230,7 +230,7 @@ it.each([false, true])(
   "requires explicit consent and handles a rejected recovery=%s without replay",
   async (rejectRecovery) => {
     const { host, selection, modal } = await selecting({ rejectRecovery });
-    for (const phrase of ["own permissions", "Gateway host", "Only this session"]) {
+    for (const phrase of ["own permissions", "Gateway device", "Only this session"]) {
       expect(modal.textContent).toContain(phrase);
     }
     expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);

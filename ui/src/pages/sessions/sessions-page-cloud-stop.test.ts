@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import * as confirmDialog from "../../components/confirm-dialog.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -15,11 +15,8 @@ import {
   sessionRow,
 } from "./sessions-page.test-support.ts";
 
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-
 afterEach(() => {
   document.body.replaceChildren();
-  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -46,7 +43,9 @@ describe("sessions page cloud stop", () => {
       );
       const [query] = managed.subscribeList.mock.calls[0]!;
       managed.refreshList.mockClear();
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
+      const showConfirmDialog = vi
+        .spyOn(confirmDialog, "showConfirmDialog")
+        .mockResolvedValue(true);
       const stopping = page.stopCloudWorker(target);
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       expect(showConfirmDialog).toHaveBeenCalledWith(
