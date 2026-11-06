@@ -6,6 +6,7 @@
 node scripts/run-vitest.mjs extensions/facetime
 for script in extensions/facetime/scripts/*.sh; do sh -n "$script"; done
 sh extensions/facetime/scripts/test-driver-transaction.sh
+sh extensions/facetime/scripts/test-driver-deployment-target.sh
 sh extensions/facetime/scripts/test-uninstall-inventory.sh
 (cd extensions/facetime && npm pack --dry-run)
 ```
