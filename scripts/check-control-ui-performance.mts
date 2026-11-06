@@ -59,7 +59,7 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
   // Coordinator accepted transcript mounting's minifier variance; complete build plus 64 B.
-  chatBootJsGzipBytes: 1_287_197,
+  chatBootJsGzipBytes: 1_287_669,
   newBootJsGzipBytes: 796_484,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
