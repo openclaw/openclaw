@@ -302,15 +302,31 @@ it.each([true, false])(
   },
 );
 
-it("releases layout observation when a banner replaces the input", async () => {
+it("measures the capability menu on opening and releases observation with the input", async () => {
   vi.useFakeTimers();
   const { container, props: initial } = renderComposer({}, true);
   const input = container.querySelector<HTMLElement>(".agent-chat__input")!;
   let top = 100;
-  vi.spyOn(input, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, top, 400, 48));
+  const measure = vi
+    .spyOn(input, "getBoundingClientRect")
+    .mockImplementation(() => new DOMRect(0, top, 400, 48));
   window.dispatchEvent(new Event("resize"));
   await vi.advanceTimersByTimeAsync(20);
+  expect(measure).not.toHaveBeenCalled();
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("");
+  button(container, t("chat.composer.addAttachment")).click();
   expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("72px");
+  top = 150;
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(20);
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("122px");
+
+  button(container, t("chat.composer.addAttachment")).click();
+  await vi.advanceTimersByTimeAsync(300);
+  measure.mockClear();
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(20);
+  expect(measure).not.toHaveBeenCalled();
 
   renderComposerInto(container, {
     ...initial,
@@ -320,16 +336,18 @@ it("releases layout observation when a banner replaces the input", async () => {
   top = 200;
   window.dispatchEvent(new Event("resize"));
   await vi.advanceTimersByTimeAsync(20);
-  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("72px");
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("122px");
 
   renderComposerInto(container, initial);
   const replacement = container.querySelector<HTMLElement>(".agent-chat__input")!;
   expect(replacement).not.toBe(input);
   vi.spyOn(replacement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 300, 400, 48));
+  button(container, t("chat.composer.addAttachment")).click();
+  expect(replacement.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("272px");
   window.dispatchEvent(new Event("resize"));
   await vi.advanceTimersByTimeAsync(20);
   expect(replacement.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("272px");
-  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("72px");
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("122px");
 });
 
 it("replaces the composer with the archived-session notice", () => {
