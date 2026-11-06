@@ -12,6 +12,7 @@ import type { SecretStoreValidationError } from "../secrets/store/secret-store.j
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
+import { SecretStoreInputFileError } from "./secrets-store-input-error.js";
 
 type OutputOptions = { json?: boolean; plain?: boolean; scope?: string };
 type SetOptions = {
@@ -74,6 +75,9 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
     return error;
   }
   if (error instanceof Utf8InputError) {
+    return new SecretStoreCliFailure(2, error.message);
+  }
+  if (error instanceof SecretStoreInputFileError) {
     return new SecretStoreCliFailure(2, error.message);
   }
   const validation = error as Partial<SecretStoreValidationError>;

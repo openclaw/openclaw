@@ -8,6 +8,7 @@ import {
   SECRET_STORE_VALUE_MAX_BYTES,
   SecretStoreValidationError,
 } from "../secrets/store/secret-store.js";
+import { SecretStoreInputFileError } from "./secrets-store-input-error.js";
 
 const SECRET_STORE_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -25,15 +26,35 @@ async function readBoundedStdin(maxBytes: number): Promise<string> {
   return decodeUtf8Input(bytes, "Stdin input");
 }
 
+function readFailureErrorCode(error: unknown): string | undefined {
+  // SAFETY: invariant — fs error objects expose a string `code` via the narrowed object read.
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  return typeof code === "string" && code ? code : undefined;
+}
+
+function describeInputFileOpenFailure(pathname: string, error: unknown): string {
+  const code = readFailureErrorCode(error);
+  // Keep missing paths (ENOENT/ENOTDIR) and denied access (EACCES) distinguishable
+  // while pointing the operator at the corrective action.
+  return `Input file could not be read${code ? ` (${code})` : ""}: ${pathname}. Check that the path exists and is readable.`;
+}
+
 async function readBoundedFile(pathname: string, maxBytes: number): Promise<string> {
   // Open FIFOs without waiting for a writer so the descriptor check can reject them.
   const flags =
     process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
-  const file = await fs.open(pathname, flags);
+  let file: fs.FileHandle;
+  try {
+    file = await fs.open(pathname, flags);
+  } catch (error) {
+    throw new SecretStoreInputFileError(describeInputFileOpenFailure(pathname, error), {
+      cause: error,
+    });
+  }
   try {
     const stat = await file.stat();
     if (!stat.isFile()) {
-      throw new Error(`Input path is not a regular file: ${pathname}`);
+      throw new SecretStoreInputFileError(`Input path is not a regular file: ${pathname}`);
     }
     if (stat.size > maxBytes) {
       throw new SecretStoreValidationError(
