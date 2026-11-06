@@ -116,6 +116,7 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
     },
     scrollToFn: elementScroll,
     overscan: 3,
+    useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
   const pinFocus = (pinnedExpandedKey: string | null, pinnedMenuKey: string | undefined) => {

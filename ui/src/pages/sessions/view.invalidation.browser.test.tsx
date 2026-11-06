@@ -87,7 +87,7 @@ it.each([1280, 390])(
     const onSelectPage = vi.fn();
     const [current, setCurrent] = createSignal({
       ...buildProps(result),
-      pageSize: 100,
+      pageSize: 25,
       onSelectPage,
     });
     const view = mountSolid(() => (
@@ -100,10 +100,39 @@ it.each([1280, 390])(
     const rows = () => [
       ...view.container.querySelectorAll<HTMLTableRowElement>(".session-data-row"),
     ];
+    await expect.poll(() => rows().length).toBe(25);
+    expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("26");
+    setCurrent((previous) => ({ ...previous, pageSize: 100 }));
+    flush();
+
     await expect.poll(() => rows().length).toBeLessThan(25);
     expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
     // The phone list has no header row; select-all lives in the bulk bar.
     const phone = width === 390;
+    const scroller = view.container.querySelector<HTMLElement>(
+      phone ? ".content" : ".data-table-container",
+    )!;
+    await expect
+      .poll(async () => {
+        const geometry = [];
+        for (let frame = 0; frame < 4; frame++) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+          geometry.push(
+            JSON.stringify([
+              scroller.scrollHeight,
+              scroller.scrollTop,
+              rows().map((row) => [
+                row.getAttribute("aria-rowindex"),
+                row.getBoundingClientRect().height,
+              ]),
+            ]),
+          );
+        }
+        return new Set(geometry).size;
+      })
+      .toBe(1);
     if (phone) {
       expect(view.container.querySelector("thead input")).toBeNull();
       setCurrent((previous) => ({
@@ -132,9 +161,6 @@ it.each([1280, 390])(
     setCurrent((previous) => ({ ...previous, expandedSessionKey: result.sessions[0]!.key }));
     flush();
     const draft = view.container.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
-    const scroller = view.container.querySelector<HTMLElement>(
-      phone ? ".content" : ".data-table-container",
-    )!;
     scroller.style.height = "200px";
     draft.value = "Retained draft";
     draft.focus();
