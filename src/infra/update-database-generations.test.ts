@@ -18,6 +18,7 @@ import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 import {
   readUnchangedUpdateDatabaseGeneration,
+  readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
 } from "./update-database-generations.js";
 import {
