@@ -11,6 +11,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   protected memoryWatcherReady: Promise<void> = Promise.resolve();
   private remoteWatchRetirement: Promise<void> | undefined;
   private remoteWatchCloseFailure: { error: unknown } | undefined;
+  private remoteWatchRestarts = 0;
   protected get memoryWatcherHealth() {
     return this.fileWatcher?.health();
   }
@@ -48,7 +49,26 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           subscription.signal,
         )
         .then(
-          () => markDirty("unavailable"),
+          () => {
+            // Only our own abort legitimately ends this subscription. Anything else
+            // means the transport retired on its own, so the memory source stops
+            // observing edits while the manager still reports healthy.
+            if (subscription.signal.aborted || this.closed) {
+              return;
+            }
+            markDirty("unavailable");
+            // One bounded re-subscription restores observation; a transport that
+            // keeps retiring settles on the search fallback instead of a retry loop.
+            if (this.remoteWatchRestarts >= 1) {
+              return;
+            }
+            this.remoteWatchRestarts += 1;
+            log.warn("memory workspace watcher ended unexpectedly; re-subscribing");
+            // Release this attempt's latches so ensureWatcher() can take a new claim.
+            this.memoryWatchSubscription = undefined;
+            this.memoryWatchUnavailable = false;
+            this.ensureWatcher();
+          },
           (error: unknown) => {
             markDirty("unavailable");
             if (!subscription.signal.aborted) {
