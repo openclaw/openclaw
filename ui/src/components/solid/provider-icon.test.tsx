@@ -18,9 +18,10 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import type { CloudProfileIdentity } from "../provider-icon-data.ts";
+import type { CloudProfileIdentity } from "../cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "./cloud-profile-icon.tsx";
 import { Icon } from "./icon.tsx";
-import { CloudProfileIcon, ProviderBrandIcon, ProviderFallbackIcon } from "./provider-icon.tsx";
+import { ProviderBrandIcon, ProviderFallbackIcon } from "./provider-icon.tsx";
 
 afterEach(() => {
   cleanup();

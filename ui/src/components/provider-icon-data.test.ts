@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  compareCloudProfiles,
-  hasProviderBrandIcon,
-  providerDisplayLabel,
-} from "./provider-icon-data.ts";
+import { compareCloudProfiles } from "./cloud-profile-icon-data.ts";
+import { hasProviderBrandIcon, providerDisplayLabel } from "./provider-icon-data.ts";
 
 describe("model provider labels", () => {
   it.each([
