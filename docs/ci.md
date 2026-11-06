@@ -35,6 +35,12 @@ the following declaration phase; a complete Windows installer job previously too
 compilation, desktop tests, and installer packaging. The override stays on each
 source-build step; release-workflow budgets and package-integrity checks are unchanged.
 
+Precise PR plans can run the complete source-boundary gate first in an existing
+short, serial 8-class tooling job. Both configs retain separate test processes;
+a 90-second boundary reservation must fit the existing 150-second test budget.
+Other runners, preparation modes, parallel jobs, and full validation keep their
+standalone boundary ownership.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
@@ -300,6 +306,12 @@ dependencies are downloaded during setup; no Google account, companion APK, or
 paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
+
+Numeric test-budget records retain full guard coverage without widening an
+otherwise scoped source/test compiler and lint selection.
+
+Selected singleton compiler rows share setup in pairs within the existing
+two-compiler limit. Full stripes and rows carrying root partitions stay unchanged.
 
 Scoped PR plans inspect the four root-test partitions separately and select every
 partition that consumes a changed input, including type-only imports. A change
