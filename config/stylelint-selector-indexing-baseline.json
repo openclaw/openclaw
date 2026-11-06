@@ -15,11 +15,7 @@
     "35a20743ee492a2fea8465cabc1f9cb28fcc2162a4c00fd22cddbfe7ec8ab32c": 1
   },
   "ui/src/components/solid/overlay.css": {
-    "2e9adc561aebee51f1c72279e11e6588f8c9becaaf5b807d5d2a614c085a90da": 1,
-    "b1d2407980ecd001b1aff2a5cc6e77db5dcbca6ebc3970036deb7c36eb6f3394": 1,
-    "b592d447ae428407648839344168fb9e088d009c964c94b4aade6141d7878c47": 1,
-    "ba55ae5a7159d7266bf6e106ce38524bcfdb4b1a48b79b5e8ca7b62c5e7d1c3f": 1,
-    "e6ce6d18b97c7bad2cfb10f4a447f150f925181bfa72ad53f60c7fe923f09cfd": 1
+    "b592d447ae428407648839344168fb9e088d009c964c94b4aade6141d7878c47": 1
   },
   "ui/src/pages/chat/components/chat-activity-pills.css": {
     "a2180f54e58f0c031d24f007335e01522eb66c78fd565c27af9c12e1fdc7dd0d": 1,

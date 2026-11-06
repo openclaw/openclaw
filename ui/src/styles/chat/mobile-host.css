@@ -496,8 +496,11 @@
 .sidebar-region--mobile-host .chat-mobile-host,
 .sidebar-region--mobile-host .chat-mobile-host * {
   --scrollbar-thumb: transparent;
+  --scrollbar-thumb-near: transparent;
   --scrollbar-thumb-hover: transparent;
   scrollbar-color: transparent transparent;
+  /* The native host keeps standard overlay-style scrollbars, not the styled thumb. */
+  scrollbar-width: thin;
 }
 
 /* Reserve space only on existing scrollports. Hidden layout wrappers must not
@@ -529,6 +532,7 @@
 .sidebar-region--mobile-host .chat-mobile-host :focus-within,
 .sidebar-region--mobile-host .chat-mobile-host [data-mobile-scrolling] {
   --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-thumb-near: var(--scrollbar-thumb);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
