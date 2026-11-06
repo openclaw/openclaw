@@ -1,60 +1,377 @@
 # LiteLLM provider gateway for OpenClaw
 # ----------------------------------------------------------------------------
-# Role: a fallback safety-net in front of OpenClaw's LLM layer. OpenClaw keeps
-# its claude-cli / codex SUBSCRIPTION runtimes as primary (free). When a
-# subscription dies (Max/Pro required, rate limit, token/quota), OpenClaw falls
-# through to `litellm/openclaw-auto` here, which fans out across HTTP providers.
+# Role: единый шлюз для всех ИИ. Claude Code, OpenClaw и локальные клиенты
+# ходят на http://127.0.0.1:4000 и выбирают модель алиасом из model_list.
 #
-# Tier order inside this gateway (per operator decision):
-#   1) OpenRouter  anthropic/claude-sonnet-4-6   (Claude tier, key already owned)
-#   2) Ollama      qwen3:8b                       (local, always available)
-#   3) Ollama      qwen2.5:3b                     (lightweight last resort)
+# Ключи берутся только из окружения контейнера (env_file: .env), который
+# наполняется из secret-wallet. Инлайн-ключей в этом файле нет.
 #
-# ANTHROPIC_API_KEY is OPTIONAL. The `claude-primary` model below is defined but
-# kept OUT of the default openclaw-auto chain. To make direct Anthropic the top
-# tier, set ANTHROPIC_API_KEY in .env and prepend "claude-primary" to the
-# openclaw-auto fallback list in litellm_settings.fallbacks.
+# Проверено 2026-11-04 (живые запросы к каждому провайдеру):
+#   OpenRouter  — id моделей С ТОЧКАМИ: anthropic/claude-sonnet-5.5,
+#                 anthropic/claude-sonnet-4.6, anthropic/claude-haiku-4.5,
+#                 z-ai/glm-5.2, minimax/minimax-m3, minimax/minimax-m3.1-flash → 200
+#   z.ai direct  — glm-5.2 / glm-5.3 / glm-4.6 → 200
+#   Anthropic    — ключ есть, баланс владельца $10, но org Anthropic не верифицирован
+#                 → 403 «organization can't receive replies» (см. claude-primary)
+#   MiniMax      — официальная модель M Plan: MiniMax-M3.1-Flash, base
+#                 https://api.minimax.io/v1 (или /anthropic). Ключ в кошельке -
+#                 старый Token Plan-ключ, по нему api.minimax.io отдаёт 402
+#                 insufficient balance: квота M Plan с ним не работает. Нужен
+#                 M Plan API key из platform.minimax.io/console/plan.
+#                 Через OpenRouter minimax/minimax-m3.1-flash → 200 (работает сейчас).
+#   DeepInfra    — оплаченные токены владельца, база api.deepinfra.com/v1/openai,
+#                 173 модели в каталоге. Работают: MiniMaxAI/MiniMax-M3,
+#                 zai-org/GLM-5.2, zai-org/GLM-5.3-Flash, Qwen/Qwen3.8-27B,
+#                 Qwen/Qwen3.8-Max, deepseek-ai/DeepSeek-V4.1-Flash → 200
+#   NVIDIA NIM   — бесплатные кредиты build.nvidia.com, 85 моделей в каталоге,
+#                 для этого аккаунта развёрнуто 5 (см. алиасы nvidia-*).
+#   Ollama local — zerohour/qwen3.8-27b-uncensored:iq3, ministral-3:14b
+#
+# Tier order (решение владельца 2026-11-04: покупаем только MiniMax):
+#   1) MiniMax-M3.1-Flash[1m] — основной алиас Claude Code и OpenClaw
+#   2) minimax-direct  — прямой M Plan API (включится при наличии M Plan key)
+#   3) minimax-primary — MiniMax через OpenRouter (рабочий путь на сегодня)
+#   4) deepinfra-minimax — MiniMax-M3 через DeepInfra (оплаченные токены)
+#   5) nvidia-minimax  — minimax-m3.1-flash через NVIDIA NIM (бесплатный резерв)
+#   6) claude-primary  — прямой Anthropic на балансе владельца $10
+#                         (сейчас 403 до верификации организации)
+#   7) Ollama zerohour/qwen3.8-27b-uncensored:iq3 (локальный)
+#   8) Ollama ministral-3:14b                  (лёгкий локальный)
+#
+# ВАЖНО про лишние параметры: Claude Code шлёт output_config и thinking.
+# OpenAI-совместимые провайдеры (NVIDIA NIM, DeepInfra) их не понимают -
+# NVIDIA отвечает 400 «Unsupported parameter(s)», а на thinking зависает.
+# LiteLLM сам разворачивает output_config -> reasoning_effort -> effort,
+# а thinking -> type + budget_tokens, поэтому в дроп попадают все пять имён.
 # ----------------------------------------------------------------------------
 
 model_list:
-  # --- Entry point OpenClaw calls. Primary = OpenRouter Claude. ---
+  # --- Основной алиас шлюза (MiniMax) ---
+  # Решение владельца от 2026-11-04: покупаем только MiniMax. OpenClaw и Claude Code
+  # идут в MiniMax первым; Claude-модели остаются явными алиасами, но в дефолтной
+  # цепочке не участвуют.
   - model_name: openclaw-auto
     litellm_params:
-      model: openrouter/anthropic/claude-sonnet-4-6
+      # Экономия квоты (решение владельца 2026-11-04): MiniMax напрямую по M Plan -
+      # подписка, нулевая маржинальная цена. OpenRouter остаётся резервом.
+      # 2026-11-06: прямой M Plan-ключ отдаёт 402 и висит до timeout 180s —
+      # запрос не падал, а висел, и агентские сессии умирали по таймауту.
+      # Первым маршрутом идёт OpenRouter (проверено: 200 за 1.2s).
+      model: openrouter/minimax/minimax-m3.1-flash
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
-      timeout: 90
+      timeout: 120
       extra_headers:
         HTTP-Referer: https://xn--e1afmkfd6e.xn--p1ai
         X-Title: GruzPotok OpenClaw LiteLLM
 
-  # --- Claude tier via OpenRouter (named, reusable) ---
+  # --- Claude-резерв через OpenRouter ---
   - model_name: openrouter-fallback
     litellm_params:
-      model: openrouter/anthropic/claude-sonnet-4-6
+      model: openrouter/anthropic/claude-sonnet-4.6
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
-      timeout: 90
+      timeout: 120
 
-  # --- Optional direct Anthropic API (enabled only if ANTHROPIC_API_KEY set) ---
+  # --- Быстрая Claude-модель (для фоновых задач Claude Code) ---
+  - model_name: openrouter-haiku
+    litellm_params:
+      model: openrouter/anthropic/claude-haiku-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  # --- MiniMax: основная модель (решение владельца) ---
+  # Claude Code вырезает суффикс [1m] из имени и отправляет в шлюз базовое
+  # "MiniMax-M3.1-Flash" (суффикс нужен только клиенту - он включает контекст 1M).
+  # Поэтому в шлюзе обязаны быть оба имени: с [1m] и без.
+  - model_name: "MiniMax-M3.1-Flash"
+    litellm_params:
+      # MiniMax напрямую (M Plan): нулевая маржинальная цена, OpenRouter - резерв.
+      # 2026-11-06: прямой M Plan-ключ отдаёт 402 и висит до timeout 180s —
+      # запрос не падал, а висел, и агентские сессии умирали по таймауту.
+      # Первым маршрутом идёт OpenRouter (проверено: 200 за 1.2s).
+      model: openrouter/minimax/minimax-m3.1-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: "MiniMax-M3.1-Flash[1m]"
+    litellm_params:
+      # MiniMax напрямую (M Plan): подписка вместо pay-per-token OpenRouter.
+      # 2026-11-06: прямой M Plan-ключ отдаёт 402 и висит до timeout 180s —
+      # запрос не падал, а висел, и агентские сессии умирали по таймауту.
+      # Первым маршрутом идёт OpenRouter (проверено: 200 за 1.2s).
+      model: openrouter/minimax/minimax-m3.1-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  # --- MiniMax напрямую через M Plan API ---
+  # Официальный рецепт MiniMax: base https://api.minimax.io/v1, модель MiniMax-M3.1-Flash.
+  # Ключ = M Plan API key из консоли platform.minimax.io/console/plan; в кошельке он
+  # заведён как minimax_mplan_api_key и попадает в .env как MINIMAX_MPLAN_API_KEY.
+  # Пока ключа нет, деплой отваливается быстро и цепочка уходит на OpenRouter.
+  # КАК ВКЛЮЧИТЬ ПРЯМОЙ ДОСТУП: владелец кладёт M Plan API key в кошелёк ->
+  # apply-wallet-keys-to-env.py -> recreate контейнера -> этот алиас идёт в MiniMax
+  # напрямую, без OpenRouter. Чтобы Direct стал ПЕРВЫМ, в алиасе
+  # "MiniMax-M3.1-Flash[1m]" меняем litellm_params.model на openai/MiniMax-M3.1-Flash,
+  # api_base на https://api.minimax.io/v1, api_key на os.environ/MINIMAX_MPLAN_API_KEY.
+  - model_name: minimax-direct
+    litellm_params:
+      model: openai/MiniMax-M3.1-Flash
+      api_base: https://api.minimax.io/v1
+      api_key: os.environ/MINIMAX_MPLAN_API_KEY
+      timeout: 180
+
+  # --- Прямой Anthropic API ---
+  # Ключ в кошельке есть, но организация Anthropic не прошла верификацию:
+  # прямые сообщения дают 403 «organization can't receive replies».
+  # Модель оставлена в списке (включится после верификации), но в основные
+  # цепочки fallback не входит — иначе ошибка пряталась бы за OpenRouter.
   - model_name: claude-primary
     litellm_params:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
-      timeout: 90
-
-  # --- Local Ollama: qwen3:8b (primary local fallback) ---
-  - model_name: ollama-local-qwen
-    litellm_params:
-      model: ollama_chat/qwen3:8b
-      api_base: os.environ/OLLAMA_BASE_URL
       timeout: 120
 
-  # --- Local Ollama: qwen2.5:3b (lightweight last resort) ---
+  # --- GLM напрямую через z.ai ---
+  - model_name: glm-primary
+    litellm_params:
+      model: zai/glm-5.2
+      api_key: os.environ/GLM_API_KEY
+      api_base: https://api.z.ai/api/paas/v4
+      timeout: 120
+
+  - model_name: glm-fast
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/GLM_API_KEY
+      api_base: https://api.z.ai/api/paas/v4
+      timeout: 120
+
+  # --- MiniMax через OpenRouter (рабочий путь на сегодня) ---
+  # Ключ в кошельке - старый Token Plan-ключ: на api.minimax.io он даёт 402
+  # insufficient balance, потому что квота M Plan по нему не действует.
+  # Через OpenRouter модель MiniMax доступна сразу, поэтому он и стоит первым.
+  - model_name: minimax-primary
+    litellm_params:
+      model: openrouter/minimax/minimax-m3
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  # --- NVIDIA NIM: бесплатные кредиты build.nvidia.com ---
+  # База integrate.api.nvidia.com/v1. В каталоге 85 моделей, но для этого
+  # аккаунта реально развёрнуты только перечисленные ниже — остальные отдают
+  # 404 "not found for account" / 410 (модель убрана) или висят в очереди.
+  # Проверено живыми запросами 2026-11-04.
+  # Если включите модель в консоли build.nvidia.com - добавьте алиас здесь.
+  - model_name: nvidia-minimax
+    litellm_params:
+      model: nvidia_nim/minimaxai/minimax-m3.1-flash
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
+      # NVIDIA NIM отбивает anthropic-параметры Claude Code: output_config ->
+      # 400 «Unsupported parameter(s)», thinking -> зависание. LiteLLM считает их
+      # поддерживаемыми и сам не вычищает, поэтому роняем явно.
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: nvidia-nemotron
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: nvidia-nemotron-fast
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-3.5-bolt-e4b
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: nvidia-nemotron-lightning
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: nvidia-nemotron-vl
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  # --- DeepInfra: оплаченные токены владельца ---
+  # База https://api.deepinfra.com/v1/openai, в каталоге 173 модели. Проверено
+  # живыми запросами 2026-11-04: HTTP 200 и ненулевой estimated_cost (кредиты есть).
+  #   MiniMaxAI/MiniMax-M3              → 1,7 с
+  #   zai-org/GLM-5.2                    → 2,1 с
+  #   zai-org/GLM-5.3-Flash              → 1,0 с
+  #   Qwen/Qwen3.8-27B                   → 16,8 с
+  #   Qwen/Qwen3.8-Max                   → 2,8 с
+  #   deepseek-ai/DeepSeek-V4.1-Flash    → 1,2 с
+  # DeepInfra - OpenAI-совместимый провайдер, поэтому anthropic-параметры Claude
+  # Code (output_config, thinking) не поддерживаются и роняются заранее.
+  - model_name: deepinfra-minimax
+    litellm_params:
+      model: deepinfra/MiniMaxAI/MiniMax-M3
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: deepinfra-glm
+    litellm_params:
+      model: deepinfra/zai-org/GLM-5.2
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: deepinfra-glm-fast
+    litellm_params:
+      model: deepinfra/zai-org/GLM-5.3-Flash
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: deepinfra-qwen
+    litellm_params:
+      model: deepinfra/Qwen/Qwen3.8-27B
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: deepinfra-qwen-max
+    litellm_params:
+      model: deepinfra/Qwen/Qwen3.8-Max
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  - model_name: deepinfra-deepseek
+    litellm_params:
+      model: deepinfra/deepseek-ai/DeepSeek-V4.1-Flash
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+      timeout: 120
+      additional_drop_params: ["output_config", "reasoning_effort", "effort", "thinking", "type", "budget_tokens"]
+
+  # --- Локальный Ollama: большая модель (основной локальный) ---
+  - model_name: ollama-local-qwen
+    litellm_params:
+      model: ollama_chat/zerohour/qwen3.8-27b-uncensored:iq3
+      api_base: os.environ/OLLAMA_BASE_URL
+      timeout: 300
+
+  # --- Локальный Ollama: лёгкая модель (аварийный конец цепочки) ---
   - model_name: ollama-local-coder
     litellm_params:
-      model: ollama_chat/qwen2.5:3b
+      model: ollama_chat/ministral-3:14b
       api_base: os.environ/OLLAMA_BASE_URL
+      timeout: 300
+
+  # --- Канонические имена Claude Code ---
+  # Чтобы /model opus|sonnet|haiku и внутренние быстрые вызовы Claude Code
+  # не упирались в «Invalid model name», канонические id промаплены на OpenRouter.
+  - model_name: claude-opus-4-5
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: openrouter/anthropic/claude-haiku-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  # --- Родные id семейства Claude 5.x ---
+  # Claude Code знает эти id (в его бинарнике), а OpenRouter называет их с
+  # точками — алиасы мостят одно в другое. Без них Claude Code ругается на
+  # unrecognized_model, а /model opus|sonnet|haiku не находит модель.
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-5.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-opus-5-5
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-5.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-opus-5
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-haiku-5-5
+    litellm_params:
+      model: openrouter/anthropic/claude-haiku-5.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-fable-5
+    litellm_params:
+      model: openrouter/anthropic/claude-fable-5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-fable-5-1
+    litellm_params:
+      model: openrouter/anthropic/claude-fable-5.1
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4.6
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 120
+
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-4.6
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
       timeout: 120
 
 litellm_settings:
@@ -64,13 +381,43 @@ litellm_settings:
   # Drop failed deployments out of rotation briefly so retries don't hammer them.
   allowed_fails: 2
   cooldown_time: 30
+  # Claude Code шлёт лишние параметры (thinking, metadata) — не роняем из-за них.
+  drop_params: true
+  telemetry: false
   # Fallback chains. LiteLLM triggers these on retryable provider failures:
   # 429 (rate limit), 500/502/503 (provider unavailable), timeouts, and
   # auth/quota errors (401/402/403, insufficient_quota) surfaced as API errors.
   fallbacks:
-    - openclaw-auto: ["ollama-local-qwen", "ollama-local-coder"]
-    - openrouter-fallback: ["ollama-local-qwen", "ollama-local-coder"]
+    - openclaw-auto: ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - "MiniMax-M3.1-Flash": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - "MiniMax-M3.1-Flash[1m]": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - minimax-direct: ["nvidia-minimax", "minimax-primary", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - openrouter-fallback: ["glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - glm-primary: ["deepinfra-glm", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - glm-fast: ["glm-primary", "deepinfra-glm-fast", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - minimax-primary: ["nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-minimax: ["nvidia-nemotron-fast", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron: ["nvidia-nemotron-fast", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron-fast: ["nvidia-minimax", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron-lightning: ["nvidia-nemotron-fast", "nvidia-minimax", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron-vl: ["nvidia-nemotron-fast", "nvidia-minimax", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-minimax: ["minimax-primary", "nvidia-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-glm: ["glm-primary", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-glm-fast: ["glm-primary", "deepinfra-glm", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-qwen: ["ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-qwen-max: ["deepinfra-qwen", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-deepseek: ["deepinfra-qwen-max", "ollama-local-qwen", "ollama-local-coder"]
+    - ollama-local-qwen: ["ollama-local-coder"]
     - claude-primary: ["openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-sonnet-5-5: ["openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-sonnet-5: ["openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-sonnet-4-6: ["openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-opus-5-5: ["claude-sonnet-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-opus-5: ["claude-opus-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-opus-4-6: ["claude-opus-4-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-haiku-5-5: ["openrouter-haiku", "glm-fast", "ollama-local-coder"]
+    - claude-fable-5-1: ["claude-fable-5", "claude-sonnet-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-fable-5: ["claude-sonnet-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
   # Oversized-context requests route to the big local context model.
   context_window_fallbacks:
     - openclaw-auto: ["ollama-local-qwen"]
@@ -80,9 +427,36 @@ router_settings:
   num_retries: 2
   timeout: 120
   fallbacks:
-    - openclaw-auto: ["ollama-local-qwen", "ollama-local-coder"]
-    - openrouter-fallback: ["ollama-local-qwen", "ollama-local-coder"]
+    - openclaw-auto: ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - "MiniMax-M3.1-Flash": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - "MiniMax-M3.1-Flash[1m]": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - minimax-direct: ["nvidia-minimax", "minimax-primary", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - openrouter-fallback: ["glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - glm-primary: ["deepinfra-glm", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - glm-fast: ["glm-primary", "deepinfra-glm-fast", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - minimax-primary: ["nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-minimax: ["nvidia-nemotron-fast", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron: ["nvidia-nemotron-fast", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron-fast: ["nvidia-minimax", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron-lightning: ["nvidia-nemotron-fast", "nvidia-minimax", "ollama-local-qwen", "ollama-local-coder"]
+    - nvidia-nemotron-vl: ["nvidia-nemotron-fast", "nvidia-minimax", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-minimax: ["minimax-primary", "nvidia-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-glm: ["glm-primary", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-glm-fast: ["glm-primary", "deepinfra-glm", "openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-qwen: ["ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-qwen-max: ["deepinfra-qwen", "ollama-local-qwen", "ollama-local-coder"]
+    - deepinfra-deepseek: ["deepinfra-qwen-max", "ollama-local-qwen", "ollama-local-coder"]
+    - ollama-local-qwen: ["ollama-local-coder"]
     - claude-primary: ["openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-sonnet-5-5: ["openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-sonnet-5: ["openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-sonnet-4-6: ["openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-opus-5-5: ["claude-sonnet-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-opus-5: ["claude-opus-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-opus-4-6: ["claude-opus-4-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-haiku-5-5: ["openrouter-haiku", "glm-fast", "ollama-local-coder"]
+    - claude-fable-5-1: ["claude-fable-5", "claude-sonnet-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
+    - claude-fable-5: ["claude-sonnet-5-5", "openrouter-fallback", "glm-primary", "ollama-local-qwen", "ollama-local-coder"]
 
 general_settings:
   # Master key gates /v1/* and /health. Set in .env (never committed).
