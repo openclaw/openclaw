@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android ${{ inputs.operation == 'benchmark' && 'notes/build benchmark' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'cache-benchmark' && 'Gradle cache benchmark' || inputs.operation == 'benchmark' && 'notes/build benchmark' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -14,6 +14,7 @@ on:
           - boot
           - screenshots
           - benchmark
+          - cache-benchmark
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -24,7 +25,7 @@ permissions:
 
 jobs:
   validate-target:
-    if: inputs.operation != 'benchmark'
+    if: inputs.operation != 'benchmark' && inputs.operation != 'cache-benchmark'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -794,5 +795,139 @@ jobs:
             .build/android-overlap/*/notes.log
             .build/android-overlap/*/build.log
             .build/android-overlap/*/gradle-profile/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  cache-benchmark:
+    if: inputs.operation == 'cache-benchmark'
+    permissions:
+      contents: read
+      actions: read
+    name: Cache ${{ matrix.sample }} ${{ matrix.variant }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - sample: "01"
+            variant: cold
+          - sample: "02"
+            variant: dependencies
+          - sample: "03"
+            variant: tasks
+          - sample: "04"
+            variant: tasks
+          - sample: "05"
+            variant: dependencies
+          - sample: "06"
+            variant: cold
+    steps:
+      - name: Checkout committed benchmark tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout identical release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ba3392580165f2593b9d061aa90607517694ba53
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download the successful run's frozen plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-release-recovery-42282370098-1
+          path: ${{ runner.temp }}/android-cache-plan
+          run-id: 42282370098
+          github-token: ${{ github.token }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          install-deps: "false"
+          node-version: "24.22.1"
+
+      - name: Install identical mobile release dependencies
+        working-directory: candidate
+        run: node scripts/install-mobile-release-dependencies.mjs
+
+      - name: Setup identical Android toolchain
+        id: cache-android-toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          install-screenshot-emulators: "false"
+
+      - name: Start complete cache and build timing
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$TARGET_SHA" = ba3392580165f2593b9d061aa90607517694ba53
+          test ! -e "$HOME/.gradle/caches"
+          test ! -e "$HOME/.gradle/wrapper"
+          echo "ANDROID_CACHE_BENCHMARK_HOME=$HOME/.gradle" >>"$GITHUB_ENV"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import path from "node:path";
+            fs.writeFileSync(
+              path.join(process.env.RUNNER_TEMP, "android-cache-window.json"),
+              JSON.stringify({ startedAt: new Date().toISOString() }),
+            );
+          '
+
+      - name: Restore the existing main Gradle archive
+        if: matrix.variant != 'cold'
+        id: existing-gradle-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.ANDROID_CACHE_BENCHMARK_HOME }}/caches
+            ${{ env.ANDROID_CACHE_BENCHMARK_HOME }}/wrapper
+          key: setup-java-Linux-x64-gradle-194efd598202594ca8e871c54cebb3f156984f9bfacda95bdca1f69575a0ab65
+          fail-on-cache-miss: true
+
+      - name: Compare Gradle cache reuse without publishing
+        env:
+          JAVA_HOME: ${{ steps.cache-android-toolchain.outputs.gradle-java-home }}
+          EXISTING_GRADLE_CACHE_HIT: ${{ steps.existing-gradle-cache.outputs.cache-hit }}
+        run: >-
+          node scripts/bench-android-gradle-cache.mjs
+          --source candidate
+          --source-sha ba3392580165f2593b9d061aa90607517694ba53
+          --plan "$RUNNER_TEMP/android-cache-plan/android-plan.json"
+          --variant "${{ matrix.variant }}"
+          --window-start "$RUNNER_TEMP/android-cache-window.json"
+          --output ".build/android-cache/${{ matrix.sample }}-${{ matrix.variant }}"
+
+      - name: Measure one-time cache population cost
+        if: matrix.sample == '04' && success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.ANDROID_CACHE_BENCHMARK_HOME }}/caches
+            ${{ env.ANDROID_CACHE_BENCHMARK_HOME }}/wrapper
+          key: android-gradle-cache-benchmark-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Retain cache timing and resource evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-cache-${{ matrix.sample }}-${{ matrix.variant }}-${{ github.run_id }}
+          path: |
+            .build/android-cache/*/result.json
+            .build/android-cache/*/resources.json
+            .build/android-cache/*/preflight.log
+            .build/android-cache/*/build.log
+            .build/android-cache/*/gradle-profile/**
           if-no-files-found: warn
           retention-days: 7
