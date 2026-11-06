@@ -588,6 +588,7 @@ export async function attachAuthenticatedGatewayConnect(
       `mode=${connectParams.client.mode} role=${role} auth=${authMethod}`,
       `version=${formatPeerTextForLog(connectParams.client.version)} platform=${formatPeerTextForLog(connectParams.client.platform)}`,
       `build=${formatPeerTextForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
+      `locality=${pairingLocality}`,
       authenticatedUserId ? `user=${formatForLog(authenticatedUserId)}` : undefined,
     ]
       .filter(Boolean)
