@@ -335,13 +335,6 @@
   width: fit-content;
 }
 
-.model-providers__help-button {
-  width: 16px;
-  height: 16px;
-  border: 0;
-  border-radius: 0;
-}
-
 .model-providers__help-button:hover,
 .model-providers__help-button:focus-visible {
   color: var(--text);
@@ -623,8 +616,6 @@
   padding: var(--list-row-padding);
   border: 0;
   background: transparent;
-  color: inherit;
-  font: inherit;
   text-align: start;
   cursor: default;
   box-shadow: inset 2px 0 0 var(--oc-chart-color, transparent);
@@ -663,14 +654,8 @@
 
 .provider-row__meta {
   overflow: hidden;
-  color: var(--oc-text-muted);
-  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.provider-row__meta-part:empty {
-  display: none;
 }
 
 .provider-row__meta-part:not(:empty) ~ .provider-row__meta-part:not(:empty)::before {
