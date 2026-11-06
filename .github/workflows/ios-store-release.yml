@@ -1,23 +1,11 @@
 name: iOS Store Release
 
-run-name: Unsigned archive cache probe (${{ inputs.probe_mode }})
+run-name: Signed archive cache campaign
 
-# Temporary diagnostic branch only. This workflow has no signing, release,
-# qualification, export, or upload steps. Never merge this replacement.
+# Temporary diagnostic branch only: signed archives and exports, with no
+# Store/TestFlight uploads or staging. Never merge this workflow replacement.
 on:
   workflow_dispatch:
-    inputs:
-      probe_mode:
-        description: Produce a cold cache or consume it on a fresh runner
-        type: choice
-        default: producer
-        options:
-          - producer
-          - consumer
-      producer_run_id:
-        description: Exact producer run ID (required for consumer)
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -28,13 +16,13 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PROBE_MODE: ${{ inputs.probe_mode }}
 
 jobs:
   archive-cache-probe:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw'
     runs-on: xcode-27-xlarge
-    timeout-minutes: 60
+    timeout-minutes: 120
+    environment: ios-store-release
     steps:
       - name: Reserve host CPU for archive probe
         run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
@@ -71,21 +59,66 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Identify probe cache
-        id: cache-inputs
-        env:
-          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        with:
+          ruby-version: "4.0.7"
+          bundler: "4.0.23"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/ios
         run: |
           set -euo pipefail
-          producer="$GITHUB_RUN_ID"
-          if [[ "$PROBE_MODE" == consumer ]]; then
-            [[ "$PRODUCER_RUN_ID" =~ ^[0-9]+$ ]] || exit 2
-            producer="$PRODUCER_RUN_ID"
-          fi
+          bundle _4.0.23_ install --jobs 4 --retry 3
+          bundle _4.0.23_ check
+
+      - name: Identify probe cache
+        id: cache-inputs
+        run: |
+          set -euo pipefail
           xcode="$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)"
           echo "xcode=$xcode" >> "$GITHUB_OUTPUT"
-          echo "key=ios-archive-cas-probe-v1-$GITHUB_SHA-$xcode-$producer" >> "$GITHUB_OUTPUT"
+          echo "key=ios-signed-archive-cas-campaign-v1-$GITHUB_SHA-$xcode-$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-release-libraries" >> "$GITHUB_ENV"
+
+      - name: Create readonly signing token
+        id: signing-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: apps-signing
+          permission-contents: read
+
+      - name: Checkout encrypted signing assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/apps-signing
+          ref: main
+          path: apps/ios/build/release-signing/apps-signing
+          token: ${{ steps.signing-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Route readonly signing to approved assets
+        run: |
+          set -euo pipefail
+          signing_repo="file://${GITHUB_WORKSPACE}/apps/ios/build/release-signing/apps-signing/"
+          git config --global url."${signing_repo}".insteadOf git@github.com:openclaw/apps-signing.git
+
+      - name: Create job-owned signing keychain
+        uses: ./.github/actions/ios-signing-keychain
+
+      - name: Validate readonly signing access
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source ./scripts/lib/ios-fastlane.sh
+          (cd apps/ios && run_ios_fastlane ios signing_check)
+          node .github/actions/ios-signing-keychain/keychain.mjs probe
 
       - name: Restore verified Watch RTC release libraries
         continue-on-error: true
@@ -105,30 +138,23 @@ jobs:
           path: apps/ios/build/SourcePackages
           key: ios-source-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
-      - name: Prepare canonical release inputs and warm device RTC
+      - name: Warm verified Watch device libraries
         run: node scripts/ios-archive-cache-probe.mjs prepare
 
-      - name: Archive with an empty compilation cache
-        run: node scripts/ios-archive-cache-probe.mjs cold
+      - name: Produce cold signed seed (excluded from warm statistics)
+        run: node scripts/ios-archive-cache-probe.mjs seed
 
-      - name: Save finished producer CAS through GitHub
-        if: inputs.probe_mode == 'producer'
+      - name: Save immutable signed seed CAS
         timeout-minutes: 5
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ios-archive-cache-probe/cache
           key: ${{ steps.cache-inputs.outputs.key }}
 
-      - name: Rematerialize source at the canonical paths
-        if: inputs.probe_mode == 'consumer'
-        run: |
-          set -euo pipefail
-          test -z "$(git status --porcelain)"
-          git checkout-index --all --force
-          node scripts/ios-archive-cache-probe.mjs prepare
+      - name: Baseline 1 - signed archive with caching disabled
+        run: node scripts/ios-archive-cache-probe.mjs baseline 1
 
-      - name: Restore exact producer CAS through GitHub
-        if: inputs.probe_mode == 'consumer'
+      - name: Restore immutable seed CAS for candidate 1
         timeout-minutes: 5
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -136,9 +162,67 @@ jobs:
           key: ${{ steps.cache-inputs.outputs.key }}
           fail-on-cache-miss: true
 
-      - name: Archive from restored CAS and compare executables
-        if: inputs.probe_mode == 'consumer'
-        run: node scripts/ios-archive-cache-probe.mjs candidate
+      - name: Candidate 1 - signed archive with changed metadata
+        run: node scripts/ios-archive-cache-probe.mjs candidate 1
+
+      - name: Baseline 2 - signed archive with caching disabled
+        run: node scripts/ios-archive-cache-probe.mjs baseline 2
+
+      - name: Restore immutable seed CAS for candidate 2
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
+          key: ${{ steps.cache-inputs.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Candidate 2 - signed archive with changed metadata
+        run: node scripts/ios-archive-cache-probe.mjs candidate 2
+
+      - name: Baseline 3 - signed archive with caching disabled
+        run: node scripts/ios-archive-cache-probe.mjs baseline 3
+
+      - name: Restore immutable seed CAS for candidate 3
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
+          key: ${{ steps.cache-inputs.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Candidate 3 - signed archive with changed metadata
+        run: node scripts/ios-archive-cache-probe.mjs candidate 3
+
+      - name: Baseline 4 - signed archive with caching disabled
+        run: node scripts/ios-archive-cache-probe.mjs baseline 4
+
+      - name: Restore immutable seed CAS for candidate 4
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
+          key: ${{ steps.cache-inputs.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Candidate 4 - signed archive with changed metadata
+        run: node scripts/ios-archive-cache-probe.mjs candidate 4
+
+      - name: Baseline 5 - signed archive with caching disabled
+        run: node scripts/ios-archive-cache-probe.mjs baseline 5
+
+      - name: Restore immutable seed CAS for candidate 5
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ios-archive-cache-probe/cache
+          key: ${{ steps.cache-inputs.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Candidate 5 - signed archive with changed metadata
+        run: node scripts/ios-archive-cache-probe.mjs candidate 5
+
+      - name: Summarize five interleaved pairs
+        run: node scripts/ios-archive-cache-probe.mjs report
 
       - name: Retain archive probe evidence
         if: always()
@@ -146,6 +230,8 @@ jobs:
         with:
           name: ios-archive-cache-probe-${{ github.run_id }}
           path: |
+            ${{ runner.temp }}/ios-archive-cache-probe/report.json
+            ${{ runner.temp }}/ios-archive-cache-probe/*/time.txt
             ${{ runner.temp }}/ios-archive-cache-probe/*/run.json
             ${{ runner.temp }}/ios-archive-cache-probe/*/summary.json
             ${{ runner.temp }}/ios-archive-cache-probe/*/comparison.json
