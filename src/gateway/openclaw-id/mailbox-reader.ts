@@ -52,6 +52,14 @@ export async function applyMailboxMessage(
       detail: `mailbox kind ${payload.kind} is not for the Gateway`,
     });
   } else if (payload.kind === "invite_redemption") {
+    if (message.from.account_id === null) {
+      await record({
+        ok: false,
+        code: "audience_mismatch",
+        detail: "redeeming account is not the invite audience",
+      });
+      return results;
+    }
     await record(
       await sink.redeem(payload.redemption, {
         account_id: message.from.account_id,

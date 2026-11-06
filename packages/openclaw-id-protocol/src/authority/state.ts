@@ -6,6 +6,8 @@ import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.
 import type {
   OwnerCapability,
   InviteCapBody,
+  NodeInviteCapBody,
+  NodeRedemptionBody,
   MemberRole,
   MembershipSnapshotBody,
   OwnerDeviceCertBody,
@@ -79,6 +81,25 @@ export type InviteRecord = {
   created_by?: OwnerApprover;
 };
 
+/** An admitted node; it has no account, role, owner capabilities or approval descendants. */
+export type NodeRecord = {
+  label: string;
+  listed_seq: number;
+  added_by: OwnerApprover;
+  /** Last authenticated tunnel activity/admission (or initial approval). */
+  last_seen: UnixSeconds;
+  invite_id: string;
+};
+
+/** Separate invite class; member proofs can never redeem it. */
+export type NodeInviteRecord = {
+  cap: NodeInviteCapBody;
+  proof_key: string;
+  status: "open" | "pending" | "consumed";
+  pending: Pick<NodeRedemptionBody, "peer_key" | "requested_at"> | null;
+  created_by: OwnerApprover;
+};
+
 /** The Gateway's membership state for one claw. */
 export type AuthorityState = {
   claw_id: string;
@@ -90,12 +111,15 @@ export type AuthorityState = {
   owner_devices: Record<KeyFingerprint, OwnerDeviceRecord>;
   members: Record<string, MemberRecord>;
   invites: Record<string, InviteRecord>;
+  nodes: Record<IrohEndpointKey, NodeRecord>;
+  node_invites: Record<string, NodeInviteRecord>;
 };
 
 /** Side effects the Gateway must perform after a write. */
 export type AuthorityEvent =
   | { type: "disconnect"; peer_keys: IrohEndpointKey[] }
   | { type: "invalidate_tokens"; peer_keys: IrohEndpointKey[] }
+  | { type: "remove_node_pairings"; peer_keys: IrohEndpointKey[] }
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
@@ -182,6 +206,8 @@ export function linkClaw(
       owner_devices: {},
       members: {},
       invites: {},
+      nodes: {},
+      node_invites: {},
     },
   };
 }
@@ -233,12 +259,20 @@ export function isAdmitted(
   peerKey: IrohEndpointKey,
   now: UnixSeconds,
 ): boolean {
+  if (isNode(state, peerKey)) {
+    return true;
+  }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
     return true;
   }
   return activeOwnerDevices(state, now).some((record) =>
     record.cert.body.peer_keys.includes(peerKey),
   );
+}
+
+/** Whether an admitted W has only node authority (Gateway builds a node principal). */
+export function isNode(state: AuthorityState, peerKey: IrohEndpointKey): boolean {
+  return state.nodes[peerKey] !== undefined;
 }
 
 /** The snapshot body the Gateway signs with K_gw and publishes to Discovery: current state only. */
@@ -261,6 +295,8 @@ export function snapshotBody(
     owner_peer_keys: [
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
+    // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
+    node_peer_keys: Object.keys(state.nodes).toSorted() as IrohEndpointKey[],
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,
