@@ -199,19 +199,16 @@ it.each([
         const invocation = registry.invoke({
           nodeId: "legacy-node",
           command: "system.run",
-          timeoutMs: 0,
+          timeoutMs: 1,
           params: { runId, sessionKey },
           turnSource: source,
         });
-        const request = JSON.parse(frames[0]!).payload;
-        registry.handleInvokeResult({
-          id: request.id,
-          nodeId: "legacy-node",
-          connId: "legacy-conn",
-          ok: true,
-          payloadJSON: JSON.stringify({ exitCode: 0, stdout: marker, durationMs: 267 }),
+        // A successful inline result already belongs to its waiting caller and suppresses
+        // duplicate notices. Exercise a late completion whose caller timed out instead.
+        await expect(invocation).resolves.toMatchObject({
+          ok: false,
+          error: { code: "TIMEOUT" },
         });
-        await invocation;
         const unexpected = () => {
           throw new Error("Unexpected non-exec node event effect");
         };
