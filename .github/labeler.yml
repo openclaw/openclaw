@@ -551,6 +551,10 @@
       - any-glob-to-any-file:
           - "extensions/web-readability/**"
           - "docs/plugins/reference/web-readability.md"
+"extensions: deep-research":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deep-research/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:
