@@ -1,5 +1,6 @@
-457
+565
 # Exact net test LF growth against ffbbb514ba3b7d06d59ca8dd11521e100335da4d.
 # Durable/incognito persistence, requester-scoped board reconstruction, escaped
-# large payload restoration, and real-Gateway expiry proof reuse existing owners.
+# large payload restoration, mounted expiry recovery/Retry, delayed-authority
+# retirement, and real-Gateway expiry proof reuse existing owners.
 # This allocates only this fix; the inherited 86-line debt remains visible.

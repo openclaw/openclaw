@@ -1,7 +1,6 @@
 import { PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
@@ -16,6 +15,7 @@ import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
   buildMcpAppFrameHostContext,
+  closeMcpAppFrame,
   loadMcpAppSandbox,
   waitForMcpAppHandlerRegistration,
   waitForMcpAppInitialization,
@@ -42,8 +42,6 @@ import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 registerMcpAppEnglish();
 
-const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
-
 /** Owns synchronous frame/protocol admission; the view observes its publications. */
 export function createMcpAppView(
   host: McpAppViewElement,
@@ -55,6 +53,7 @@ export function createMcpAppView(
   let errorState: unknown = null;
   let mountElement: HTMLDivElement | undefined;
   let activeResources: McpAppResources | null = null;
+  let readableFrame: HTMLIFrameElement | null = null;
   let teardownPromise: Promise<void> | null = null;
   let setupAbort: AbortController | undefined;
   let requestAbort = new AbortController();
@@ -107,7 +106,10 @@ export function createMcpAppView(
     const reconnectSetup = reconnectSetupPending && !retired;
     reconnectSetupPending = false;
     if (bindingChanged || reconnectSetup) {
-      void setup(currentBinding(nextBinding));
+      void setup(
+        currentBinding(nextBinding),
+        reconnectSetup && !bindingChanged && readableFrame !== null,
+      );
     }
     if (titleInput !== host.title) {
       titleInput = host.title;
@@ -189,11 +191,15 @@ export function createMcpAppView(
       }
     }
   }
-  async function setup(binding: McpAppBinding | null) {
+  async function setup(binding: McpAppBinding | null, retainReadable = false) {
     if (disposed) {
       return;
     }
     retired = false;
+    if (!retainReadable) {
+      readableFrame?.remove();
+      readableFrame = null;
+    }
     setupAbort?.abort();
     const abort = new AbortController();
     setupAbort = abort;
@@ -202,7 +208,9 @@ export function createMcpAppView(
     try {
       await teardownResources(activeResources);
       abort.signal.throwIfAborted();
-      setInactive(null);
+      if (!retainReadable) {
+        setInactive(null);
+      }
       if (!host.sessionKey || !host.viewId) {
         return;
       }
@@ -305,6 +313,12 @@ export function createMcpAppView(
         host.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
         );
+        if (method !== "mcp.app.view" && activeResources && !activeResources.disposed) {
+          // Keep the rendered content, not its expired bridge authority. Recovery
+          // asks the Gateway for a fresh authorized payload; never replay the RPC.
+          readableFrame = activeResources.iframe;
+          void setup(binding, true);
+        }
       }
       throw error;
     }
@@ -325,25 +339,11 @@ export function createMcpAppView(
       return;
     }
     resources.disposed = true;
+    const retainFrame = resources.iframe === readableFrame;
     if (activeResources === resources) {
       activeResources = null;
     }
-    for (const cleanup of resources.cleanups) {
-      resources.cleanups.delete(cleanup);
-      cleanup();
-    }
-    const teardownWork = (async () => {
-      if (resources.bridge) {
-        await raceWithTimeout(
-          resources.bridge.teardownResource({}).catch(() => undefined),
-          MCP_APP_TEARDOWN_TIMEOUT_MS,
-          () => undefined,
-        );
-      }
-      resources.requestAbort.abort();
-      await resources.transport?.close().catch(() => undefined);
-      resources.iframe.remove();
-    })();
+    const teardownWork = closeMcpAppFrame(resources, retainFrame);
     teardownPromise = teardownWork;
     try {
       await teardownWork;
@@ -357,6 +357,8 @@ export function createMcpAppView(
   /** Parent render owners await this before removing the connected view. */
   async function teardown() {
     retired = true;
+    readableFrame?.remove();
+    readableFrame = null;
     bindingInputs = readBindingInputs();
     reconnectSetupPending = false;
     setupAbort?.abort();
@@ -416,12 +418,15 @@ export function createMcpAppView(
       const payload = await requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, signal);
       const mount = mountElement;
       signal.throwIfAborted();
-      setInactive(payload.messageSupported === false ? "reconstructed" : null);
+      if (!readableFrame) {
+        setInactive(payload.messageSupported === false ? "reconstructed" : null);
+      }
       if (!mount) {
         throw new Error(translate("mcpApp.errors.mountUnavailable"));
       }
       const iframe = document.createElement("iframe");
       iframe.title = host.title || translate("mcpApp.title");
+      iframe.hidden = readableFrame !== null;
       // The isolated proxy binds its parent before accepting messages. Only the
       // Control UI origin is disclosed; path/query data remains suppressed.
       iframe.referrerPolicy = "origin";
@@ -702,6 +707,10 @@ export function createMcpAppView(
       });
       await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
+      readableFrame?.remove();
+      readableFrame = null;
+      iframe.hidden = false;
+      setInactive(payload.messageSupported === false ? "reconstructed" : null);
     } catch (error) {
       await teardownResources(resources);
       throw error;
@@ -712,11 +721,10 @@ export function createMcpAppView(
     start,
     dispose,
     inputChanged,
-    setup,
-    currentBinding,
+    retry: () => setup(currentBinding(), readableFrame !== null),
     teardown,
     restartAfterTeardown,
-    read: () => ({ inactive, error: errorState }),
+    read: () => ({ inactive, error: errorState, readable: readableFrame !== null }),
     setMount: (element: HTMLDivElement) => {
       mountElement = element;
     },

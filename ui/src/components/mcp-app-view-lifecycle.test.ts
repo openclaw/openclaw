@@ -1,3 +1,4 @@
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol/gateway-error-details";
 import { flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -76,6 +77,50 @@ it.each(["user", "generation", "access", "binding"] as const)(
     if (change === "access") {
       expect(view.querySelector(".error")?.textContent).toContain("Couldn’t connect this app.");
     }
+  },
+);
+
+it.each(["user", "generation", "access", "binding"] as const)(
+  "retires readable expiry fallback and delayed recovery on %s change",
+  async (change) => {
+    const { view, frame, bridge, request, gateway, publish } = await mountBridge("view-recovering");
+    const delayed = deferred<unknown>();
+    const payload = await request.mock.results[0]!.value;
+    request
+      .mockRejectedValueOnce(
+        Object.assign(new Error("expired"), {
+          details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+        }),
+      )
+      .mockReturnValueOnce(delayed.promise);
+    await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
+      "expired",
+    );
+    await waitForSolid(() => expect(viewCalls(request)).toHaveLength(2));
+    const signal = viewCalls(request)[1]![2]!.signal!;
+    expect(frame.isConnected).toBe(true);
+    if (change === "user") {
+      gateway.snapshot.selfUser = { id: "one", name: "One" };
+      publish(gateway.snapshot);
+      flush();
+      gateway.snapshot.selfUser = { id: "two", name: "Two" };
+    } else if (change === "generation") {
+      Object.defineProperty(gateway, "connectionRevision", {
+        value: gateway.connectionRevision + 1,
+      });
+    } else if (change === "access") {
+      gateway.snapshot.hello!.auth!.scopes = [];
+    } else {
+      Object.assign(view, replacement);
+    }
+    publish(gateway.snapshot);
+    await waitForSolid(() => expect(frame.isConnected).toBe(false));
+    expect(signal.aborted).toBe(true);
+    const frames = [...view.querySelectorAll("iframe")];
+    delayed.resolve(payload);
+    await view.updateComplete;
+    expect([...view.querySelectorAll("iframe")]).toEqual(frames);
+    expect(viewCalls(request)).toHaveLength(change === "access" ? 2 : 3);
   },
 );
 

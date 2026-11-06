@@ -800,7 +800,7 @@ suite.define(() => {
     });
   }, 240_000);
 
-  it("restores expired inline content on return without replaying the tool", async (context) => {
+  it("recovers expired inline content with readable Retry and on return without replaying the tool", async (context) => {
     await suite.runScenario(context, {
       run: async () => {
         await configureImmediate("expiry-restoration");
@@ -815,6 +815,29 @@ suite.define(() => {
         // Controlled lease deadline; production keeps its ten-minute TTL.
         viewLease().expiresAtMs = Date.now() - 1;
         expect(getMcpAppViewLease(viewId, runtime)).toBeUndefined();
+        // A failed sandbox response must not erase the already rendered document.
+        // This faults real network I/O, not Gateway authorization or saved data.
+        const sandboxRoute = "**/mcp-app-sandbox?*";
+        await page.route(sandboxRoute, (route) => route.abort("failed"));
+        await app.locator("#update-context").click();
+        const replacementFrame = page.locator("mcp-app-view iframe[hidden]");
+        await expect.poll(() => replacementFrame.count()).toBe(1);
+        expect(await replacementFrame.isVisible()).toBe(false);
+        await expect
+          .poll(() => page.locator("mcp-app-view .error").textContent(), {
+            timeout: 25_000,
+          })
+          .toContain("Try again");
+        expect(app.isDetached()).toBe(false);
+        await waitForText(app.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-readable-retry");
+        await page.unroute(sandboxRoute);
+        await page.locator("mcp-app-view .error button").click();
+        await expect.poll(() => app.isDetached()).toBe(true);
+        const recoveredApp = await findAppFrame(page);
+        await waitForTextContaining(recoveredApp.locator("#result"), "initial-result");
+        await waitForText(recoveredApp.locator("#checkpoint"), "synthetic-checkpoint");
+        await capture(page, "expiry-reconnected");
         await mountHost(page);
         await expect
           .poll(() => page.locator("mcp-app-view").textContent())
