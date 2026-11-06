@@ -276,6 +276,7 @@ export class ResearchJobs {
     context: ResearchExecution,
     parentSignal?: AbortSignal,
     progress: (message: string) => void = () => {},
+    explicitResume = false,
   ) {
     let job = initialJob;
     if (terminal(job) || this.active.has(job.id)) {
@@ -289,7 +290,10 @@ export class ResearchJobs {
       }
       return {
         ...job,
-        progress: "Four research invocations are active; this job remains queued.",
+        progress:
+          explicitResume && job.recovery === "deferred"
+            ? "Four research invocations are active; retry resume when capacity is available."
+            : "Four research invocations are active; this job remains queued.",
       };
     }
     const cancel = new AbortController();
@@ -407,6 +411,15 @@ export class ResearchJobs {
         (await this.state.open<boolean>("cancellations", context, assertCurrent).lookup(job.id)) ??
         job.cancelRequested ??
         false;
+      if (explicitResume && job.recovery === "deferred" && !job.cancelRequested) {
+        // Only a fresh user request renews exhausted automatic recovery; a wake
+        // or restored role alone must never re-arm a deferred operation.
+        job.recovery = "ready";
+        job.wakeFailures = 0;
+        job.pollFailures = 0;
+        job.nextWakeAt = this.scheduler.now();
+        await save();
+      }
       if (job.request.engine === "google") {
         const client = managedClient(this.api, context, {
           dispatched: () => {

@@ -20,6 +20,81 @@ const fixture = (options: Parameters<typeof createResearchJobsFixture>[0] = {}) 
   createResearchJobsFixture(options, (close) => cleanup.push(close));
 
 describe("durable research wakes", () => {
+  it.each([true, false])("re-arms an explicit resume (retained handle: %s)", async (hasHandle) => {
+    const clock = createGatewaySchedulerClock(100);
+    const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:research-fixture",
+      sessionId: "generation-1",
+    };
+    const sessionWork: PluginServiceSessionWorkV1 = {
+      version: 1,
+      admit: async () => ({ recoverable: true, target }),
+      run: async (_id, work) => ({
+        status: "completed",
+        value: await work({ target, signal: scheduler.signal, assertCurrent() {} }),
+      }),
+    };
+    const { jobs, runtime, context, readStore, tool } = await fixture({ scheduler, sessionWork });
+    let phase = "accept";
+    let starts = 0;
+    const actions: string[] = [];
+    vi.mocked(runtime.gateway.request).mockImplementation(async (_method, params) => {
+      assert.ok(params);
+      const request = params.request as { action: string };
+      actions.push(request.action);
+      if (request.action === "describe") {
+        return !hasHandle && phase === "accept"
+          ? { version: 1, ok: false, state: "blocked", reason: "Not dispatched" }
+          : descriptor;
+      }
+      if (request.action === "start") {
+        starts++;
+      }
+      return phase === "automatic"
+        ? completed
+        : { version: 1, ok: true, value: { state: "running", handle, citations: [] } };
+    });
+    const accepted = await jobs.start(
+      { question: "Retained provider job", engine: "google" },
+      "tool-resume",
+      context,
+    );
+    await readStore().register(accepted.id, {
+      ...accepted,
+      state: "paused",
+      recovery: "deferred",
+      wakeFailures: 5,
+      pollFailures: 5,
+      deadlineAt: 12_345,
+    });
+    phase = "manual";
+    actions.length = 0;
+    await tool.execute("resume", { action: "resume", jobId: accepted.id });
+    expect(actions).toEqual(hasHandle ? ["poll"] : ["describe", "start", "poll"]);
+    expect(await readStore().lookup(accepted.id)).toMatchObject({
+      state: "paused",
+      recovery: "ready",
+      wakeFailures: 0,
+      nextWakeAt: 5100,
+      deadlineAt: 12_345,
+      cancelRequested: false,
+      handle,
+    });
+    const wakes = runtime.state.openKeyedStoreV2({
+      namespace: "research-wakes-v1",
+      maxEntries: 4096,
+      overflowPolicy: "reject-new",
+    });
+    expect(await wakes.lookup(accepted.id)).toMatchObject({ nextWakeAt: 5100 });
+    phase = "automatic";
+    await clock.advanceBy(5000);
+    expect((await readStore().lookup(accepted.id))?.state).toBe("completed");
+    expect(await wakes.count()).toBe(0);
+    expect(starts).toBe(1);
+  });
+
   it.each(["unavailable", "missing", "terminal", "deferred"] as const)(
     "retires an obsolete wake without provider effects: %s",
     async (condition) => {
