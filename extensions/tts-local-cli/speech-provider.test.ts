@@ -31,7 +31,10 @@ const EMPTY_ID3V2_HEADER = [...Buffer.from("ID3"), 0x04, 0x00, 0x00, 0x00, 0x00,
 const EMPTY_ID3V24_HEADER_WITH_FOOTER = EMPTY_ID3V2_HEADER.with(5, 0x10);
 const EMPTY_ID3V24_FOOTER = [...Buffer.from("3DI"), ...EMPTY_ID3V24_HEADER_WITH_FOOTER.slice(3)];
 
-function createCliFixture(audio?: readonly number[]): string {
+function createCliFixture(
+  audio?: readonly number[],
+  options: { format?: "wav" | "mp3"; captureContext?: boolean } = {},
+): string {
   const dir = tempDirs.make("openclaw-cli-tts-test-");
   const script = path.join(dir, "write-audio.mjs");
   writeFileSync(
@@ -50,10 +53,19 @@ const stdin = await new Promise((resolve) => {
   process.stdin.on("end", () => resolve(data));
 });
 const payload = Buffer.concat([
-  Buffer.from("RIFF"),
-  Buffer.alloc(4),
-  Buffer.from("WAVE"),
-  Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg })),
+  ${
+    options.format === "mp3"
+      ? `Buffer.from(${JSON.stringify(VALID_MPEG_FRAME_HEADER)})`
+      : 'Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVE")])'
+  },
+  Buffer.from(JSON.stringify({
+    args: process.argv.slice(2), stdin, textArg,
+    ${
+      options.captureContext
+        ? "cwd: process.cwd(), commandContext: process.env.OPENCLAW_TTS_TEST_COMMAND_CONTEXT ?? null,"
+        : ""
+    }
+  })),
 ]);
 const audio = ${audio ? `Buffer.from(${JSON.stringify(audio)})` : "payload"};
 if (outputPath) {
@@ -110,6 +122,8 @@ function parseAudioPayload(result: { audioBuffer: Buffer }) {
     args: string[];
     stdin?: string;
     textArg?: string;
+    cwd?: string;
+    commandContext?: string | null;
   };
 }
 
@@ -166,6 +180,257 @@ describe("buildCliSpeechProvider", () => {
 
   it("advertises the existing command timeout as its provider default", () => {
     expect(buildCliSpeechProvider().defaultTimeoutMs).toBe(120_000);
+  });
+
+  it("lists the voices declared in provider config", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x", voices: ["af_jessica", "af_bella"] },
+    });
+
+    expect(voices).toEqual([
+      { id: "af_jessica", name: "af_jessica" },
+      { id: "af_bella", name: "af_bella" },
+    ]);
+  });
+
+  it("falls back to the selected voice when no list is declared", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x", voiceId: "af_jessica" },
+    });
+
+    expect(voices).toEqual([{ id: "af_jessica", name: "af_jessica" }]);
+  });
+
+  it("reports an empty voice list instead of failing when none are configured", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x" },
+    });
+
+    expect(voices).toEqual([]);
+  });
+
+  it("ignores a voices list that is not all strings", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: TEST_CFG,
+      providerConfig: { command: "x", voices: ["af_jessica", 7] },
+    });
+
+    expect(voices).toEqual([]);
+  });
+
+  it("templates the selected voice id into command args", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+        voices: ["af_jessica", "af_bella"],
+        voiceId: "af_bella",
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "af_bella"]);
+  });
+
+  it("templates the first declared voice when none is selected", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+        voices: ["af_jessica", "af_bella"],
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "af_jessica"]);
+  });
+
+  it("uses a selected voice that the declared list omits", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+        voices: ["af_jessica"],
+        voiceId: "am_michael",
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "am_michael"]);
+  });
+
+  it("keeps base executable settings when Talk supplies only a voice", () => {
+    const provider = buildCliSpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: {
+            "tts-local-cli": {
+              command: "/usr/local/bin/my-tts --voice {{VoiceId}}",
+              args: ["{{OutputPath}}"],
+              outputFormat: "wav",
+              voices: ["af_jessica", "af_bella"],
+              voiceId: "af_jessica",
+            },
+          },
+        },
+        talkProviderConfig: { voiceId: "af_bella" },
+        timeoutMs: 1000,
+      }),
+    ).toMatchObject({
+      command: "/usr/local/bin/my-tts --voice {{VoiceId}}",
+      args: ["{{OutputPath}}"],
+      outputFormat: "wav",
+      voices: ["af_jessica", "af_bella"],
+      voiceId: "af_bella",
+    });
+  });
+
+  it("ignores blank Talk overrides rather than clobbering the executable", () => {
+    const provider = buildCliSpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: { "tts-local-cli": { command: "real-command", outputFormat: "wav" } },
+        },
+        talkProviderConfig: { command: "   ", voiceId: "af_bella" },
+        timeoutMs: 1000,
+      }),
+    ).toMatchObject({ command: "real-command", voiceId: "af_bella" });
+  });
+
+  it("keeps a pre-existing full Talk record working when TTS has no CLI block", () => {
+    // Before Talk merging existed, a Talk record had to carry the executable itself.
+    const talkProviderConfig = {
+      command: "/usr/local/bin/talk-tts",
+      args: ["--out", "{{OutputPath}}"],
+      outputFormat: "wav",
+    };
+
+    expect(
+      buildCliSpeechProvider().resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {},
+        talkProviderConfig,
+        timeoutMs: 1000,
+      }),
+    ).toEqual(talkProviderConfig);
+  });
+
+  it.each(["wav", "mp3"] as const)(
+    "keeps an independent Talk command's arguments and context for %s output",
+    async (format) => {
+      const script = createCliFixture(undefined, { format, captureContext: true });
+      const ttsCwd = tempDirs.make("openclaw-tts-command-context-");
+      const providerConfig = buildCliSpeechProvider().resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: {
+            "tts-local-cli": {
+              command: "unused-tts-command",
+              args: ["--text", "{{Text}}"],
+              outputFormat: "wav",
+              cwd: ttsCwd,
+              env: { OPENCLAW_TTS_TEST_COMMAND_CONTEXT: "tts-only" },
+              voices: ["af_jessica", "af_bella"],
+            },
+          },
+        },
+        talkProviderConfig: {
+          command: `"${process.execPath}" "${script}"`,
+          ...(format === "wav" ? { outputFormat: "wav" } : {}),
+        },
+        timeoutMs: 1000,
+      });
+
+      const result = await synthesize(providerConfig ?? {});
+
+      expect(result.outputFormat).toBe(format);
+      expect(parseAudioPayload(result)).toEqual({
+        args: [],
+        stdin: "hello world",
+        textArg: "",
+        cwd: process.cwd(),
+        commandContext: process.env.OPENCLAW_TTS_TEST_COMMAND_CONTEXT ?? null,
+      });
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+      expect(providerConfig).toMatchObject({ voices: ["af_jessica", "af_bella"] });
+    },
+  );
+
+  it("lets a Talk selection beat a speaker alias inherited from the TTS default", async () => {
+    const script = createCliFixture();
+    const resolved = buildCliSpeechProvider().resolveTalkConfig?.({
+      cfg: TEST_CFG,
+      // Core normalizes the base record before Talk resolution, so the TTS
+      // default arrives with `speakerVoiceId`, which outranks `voiceId`.
+      baseTtsConfig: {
+        providers: {
+          "tts-local-cli": {
+            ...baseProviderConfig(script, {
+              args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+            }),
+            voices: ["af_jessica", "af_bella"],
+            voiceId: "af_jessica",
+            speakerVoiceId: "af_jessica",
+          },
+        },
+      },
+      talkProviderConfig: { voiceId: "af_bella" },
+      timeoutMs: 1000,
+    });
+
+    expect(resolved).toMatchObject({ voiceId: "af_bella" });
+    expect(resolved).not.toHaveProperty("speakerVoiceId");
+    const result = await synthesize(resolved ?? {});
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "af_bella"]);
+  });
+
+  it("keeps the TTS catalog when a Talk record declares its own voices", async () => {
+    const provider = buildCliSpeechProvider();
+    const ttsProviderConfig = { command: "x", voices: ["af_jessica", "af_bella"] };
+
+    const resolved = provider.resolveTalkConfig?.({
+      cfg: TEST_CFG,
+      baseTtsConfig: { providers: { "tts-local-cli": ttsProviderConfig } },
+      talkProviderConfig: { voices: ["talk-only"], voiceId: "af_bella" },
+      timeoutMs: 1000,
+    });
+
+    // `/voice list` sees the TTS record; Talk synthesis must see the same list.
+    expect(resolved).toMatchObject({ voices: ["af_jessica", "af_bella"], voiceId: "af_bella" });
+    expect(
+      await provider.listVoices?.({ cfg: TEST_CFG, providerConfig: ttsProviderConfig }),
+    ).toEqual([
+      { id: "af_jessica", name: "af_jessica" },
+      { id: "af_bella", name: "af_bella" },
+    ]);
+  });
+
+  it("does not read voices from other config scopes", async () => {
+    const voices = await buildCliSpeechProvider().listVoices?.({
+      cfg: {
+        talk: { providers: { "tts-local-cli": { voices: ["talk-voice"] } } },
+      } as never,
+      providerConfig: { command: "x" },
+    });
+
+    expect(voices).toEqual([]);
+  });
+
+  it("templates an empty voice id when no voice is configured", async () => {
+    const script = createCliFixture();
+    const result = await synthesize(
+      baseProviderConfig(script, {
+        args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+      }),
+    );
+
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", ""]);
   });
 
   it("passes text through stdin when args omit the text template", async () => {

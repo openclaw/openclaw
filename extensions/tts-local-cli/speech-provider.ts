@@ -25,9 +25,35 @@ function normalizeOutputFormat(value: unknown): OutputFormat {
   return VALID_OUTPUT_FORMATS.find((format) => format === lower) ?? "mp3";
 }
 
+/** Explicit `voiceId` wins; otherwise the first declared voice is the default. */
+function resolveVoiceId(cfg: SpeechProviderConfig): string | undefined {
+  const explicit = typeof cfg.voiceId === "string" ? cfg.voiceId.trim() : "";
+  return explicit || (isStringArray(cfg.voices) ? cfg.voices[0] : undefined);
+}
+
+/**
+ * The CLI selects by `voiceId` alone. Core speech normalization ranks
+ * `speakerVoiceId` above `voiceId`, so an alias inherited from the base TTS
+ * record would silently undo a Talk selection; drop the aliases and let core
+ * re-derive them from the merged `voiceId`.
+ */
+const SPEAKER_ALIAS_KEYS = new Set(["speakerVoice", "speakerVoiceId", "voice", "voiceName"]);
+
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
   const providers = asOptionalRecord(rawConfig.providers);
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
+}
+
+/**
+ * The TTS provider block owns the catalog, so `/voice list` (which receives
+ * the TTS record) and Talk synthesis (which merges over it) read one list.
+ */
+function resolveVoiceCatalog(providerConfig: SpeechProviderConfig = {}): string[] {
+  if (isStringArray(providerConfig.voices) && providerConfig.voices.length) {
+    return providerConfig.voices;
+  }
+  const selected = typeof providerConfig.voiceId === "string" ? providerConfig.voiceId.trim() : "";
+  return selected ? [selected] : [];
 }
 
 function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOUT_MS) {
@@ -39,6 +65,7 @@ function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOU
     command,
     args: isStringArray(cfg.args) ? cfg.args : [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
+    voiceId: resolveVoiceId(cfg),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : timeoutMs,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
     env: filterStringRecord(cfg.env),
@@ -195,6 +222,7 @@ async function synthesizeCli(
           OutputPath: path.join(temp.dir, `${filePrefix}.${config.outputFormat}`),
           OutputDir: temp.dir,
           OutputBase: filePrefix,
+          VoiceId: config.voiceId,
         };
 
         const { cmd, initialArgs } = parseCommand(config.command);
@@ -332,6 +360,32 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
     isConfiguredAsync: async (ctx) => isConfigured(ctx),
+
+    resolveTalkConfig({ baseTtsConfig, talkProviderConfig }): SpeechProviderConfig {
+      const base = resolveCliProviderConfig(baseTtsConfig);
+      const talk = Object.fromEntries(
+        Object.entries(talkProviderConfig).filter(
+          ([key, value]) =>
+            key !== "voices" &&
+            value !== undefined &&
+            !(typeof value === "string" && value.trim() === ""),
+        ),
+      );
+      // An authored Talk command owns its execution settings and defaults;
+      // inheriting another executable's arguments, cwd, or env can break it.
+      // Selection-only records inherit TTS, while both keep its voice defaults.
+      const defaults =
+        typeof talk.command === "string" ? { voices: base.voices, voiceId: base.voiceId } : base;
+      return Object.fromEntries(
+        Object.entries({ ...defaults, ...talk }).filter(
+          ([key, value]) => value !== undefined && !SPEAKER_ALIAS_KEYS.has(key),
+        ),
+      );
+    },
+
+    async listVoices(req) {
+      return resolveVoiceCatalog(req.providerConfig).map((voice) => ({ id: voice, name: voice }));
+    },
 
     async synthesize(req) {
       const result = await synthesizeCli(
