@@ -1157,13 +1157,13 @@
         --mount-fallback-muted: var(--muted, #8e8e97);
         --mount-fallback-glyph: rgba(188, 188, 192, 0.484);
         --mount-fallback-selected: #222429;
-        --mount-fallback-skeleton: rgba(142, 142, 151, 0.09);
+        --mount-fallback-skeleton: rgba(142, 142, 151, 0.1);
         --mount-fallback-skeleton-strong: rgba(142, 142, 151, 0.12);
         --mount-fallback-placeholder: rgba(142, 142, 151, 0.16);
+        --mount-fallback-placeholder-strong: rgba(142, 142, 151, 0.2);
         --mount-fallback-accent: #ff5c5c;
         --mount-fallback-tile: #1c1e23;
         --mount-fallback-tile-border: #23252a;
-        --mount-fallback-on-accent: #0e1015;
         --mount-fallback-link: var(--link, #ff7070);
         --mount-fallback-ring: var(--ring, #ff5c5c);
 
@@ -1234,14 +1234,16 @@
         height: 19px;
       }
 
-      .mount-fallback__rail-item.is-mark svg {
-        width: 24px;
-        height: 24px;
+      .mount-fallback__rail-disc {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: var(--mount-fallback-placeholder-strong);
       }
 
       .mount-fallback__rail-item.is-selected {
-        background: var(--mount-fallback-selected);
-        color: var(--mount-fallback-text);
+        background: color-mix(in srgb, var(--mount-fallback-selected) 50%, transparent);
+        color: color-mix(in srgb, var(--mount-fallback-text) 60%, transparent);
       }
 
       .mount-fallback__rail-item.is-muted {
@@ -1264,9 +1266,8 @@
         height: 30px;
         margin: 3px 0;
         border-radius: 12.5px;
-        background: var(--mount-fallback-accent);
-        color: var(--mount-fallback-on-accent);
-        opacity: 0.4;
+        background: var(--mount-fallback-skeleton-strong);
+        color: var(--mount-fallback-glyph);
       }
 
       .mount-fallback__rail-new svg {
@@ -1296,28 +1297,30 @@
       .mount-fallback__skeleton {
         flex: 1;
         min-width: 0;
-        padding: 18px 22px;
+        padding: 12px 4px;
       }
 
-      .mount-fallback__skeleton-heading {
+      /* The wordmark's mascot centers on the session avatar column. */
+      .mount-fallback__side-brand {
         display: block;
-        width: 60px;
-        height: 7px;
-        border-radius: 4px;
-        background: var(--mount-fallback-skeleton-strong);
+        width: auto;
+        height: 20px;
+        margin-inline-start: 8.6px;
+        color: var(--mount-fallback-text);
       }
 
+      /* Control UI session-row metrics: 32px rows, 18px avatar centered 24px in, title at 42px. */
       .mount-fallback__skeleton-rows {
         display: grid;
-        gap: 22px;
-        margin-top: 34px;
+        margin-top: 16px;
       }
 
       .mount-fallback__skeleton-row {
         display: flex;
         align-items: center;
-        gap: 10px;
-        height: 12px;
+        gap: 9px;
+        height: 32px;
+        padding-inline: 11px 8px;
       }
 
       .mount-fallback__skeleton-row::before,
@@ -1329,30 +1332,31 @@
       .mount-fallback__skeleton-row::before {
         content: "";
         flex: none;
-        width: 9px;
-        height: 9px;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
+        background: var(--mount-fallback-skeleton-strong);
       }
 
       .mount-fallback__skeleton-row span {
-        height: 6px;
-        border-radius: 4px;
+        height: 10px;
+        border-radius: 9999px;
       }
 
       .mount-fallback__skeleton-row:nth-child(1) span {
-        width: 149px;
+        width: 68%;
       }
 
       .mount-fallback__skeleton-row:nth-child(2) span {
-        width: 111px;
+        width: 50%;
       }
 
       .mount-fallback__skeleton-row:nth-child(3) span {
-        width: 168px;
+        width: 78%;
       }
 
       .mount-fallback__skeleton-row:nth-child(4) span {
-        width: 130px;
+        width: 58%;
       }
 
       .mount-fallback__main {
@@ -1374,10 +1378,12 @@
         color: var(--mount-fallback-text);
       }
 
+      /* On desktop the sidebar header carries the wordmark; the bar keeps its height. */
       .mount-fallback__wordmark {
         display: block;
         width: 140px;
         height: 32px;
+        visibility: hidden;
       }
 
       .mount-fallback__stage {
@@ -1537,13 +1543,13 @@
         --mount-fallback-muted: var(--muted, #5e5e5e);
         --mount-fallback-glyph: rgba(53, 53, 53, 0.6);
         --mount-fallback-selected: #e5e5e5;
-        --mount-fallback-skeleton: rgba(94, 94, 94, 0.09);
+        --mount-fallback-skeleton: rgba(94, 94, 94, 0.1);
         --mount-fallback-skeleton-strong: rgba(94, 94, 94, 0.12);
         --mount-fallback-placeholder: rgba(94, 94, 94, 0.16);
+        --mount-fallback-placeholder-strong: rgba(94, 94, 94, 0.2);
         --mount-fallback-accent: #bd4531;
         --mount-fallback-tile: #fcfcfc;
         --mount-fallback-tile-border: #eaeaea;
-        --mount-fallback-on-accent: #ffffff;
         --mount-fallback-link: var(--link, #ad3623);
         --mount-fallback-ring: var(--ring, #bd4531);
       }
@@ -1570,6 +1576,10 @@
           align-items: flex-start;
           justify-content: center;
           padding-top: max(14.5px, env(safe-area-inset-top));
+        }
+
+        .mount-fallback__wordmark {
+          visibility: visible;
         }
 
         .mount-fallback__stage {
@@ -1705,33 +1715,7 @@
     >
       <div class="mount-fallback__shell" aria-hidden="true">
         <div class="mount-fallback__rail">
-          <span class="mount-fallback__rail-item is-mark"
-            ><svg viewBox="0 0 120 120" fill="none">
-              <defs>
-                <linearGradient id="mount-fallback-lobster" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#ff4d4d" />
-                  <stop offset="100%" stop-color="#991b1b" />
-                </linearGradient>
-              </defs>
-              <path
-                d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
-                fill="url(#mount-fallback-lobster)"
-              />
-              <path
-                d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z"
-                fill="url(#mount-fallback-lobster)"
-              />
-              <path
-                d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
-                fill="url(#mount-fallback-lobster)"
-              />
-              <path d="M45 15Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-              <path d="M75 15Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-              <circle cx="45" cy="35" r="6" fill="#050810" />
-              <circle cx="75" cy="35" r="6" fill="#050810" />
-              <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
-              <circle cx="76" cy="34" r="2.5" fill="#00e5cc" /></svg
-          ></span>
+          <span class="mount-fallback__rail-item"><span class="mount-fallback__rail-disc"></span></span>
           <span class="mount-fallback__rail-create"
             ><span class="mount-fallback__rail-new"
               ><svg
@@ -1826,7 +1810,92 @@
           <span class="mount-fallback__rail-avatar"></span>
         </div>
         <div class="mount-fallback__skeleton">
-          <span class="mount-fallback__skeleton-heading"></span>
+          <svg
+            class="mount-fallback__side-brand"
+            focusable="false"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="15 12 757 142"
+            fill="none"
+          >
+            <g transform="translate(95.76 80.4) scale(1.01) translate(-95.76 -80.4)">
+              <g transform="translate(18 8.463999999999999) scale(1.2959999999999998)">
+                <defs>
+                  <linearGradient
+                    id="mount-fallback-sidebar-shell"
+                    x1="0%"
+                    y1="0%"
+                    x2="100%"
+                    y2="100%"
+                  >
+                    <stop offset="0%" stop-color="#ff4d4d" />
+                    <stop offset="100%" stop-color="#991b1b" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"
+                  fill="url(#mount-fallback-sidebar-shell)"
+                />
+                <path
+                  d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"
+                  fill="url(#mount-fallback-sidebar-shell)"
+                />
+                <path
+                  d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"
+                  fill="url(#mount-fallback-sidebar-shell)"
+                />
+                <path
+                  d="M45 15 Q35 5 30 8"
+                  stroke="#ff4d4d"
+                  stroke-width="3"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M75 15 Q85 5 90 8"
+                  stroke="#ff4d4d"
+                  stroke-width="3"
+                  stroke-linecap="round"
+                />
+                <circle cx="45" cy="35" r="6" fill="#181A1F" />
+                <circle cx="75" cy="35" r="6" fill="#181A1F" />
+                <circle cx="46" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
+                <circle cx="76" cy="34" r="2.5" fill="#DDE2E9" opacity="0.82" />
+              </g>
+            </g>
+            <g fill="currentColor" transform="translate(200.5 116.564)">
+              <path
+                d="M385 -10Q219 -10 122.0 84.0Q25 178 25.0 335.0Q25 492 122.0 586.0Q219 680 385 680Q554 680 651.5 586.5Q749 493 749.0 335.0Q749 177 651.5 83.5Q554 -10 385 -10ZM229.0 179.0Q274 134 385.0 134.0Q496 134 542.5 179.0Q589 224 589.0 335.0Q589 446 542.5 491.0Q496 536 385.0 536.0Q274 536 229.0 491.0Q184 446 184.0 335.0Q184 224 229.0 179.0Z"
+                transform="translate(0.0000 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M190 -170H40V501H179V364H189Q217 511 389 511Q503 511 566.0 441.0Q629 371 629.0 250.0Q629 129 567.5 59.5Q506 -10 394 -10Q309 -10 259.5 28.5Q210 67 197 135H190ZM190 243Q190 181 226.5 154.0Q263 127 336 127Q410 127 443.5 155.0Q477 183 477.0 250.0Q477 317 443.5 345.0Q410 373 337 373Q262 373 226.0 344.5Q190 316 190 251Z"
+                transform="translate(85.7520 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M306 -10Q176 -10 100.5 55.5Q25 121 25 250Q25 369 101.5 440.0Q178 511 303.0 511.0Q428 511 502.0 447.5Q576 384 576 268Q576 254 572 220H164Q167 161 198.0 135.5Q229 110 301 110Q366 110 393.5 126.5Q421 143 421 176V186H571V175Q571 93 498.0 41.5Q425 -10 306 -10ZM166 299H432Q429 349 397.5 371.5Q366 394 300.0 394.0Q234 394 202.5 371.0Q171 348 166 299Z"
+                transform="translate(158.2200 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M190 0H40V501H179V347H188Q199 417 249.5 464.0Q300 511 392 511Q491 511 542.5 455.5Q594 400 594 312V0H444V262Q444 323 415.5 349.5Q387 376 319 376Q249 376 219.5 347.0Q190 318 190 253Z"
+                transform="translate(225.1800 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M383 -10Q218 -10 121.5 84.0Q25 178 25.0 335.0Q25 492 121.5 586.0Q218 680 383 680Q540 680 632.5 606.5Q725 533 725 406V391H558V406Q558 473 517.0 504.5Q476 536 386 536Q275 536 229.5 491.0Q184 446 184.0 335.0Q184 224 229.5 179.0Q275 134 386 134Q476 134 517.0 165.5Q558 197 558 264V279H725V264Q725 137 632.5 63.5Q540 -10 383 -10Z"
+                transform="translate(295.3800 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M190 0H40V670H190Z"
+                transform="translate(378.5400 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M194 -10Q113 -10 67.0 25.5Q21 61 21 124Q21 238 183 255L398 277V296Q398 344 374.0 361.5Q350 379 289 379Q231 379 206.5 361.5Q182 344 182 302V298H31V301Q31 395 104.0 453.0Q177 511 300 511Q422 511 484.0 453.0Q546 395 546 294V0H406V115H398Q380 56 328.0 23.0Q276 -10 194 -10ZM172 134Q172 96 237 96Q316 96 355.5 117.5Q395 139 398 191L224 171Q172 167 172 134Z"
+                transform="translate(405.4320 0.0000) scale(0.108000 -0.108000)"
+              />
+              <path
+                d="M324 0H137L0 501H155L214 272L235 116H245L285 287L361 501H554L629 287L669 116H679L701 272L759 501H912L770 0H583L497 241L460 379H449L411 241Z"
+                transform="translate(470.4480 0.0000) scale(0.108000 -0.108000)"
+              />
+            </g>
+          </svg>
           <div class="mount-fallback__skeleton-rows">
             <span class="mount-fallback__skeleton-row"><span></span></span>
             <span class="mount-fallback__skeleton-row"><span></span></span>
