@@ -1,12 +1,13 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
-import { realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
+import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
@@ -55,16 +56,33 @@ export function MicrophoneMenu(props: {
             </div>
           ),
         });
+      const fault = (id: string, issue: RealtimeTalkDeviceIssue) => {
+        const message = realtimeTalkDeviceIssueMessage(issue, "audioinput");
+        entries.push({
+          id,
+          label: message,
+          disabled: true,
+          class: "chat-talk-input-picker__notice",
+          content: (
+            <InlineAlert compact tone="warning" class="chat-talk-input-picker__alert">
+              {message}
+            </InlineAlert>
+          ),
+        });
+      };
       const issue =
         !props.picker.loading && props.picker.devices.length === 0 ? props.picker.issue : null;
       if (issue) {
-        const fault = issue !== "none-found" && issue !== "list-unsupported";
-        notice(
-          "unavailable",
-          `chat-talk-input-picker__empty${fault ? " chat-talk-input-picker__empty--fault" : ""}`,
-          realtimeTalkDeviceIssueMessage(issue, "audioinput"),
-          "status",
-        );
+        if (issue === "none-found" || issue === "list-unsupported") {
+          notice(
+            "unavailable",
+            "chat-talk-input-picker__empty",
+            realtimeTalkDeviceIssueMessage(issue, "audioinput"),
+            "status",
+          );
+        } else {
+          fault("unavailable", issue);
+        }
       } else {
         for (const option of [
           { deviceId: "", label: t("chat.composer.systemDefaultMicrophone") },
@@ -100,12 +118,7 @@ export function MicrophoneMenu(props: {
           notice("loading", "chat-talk-input-picker__note", t("common.loading"), "status");
         }
         if (props.picker.issue) {
-          notice(
-            "issue",
-            "chat-talk-input-picker__warning",
-            realtimeTalkDeviceIssueMessage(props.picker.issue, "audioinput"),
-            "alert",
-          );
+          fault("issue", props.picker.issue);
         }
         if (props.picker.voiceActive) {
           notice(

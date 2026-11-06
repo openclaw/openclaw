@@ -157,17 +157,13 @@
   color: color-mix(in srgb, var(--danger) 78%, var(--text));
 }
 
-.agent-chat__composer-status-band,
-.agent-chat__composer-error {
+.agent-chat__composer-status-band {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 44px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
-}
-
-.agent-chat__composer-status-band {
   width: 100%;
   padding: 8px 14px;
   white-space: nowrap;
@@ -594,38 +590,15 @@
   color: var(--text);
 }
 
-.agent-chat__composer-errors {
+.agent-chat__composer-alert {
   width: 100%;
-  background: color-mix(in srgb, var(--danger) 8%, var(--chat-composer-surface));
-  color: color-mix(in srgb, var(--danger) 78%, var(--text));
-}
-
-.agent-chat__composer-errors--standalone {
-  overflow: hidden;
-}
-
-:root[data-theme-mode="light"] .agent-chat__composer-errors {
-  background: color-mix(in srgb, var(--danger) 14%, var(--chat-composer-surface));
-}
-
-.agent-chat__composer-error {
+  min-height: 44px;
   padding: 8px 10px 8px 14px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
-.agent-chat__composer-error + .agent-chat__composer-error {
-  border-top: 1px solid color-mix(in srgb, var(--danger) 16%, transparent);
-}
-
-.agent-chat__composer-error-icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  color: var(--danger);
-}
-
-.agent-chat__composer-error-icon svg,
 .agent-chat__video-preview-switch svg,
 .chat-controls__permission-icon svg,
 .chat-controls__permission-lock svg,
@@ -633,17 +606,6 @@
 .chat-controls__target-icon svg {
   width: 100%;
   height: 100%;
-}
-
-.agent-chat__composer-error .callout__dismiss {
-  margin: -4px -4px -4px 0;
-  border-radius: var(--radius-full);
-  opacity: 0.72;
-}
-
-.agent-chat__composer-error .callout__dismiss:hover {
-  background: transparent;
-  opacity: 1;
 }
 
 .agent-chat__talk-status-text {
@@ -768,8 +730,7 @@
   color: var(--text);
 }
 
-.chat-talk-input-picker__settings svg,
-.chat-attachment-remove svg {
+.chat-talk-input-picker__settings svg {
   width: 13px;
   height: 13px;
 }
@@ -1006,7 +967,6 @@
 }
 
 .chat-talk-input-picker__note,
-.chat-talk-input-picker__warning,
 .chat-talk-input-picker__hint {
   padding: 5px 8px;
   color: var(--muted);
@@ -1014,8 +974,8 @@
   line-height: 1.35;
 }
 
-.chat-talk-input-picker__warning {
-  color: var(--warn);
+.chat-talk-input-picker__alert {
+  width: 100%;
 }
 
 /* Sole content of the popover when no input can be selected, so it carries the
@@ -1034,10 +994,6 @@
   font-size: 12px;
   line-height: 1.4;
   text-wrap: pretty;
-}
-
-.chat-talk-input-picker__empty--fault {
-  color: var(--warn);
 }
 
 .chat-talk-input-picker__hint {
@@ -1226,7 +1182,7 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .agent-chat__composer-error .callout__dismiss {
+  .agent-chat__composer-alert .callout__dismiss {
     width: 44px;
     height: 44px;
     margin-block: -8px;
@@ -1686,26 +1642,21 @@
   white-space: nowrap;
 }
 
+/* A corner badge over the thumbnail: the 32px hit area holds a 20px disc
+   and a 12px glyph so the X remains legible over an image. */
 .chat-attachment-remove {
+  --oc-icon-button-glyph: 12px;
   position: absolute;
   z-index: 1;
-  display: grid;
-  place-items: center;
-  border: none;
-  border-radius: var(--radius-full);
-  corner-shape: round;
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
-
   top: -13px;
   right: -13px;
-  width: 32px;
-  height: 32px;
-  padding: 6px;
-  background: none;
-  color: var(--muted);
-  transform: none;
   isolation: isolate;
+}
+
+.chat-attachment-remove.oc-icon-button:hover:where(:not(:disabled)) {
+  background: transparent;
 }
 
 .chat-attachment-thumb:is(:hover, :focus-within) .chat-attachment-remove {
@@ -1864,14 +1815,13 @@
   z-index: -1;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
+  corner-shape: round;
   background: var(--chat-composer-surface, var(--popover));
   box-shadow: var(--shadow-sm);
 }
 
-.chat-attachment-remove svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 2px;
+.chat-attachment-remove:hover:not(:disabled)::before {
+  background: color-mix(in srgb, var(--text) 6%, var(--chat-composer-surface, var(--popover)));
 }
 
 .chat-attachment-remove:disabled {
