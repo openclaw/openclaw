@@ -327,6 +327,27 @@ describe("PaletteSessionDraft", () => {
     expect(host.draft.message).toBe("");
   });
 
+  it.each([
+    { status: "started", message: "Session started" },
+    { status: "idle", message: "Session created" },
+  ] as const)("confirms $status session creation", async ({ status, message }) => {
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    const { host, create } = await mount();
+    create.mockResolvedValue({
+      key: "agent:main:dashboard:created",
+      initialRun: { status },
+    });
+    host.draft.setMessage("Start a new session");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message,
+      severity: "success",
+      actionLabel: "Open session",
+      onAction: expect.any(Function),
+    });
+  });
+
   it.each(["unchanged", "connection", "account"] as const)(
     "settles one released creation when its owner is %s",
     async (change) => {
@@ -387,7 +408,10 @@ describe("PaletteSessionDraft", () => {
       // The destination session owns the rejected prompt and its retry.
       expect(host.draft.message).toBe("");
       const notice = showToast.mock.calls.at(-1)?.[0];
-      expect(notice?.message).toContain("Initial turn rejected");
+      expect(notice).toMatchObject({
+        message: "Session created, but couldn't start: Initial turn rejected",
+        severity: "error",
+      });
       context.gateway.snapshot.phase = "reconnecting";
       publish();
       context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;

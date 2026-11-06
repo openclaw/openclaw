@@ -470,7 +470,8 @@ suite.define(() => {
       await input.waitFor({ state: "hidden" });
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       const toast = page.locator(".app-toast");
-      await expect.poll(() => toast.textContent()).toContain("Running");
+      await expect.poll(() => toast.textContent()).toContain("Session started");
+      expect(await toast.getAttribute("class")).toContain("app-toast--success");
       await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
       await gateway.rejectDeferred("sessions.create", {
         code: "INVALID_REQUEST",
@@ -481,7 +482,7 @@ suite.define(() => {
       await toast.getByRole("button", { name: "Try again", exact: true }).click();
       const retry = await gateway.waitForRequest("sessions.create", { after: 2 });
       expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
-      await expect.poll(() => toast.textContent()).toContain("Running");
+      await expect.poll(() => toast.textContent()).toContain("Session started");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(3);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
       // Notice actions retire their own button; the foreground route and draft stay intact.

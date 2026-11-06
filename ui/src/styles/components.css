@@ -672,7 +672,7 @@ openclaw-toast-host[popover] {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 6px;
   box-sizing: border-box;
   min-width: min(240px, calc(100vw - 24px));
   padding: 12px 16px;
@@ -696,6 +696,7 @@ openclaw-toast-host[popover] {
 
 .app-toast--avatar {
   --app-toast-row: 32px;
+  gap: 10px;
   padding-left: 12px;
 }
 
@@ -937,7 +938,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 10px 14px;
   min-width: 0;
 }
 
