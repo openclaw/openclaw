@@ -66,6 +66,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(card.label, "Plan, Now: reading the sample diff.")
     }
 
+    func testTaskListLinesUpWithComposer() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-progress-card-fixture"])
+        let app = try XCTUnwrap(self.app)
+        // The header button starts at the card's leading edge.
+        let card = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Plan, 1 of 3 steps done")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "task-list-above-composer")
+        // Both are centered in the same column, so equal leading edges mean equal widths.
+        XCTAssertEqual(
+            card.frame.minX,
+            composer.frame.minX,
+            accuracy: 0.5,
+            "Task list card overhangs the composer")
+    }
+
     func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
