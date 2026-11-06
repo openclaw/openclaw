@@ -29,10 +29,7 @@ import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
-import {
-  createNodeHostGatewayCandidateConnection,
-  formatGatewayCandidateUrl,
-} from "./gateway-candidate-connection.js";
+import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
 import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
@@ -446,7 +443,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onHelloOk: (hello, url, tlsFingerprint, cloudflareAccess) => {
       consecutivePermanentGatewayRejections = 0;
       writeStderrLine(
-        `node host gateway connected: ${tunnel ? formatGatewayCandidateUrl(gateway) : url}`,
+        `node host gateway connected: ${tunnel ? tunnel.formatDiagnostic(url) : url}`,
       );
       if (opts.stopAfterFirstConnect) {
         void finish(0);
@@ -464,7 +461,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onConnectError: (error) => {
-      writeStderrLine(`node host gateway connect failed: ${error.message}`);
+      writeStderrLine(
+        `node host gateway connect failed: ${tunnel ? tunnel.formatDiagnostic(error.message) : error.message}`,
+      );
       const rejection =
         error instanceof GatewayClientRequestError && isRecord(error.details)
           ? error.details

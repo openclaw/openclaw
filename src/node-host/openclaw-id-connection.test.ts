@@ -61,11 +61,15 @@ test.each([1, 2])(
 test("waits for admission, shares one dial, then probes a silent connection", async () => {
   vi.useFakeTimers();
   const { session, connect, conn, close } = fixture();
+  expect(session.pathKind()).toBe("none");
   const first = session.connection();
   const second = session.connection();
   await vi.advanceTimersByTimeAsync(500);
   expect(await first).toBe(conn);
   expect(await second).toBe(conn);
+  expect(session.pathKind()).toBe("direct");
+  conn.pathKind = () => "relay";
+  expect(session.pathKind()).toBe("relay");
   expect(connect).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(5_000);
   expect(connect).toHaveBeenCalledTimes(2);
