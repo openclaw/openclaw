@@ -11,58 +11,73 @@ import {
 } from "./project-preparation.js";
 import {
   createProjectPreparationFixture,
+  prepareRefreshFixture,
+  prepareProjectFixture as prepare,
+  expectSetupProcessStopped,
+  preparedPath,
+  snapshot,
+  manifestFiles,
+  readManifest,
   runProjectScriptWithGitProbe,
 } from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
-import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import { workspaceStatIdentity } from "./workspace-hash-memo.js";
-import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const readText = (root: string, ...parts: string[]) =>
   fs.readFile(path.join(root, ...parts), "utf8");
 
-function expectSetupProcessStopped(pid: number) {
-  expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-  const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
-  expect(result.error).toBeUndefined();
-  expect([0, 1]).toContain(result.status);
-  const state = result.stdout.trim();
-  expect(state === "" || state.startsWith("Z")).toBe(true);
-}
-
 function fixture(setup?: string, symlink = false) {
   return createProjectPreparationFixture(tempDirs.make("project-preparation-"), setup, symlink);
 }
 
-async function prepare(
-  f: Awaited<ReturnType<typeof fixture>>,
-  options?: Parameters<typeof f.preparedOperation>[1],
-) {
-  const operation = await f.preparedOperation(undefined, options);
-  try {
-    return await operation.project.prepare(f);
-  } finally {
-    operation.close();
-  }
-}
-
-const preparedPath = (home: string, ...parts: string[]) =>
-  path.join(home, ".openclaw-worker", "prepared", "gateway", "c".repeat(64), ...parts);
-const snapshot = async (localPath: string) =>
-  (await prepareWorkerProjectSnapshot({ localPath, namespace: "gateway" }))!;
-const manifestFiles = async (home: string) =>
-  (await fs.readdir(path.join(home, ".openclaw-worker", "manifests"))).filter((file) =>
-    file.endsWith(".json"),
-  );
-const readManifest = async (home: string, ref: string) =>
-  parseWorkerWorkspaceManifest(
-    await readText(home, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
-    ref,
-  );
-
 describe("project checkout preparation", () => {
+  it.each(["public", "private", "unpacked"] as const)(
+    "refreshes %s sources with one seed transfer and budgeted setup",
+    async (source) => {
+      const f = await fixture('#!/bin/sh\ncat input.txt >> "$HOME/count"\n');
+      const {
+        initial,
+        result,
+        runs,
+        budgets,
+        workspaceFetches,
+        seed,
+        originalPacks,
+        reportedPhases,
+      } = await prepareRefreshFixture(f, source);
+      expect.soft(runs).toBe(source === "public" ? 1 : 2);
+      expect(budgets).toBe(1);
+      expect(result.recipePreparation?.phaseDurationsMs).toEqual(reportedPhases);
+      expect(result.preparedWorkspace?.workspaceDir).toBe(initial.workspaceDir);
+      expect(await readText(initial.homeDir, "count")).toBe("prepared base\nrefreshed\n");
+      expect(result.recipePreparation?.phaseDurationsMs).toMatchObject({
+        retainedManifest: expect.any(Number),
+        seedTransfer: expect.any(Number),
+        gitUpdate: expect.any(Number),
+        onCreate: expect.any(Number),
+      });
+      await requireGit(initial.workspaceDir, ["fsck", "--connectivity-only"]);
+      const packs = (await fs.readdir(path.join(seed, ".git/objects/pack"))).filter((file) =>
+        file.endsWith(".pack"),
+      );
+      if (source === "unpacked") {
+        expect(packs).toHaveLength(0);
+        expect(workspaceFetches).toBe(1);
+      } else {
+        expect(packs.length).toBeGreaterThan(0);
+        for (const file of packs.filter((name) => !originalPacks.has(name))) {
+          const donor = await fs.stat(path.join(seed, ".git/objects/pack", file));
+          const linked = await fs.stat(path.join(initial.workspaceDir, ".git/objects/pack", file));
+          expect(linked.ino).toBe(donor.ino);
+          expect(linked.nlink).toBeGreaterThan(1);
+        }
+        expect(workspaceFetches).toBe(0);
+      }
+    },
+  );
   it("bounds retained checkouts and abandoned staging while preserving the current project", async () => {
     const f = await fixture();
     const namespace = path.dirname(f.seed);
@@ -1014,16 +1029,5 @@ ${action}
     expect(
       await fs.stat(path.join(f.home, ".openclaw-worker", "prepared")).catch(() => undefined),
     ).toBeUndefined();
-  });
-
-  it("requires a budgeted transport before transferring a new prepared workspace", async () => {
-    const f = await fixture();
-    const operation = await f.preparedOperation();
-    await expect(
-      operation.project.prepare({ runScript: f.runScript, upload: f.upload }),
-    ).rejects.toThrow("Prepared workspaces require a provider command budget");
-    operation.close();
-    expect(f.runScript).not.toHaveBeenCalled();
-    expect(f.upload).not.toHaveBeenCalled();
   });
 });

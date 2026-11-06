@@ -159,6 +159,7 @@ export function createWorkerProjectPreparation(params: {
   // One owner represents one fixed allocation; retries on another machine get a new owner.
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
+  let mergedSetup: unknown;
   // The serialized pre-enrollment producer invalidates completion before mutation.
   // Reuse verification only within this operation; replay starts with a fresh scan.
   let verifiedRetained: PreparedProjectVerification | null | undefined;
@@ -188,7 +189,7 @@ export function createWorkerProjectPreparation(params: {
       throw error;
     }
   };
-  const readPreparedWorkspace = (prepared: unknown) => {
+  const readPreparedWorkspace = (prepared: unknown, baseCommit: string) => {
     if (!preparation) {
       throw new Error("Project preparation did not request a prepared workspace");
     }
@@ -210,6 +211,7 @@ export function createWorkerProjectPreparation(params: {
     }
     return Object.freeze({
       preparationKey: preparation.key,
+      baseCommit,
       cacheKey: preparation.cacheKey,
       workspaceDir: prepared.workspaceDir,
       homeDir: prepared.homeDir,
@@ -233,12 +235,35 @@ export function createWorkerProjectPreparation(params: {
     const { seedKey } = sourceInput;
     const scriptInput = {
       ...sourceInput,
+      projectKey: params.project.key,
       ...(preparationInput ? { preparation: preparationInput } : {}),
     };
     requireCurrent();
-    const inspection: unknown = JSON.parse(
-      await transport.runScript(createProjectSeedScript(scriptInput), signal),
-    );
+    const runSeed = async (
+      input: Parameters<typeof createProjectSeedScript>[0],
+    ): Promise<unknown> => {
+      requireCurrent();
+      return JSON.parse(
+        await (preparationInput && (input.pack || input.repository)
+          ? transport.runScriptWithBudget!(
+              (timeoutMs, setupEnv) =>
+                createProjectSeedScript({
+                  ...input,
+                  preparation: { ...preparationInput, timeoutMs, setupEnv },
+                }),
+              signal,
+            )
+          : transport.runScript(createProjectSeedScript(input), signal)),
+      );
+    };
+    const publicRepository =
+      "source" in params.project && !params.prepareRepositoryGitPack
+        ? { url: params.project.source.url }
+        : undefined;
+    const inspection = await runSeed({
+      ...scriptInput,
+      ...(publicRepository ? { repository: publicRepository } : {}),
+    });
     requireCurrent();
     if (!isRecord(inspection) || typeof inspection.ready !== "boolean") {
       throw new Error("Project preparation returned invalid seed status");
@@ -275,13 +300,11 @@ export function createWorkerProjectPreparation(params: {
       throw new Error("Selected snapshot has no matching completed repository workspace");
     }
     if (inspection.ready) {
+      mergedSetup = inspection.preparedWorkspace;
       return {
         seedKey,
-        cacheHit: true,
+        cacheHit: inspection.cacheHit !== false,
         recipePreparation: readRecipePreparation(),
-        ...(inspection.preparedWorkspace !== undefined
-          ? { preparedWorkspace: readPreparedWorkspace(inspection.preparedWorkspace) }
-          : {}),
       };
     }
     const directory = inspection.directory;
@@ -302,88 +325,49 @@ export function createWorkerProjectPreparation(params: {
     );
     try {
       requireCurrent();
-      let transfer: Pick<Parameters<typeof createProjectSeedScript>[0], "pack" | "repository">;
-      if ("source" in params.project && !params.prepareRepositoryGitPack) {
-        // Public source fetches need no credential transfer or remote secret lifetime.
-        transfer = { repository: { directory, url: params.project.source.url } };
-      } else {
-        const repository = "source" in params.project ? params.project.source : undefined;
-        const pack =
-          "root" in params.project
-            ? await prepareWorkerWorkspaceGitPack({
-                root: params.project.root,
-                baseCommit: params.project.baseCommit,
-                ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
-                temporaryRoot,
-                signal,
-              })
-            : await params.prepareRepositoryGitPack!({ temporaryRoot, signal, retainedCommit });
-        requireCurrent();
-        const bytes = (await fsp.stat(pack)).size;
-        if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-          throw new Error("Project Git pack exceeds the workspace byte limit");
-        }
-        let sha256: string;
-        {
-          await using handle = await fsp.open(pack, "r");
-          ({ digest: sha256 } = await sha256File(handle, { signal }));
-        }
-        requireCurrent();
-        await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
-        requireCurrent();
-        transfer = {
-          pack: {
-            directory,
-            bytes,
-            sha256,
-            ...(repository ? { repositoryUrl: repository.url } : {}),
-            ...(retainedCommit ? { retainedCommit } : {}),
-          },
-        };
+      const repository = "source" in params.project ? params.project.source : undefined;
+      const pack =
+        "root" in params.project
+          ? await prepareWorkerWorkspaceGitPack({
+              root: params.project.root,
+              baseCommit: params.project.baseCommit,
+              ...(typeof retainedCommit === "string" ? { retainedCommit } : {}),
+              temporaryRoot,
+              signal,
+            })
+          : await params.prepareRepositoryGitPack!({ temporaryRoot, signal, retainedCommit });
+      requireCurrent();
+      const bytes = (await fsp.stat(pack)).size;
+      if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+        throw new Error("Project Git pack exceeds the workspace byte limit");
       }
-      const installed: unknown = JSON.parse(
-        await transport.runScript(
-          createProjectSeedScript({
-            ...scriptInput,
-            ...transfer,
-            verifiedRetained,
-            ...(retainedCommit
-              ? {
-                  retainedSeedKey: workerProjectSeedKey({
-                    key: params.project.key,
-                    baseCommit: retainedCommit,
-                  }),
-                }
-              : {}),
-          }),
-          signal,
-        ),
-      );
+      let sha256: string;
+      {
+        await using handle = await fsp.open(pack, "r");
+        ({ digest: sha256 } = await sha256File(handle, { signal }));
+      }
+      requireCurrent();
+      await transport.upload(pack, path.posix.join(directory, "base.pack"), signal);
+      requireCurrent();
+      const packInput = {
+        directory,
+        bytes,
+        sha256,
+        ...(repository ? { repositoryUrl: repository.url } : {}),
+        ...(retainedCommit ? { retainedCommit } : {}),
+      };
+      const installed = await runSeed({
+        ...scriptInput,
+        pack: packInput,
+        verifiedRetained,
+      });
       requireCurrent();
       if (!isRecord(installed) || installed.ready !== true) {
         throw new Error("Project checkout was not verified before capture");
       }
       collectPhases(installed.phaseDurationsMs);
-      return {
-        seedKey,
-        cacheHit: false,
-        recipePreparation: readRecipePreparation(),
-        ...(installed.preparedWorkspace !== undefined
-          ? {
-              preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
-              captureRequired: true,
-              ...(isRecord(installed.preparedWorkspace) &&
-              installed.preparedWorkspace.recipePreparation
-                ? {
-                    recipePreparation: {
-                      ...RecipePreparation.parse(installed.preparedWorkspace.recipePreparation),
-                      phaseDurationsMs,
-                    },
-                  }
-                : {}),
-            }
-          : {}),
-      };
+      mergedSetup = installed.preparedWorkspace;
+      return { seedKey, cacheHit: false, recipePreparation: readRecipePreparation() };
     } finally {
       await fsp.rm(temporaryRoot, { recursive: true, force: true });
     }
@@ -419,37 +403,30 @@ export function createWorkerProjectPreparation(params: {
       requireCurrent();
       return result;
     }
-    if (result.preparedWorkspace) {
-      await transport.recordRecipePreparation?.(result.recipePreparation!);
-      requireCurrent();
-      preparedWorkspace = result.preparedWorkspace;
-      return {
-        ...result,
-        ...(sourceInput.baseCommit !== params.project.baseCommit
-          ? { baseCommit: sourceInput.baseCommit }
-          : {}),
-      };
-    }
     // Seed transfer can outlive its caller. Repository code starts only under
     // the current provisioning owner, and never runs in a later session's HOME.
-    const prepared: unknown = JSON.parse(
-      await transport.runScriptWithBudget!(
-        (timeoutMs, setupEnv) =>
-          createProjectSetupScript({
-            ...sourceInput,
-            ...preparationInput,
-            timeoutMs,
-            setupEnv,
-            verifiedRetained,
-          }),
-        signal,
-      ),
-    );
+    const prepared: unknown =
+      mergedSetup ??
+      JSON.parse(
+        await transport.runScriptWithBudget!(
+          (timeoutMs, setupEnv) =>
+            createProjectSetupScript({
+              ...sourceInput,
+              ...preparationInput,
+              timeoutMs,
+              setupEnv,
+              verifiedRetained,
+            }),
+          signal,
+        ),
+      );
     requireCurrent();
     if (!isRecord(prepared)) {
       throw new Error("Prepared project returned invalid setup status");
     }
-    const recipePreparation = readRecipePreparation(prepared.recipePreparation);
+    const recipePreparation = mergedSetup
+      ? { ...RecipePreparation.parse(prepared.recipePreparation), phaseDurationsMs }
+      : readRecipePreparation(prepared.recipePreparation);
     await transport.recordRecipePreparation?.(recipePreparation);
     requireCurrent();
     if (typeof prepared.setupFailure === "string") {
@@ -457,14 +434,16 @@ export function createWorkerProjectPreparation(params: {
         `${prepared.setupFailure}${recipePreparation.failure?.outputTail ? `: ${recipePreparation.failure.outputTail}` : ""}`,
       );
     }
-    preparedWorkspace = readPreparedWorkspace(prepared);
+    preparedWorkspace = readPreparedWorkspace(prepared, sourceInput.baseCommit);
     return {
       ...result,
       preparedWorkspace,
       recipePreparation,
       ...(typeof prepared.captureSkipped === "string"
         ? { captureSkipped: prepared.captureSkipped }
-        : { captureRequired: true as const }),
+        : result.cacheHit && verifiedRetained?.baseCommit === sourceInput.baseCommit
+          ? {}
+          : { captureRequired: true as const }),
     };
   };
   return {
@@ -502,7 +481,10 @@ export function createWorkerProjectPreparation(params: {
               ) {
                 throw new Error("Enrolled project has no matching completed workspace");
               }
-              preparedWorkspace = readPreparedWorkspace(inspected);
+              preparedWorkspace = readPreparedWorkspace(
+                inspected,
+                transport.baseCommit ?? sourceInput.baseCommit,
+              );
               await transport.recordRecipePreparation?.(
                 readRecipePreparation(inspected.recipePreparation),
               );

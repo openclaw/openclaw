@@ -683,7 +683,7 @@ describe("ComposerDictationOwner", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await expect(finished).resolves.toBe(false);
     expect(controller.locksComposer).toBe(false);
-    expect(request).not.toHaveBeenCalledWith("talk.session.close", expect.anything());
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.close");
     created.resolve(sessionResult("late-session"));
     await waitForFast(() => expectClosed("late-session"));
   });
@@ -735,7 +735,7 @@ describe("composer microphone button", () => {
 
     await releaseLatched(target);
     expect(controller.active).toBe(true);
-    expect(request).not.toHaveBeenCalledWith("talk.session.close", expect.anything());
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.close");
     expect(onCommit).not.toHaveBeenCalled();
 
     click(target);
