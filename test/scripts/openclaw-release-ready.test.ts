@@ -2243,6 +2243,7 @@ describe("prepared Windows handoff", () => {
         windows_node_installer_digests: digests
           ? JSON.stringify({
               "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+              "OpenClawCompanion-Setup-arm64.exe": `sha256:${"e".repeat(64)}`,
             })
           : "",
       };
@@ -2306,6 +2307,8 @@ describe("prepared Windows handoff", () => {
         expect(dispatches[0]?.body).toEqual({
           ref: TOOLING.ref,
           inputs: {
+            release_publish_run_id: "700",
+            release_publish_run_attempt: "1",
             tag,
             windows_node_tag: "v1.2.3",
             expected_installer_digests: ready.inputs.windows_node_installer_digests,

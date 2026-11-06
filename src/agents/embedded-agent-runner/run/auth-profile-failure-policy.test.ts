@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 
 describe("resolveAuthProfileFailureReason", () => {
+  it("keeps unavailable routes out of shared credential health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "route_unavailable",
+        providerStarted: true,
+      }),
+    ).toBeNull();
+  });
+
   it("keeps only transient local failures out of shared auth state", () => {
     expect(
       resolveAuthProfileFailureReason({

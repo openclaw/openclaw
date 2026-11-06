@@ -159,7 +159,7 @@ suite.define(() => {
     await pollCount(page.locator('.chat-pr__publication-outcome[data-state="failed"]')).toBe(1);
     await closeChatDetails(page);
     await emitPullRequests(gateway, watchedKey, empty);
-    await pollText(pill).toContain("Publish failed");
+    await pollText(pill).toContain("Couldn’t publish");
   });
 
   it("keeps one mobile pill across a PR's publication lifecycle", async () => {
@@ -872,7 +872,7 @@ suite.define(() => {
     });
     expect(publicationRequestKey(second.params)).toBe(publicationRequestKey(first.params));
     const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await pollText(failure).toContain("Publication failed");
+    await pollText(failure).toContain("Couldn’t publish");
     await pollText(failure).toContain("Check repository write access");
     await pollCount(page.getByRole("button", { name: "Choose a new publication" })).toBe(1);
     await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");

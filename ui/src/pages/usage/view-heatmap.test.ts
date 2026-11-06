@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -24,7 +24,7 @@ describe("UsageHeatmap", () => {
     (start) => {
       const container = mountHeatmap([dailyEntry("2026-07-09", 10)], start, "2026-07-09");
       expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-        "Token Activity",
+        "Token activity",
       );
       const cells = [...container.querySelectorAll(".usage-heatmap__cell")];
       expect(cells).toHaveLength(364);
@@ -145,11 +145,18 @@ describe("UsageHeatmap", () => {
       const cells = [...container.querySelectorAll(".usage-heatmap__cell")];
       const cell = cells.at(-1)!;
       const englishTooltip = cell.getAttribute("data-tooltip");
-      const dateLabel = englishTooltip?.split(" · ")[0];
-      const hostFormattedTokens = new Intl.NumberFormat(undefined, {
-        maximumFractionDigits: 0,
-      }).format(1234);
+
       const labels = () => {
+        expect(container.querySelector(".usage-heatmap__month")?.textContent).toBe(
+          new Intl.DateTimeFormat(i18n.getLocale(), { month: "short", timeZone: "UTC" }).format(
+            Date.UTC(2026, 4, 8),
+          ),
+        );
+        expect(container.querySelector(".usage-heatmap__weekday")?.textContent).toBe(
+          new Intl.DateTimeFormat(i18n.getLocale(), { weekday: "short", timeZone: "UTC" }).format(
+            Date.UTC(2023, 0, 2),
+          ),
+        );
         expect(container.querySelector(".usage-heatmap__svg")).toBe(svg);
         const current = [...container.querySelectorAll(".usage-heatmap__cell")];
         expect(current).toHaveLength(cells.length);
@@ -167,7 +174,7 @@ describe("UsageHeatmap", () => {
           i18n.t("usage.heatmap.more"),
         );
         expect(cell.getAttribute("data-tooltip")).toBe(
-          `${dateLabel} · ${i18n.t("usage.heatmap.cellTokens", { tokens: hostFormattedTokens })}`,
+          `${new Intl.DateTimeFormat(i18n.getLocale(), { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(Date.UTC(2026, 6, 9))} · ${i18n.t("usage.heatmap.cellTokens", { tokens: new Intl.NumberFormat(i18n.getLocale(), { maximumFractionDigits: 0 }).format(1234) })}`,
         );
         expect(cell.getAttribute("aria-label")).toBe(cell.getAttribute("data-tooltip"));
       };
@@ -184,4 +191,28 @@ describe("UsageHeatmap", () => {
       await restoreI18n();
     }
   });
+});
+
+it("formats UTC bucket month, weekday, and token labels with the UI locale", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  try {
+    const container = mountHeatmap([dailyEntry("2026-01-10", 12345)], "2026-01-01", "2026-04-01");
+    expect(container.textContent).toContain(
+      new Intl.DateTimeFormat("de", { month: "short", timeZone: "UTC" }).format(
+        Date.UTC(2026, 0, 1),
+      ),
+    );
+    expect(container.textContent).toContain(
+      new Intl.DateTimeFormat("de", { weekday: "short", timeZone: "UTC" }).format(
+        Date.UTC(2026, 0, 5),
+      ),
+    );
+    expect(
+      [...container.querySelectorAll(".usage-heatmap__cell")]
+        .map((cell) => cell.getAttribute("data-tooltip"))
+        .join(" "),
+    ).toContain(new Intl.NumberFormat("de", { maximumFractionDigits: 0 }).format(12345));
+  } finally {
+    locale.mockRestore();
+  }
 });

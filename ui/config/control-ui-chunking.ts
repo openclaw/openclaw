@@ -229,6 +229,13 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/timezone-suggestions.ts":
       // Page chrome and its selectors stay separate from shared controls in lazy Chat panels.
       return "route-chrome";
+    case "ui/src/lib/phone-layout.ts":
+    case "ui/src/lib/reactive/pending-focus.ts":
+    case "ui/src/components/solid/menu-trigger.tsx":
+    case "ui/src/components/menu-shortcut-activation.ts":
+    case "ui/src/components/solid/refresh-button.tsx":
+      // Share small navigation helpers without coupling their callers to page renderers.
+      return "navigation-helpers";
     case "ui/src/components/config-form.analyze.ts":
     case "ui/src/components/config-form.shared.ts":
     case "src/config/sensitive-paths.ts":

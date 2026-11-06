@@ -1,9 +1,13 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
 import {
@@ -85,6 +89,9 @@ function makeStoredProfileClient(name: string) {
 }
 
 describe("createGatewayRequestContext presence", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   it.each([
     {
       identity: "email",
@@ -114,7 +121,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
       });
       const params = makePresenceContextParams({
-        clients: new Set([...clients, unrelated]) as never,
+        clients: new GatewayClientRegistry([...clients, unrelated] as never),
       });
       const context = createGatewayRequestContext(params);
       const first = clients[0]!;
@@ -170,6 +177,7 @@ describe("createGatewayRequestContext presence", () => {
 
   it("canonicalizes a connected profile after its durable identity is merged", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sourceClient = makeStoredProfileClient("source");
       const targetClient = makeStoredProfileClient("target");
       const unrelatedClient = makeStoredProfileClient("unrelated");
@@ -185,7 +193,7 @@ describe("createGatewayRequestContext presence", () => {
       });
       const capturedProfile = sourceClient.authenticatedUserProfile;
       const params = makePresenceContextParams({
-        clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
+        clients: new GatewayClientRegistry([sourceClient, targetClient, unrelatedClient] as never),
       });
       const context = createGatewayRequestContext(params);
 

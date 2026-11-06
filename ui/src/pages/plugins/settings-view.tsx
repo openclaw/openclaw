@@ -22,7 +22,6 @@ import { PluginInstallAction, type PluginInstallActionProps } from "./install-ac
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -161,14 +160,18 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
     if (
       field.path[3] !== "hooks" ||
       field.path.length !== 5 ||
-      (key !== "allowPromptInjection" && key !== "allowConversationAccess")
+      (key !== "allowPromptModification" && key !== "allowConversationAccess")
     ) {
       continue;
     }
-    const labelKey = key === "allowPromptInjection" ? "promptContextAccess" : "conversationAccess";
+    const labelKey =
+      key === "allowPromptModification" ? "promptContextAccess" : "conversationAccess";
     field.label = t(`pluginsPage.${labelKey}`);
     field.help = t(`pluginsPage.${labelKey}Description`);
-    field.effectiveValue = options.inspection.grants.hooks[key].effective;
+    field.effectiveValue =
+      options.inspection.grants.hooks[
+        key === "allowPromptModification" ? "allowPromptInjection" : key
+      ].effective;
   }
   return {
     fields,
@@ -215,7 +218,6 @@ function PluginNotices(props: DetailProps) {
         </div>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
-      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }

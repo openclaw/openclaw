@@ -26,6 +26,7 @@ import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -303,12 +304,17 @@ export async function handleChatSendWithStorage(
           userTurnRecorder.getPendingInputMessage?.() &&
           !userTurnRecorder.isPendingInputConsumed?.();
         const disposition = "cancelled";
-        userTurnRecorder.finishPendingInput?.(disposition);
-        if (pending && activeRunAbort.controller.signal.aborted) {
-          const reason = resolveChatAbortDiagnosticReason(
-            activeRunAbort.controller.signal,
-            activeRunAbort.entry?.adapter,
-          );
+        const reason = activeRunAbort.controller.signal.aborted
+          ? resolveChatAbortDiagnosticReason(
+              activeRunAbort.controller.signal,
+              activeRunAbort.entry?.adapter,
+            )
+          : undefined;
+        userTurnRecorder.finishPendingInput?.(
+          disposition,
+          reason === "user-stop" ? true : undefined,
+        );
+        if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
             runId: clientRunId,
             sessionKey,
@@ -453,6 +459,14 @@ export async function handleChatSendWithStorage(
         return;
       }
     }
+    // Steering and queued input never reach agent preparation; existing entries record here.
+    await recordSessionOperatorSource({
+      agentId: session.agentId,
+      sessionKey,
+      storePath,
+      authority: admission.operatorAuthority,
+      log: context.logGateway,
+    });
     if (approvedInput) {
       preparedUserTurn.applyApprovedText(
         extractTextFromChatContent(approvedInput.content, {
@@ -581,6 +595,7 @@ export async function handleChatSendWithStorage(
     }
     phase?.finish();
     diagnostics.acknowledge();
+    using dispatchHandoff = diagnostics.scope("detail.dispatch.accepted_handoff");
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
@@ -642,6 +657,7 @@ export async function handleChatSendWithStorage(
         runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
       ),
     );
+    dispatchHandoff?.finish();
     admittedCleanup.dispatched = true;
     if (codexGoalCommitted) {
       await acknowledgeCodexGoal({

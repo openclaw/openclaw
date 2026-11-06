@@ -309,6 +309,68 @@ observations retry within the existing recovery budget; exhaustion fails the
 scheduled pass so its scan window remains eligible. A newer active run or attempt
 keeps the status pending until that run completes.
 
+## Recover dependency-cache device identities
+
+The lifetime ledger binds the cache, database, and installations to their device
+numbers, inodes, owners, and modes. A device-number change can make ordinary
+commands refuse the ledger. Matching inodes or a recent reboot do not prove that
+the same volume remains mounted. Ordinary commands never repair this mismatch.
+
+After independently inspecting the complete cache and accepting its current
+identity, an operator can adopt only its device numbers:
+
+```bash
+scripts/pr dependency-cache-recover <plan.json> \
+  --plan-sha256 <SHA256> --confirmed-operator-recovery
+```
+
+This shared-cache operation uses the existing metadata mutex, not a PR lock or
+workflow binding. It requires the official OpenClaw origin and authenticates the
+complete official-main wrapper before opening the ledger, using only Git and
+Node built-ins. Origin admission runs before wrapper substitution or bootstrap.
+Review and land tooling repairs before use. Developer-wrapper opt-in and unlanded
+code do not authorize recovery. The command does not install packages or select
+another dependency donor.
+
+When source selection materializes a temporary wrapper, recovery retains that
+directory and prints its path on both success and failure. Ordinary anchor
+retirement opens the ledger and could roll back an unresolved SQLite journal.
+Recovery therefore performs no exit-time cache cleanup or hold settlement.
+
+The SHA-256 seals exact UTF-8 JSON bytes. The version-1 plan contains:
+
+- `version: 1`, the physical `cache` path returned by `dependencyCacheRoot()`, and
+  a nonempty `reason` recording the operator's identity decision.
+- `before`: complete `owner`, `installations`, and `holds` row arrays. Include
+  every column and preserve SQLite value types. Sort owner rows by `id`,
+  installations by `key`, and holds by `entry_key`, `anchor_path`, `anchor_dev`,
+  then `anchor_ino`.
+- `physical`: `cache` and `database` identities, plus an `installations` array
+  ordered by key. Each installation has `key` and its physical identity.
+  Identities contain decimal strings for `dev`, `ino`, `uid`, and `mode` from
+  `lstat`. The database is the existing `lifetime.sqlite` file.
+
+Preserve the sealed plan until reconciliation finishes. Exclude manual ledger
+writers and cache-directory replacement throughout inspection and recovery; the
+metadata mutex serializes native owners only. The cache must contain exactly the
+ledger and registered installations, with no unresolved journal or unknown
+entries. Recorded cache, database, and installation device numbers must identify
+one old device, and their current identities must identify one new device. Inodes,
+owners, modes, schema, and integrity must match.
+
+The owner compares the complete logical preimage inside one synchronous SQLite
+write transaction. It updates only `owner.cache_dev`, `owner.db_dev`, and each
+registered `installations.dev`. It preserves all holds, including absent anchors,
+and preserves sequence, settlement, reuse order, and installed contents. Recovery
+grants no collection, anchor retirement, or hold-release authority.
+
+Success prints `recovered` with the plan seal and installation count. After an
+interruption or lost response, repeat only the same sealed plan: the exact
+postimage returns `already-recovered` without changing rows. Any third state
+refuses and requires fresh inspection. A failure is not proof that no commit
+occurred. After verified recovery, use the original command's ordinary admission;
+its existing source, dependency, and workflow requirements still apply.
+
 ## Recover a retained dependency projection
 
 When a retained anchor's pinned package directory disappears, changing

@@ -21,9 +21,11 @@ import {
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-import type { FallbackAttempt } from "../model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackResultClassification,
+} from "../model-fallback.types.js";
 import { isOperatorAccessProgramAllowed } from "../operator-access-program.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { withAgentPromptProjects } from "../prompt-projects.js";

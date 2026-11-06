@@ -28,6 +28,7 @@ import {
 import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronNoOutputTimeoutOption,
@@ -517,7 +518,11 @@ export function registerCronEditCommand(cron: Command) {
           } else if (payloadKind === "command") {
             payload = {
               kind: "command",
-              argv: commandArgv ?? (commandShell ? ["sh", "-lc", commandShell] : undefined),
+              argv:
+                commandArgv ??
+                (commandShell
+                  ? await buildCronCommandShellArgvForGateway(commandShell, opts)
+                  : undefined),
               cwd: commandCwd,
               env: commandEnv,
               input: hasCommandInput ? opts.commandInput : undefined,

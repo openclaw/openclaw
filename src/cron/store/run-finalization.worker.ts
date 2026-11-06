@@ -118,6 +118,30 @@ export function finalizeCronRunsInWorker(
               currentJob && ownsRunningMarker ? currentJob : structuredClone(completed.job);
             if (admissionDeferred) {
               if (currentJob && ownsRunningMarker) {
+                if (
+                  currentJob.schedule.kind !== "stream" &&
+                  !currentJob.state.runningScheduleChangeId
+                ) {
+                  const previous = currentJob.state.admissionDeferred;
+                  const attempts = (previous?.attempts ?? 0) + 1;
+                  currentJob.state.admissionDeferred = {
+                    reason:
+                      completed.summary ??
+                      completed.admissionDeferredReason ??
+                      "Admission unavailable",
+                    sinceMs: previous?.sinceMs ?? completed.endedAt,
+                    attempts,
+                    retryAtMs:
+                      completed.endedAt +
+                      Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
+                  };
+                  if (attempts === 5) {
+                    state.deps.log.warn(
+                      { jobId: currentJob.id, ...currentJob.state.admissionDeferred },
+                      "cron: admission remains deferred",
+                    );
+                  }
+                }
                 delete currentJob.state.queuedAtMs;
                 delete currentJob.state.runningAtMs;
                 delete currentJob.state.runningReceiptId;

@@ -432,6 +432,16 @@ export function createKnowledgeService(
             recordResponseBytes: RECORD_RESPONSE_MAX_BYTES,
           },
         };
+        // Whether this caller may write here: the plugin gate plus its own grant.
+        const canWrite =
+          policy.writesEnabled &&
+          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
+            (context.source === "session-action" &&
+              Boolean(
+                context.action.client?.scopes.some(
+                  (s: string) => s === "operator.write" || s === "operator.admin",
+                ),
+              )));
         const notReady = (
           agentId: string,
           store: Exclude<StoreState, "ready">,
@@ -443,7 +453,10 @@ export function createKnowledgeService(
           agent: agentId,
           store,
           scope: "private",
-          writesEnabled: false,
+          // A never-written store is created by the caller's first Knowledge tool
+          // call, so it reports the access that call will have. Any other
+          // non-ready store cannot take writes.
+          writesEnabled: store === "unprovisioned" && canWrite,
           live: "stopped" as const,
           records: 0,
           validRecords: 0,
@@ -482,15 +495,6 @@ export function createKnowledgeService(
         if (scope === "private") {
           runtime.live.ensureWatching();
         }
-        const canWrite =
-          policy.writesEnabled &&
-          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
-            (context.source === "session-action" &&
-              Boolean(
-                context.action.client?.scopes.some(
-                  (s: string) => s === "operator.write" || s === "operator.admin",
-                ),
-              )));
         return {
           ...base,
           checkedAt: catalog.checkedAt,

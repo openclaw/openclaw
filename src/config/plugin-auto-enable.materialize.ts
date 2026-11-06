@@ -225,7 +225,9 @@ export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
   }
   return (
     entry.enabled === true ||
-    isRecord(entry.config) ||
+    // Validation materializes `{}` defaults for enabled plugins; an empty object carries
+    // no operator configuration and must not widen a restrictive plugins.allow.
+    (isRecord(entry.config) && Object.keys(entry.config).length > 0) ||
     isRecord(entry.hooks) ||
     isRecord(entry.subagent) ||
     isRecord(entry.llm) ||

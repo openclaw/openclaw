@@ -2107,8 +2107,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* The disclosure stays rightmost; actions sit beside it. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
+/* Every depth shares the disclosure endcap. Keep row-host specificity so touch
+   alignment cannot reset its horizontal space. */
+.sidebar-recent-session.session-row-host:has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
@@ -2876,12 +2877,16 @@ a:is(
   outline-offset: 1px;
 }
 
+.sidebar-workspace-header__mark,
+.sidebar-agent-card__avatar {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
 .sidebar-workspace-header__mark {
   display: grid;
   place-items: center;
-  width: var(--sidebar-agent-avatar-size);
-  height: var(--sidebar-agent-avatar-size);
-  flex: none;
 }
 
 .sidebar-workspace-header__mark > svg {
@@ -2894,9 +2899,6 @@ a:is(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--sidebar-agent-avatar-size);
-  height: var(--sidebar-agent-avatar-size);
-  flex: none;
   border-radius: var(--radius-full);
   background: var(--secondary);
   color: var(--secondary-foreground);
@@ -3950,7 +3952,8 @@ html.openclaw-native-web-chrome
 .sidebar-recent-session--single-line .sidebar-recent-session__text {
   flex-direction: row;
   align-items: center;
-  gap: calc(var(--sidebar-row-gap) + var(--sidebar-row-gap));
+  /* Trailing metadata needs less separation than the leading status icon. */
+  gap: 6px;
 }
 
 /* Basis 0 mirrors the two-line subtitle contract: the title absorbs all

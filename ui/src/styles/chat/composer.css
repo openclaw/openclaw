@@ -325,12 +325,12 @@
   overflow: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: auto;
-  transition:
-    height 220ms cubic-bezier(0.2, 1, 0.22, 1),
-    opacity var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete;
+}
+
+/* Height eases only between views of a settled menu. Entry and exit keep the
+   shared menu presentation instead of growing from the last measured height. */
+.agent-chat__capability-menu-panel:where([data-phase="open"]) {
+  transition: height 220ms cubic-bezier(0.2, 1, 0.22, 1);
 }
 
 .agent-chat__capability-menu-body {

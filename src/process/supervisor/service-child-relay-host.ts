@@ -30,6 +30,7 @@ import {
 } from "./service-child-relay-preparation.js";
 import {
   createServiceChildRelayRetirement,
+  joinStartupFailureCleanup,
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
@@ -621,9 +622,11 @@ export async function createServiceChildRelayAdapter(
       ]);
       // Preserve admission failure over the secret pipe it closes as a consequence.
       if (startupResult.status === "rejected") {
-        await startupErrorAckDelivery;
-        await cleanup.promise;
-        throw startupResult.reason;
+        throw await joinStartupFailureCleanup(
+          startupResult.reason,
+          startupErrorAckDelivery,
+          cleanup.promise,
+        );
       }
       if (secretDeliveryResult.status === "rejected") {
         throw secretDeliveryResult.reason;

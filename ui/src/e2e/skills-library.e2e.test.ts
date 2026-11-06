@@ -4,6 +4,7 @@ import type {
   SkillsLibraryListResult,
   SkillsLibraryReceipt,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { answerConfirmModal } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { buildSkillLibraryMock } from "../test-helpers/skill-library-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -148,11 +149,8 @@ suite.define(() => {
       await page.getByLabel("File", { exact: true }).selectOption("SKILL.md");
       const draft = `${own.content}\nKeep this draft.\n`;
       await page.getByLabel("SKILL.md", { exact: true }).fill(draft);
-      page.once("dialog", (dialog) => {
-        expect(dialog.message()).toBe("Discard your unsaved skill changes?");
-        void dialog.dismiss();
-      });
       await page.keyboard.press("Escape");
+      await answerConfirmModal(page, "Discard your unsaved skill changes?", "Cancel");
       await expectLibraryDialogOpen(page);
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
       await gateway.deferNext("skills.library.save");
@@ -187,11 +185,8 @@ suite.define(() => {
           (element) => element.clientWidth > 0 && element.scrollWidth <= element.clientWidth + 1,
         ),
       ).toBe(true);
-      page.once("dialog", (dialog) => {
-        expect(dialog.message()).toBe("Discard your unsaved skill changes?");
-        void dialog.accept();
-      });
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await answerConfirmModal(page, "Discard your unsaved skill changes?", "Discard");
       await openLibraryAction(page, "Import skill");
       const importer = page.locator("openclaw-modal-dialog");
       await importer.getByLabel("Skill name", { exact: true }).waitFor();
@@ -276,8 +271,8 @@ suite.define(() => {
         const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
         // The saved receipt precedes refresh completion; press() does not wait for enabled controls.
         await expect.poll(() => deleteFile.isEnabled()).toBe(true);
-        page.once("dialog", (dialog) => void dialog.accept());
         await deleteFile.press("Enter");
+        await answerConfirmModal(page, /^Remove references\/lilac\.txt from/u, "Remove");
         await picker.locator('option[value="references/lilac.txt"]').waitFor({ state: "detached" });
         expect(await picker.inputValue()).toBe("SKILL.md");
         expect(await skill.inputValue()).toBe(own.content);
@@ -355,7 +350,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
-      await page.getByText(/Only its owner or an authorized administrator/u).waitFor();
+      await page.getByText(/only its owner or an authorized admin/u).waitFor();
       // The read-only checks can finish while the reader is still animating in.
       await expectLibraryDialogOpen(page);
       expect(await page.getByRole("button", { name: "Transfer to team" }).count()).toBe(0);
@@ -440,7 +435,6 @@ suite.define(() => {
 
   it("uses stable identity for share, transfer, rollback, and removal receipts", async () => {
     await suite.withPage({}, async ({ page }) => {
-      page.on("dialog", (dialog) => void dialog.accept());
       const oldRevision = "0".repeat(64);
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -490,6 +484,11 @@ suite.define(() => {
         entry: { ...published.entry, ownerProfileId: null, ownerLabel: "Team", shared: true },
       });
       await page.getByRole("button", { name: "Transfer to team", exact: true }).click();
+      await answerConfirmModal(
+        page,
+        "Transfer release-notes to team ownership?",
+        "Transfer to team",
+      );
       await page.getByText(/Saved release-notes to team library/u).waitFor();
       await page
         .getByText(`Team · revision ${published.entry.revision.slice(0, 8)}`, { exact: true })
@@ -521,6 +520,7 @@ suite.define(() => {
           "Existing sessions retain their pinned revision. Create a new skill to add it to future sessions.",
       });
       await page.getByRole("button", { name: "Remove skill", exact: true }).click();
+      await answerConfirmModal(page, "Remove release-notes from the library?", "Remove skill");
       await page.getByText(/Removed release-notes from team library/u).waitFor();
       expect(
         (await gateway.getRequests("skills.library.mutate")).map(

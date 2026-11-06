@@ -48,6 +48,7 @@ import {
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
+  resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -98,6 +99,7 @@ type ChangedTargetValidation = {
   baseRef?: string;
   onFallback?: PlanDiagnostic;
   selectionMode?: "full" | "aggressive";
+  adaptiveMarkdown?: boolean;
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
 };
 const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
@@ -409,6 +411,20 @@ const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
 // opt-in scripts/control-ui-retention census, keep their own config and command.
 const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
+function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
+  // Canonical inventories resolve against the process root, even for explicit targets.
+  if (
+    path.resolve(cwd) !== process.cwd() ||
+    !isTestFileTarget(file) ||
+    !lstatSync(path.resolve(cwd, file), { throwIfNoEntry: false })?.isFile()
+  ) {
+    return false;
+  }
+  const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
+  // Each config runs in its own process; unit-fast shares the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.unit-fast.config.ts";
+}
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -427,6 +443,9 @@ export function resolveChangedNodeTestTargets(
     boundedOwners: true,
     baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
+    adaptiveMarkdown: options.adaptiveMarkdown
+      ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
+      : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,
@@ -538,6 +557,13 @@ export function resolveChangedNodeTestTargets(
     const selectedSet = new Set(selected);
     const explained = new Set<string>();
     for (const selection of selections) {
+      if (selection.rule === "adaptive-qualified-unchanged") {
+        const targets = selection.targets.filter((file) => !selectedSet.has(file));
+        if (targets.length > 0) {
+          options.onSelection({ ...selection, targets });
+        }
+        continue;
+      }
       const targets = [
         ...new Set(selection.targets.flatMap((target) => expanded.get(target) ?? [target])),
       ].filter((file) => selectedSet.has(file));

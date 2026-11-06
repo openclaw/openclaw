@@ -114,6 +114,17 @@ afterEach(() => {
 });
 
 describe("Sessions archive outcome lifetime", () => {
+  it("shows confirmed archive feedback without error styling", async () => {
+    const { page, pending, started, toast, undo } = await setup();
+    const archived = page.archive(target);
+    await started.promise;
+    pending.resolve(patched);
+    await archived;
+    await waitForFast(() => expect(undo()).not.toBeNull());
+    expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived");
+    expect(toast.querySelector(".app-toast")?.classList.contains("app-toast--error")).toBe(false);
+  });
+
   it.each(["archive", "unarchive", "delete"] as const)(
     "queues offline page %s without issuing an RPC until reconnect",
     async (action) => {

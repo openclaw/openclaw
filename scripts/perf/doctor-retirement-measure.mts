@@ -2,6 +2,7 @@
 // Count mode also requires --observer-root <frozen SQL harness>; --mode profile captures each thread.
 // Native source update + Gateway diagnostic. The caller owns the timing lock/quiet-host gate.
 // Synthetic fixtures only; no QA test watchdog is changed and no live state is read.
+// --retained-wal leaves committed WAL at CLI entry.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -9,9 +10,12 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { runSqliteImmediateTransactionSync } from "../../src/infra/sqlite-transaction.js";
 import type { UpdateRunResult } from "../../src/infra/update-runner-types.js";
+import { writeConfigMachineStateInDatabase } from "../../src/state/config-machine-state-write.js";
 
 const { values } = parseArgs({
   options: {
@@ -20,11 +24,14 @@ const { values } = parseArgs({
     "cold-driver-root": { type: "string" },
     "warm-driver-root": { type: "string" },
     "target-sha": { type: "string" },
+    "scratch-root": { type: "string" },
     "install-lock": { type: "string" },
     "pnpm-store": { type: "string" },
     mode: { type: "string", default: "count" },
     "cold-only": { type: "boolean", default: false },
     "observer-root": { type: "string" },
+    "retained-wal": { type: "boolean", default: false },
+    "standing-advisories": { type: "boolean", default: false },
   },
 });
 assert.ok(values.output, "--output is required (use a fresh directory per invocation)");
@@ -63,7 +70,18 @@ assert.ok(!fs.existsSync(output), "--output must not already exist");
 fs.mkdirSync(output, { recursive: true });
 const scratchParent = process.env.TMPDIR;
 assert.ok(scratchParent, "Set TMPDIR to the lane's internal-disk scratch directory");
-const scratch = fs.mkdtempSync(path.join(scratchParent, "doctor-direct-"));
+// An explicit root is created fresh and owned by this invocation, with the same cleanup.
+const scratch = values["scratch-root"]
+  ? path.resolve(values["scratch-root"])
+  : fs.mkdtempSync(path.join(scratchParent, "doctor-direct-"));
+if (values["scratch-root"]) {
+  assert.equal(
+    path.dirname(scratch),
+    path.resolve(scratchParent),
+    "--scratch-root must be directly inside TMPDIR",
+  );
+  fs.mkdirSync(scratch, { mode: 0o700 });
+}
 for (const name of ["home", "state", "cache"]) {
   fs.mkdirSync(path.join(scratch, name));
 }
@@ -124,7 +142,10 @@ record({ type: 'start', ppid: process.ppid, mainThread: wt.isMainThread, argv: p
 const ownOptions = '--require=' + JSON.stringify(__filename) +
   (mode === 'count' ? ' --require=' + JSON.stringify(process.env.DOCTOR_BENCH_OBSERVER) : '');
 function instrumentOptions(value) {
-  const options = { ...value, env: { ...(value && value.env || process.env) } };
+  const options = { ...value, env: { ...(value && value.env || process.env),
+    DOCTOR_BENCH_OUTPUT: root, DOCTOR_BENCH_MODE: mode,
+    DOCTOR_BENCH_OBSERVER: process.env.DOCTOR_BENCH_OBSERVER, SQLMEASURE_OUT: root,
+  } };
   const old = options.env.NODE_OPTIONS || '';
   options.env.NODE_OPTIONS = old.includes(__filename) ? old : old + ' ' + ownOptions;
   return options;
@@ -133,8 +154,17 @@ process.env.NODE_OPTIONS = instrumentOptions({ env: process.env }).env.NODE_OPTI
 const originalSpawn = cp.spawn;
 cp.spawn = function(command, args, options) {
   const env = options && options.env || process.env;
+  const runsDoctor = args.includes('--doctor') ||
+    (args.includes('doctor') && (args.includes('--fix') || args.includes('--repair')));
+  if (env.DOCTOR_BENCH_RETAINED_WAL === '1' &&
+      runsDoctor) {
+    const filename = path.join(env.OPENCLAW_STATE_DIR, 'state', 'openclaw.sqlite');
+    record({ type: 'doctor-wal-input',
+      walBytes: fs.existsSync(filename + '-wal') ? fs.statSync(filename + '-wal').size : 0,
+      shmExists: fs.existsSync(filename + '-shm') });
+  }
   if (env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === '1' &&
-      (args.includes('--doctor') || (args.includes('doctor') && args.includes('--repair')))) {
+      runsDoctor) {
     // Retain the first Doctor's receipt before the second replaces it with completion.
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(path.join(env.OPENCLAW_STATE_DIR, 'state', 'openclaw.sqlite'), { readOnly: true });
@@ -238,6 +268,11 @@ const summary: Record<string, unknown> = {
     "Inspector intervals are sampled elapsed attribution, not exact OS CPU.",
     "Hard-killed child/worker profiles and exits may be missing; analyzers expose coverage.",
     "Profile mode samples OS process/thread CPU every 100 ms; count/timing mode has no periodic CPU sampling.",
+    ...(values["retained-wal"]
+      ? [
+          "Committed nonempty WAL is asserted at native CLI entry. The updater closes shared state before Doctor; doctor-wal-input events record whether WAL remains at that later boundary.",
+        ]
+      : []),
   ],
 };
 const childResults: Array<Record<string, unknown>> = [];
@@ -361,6 +396,97 @@ try {
   cfg.plugins ??= {};
   cfg.plugins.entries ??= {};
   cfg.plugins.entries.github = { ...cfg.plugins.entries.github, enabled: false };
+  if (values["standing-advisories"]) {
+    const id = "postpass-advisory";
+    const peers = ["synthetic-a", "synthetic-b"];
+    const pluginRoot = path.join(scratch, id);
+    fs.mkdirSync(pluginRoot);
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: id,
+        version: "0.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"], setupEntry: "./setup.js" },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id,
+        channels: [id],
+        doctorContract: { stateMigrations: [] },
+        channelConfigs: {
+          [id]: {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                enabled: { type: "boolean" },
+                dmPolicy: { const: "allowlist" },
+                allowFrom: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["peers"],
+          properties: { peers: { type: "array", items: { type: "string" } } },
+        },
+      }),
+    );
+    // The loader observes this still-supported import and emits its real dated SDK notice.
+    fs.writeFileSync(
+      path.join(pluginRoot, "channel.js"),
+      `import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+const id = "postpass-advisory";
+const account = () => ({ accountId: "default", enabled: true, configured: true });
+export const plugin = {
+  id,
+  meta: { id, label: "Synthetic advisory", selectionLabel: "Synthetic advisory",
+    docsPath: "/synthetic", blurb: "Native update standing-advisory fixture" },
+  capabilities: { chatTypes: ["direct"] },
+  config: { listAccountIds: () => ["default"], resolveAccount: account, inspectAccount: account },
+  gateway: { async startAccount({ abortSignal, setStatus }) {
+    setStatus({ running: true, connected: true, lifecycle: "ready" });
+    if (!abortSignal.aborted) {
+      await new Promise(resolve => abortSignal.addEventListener("abort", resolve, { once: true }));
+    }
+  } },
+  security: { resolveDmPolicy: ({ cfg }) => ({
+    policy: "allowlist", allowFrom: resolvePluginConfigObject(cfg, id).peers,
+    policyPath: "channels.postpass-advisory.dmPolicy",
+    allowFromPath: "channels.postpass-advisory.", approveHint: "Synthetic fixture only",
+  }) },
+};
+`,
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      `import { plugin } from "./channel.js";
+export default { id: "postpass-advisory", register(api) { api.registerChannel({ plugin }); } };
+`,
+    );
+    fs.writeFileSync(path.join(pluginRoot, "setup.js"), 'export { plugin } from "./channel.js";\n');
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+      "export const stateMigrations = [];\n",
+    );
+    cfg.plugins.allow = [...(cfg.plugins.allow ?? []), id];
+    cfg.plugins.load = { paths: [...(cfg.plugins.load?.paths ?? []), pluginRoot] };
+    cfg.plugins.entries[id] = { enabled: true, config: { peers } };
+    cfg.channels[id] = { enabled: true, dmPolicy: "allowlist", allowFrom: peers };
+    cfg.session = { ...cfg.session, dmScope: "main" };
+    cfg.bindings = [...(cfg.bindings ?? []), { agentId: "qa", match: { channel: id } }];
+    // Doctor inspects authenticated LAN config; the proof Gateway still binds loopback below.
+    cfg.gateway.bind = "lan";
+    summary.standingAdvisories = {
+      channel: id,
+      expected: ["gateway.bind_network_accessible", "DM principals share a session", "2026-12-01"],
+    };
+  }
   const configBytes = `${JSON.stringify(cfg, null, 2)}\n`;
   fs.writeFileSync(configPath, configBytes, { mode: 0o600 });
   fs.mkdirSync(path.dirname(authConfigPath), { recursive: true, mode: 0o700 });
@@ -399,6 +525,7 @@ try {
       DOCTOR_BENCH_OUTPUT: output,
       DOCTOR_BENCH_MODE: mode,
       DOCTOR_BENCH_OBSERVER: observer,
+      DOCTOR_BENCH_RETAINED_WAL: values["retained-wal"] ? "1" : "0",
       SQLMEASURE_OUT: output,
     },
     "mock-openai",
@@ -563,6 +690,32 @@ try {
     "Auth bootstrap mutated canonical config",
   );
   await closeQaRuntimeStores(scratch);
+  function retainCommittedWal() {
+    const filename = path.join(stateDir, "state", "openclaw.sqlite");
+    assert.ok(fs.existsSync(filename), "Retained WAL requires the initialized shared database");
+    const saved = fs.mkdtempSync(path.join(scratch, "retained-wal-"));
+    const database = new DatabaseSync(filename);
+    try {
+      database.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)",
+      );
+      runSqliteImmediateTransactionSync(database, () =>
+        writeConfigMachineStateInDatabase(database, "qa:doctorgen:retained-wal", true),
+      );
+      fs.copyFileSync(filename, path.join(saved, "main"));
+      fs.copyFileSync(`${filename}-wal`, path.join(saved, "wal"));
+    } finally {
+      database.close();
+    }
+    // Restore the committed family after close checkpoints it, omitting the rebuildable index.
+    fs.copyFileSync(path.join(saved, "main"), filename);
+    fs.copyFileSync(path.join(saved, "wal"), `${filename}-wal`);
+    fs.rmSync(`${filename}-shm`, { force: true });
+    fs.rmSync(saved, { recursive: true });
+    const walBytes = fs.statSync(`${filename}-wal`).size;
+    assert.ok(walBytes > 32, "Native update input must contain committed WAL frames");
+    return { mainBytes: fs.statSync(filename).size, walBytes, shmExists: false };
+  }
   const updateArgs = ["update", "--channel", "dev", "--yes", "--no-restart", "--json"];
   summary.updateArgs = updateArgs;
   async function update(label: string, runtimeRoot: string) {
@@ -636,6 +789,18 @@ try {
       assert.ok(result.runId, "Native update must retain its genuine run");
       const run = getUpdateRun(result.runId, { env });
       assert.equal(run?.status, "succeeded", "Native update must settle its run");
+      if (values["retained-wal"]) {
+        const receipts = result.steps.filter((step) => step.name === "database migration writes");
+        assert.ok(receipts.length > 0, "Native update must report database write attribution");
+        assert.ok(
+          receipts.every((step) => !step.warnings?.length),
+          "Database write attribution must remain complete",
+        );
+        assert.doesNotMatch(
+          JSON.stringify([result, run]),
+          /Automatic database restoration (?:unavailable|cannot)|writer is unknown/u,
+        );
+      }
       const deferredRetirement = JSON.parse(
         fs.readFileSync(path.join(output, `retirement-deferred-${result.runId}.json`), "utf8"),
       );
@@ -660,6 +825,9 @@ try {
       fs.unlinkSync(path.join(installLock, "pid"));
       fs.rmdirSync(installLock);
     }
+  }
+  if (values["retained-wal"]) {
+    summary.coldRetainedWalInput = retainCommittedWal();
   }
   phase("cold-update");
   const coldUpdateStarted = performance.now();
@@ -698,6 +866,10 @@ try {
     await stopOwned(gateway);
     await closeQaRuntimeStores(scratch);
     assert.ok(warmDriverRoot);
+    if (values["retained-wal"]) {
+      phase("warm-fixture");
+      summary.warmRetainedWalInput = retainCommittedWal();
+    }
     phase("warm-update");
     const warmStarted = performance.now();
     summary.warmUpdate = await update("warm-update", warmDriverRoot);

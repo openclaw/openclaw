@@ -29,7 +29,8 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // Each landed change can consume this much ratchet tolerance, so small increases
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
-const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
+// Patrick approved 192 B of generated-name/compression variance for #192338 (2026-11-03).
+const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 192;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
@@ -48,14 +49,15 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // First-visit co-location improves Sessions/Cron by 7–8%, accepting 205 B in Chat.
-  // Measured 1,280,999 B plus the existing 64 B build-variance headroom.
-  chatBootJsGzipBytes: 1_281_063,
-  newBootJsGzipBytes: 797_395,
+  // Long-session windowing measures 1,294,520/801,629 B for Chat/New against d0eb40dc015.
+  // The coordinator accepted this measured remainder for the readiness/memory win
+  // (#183800); request counts and the global variance allowance stay unchanged.
+  chatBootJsGzipBytes: 1_294_520,
+  newBootJsGzipBytes: 801_629,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
-  // The separate 512 B growth and 64 B build-variance allowances are unchanged.
+  // The separate growth allowance stays 512 B; build variance is bounded above.
   startupJsGzipBytes: 325_131,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
@@ -66,20 +68,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
-  // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
-  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
-  // approved the increase on 2026-10-28. Retain 64 B build variance.
-  // iOS-style mobile sheet motion (#188162) adds 279 B to a main that already measured
-  // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
-  // Retain 64 B build variance.
-  // Mobile composer controls stay inside the composer: 309,341 B measured.
-  // Same-toolchain main 6494dce5: 319,575 B; prompt panel adds 671 B.
-  // Keep 1 KiB above that measured base without changing startup budgets.
-  totalCssGzipBytes: 320_599,
-  // Rail first frame #190877 adds 65 B; main measured 1,654,023 B (phone-UI batch landed 2026-11-02).
-  // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
-  totalCssRawBytes: 1_655_112,
+  // Profile's mobile reservation eliminates 0.114 CLS for 86 B gzip / 398 B raw.
+  // Exact head is 323,604 B gzip / 1,668,829 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 323_668,
+  totalCssRawBytes: 1_668_893,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

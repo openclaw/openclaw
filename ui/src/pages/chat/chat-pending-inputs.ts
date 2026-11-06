@@ -9,6 +9,7 @@ import type {
   ChatPendingInputsDismissResult,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -24,6 +25,7 @@ import {
   removeQueuedMessage,
 } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { describeChatQueueAttachmentLabels } from "./chat-send-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
@@ -66,18 +68,25 @@ function reconcileQueuedInputs(
 
 function describePendingInputMessage(message: unknown): string {
   const normalized = normalizeMessage(message);
-  const attachmentLabels = normalized.content.flatMap((part) =>
-    part.type === "attachment" || part.type === "attachment_error"
-      ? [part.attachment.label]
-      : part.type === "image"
-        ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
-        : [],
-  );
-  const imageCount = normalized.content.filter((part) => part.type === "image").length;
+  let imageCount = 0;
+  const attachmentLabels = normalized.content.flatMap((part) => {
+    if (part.type === "image") {
+      imageCount += 1;
+      return part.sources.map(({ fileName }) => fileName);
+    }
+    return part.type === "attachment" || part.type === "attachment_error"
+      ? part.attachment.label
+      : [];
+  });
   return (
-    extractText(message) ||
-    attachmentLabels.join(", ") ||
-    (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : "")
+    extractText(message)?.trim() ||
+    describeChatQueueAttachmentLabels(attachmentLabels) ||
+    describeChatQueueAttachmentLabels(
+      (readPersistedMediaFacts(asNullableRecord(message) ?? {}) ?? []).map(
+        ({ fileName }) => fileName,
+      ),
+      imageCount,
+    )
   );
 }
 
@@ -113,6 +122,7 @@ function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]
   return (
     !input.queued &&
     input.state === "cancelled" &&
+    !input.cancelledByUser &&
     asNullableRecord(input.message)?.display !== false
   );
 }
@@ -157,6 +167,7 @@ export function buildPendingInputItems(
           status: pendingStatus,
           key: `pending-input:${input.id}:state`,
           timestamp: input.acceptedAt,
+          ...(input.cancelledByUser ? { cancelledByUser: true } : {}),
           ...(retired ? { retired } : {}),
         }),
       ),

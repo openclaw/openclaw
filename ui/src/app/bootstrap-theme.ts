@@ -3,6 +3,7 @@ import {
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -184,7 +185,7 @@ export function createApplicationTheme(
       if (!disposed) {
         catalogLoadError = {
           themes: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: formatUiError(error),
         };
         publish();
       }

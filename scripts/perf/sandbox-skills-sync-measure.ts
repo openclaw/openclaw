@@ -5,7 +5,8 @@
  * Alternate baseline/candidate >=5 times; repeat separately with --allocations.
  * --owner selects an alternate workspace-skill-sync.runtime.ts in this checkout.
  * Modes: cold = new destinations, warm = retained snapshot/destination,
- * refreshed = retained destinations after one supporting-file revision change.
+ * refreshed = retained destinations after one supporting-file revision change,
+ * restarted = retained files without process-local sync records (relocated destinations).
  * Forty skills have nine files each, including hidden instructions and nested
  * references/scripts. Discovery, fixture writes and content verification are
  * outside measurement. This measures skills_sync, not container startup/layout.
@@ -49,7 +50,7 @@ assert(Number.isSafeInteger(skillCount) && skillCount > 0, "--skills must be pos
 assert(Number.isSafeInteger(backgroundFiles) && backgroundFiles >= 0, "Invalid --background-files");
 const modes = values.mode === "all" ? ["cold", "warm", "refreshed"] : [values.mode];
 assert(
-  modes.every((mode) => ["cold", "warm", "refreshed"].includes(mode)),
+  modes.every((mode) => ["cold", "warm", "refreshed", "restarted"].includes(mode)),
   "Invalid --mode",
 );
 const output = path.resolve(values.output ?? `.local/sandbox-skills-sync-${process.pid}.json`);
@@ -175,11 +176,18 @@ try {
     );
     if (mode !== "cold") {
       for (const target of new Set(targets)) {
-        await sync(target);
+        const seed = mode === "restarted" ? `${target}-seed` : target;
+        await sync(seed);
+        if (seed !== target) {
+          await fs.promises.rename(seed, target);
+          for (const relative of expected.keys()) {
+            await fs.promises.utimes(path.join(target, "skills", relative), 1, 1);
+          }
+        }
       }
       if (mode === "warm") {
         await sync(targets[0]!);
-      } else {
+      } else if (mode === "refreshed") {
         const changed = "synthetic-00/references/topics/file-0.txt";
         const content = `${expected.get(changed)}updated\n`;
         await writeFile(path.join(workspace, "skills", changed), content);
@@ -253,16 +261,24 @@ try {
       for (const delivery of deliveries) {
         assert.equal(delivery.length, skillCount);
       }
+      let rewrittenFiles = 0;
       for (const target of new Set(targets)) {
         const directory = path.join(target, "skills");
         const files = await listDirectoryTreeStrict(directory);
         assert.equal(files.filter((file) => file.dirent.isFile()).length, expected.size + 2);
         for (const [relative, content] of expected) {
           assert.equal(await readFile(path.join(directory, relative), "utf8"), content);
+          if (
+            mode === "restarted" &&
+            (await fs.promises.stat(path.join(directory, relative))).mtimeMs !== 1000
+          ) {
+            rewrittenFiles++;
+          }
         }
       }
       results.push({
         workload: mode,
+        ...(mode === "restarted" ? { rewrittenFiles } : {}),
         iterations,
         authorityChecksPerSync: checks / iterations,
         nodeRealpathsPerSync: realpaths / iterations,

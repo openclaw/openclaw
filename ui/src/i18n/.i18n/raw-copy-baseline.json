@@ -237,7 +237,7 @@
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",
-      "text": "Clear chat history"
+      "text": "Clear conversation"
     },
     {
       "count": 1,

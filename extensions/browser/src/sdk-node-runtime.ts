@@ -43,9 +43,7 @@ export async function withTimeout<T>(
   };
   const arm = () => {
     startedAt = performance.now();
-    const timer = setTimeout(expire, remaining);
-    timer.unref?.();
-    return timer;
+    return setTimeout(expire, remaining).unref();
   };
   let timer = arm();
   const signal = upstreamSignal

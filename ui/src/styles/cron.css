@@ -295,6 +295,10 @@
   color: var(--danger);
 }
 
+.cron-table__state--warning {
+  color: var(--warn);
+}
+
 .cron-table__state--paused {
   color: var(--muted);
 }
@@ -365,6 +369,10 @@
 
 .cron-table__cell-label {
   display: none;
+}
+
+.cron-table__waiting {
+  white-space: normal;
 }
 
 .cron-table__last {

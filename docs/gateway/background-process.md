@@ -57,7 +57,7 @@ Behavior:
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation where empty successes do not wake (`tools.exec.notifyOnExitEmptySuccess`), poll with `process`.
-- Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
+- Background exec does not automatically wake hidden subagent sessions; visible spawned sessions are woken like other sessions. A hidden subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
 - A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
 
@@ -309,6 +309,10 @@ Older builds do not reinterpret the new certificate as lineage completion.
 macOS and retained Bun process-group owners still require kernel group
 disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
+A descendant that leaves the process group, such as a daemonized tmux server,
+can outlive cleanup there. Exec then still reports the command's own exit, adds a
+note that a detached process may still be running, and records the cleanup as
+uncertain; a failed or canceled command keeps reporting the cleanup failure.
 Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.

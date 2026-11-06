@@ -20,6 +20,7 @@ import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-c
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
 import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
@@ -33,6 +34,10 @@ type MaintenanceOwner = {
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
+// Subvolume deletion leaves asynchronous backref work behind. One attempt per
+// minute gives the filesystem time to settle even when IO PSI stays low.
+const REMOVAL_INTERVAL_MS = 60_000;
+const PRESSURE_BACKOFF_MS = 5 * 60_000;
 
 function captureCleanupInputs(config: OpenClawConfig) {
   const defaults = config.agents?.defaults;
@@ -70,6 +75,8 @@ export function startWorktreeMaintenance(params: {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let archivePending = false;
+  let nextRemovalAt = 0;
+  const hasIoPressure = createHostIoPressureProbe();
   const isActive = () =>
     !scheduler.signal.aborted &&
     owners.get(params.getRuntimeConfig) === owner &&
@@ -81,6 +88,20 @@ export function startWorktreeMaintenance(params: {
       );
     }
   };
+  const pause = (delayMs: number) =>
+    new Promise<void>((resolve, reject) => {
+      const abort = () =>
+        reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
+      scheduler.signal.addEventListener("abort", abort, { once: true });
+      scheduler.schedule({
+        id: "maintenance:worktrees:resume",
+        delayMs,
+        run: () => {
+          scheduler.signal.removeEventListener("abort", abort);
+          resolve();
+        },
+      });
+    });
   const warmPending = new Map<
     string,
     { request: WorktreeWarmPoolRequest; inputs: ReturnType<typeof captureCleanupInputs> }
@@ -219,25 +240,27 @@ export function startWorktreeMaintenance(params: {
                   retryDeferred,
                   signal: scheduler.signal,
                   commitGuard: assertCurrent,
+                  beforeRemoval: async () => {
+                    assertCurrent();
+                    if (scheduler.now() < nextRemovalAt) {
+                      await pause(nextRemovalAt - scheduler.now());
+                    }
+                    while (await hasIoPressure()) {
+                      assertCurrent();
+                      await pause(PRESSURE_BACKOFF_MS);
+                    }
+                    assertCurrent();
+                    nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
+                    batchStartedAt = scheduler.now();
+                    batchItems = 0;
+                  },
                   checkpoint: async (progress) => {
                     Object.assign(current, progress);
                     assertCurrent();
                     if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
                       return;
                     }
-                    await new Promise<void>((resolve, reject) => {
-                      const abort = () =>
-                        reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
-                      scheduler.signal.addEventListener("abort", abort, { once: true });
-                      scheduler.schedule({
-                        id: "maintenance:worktrees:resume",
-                        delayMs: 1_000,
-                        run: () => {
-                          scheduler.signal.removeEventListener("abort", abort);
-                          resolve();
-                        },
-                      });
-                    });
+                    await pause(1_000);
                     assertCurrent();
                     batchItems = 0;
                     batchStartedAt = scheduler.now();

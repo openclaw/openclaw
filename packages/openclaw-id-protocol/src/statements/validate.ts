@@ -220,6 +220,8 @@ const BODIES: Record<StatementType, Check> = {
     issued_at: seconds,
   }),
   Revocation: object({
+    claw_id: clawId,
+    seq: nonNegative,
     target_fp: keyFp,
     target_kind: oneOf(REVOCATION_KINDS),
     reason: text,

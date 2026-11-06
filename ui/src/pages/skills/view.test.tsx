@@ -200,6 +200,17 @@ describe("renderSkills", () => {
     },
   );
 
+  it("distinguishes an empty inventory from a search with no matches", async () => {
+    const { container, render } = createView();
+    render({ report: skillReport([]) });
+    await Promise.resolve();
+    expect(container.textContent).toContain("No skills yet. Search ClawHub to add one.");
+    render({ report: skillReport([createSkill()]), filter: "no-matching-skill" });
+    await Promise.resolve();
+    expect(container.textContent).toContain("No skills match your search.");
+    expect(container.textContent).not.toContain("No skills yet.");
+  });
+
   it("preserves Unicode matches, raw detail targets and retained groups", async () => {
     const { container, render } = createView();
     const report = skillReport([
@@ -442,7 +453,7 @@ describe("renderSkills", () => {
     const dialog = expectDefined(query(".skill-reader-dialog"), "skill dialog");
     const labels = Array.from(dialog.querySelectorAll(".oc-dialog__row-label")).map(normalizeText);
     expect(labels).toEqual(expect.arrayContaining(["Package", "Security check", "Source"]));
-    expect(normalizeText(dialog)).toContain("Changing this skill needs operator.admin access.");
+    expect(normalizeText(dialog)).toContain("You need admin access to change this skill.");
     expect(container.querySelector(".skill-reader-dialog input[type=checkbox]")).toHaveProperty(
       "disabled",
       true,

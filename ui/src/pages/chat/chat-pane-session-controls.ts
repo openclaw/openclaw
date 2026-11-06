@@ -424,7 +424,10 @@ export function renderChatPaneComposerControls(params: {
             throw new Error("Session capability is unavailable");
           }
           if (patched.listRefreshError && ownsOutcome()) {
-            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed");
+            state.setRecoverableChatError(
+              t("chat.permissionControls.refreshFailed"),
+              patched.listRefreshError,
+            );
           }
         } catch (error) {
           if (!ownsRoute() || !ownsOutcome()) {
@@ -442,9 +445,7 @@ export function renderChatPaneComposerControls(params: {
             change = { ...change, retainWhileCurrent };
             selection.pending = change;
           }
-          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
-            error: String(error),
-          });
+          state.setRecoverableChatError(t("chat.permissionControls.updateFailed"), error);
         } finally {
           if (ownsOutcome()) {
             selection.outcome = undefined;

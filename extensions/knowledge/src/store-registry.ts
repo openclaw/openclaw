@@ -19,6 +19,7 @@ import {
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import { registerIdentity, SqliteIdentityStore } from "./identity-store.js";
@@ -151,7 +152,7 @@ export class StoreRegistry {
     return raw ? JSON.parse(raw) : null;
   }
 
-  private tx<T>(run: () => T): T {
+  private tx<T>(run: SynchronousSqliteCallback<T>): T {
     return runSqliteImmediateTransactionSync(this.db, run);
   }
   private meta(key: string): string | null {

@@ -56,7 +56,7 @@ it.each([
     expectNamespaces();
     expect(t("githubConnections.manage")).toBe("Verbindungen verwalten");
     if (settings) {
-      expect(connections.manage).toBe("Manage connections");
+      expect(connections.manage).toBe("Manage accounts");
       expect(t("agentTools.githubVerify")).toBe("Verify");
       expect(publication.failedAttempt).toBeUndefined();
       expect(pullRequests.publishPr).toBeUndefined();
@@ -68,7 +68,7 @@ it.each([
     }
     expect(connections.manage).toBeUndefined();
     expect(en.agentTools.githubVerify).toBeUndefined();
-    expect(t("githubPublication.failedAttempt")).toBe("Publication attempt failed");
+    expect(t("githubPublication.failedAttempt")).toBe("Couldn’t publish. Try again.");
     expect(t("sessionHovercard.agentNotepad")).toBe("Task progress");
     expect(t("sessionHovercard.states.open")).toBe("Open");
     expect(t("sessionHovercard.checks.passing")).toBe("CI-Prüfungen erfolgreich");
@@ -79,7 +79,7 @@ it.each([
       expect(t("chat.pullRequests.automationLabel")).toBe("chat.pullRequests.automationLabel");
     }
     expect(t("githubPublication.sharedUnavailable.changed")).toBe(
-      "The Gateway GitHub account changed. Reload and retry publication.",
+      "The shared GitHub account changed. Reload and try publishing again.",
     );
     (await import("./locales/en-github.ts")).registerGitHubEnglish();
     expectNamespaces();

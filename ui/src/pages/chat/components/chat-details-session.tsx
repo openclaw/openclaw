@@ -226,8 +226,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           );
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
-          const partialPeople = () =>
-            session()?.participantCount === undefined || count() > people().length;
+          // The Gateway omits the count when the owner-excluded participant list is empty.
+          const partialPeople = () => count() > people().length;
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];

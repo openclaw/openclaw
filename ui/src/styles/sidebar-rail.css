@@ -231,14 +231,16 @@
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {
-  outline-color: var(--accent-foreground);
+  outline-color: var(--ring);
 }
 
 .sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {

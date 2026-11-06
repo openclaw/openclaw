@@ -35,7 +35,7 @@ import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../li
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
@@ -166,6 +166,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (sourceChanged) {
       gateway.invalidate();
     }
+    let selfUserId = currentContext.gateway.snapshot.selfUser?.id;
     const applySnapshot = () => {
       if (!active || context() !== currentContext) {
         return;
@@ -173,8 +174,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       const snapshot = currentContext.gateway.snapshot;
       const previousConnected = gateway.capture() !== null;
       const presentationChanged = routeSelection.bind(currentContext.gateway);
-      const changed = gateway.transition(snapshot) || presentationChanged;
-      if (presentationChanged) {
+      // Profile hydration retires shared inventory even while its page scope stays stable.
+      const identityChanged = selfUserId !== snapshot.selfUser?.id;
+      selfUserId = snapshot.selfUser?.id;
+      const changed = gateway.transition(snapshot) || presentationChanged || identityChanged;
+      if (presentationChanged || identityChanged) {
         gateway.invalidate();
       }
       const nextAvailable = isGatewayAvailable(snapshot);

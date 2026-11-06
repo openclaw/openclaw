@@ -8,9 +8,9 @@ const catalog = {
       arguments: "Command arguments",
       menu: "Slash commands",
       optionCount: "{count} options",
-      clearDescription: "Clear chat history",
-      redirectDescription: "Abort and restart with a new message",
-      steerDescription: "Inject a message into the active run",
+      clearDescription: "Clear this conversation",
+      redirectDescription: "Restart the agent’s reply with a new message",
+      steerDescription: "Guide the agent’s current reply",
       exportDescription: "Download this conversation as Markdown",
       categories: {
         session: "Session",

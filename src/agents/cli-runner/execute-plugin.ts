@@ -39,6 +39,7 @@ import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
+  ensureCliLiveSessionMemory,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
 import {
@@ -548,6 +549,7 @@ export async function executePluginOwnedProcess(params: {
     }
     assertCurrent();
     if (params.liveSession) {
+      await ensureCliLiveSessionMemory(params.context, signal);
       liveSession = createCliLiveSessionCapability({
         context: params.context,
         argv: [command, ...executionArgs],

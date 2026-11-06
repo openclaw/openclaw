@@ -45,17 +45,40 @@ function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries
   );
 }
 
-class SelectionPartitions extends WeakMap<object, SessionListFilteredEntries> {
+class SelectionPartitions extends Map<object, SessionListFilteredEntries> {
   refs = 0;
-  count = 0;
 
   override set(key: object, value: SessionListFilteredEntries) {
     const previous = this.get(key);
     this.refs += selectionRefs(value) - (previous ? selectionRefs(previous) : 0);
-    this.count += Number(!previous);
-    // Dead weak keys may overestimate retention until view eviction. Never undercount
-    // old partition arrays by scanning or trying to predict garbage collection.
     return super.set(key, value);
+  }
+
+  override delete(key: object) {
+    const previous = this.get(key);
+    if (previous) {
+      this.refs -= selectionRefs(previous);
+    }
+    return super.delete(key);
+  }
+}
+
+export function retainCurrentSessionListPartitions(
+  retained: Map<object, SessionListFilteredEntries>,
+  partitions: Iterable<{ revision: object; entries: { size: number } }>,
+) {
+  // Only current nonempty partitions can be reused. Retire obsolete values and
+  // their charges together, without waiting for revision tokens to be collected.
+  const revisions = new Set<object>();
+  for (const partition of partitions) {
+    if (partition.entries.size) {
+      revisions.add(partition.revision);
+    }
+  }
+  for (const revision of retained.keys()) {
+    if (!revisions.has(revision)) {
+      retained.delete(revision);
+    }
   }
 }
 
@@ -228,7 +251,7 @@ export class SessionListViewCache {
       view.key.length * 2 +
       rowRefs * 8 +
       entryRefs * 48 +
-      (view.partitions?.count ?? 0) * 64 +
+      (view.partitions?.size ?? 0) * 64 +
       (view.rowHistory?.length ?? 0) * 160 +
       (view.encodedBytes ?? 0);
     retainedRefs += refs - view.refs;

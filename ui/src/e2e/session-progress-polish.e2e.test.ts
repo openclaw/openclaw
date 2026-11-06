@@ -26,13 +26,17 @@ const steps = [
   })),
 ];
 
-async function openProgress(page: Page) {
+async function openProgress(page: Page, active = true) {
   const card = { sessionKey, revision: 1, updatedAt: Date.now(), steps };
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     sessionKey,
-    sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["polish-run"] },
-    inFlightRun: { runId: "polish-run" },
+    sessionInfo: {
+      key: sessionKey,
+      hasActiveRun: active,
+      activeRunIds: active ? ["polish-run"] : [],
+    },
+    ...(active ? { inFlightRun: { runId: "polish-run" } } : {}),
     methodResponses: { "progressCard.get": { card } },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -49,6 +53,30 @@ async function openProgress(page: Page) {
 }
 
 suite.define(() => {
+  it.each([1440, 390])(
+    "keeps paused progress markers the same size as pending markers at %i px",
+    async (width) => {
+      const context = await suite.newBrowserContext({ viewport: { width, height: 1000 } });
+      try {
+        const page = await context.newPage();
+        const { details } = await openProgress(page, false);
+        const markerSize = (status: "paused" | "pending") =>
+          details
+            .locator(`.session-progress-card__step-marker[data-status="${status}"] > svg`)
+            .first()
+            .evaluate((svg) => {
+              const bounds = svg.getBoundingClientRect();
+              return { width: bounds.width, height: bounds.height };
+            });
+        const paused = await markerSize("paused");
+        const pending = await markerSize("pending");
+        expect(paused.width).toBeCloseTo(pending.width, 2);
+        expect(paused.height).toBeCloseTo(pending.height, 2);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
   it.each([
     { width: 1440, touch: false },
     { width: 390, touch: false },

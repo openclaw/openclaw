@@ -266,6 +266,8 @@ export type PreparedAgentRunAdmission = Readonly<{
   ) => Promise<AdmittedRunContext>;
   /** Checks latched source revocation after normal close; never grants execution authority. */
   assertSourceCurrent: () => void;
+  /** Checks open preparation and its exact admitted owner without evaluating source predicates. */
+  assertCurrent: () => void;
   /** Host-only source restriction available before the runtime prepares its tools. */
   readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
@@ -551,6 +553,19 @@ export function prepareAgentRunAdmission(params: {
   });
   const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
+    assertCurrent: () => {
+      assertPreparationOpen();
+      if (!admittedContext) {
+        return;
+      }
+      const lease = delegatedAuthorityLeases.get(admittedContext);
+      const assertActive =
+        lease && captureAdmittedRunActiveAssertion(admittedContext, lease.authority);
+      if (!assertActive) {
+        throw new Error("prepared execution authority is no longer active");
+      }
+      assertActive.assertScopeCurrent();
+    },
     assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
       assertScopeCurrent: assertPreparationOpen,
       prepareSessionSourceScope: () => {

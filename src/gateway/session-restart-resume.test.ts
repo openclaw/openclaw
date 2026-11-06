@@ -133,8 +133,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         return { agentId, sessionKey: `agent:${agentId}:${name}` };
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
-        ["crash", {}, mode === "crash"],
-        ["yielded", { endedAt: 120 }, mode === "crash"],
+        ["crash", {}, mode === "crash" || mode === "markers"],
+        ["yielded", { endedAt: 120 }, mode === "crash" || mode === "markers"],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],

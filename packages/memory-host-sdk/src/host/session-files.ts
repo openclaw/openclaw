@@ -536,10 +536,10 @@ async function buildSessionEntryFromSource(
     }
     const raw = (
       await retryTransientMemoryRead(
-        () =>
+        async () =>
           readRegularFile({
             filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
-              ? materializeSessionArchiveForRead(absPath)
+              ? await materializeSessionArchiveForRead(absPath)
               : absPath,
           }),
         `read session transcript ${absPath}`,

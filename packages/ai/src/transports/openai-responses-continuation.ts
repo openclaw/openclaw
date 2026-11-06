@@ -1,6 +1,5 @@
 import { createHash, type Hash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { isProxy } from "node:util/types";
 import type { ModelRequestHeaders } from "@openclaw/llm-core";
 import { writeStableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
@@ -15,6 +14,7 @@ import {
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
+import { projectJsonObject, projectJsonValue } from "./openai-responses-json-projection.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
@@ -57,70 +57,6 @@ export type ResponsesContinuationStatus =
   | "history_shorter"
   | "no_previous_response"
   | "request_changed";
-
-// Keep text by reference instead of encoding/parsing it solely for comparison.
-// Hook-provided opaque values still use native JSON, including the property's key.
-function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): unknown {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value + 0 : null;
-  }
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (value === undefined || typeof value === "symbol") {
-    return undefined;
-  }
-  if (
-    typeof value !== "object" ||
-    isProxy(value) ||
-    Object.getPrototypeOf(value) !== (Array.isArray(value) ? Array.prototype : Object.prototype) ||
-    "toJSON" in value ||
-    ancestors.has(value)
-  ) {
-    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Preserve JSON/toJSON semantics, not object identity.
-    const projected: Record<string, unknown> = JSON.parse(
-      JSON.stringify({ __proto__: null, [key]: value }),
-    );
-    return Object.hasOwn(projected, key) ? projected[key] : undefined;
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const result: unknown[] = [];
-      const length = value.length;
-      for (let index = 0; index < length; index++) {
-        result.push(projectJsonValue(value[index], String(index), ancestors) ?? null);
-      }
-      return result;
-    }
-    const result: Record<string, unknown> = {};
-    for (const name of Object.keys(value)) {
-      const member = projectJsonValue(Reflect.get(value, name), name, ancestors);
-      if (member !== undefined) {
-        if (name in result) {
-          // Match JSON's own data properties, including __proto__ and inherited setters.
-          Object.defineProperty(result, name, {
-            value: member,
-            enumerable: true,
-            configurable: true,
-            writable: true,
-          });
-        } else {
-          result[name] = member;
-        }
-      }
-    }
-    return result;
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function projectJsonObject(value: object): unknown {
-  const projected = projectJsonValue(value, "", new Set());
-  // A root toJSON returning undefined was not valid JSON either.
-  return projected === undefined ? JSON.parse("undefined") : projected;
-}
 
 function jsonValuesEqual(left: object, right: object): boolean {
   // Finish the left side before evaluating any right-side hook values.
@@ -372,7 +308,7 @@ function appendPrefixValues(digest: Hash, values: readonly unknown[], offset: nu
     if (index > 0) {
       write(",");
     }
-    writeStableStringify(projectJsonValue(value, String(index++), new Set()) ?? null, write);
+    writeStableStringify(projectJsonValue(value, String(index++), new Map()) ?? null, write);
   }
   digest.update(text);
 }
@@ -494,46 +430,64 @@ export function resolveResponsesContinuationRequest(
       normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
     ),
   );
-  const historyCurrentInput = currentInput.slice(0, previousInput.length);
-  for (const [index, previousItem] of previousInput.entries()) {
-    const currentItem = historyCurrentInput[index];
-    if (!isRecord(previousItem) || !isRecord(currentItem)) {
-      continue;
+  if (!historyToolRoundUnchanged) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  // Conversion already owns these immutable wire items. An identical sent prefix
+  // needs no replay-ID remapping; only the new response and delta need ownership checks.
+  const immutable = getAiTransportHost().immutableData;
+  let samePrefix = true;
+  for (let index = 0; index < previousInput.length; index++) {
+    const item = previousInput[index];
+    if (
+      item !== currentInput[index] ||
+      item === null ||
+      typeof item !== "object" ||
+      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
+    ) {
+      samePrefix = false;
+      break;
     }
-    if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+  }
+  if (!samePrefix) {
+    const historyCurrentInput = currentInput.slice(0, previousInput.length);
+    for (const [index, previousItem] of previousInput.entries()) {
+      const currentItem = historyCurrentInput[index];
+      if (!isRecord(previousItem) || !isRecord(currentItem)) {
+        continue;
+      }
+      if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+        if (
+          typeof previousItem.call_id === "string" &&
+          typeof currentItem.call_id === "string" &&
+          !toolCallReplayShapes({
+            callId: previousItem.call_id,
+            ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
+          }).has(currentItem.call_id)
+        ) {
+          return { request, continuationStatus: "history_changed" };
+        }
+      }
       if (
+        previousItem.type === "function_call_output" &&
+        currentItem.type === "function_call_output" &&
         typeof previousItem.call_id === "string" &&
         typeof currentItem.call_id === "string" &&
-        !toolCallReplayShapes({
-          callId: previousItem.call_id,
-          ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
-        }).has(currentItem.call_id)
+        currentItem.call_id !== previousItem.call_id &&
+        currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
       ) {
         return { request, continuationStatus: "history_changed" };
       }
     }
+    const normalizedPrevious = normalizeContinuationHistory(previousInput);
+    const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
     if (
-      previousItem.type === "function_call_output" &&
-      currentItem.type === "function_call_output" &&
-      typeof previousItem.call_id === "string" &&
-      typeof currentItem.call_id === "string" &&
-      currentItem.call_id !== previousItem.call_id &&
-      currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
+      normalizedPrevious === undefined ||
+      normalizedCurrent === undefined ||
+      !jsonValuesEqual(normalizedCurrent, normalizedPrevious)
     ) {
       return { request, continuationStatus: "history_changed" };
     }
-  }
-  const normalizedPrevious = normalizeContinuationHistory(previousInput);
-  const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
-  if (
-    !(
-      normalizedPrevious !== undefined &&
-      normalizedCurrent !== undefined &&
-      jsonValuesEqual(normalizedCurrent, normalizedPrevious)
-    ) ||
-    !historyToolRoundUnchanged
-  ) {
-    return { request, continuationStatus: "history_changed" };
   }
   // Restore accepted replay IDs in the delta to match the provider's cached call.
   const delta = currentInput.slice(baselineLength);

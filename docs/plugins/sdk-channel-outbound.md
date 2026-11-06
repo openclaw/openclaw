@@ -51,6 +51,21 @@ sweep, that bound is 35 minutes from the last refresh, plus scheduling and execu
 `pollIntervalMs` increases the bound. Active local claims keep their existing
 protection, including claims held after a settlement write fails.
 
+During a plugin reload, the monitor retains its queue custody while the plugin
+instance is quiesced. Already claimed work can settle, but new delivery callbacks
+wait until the instance resumes or a successor takes over. A failed reload wakes
+the existing monitor automatically. A retained caller may request `start()` while
+quiesced; delivery waits for resume. If that caller lacks live authority, startup
+throws so the caller can retry.
+
+`stop()` joins accepted writes and retires the drain even when a settlement write
+fails; configured `onError` observers receive that failure. Never-adopted claims
+can then be recovered by a successor immediately. Claims with unresolved terminal
+writes or uncertain write outcomes remain protected against same-process replay
+until the Gateway exits. Restart recovery, stored rows, retention, and schemas are
+unchanged. Permitted callbacks after stop, including `durable-after-stop`
+admissions, use the late caller's own active authority.
+
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
 the transport callback instead of dispatching an event that was not made
@@ -171,8 +186,10 @@ The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
 `stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the
 `ensureQueueAvailable()` check (safe to repeat) when plugin-owned migration or preparation must
 run after the queue opens but before the drain starts. `stop` first settles
-accepted admissions, then aborts and disposes the drain, waits for the pump and
-active deliveries, and disposes again to close the lazy-creation race.
+accepted admissions, then aborts, joins the pump and configured delivery waits,
+disposes the drain, and releases its custody. Aborting the supplied `abortSignal`
+starts the same teardown; plugins do not need a separate `stop()` call to release
+an aborted monitor.
 
 Keep transport-specific redaction, raw-envelope validation, non-retryable
 classification, and persisted payload shape in the plugin. Webhook transports
