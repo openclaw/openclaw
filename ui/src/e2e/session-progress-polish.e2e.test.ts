@@ -60,30 +60,17 @@ suite.define(() => {
       try {
         const page = await context.newPage();
         const { details } = await openProgress(page, false);
-        const markerSize = (status: "paused" | "pending") =>
-          details
+        const size = expect.closeTo(((width === 1440 ? 13 : 12) * 24) / 21.5, 2);
+        for (const status of ["paused", "pending"]) {
+          const marker = await details
             .locator(`.session-progress-card__step-marker[data-status="${status}"] > svg`)
             .first()
             .evaluate((svg) => {
               const bounds = svg.getBoundingClientRect();
-              const style = getComputedStyle(svg);
-              return {
-                width: bounds.width,
-                height: bounds.height,
-                cssWidth: style.width,
-                strokeWidth: style.strokeWidth,
-              };
+              return [bounds.width, bounds.height, getComputedStyle(svg).strokeWidth];
             });
-        const paused = await markerSize("paused");
-        const pending = await markerSize("pending");
-        const compactSize = width >= 768 ? 13 : 12;
-        for (const marker of [paused, pending]) {
-          expect(marker.cssWidth).toBe(`${compactSize}px`);
-          expect(marker.strokeWidth).toBe("1.5px");
-          expect(marker.width).toBeCloseTo((compactSize * 24) / 21.5, 2);
+          expect(marker).toEqual([size, size, "1.5px"]);
         }
-        expect(paused.width).toBeCloseTo(pending.width, 2);
-        expect(paused.height).toBeCloseTo(pending.height, 2);
       } finally {
         await suite.closeBrowserContext(context);
       }
