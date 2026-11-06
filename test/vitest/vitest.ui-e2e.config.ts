@@ -75,6 +75,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/memory-overview-source.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-add-provider-to-chat.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-connection-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
