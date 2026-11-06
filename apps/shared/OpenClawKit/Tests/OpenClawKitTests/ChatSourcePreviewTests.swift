@@ -266,6 +266,11 @@ struct ChatSourcePreviewTests {
             role: "assistant",
             content: [.init(type: "text", text: "[a](\(self.first))", mimeType: nil, fileName: nil, content: nil)],
             timestamp: 3, transcriptRunID: "other-run", stopReason: "stop", phase: "final_answer")
+        let thirdSearch = self.search([self.row(self.second, title: "Third run")], run: "third-run")
+        let thirdAnswer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "[b](\(self.second))", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 4, transcriptRunID: "third-run", stopReason: "stop", phase: "final_answer")
         let context = try OpenClawChatSourceContext(
             gatewayURL: #require(URL(string: "https://gateway.example.com/")), basePath: "", publicOrigin: nil)
         let original = [search("Original"), fetch, answer, otherSearch, otherAnswer]
@@ -280,12 +285,14 @@ struct ChatSourcePreviewTests {
             ([search("Edited"), fetch, otherSearch, otherAnswer], context),
             (original, nil),
             (original, context),
+            (original + [thirdSearch, thirdAnswer], context),
         ]
         // Replies whose cards must be reused (true) or rebuilt (false) at a step.
         let reuse: [Int: [UUID: Bool]] = [
             1: [answer.id: true, otherAnswer.id: true],
             2: [answer.id: false, otherAnswer.id: true],
             9: [answer.id: false, otherAnswer.id: false],
+            10: [answer.id: true, otherAnswer.id: true],
         ]
         var projector = ChatSourcePreviewProjector()
         var previous: [UUID: [ChatSourcePreview]] = [:]
