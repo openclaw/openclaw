@@ -6634,9 +6634,21 @@ describe("ci workflow guards", () => {
       expect(result.status, result.output).toBe(0);
     }
     expect(forkPrevious.outputs.shared_sdk_declarations).toBe("false");
-    expect(forkShared.outputs.shared_sdk_declarations).toBe("false");
+    expect(forkShared.outputs.shared_sdk_declarations).toBe("true");
+    const forkOldPlanner = runCiManifestFixture({
+      ...fork,
+      targetFiles: ["scripts/ci-sdk-declarations.mts"],
+      checkPlanSource: "export {};\n",
+    });
+    expect(forkOldPlanner.status, forkOldPlanner.output).toBe(0);
+    expect(forkOldPlanner.outputs.shared_sdk_declarations).toBe("false");
+    expect(forkOldPlanner.outputs.check_additional_matrix).toBe(
+      forkPrevious.outputs.check_additional_matrix,
+    );
     const forkRows = JSON.parse(forkPrevious.outputs.check_additional_matrix!).include;
-    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(forkRows);
+    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(
+      forkRows.filter((row: { group: string }) => row.group !== "extension-package-boundary"),
+    );
     for (const authorAssociation of ["OWNER", "NONE"]) {
       for (const runAttempt of [1, 2]) {
         expect(
@@ -6649,6 +6661,16 @@ describe("ci workflow guards", () => {
         ).toBe(runAttempt === 1 ? "blacksmith-16vcpu-ubuntu-2404" : "ubuntu-24.04");
       }
     }
+    for (const [profile, timeout] of [
+      ["hybrid", 30],
+      ["github", 40],
+    ] as const) {
+      expect(
+        evaluateWorkflow(producer["timeout-minutes"], {
+          preflightOutputs: { runner_profile: profile },
+        }),
+      ).toBe(timeout);
+    }
     expect(producer.needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-additional-shard"].needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-test-types-hosted-core-shard"].needs).toEqual([
@@ -6660,6 +6682,34 @@ describe("ci workflow guards", () => {
       "check-plan",
       "check-extension-package-boundary",
     ]);
+    const coreLint = workflow.jobs["check-lint-hosted-core-shard"];
+    expect(coreLint.needs).toEqual(["preflight", "check-plan", "check-extension-package-boundary"]);
+    const coreRestores = coreLint.steps.filter(
+      (step: WorkflowStep) =>
+        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
+        String(step.with?.mode).startsWith("restore"),
+    );
+    for (const sharing of ["true", "false"]) {
+      for (const needsSdk of [true, false]) {
+        const selected = coreRestores.filter((step: WorkflowStep) =>
+          evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: { requires_sdk_declarations: needsSdk },
+            preflightOutputs: {
+              shared_sdk_declarations: sharing,
+              runner_profile: "github",
+              cache_mode: "read",
+            },
+          }),
+        );
+        expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
+          sharing === "true" && needsSdk ? "restore-run" : "restore-main",
+        ]);
+        expect(selected[0]?.["continue-on-error"]).not.toBe(true);
+      }
+    }
     const steps = producer.steps as WorkflowStep[];
     expect(
       requiredWorkflowStep(steps, "Check selected package boundaries")?.env?.OPENCLAW_CI_SHARED_SDK,
@@ -6742,7 +6792,7 @@ describe("ci workflow guards", () => {
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
     expect(hostedCoreCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
+      "(needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe("./.ci-harness/.github/actions/sdk-declarations");

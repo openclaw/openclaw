@@ -10,6 +10,7 @@ import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/cu
 import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
+import { startSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import type {
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
@@ -304,6 +305,7 @@ export async function archiveSessionWithUndo(
   host: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
+  exitFrom?: HTMLElement,
 ) {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
@@ -326,8 +328,10 @@ export async function archiveSessionWithUndo(
     await archiveConfirmedSessionsWithUndo(host, choice.rows, scope);
     return;
   }
+  const stopExit = exitFrom ? startSidebarArchiveExit(exitFrom) : undefined;
   const finishArchive = scope.sessions.beginArchive(session.key, session.sessionId);
   if (!finishArchive) {
+    stopExit?.();
     return;
   }
   const undoPins = captureSessionArchivePins(scope, [session.key]);
@@ -348,6 +352,7 @@ export async function archiveSessionWithUndo(
     );
   } finally {
     finishArchive();
+    stopExit?.();
   }
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;

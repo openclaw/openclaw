@@ -420,7 +420,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // These shared Cron owners already load together in Cron and Agents.
       return "cron-domain";
     case "ui/src/lib/cron/model-suggestions.ts":
-    case "ui/src/pages/chat/chat-transcript-pages.ts":
     case "packages/model-catalog-core/src/configured-model-refs.ts":
     case "ui/src/styles/cron.css":
     case "ui/src/pages/cron/cron-page.tsx":
