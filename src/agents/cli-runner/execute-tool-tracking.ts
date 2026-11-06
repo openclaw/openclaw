@@ -469,7 +469,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
               candidates.length === 1 &&
               (latestStartedTool === candidates[0] ||
                 (typeof latestStartedTool === "string" &&
-                  latestStartedTool === candidates[0].boundToolCallId)),
+                  latestStartedTool === candidates[0]?.boundToolCallId)),
           });
         } else if (call.outcome === "completed") {
           const artifact = extractToolResultMediaArtifact(call.result);
