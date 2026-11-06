@@ -107,7 +107,7 @@ describe("approved OpenClaw ID account menu", () => {
     expect(entries.text.trim()).toBe("");
     expect(entries.rows[0]?.icon).toBeUndefined();
     expect(entries.rows[0]?.render).toBeTypeOf("function");
-    expect(menu(current).text).not.toMatch(/People|Make reachable|Regenerate|Unlink/);
+    expect(menu(current).text).not.toMatch(/People|\bAccess\b|Make reachable|Regenerate|Unlink/);
   });
 
   it("does not allow loopback sign-in over an untrusted connection", () => {
@@ -135,7 +135,7 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).labels).toEqual(["Your devices"]);
     expect(menu(current).text).toContain("End-to-end encryptedOwner phone · this device");
     expect(menu(current).text).not.toMatch(
-      /reachable|crabd|People|Sign in|Regenerate|never-display/,
+      /reachable|crabd|People|\bAccess\b|Sign in|Regenerate|never-display/,
     );
     expect((menu(current).rows[0]?.details as HTMLElement | undefined)?.textContent).toBe("2");
   });
@@ -163,7 +163,7 @@ describe("approved OpenClaw ID account menu", () => {
       expect(menu(current).labels).toEqual([]);
       expect(menu(current).text).toContain("Invited by Owner");
       expect(menu(current).text).not.toMatch(
-        /People|Your devices|Regenerate|Remote access|Sign in/,
+        /People|\bAccess\b|Your devices|Regenerate|Remote access|Sign in/,
       );
     },
   );
@@ -224,7 +224,7 @@ describe("approved OpenClaw ID account menu", () => {
       expect(menu(current).text).toContain(
         `Remote access onstudio-e61zr.crabd.xyz${relayOnline ? "Online" : "Offline"}`,
       );
-      expect(menu(current).text).not.toMatch(/People|Regenerate|Turn off remote|Unlink/);
+      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote|Unlink/);
     },
   );
 

@@ -1,5 +1,7 @@
 /** @jsxImportSource @solidjs/web */
-// The People page: invite someone, approve or deny their request, see who is
+// The Access page (titled Remote access): who may reach this claw through
+// OpenClaw ID. Its People section lets the owner invite someone, approve or
+// deny their request, see who is
 // active and what they are running, and remove members. Every change is a
 // statement this browser's owner device signs and sends straight to the
 // Gateway (openclawId.authority); everything shown is read from the Gateway
@@ -41,7 +43,7 @@ function sessionTitleFrom(host: ControlUiHost) {
   };
 }
 
-/** The People page for one Control UI host. */
+/** The Access page for one Control UI host. */
 export function PeoplePage(props: { host: ControlUiHost }) {
   // The host is fixed for the page's lifetime.
   const host = untrack(() => props.host);
@@ -148,8 +150,12 @@ export function PeoplePage(props: { host: ControlUiHost }) {
   return (
     <section class="ocid-access">
       <header class="ocid-access__header">
-        <h1>People</h1>
+        <h1>Remote access</h1>
       </header>
+      <p class="ocid-access__hint">
+        Who can reach this claw from other devices through OpenClaw ID. Devices paired with this
+        Gateway are in Settings → Devices.
+      </p>
       <Show when={latest(error) ?? latest(readError)} keyed>
         {(failure) => (
           <div class="callout danger ocid-access__error" role="alert">
@@ -201,41 +207,44 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   </p>
                 }
               >
-                <Show when={!latest(ownDevicePub)}>
-                  <div class="callout info" role="note">
-                    This browser can view people but cannot change access. Use an approved owner
-                    browser to invite, approve, or remove people.
-                  </div>
-                </Show>
-                <PendingRequests
-                  invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
-                  fingerprints={latest(fingerprints)}
-                  disabled={!canManage()}
-                  locale={host.locale}
-                  onDecide={(invite, approve) =>
-                    void run(
-                      (link) => decideInvite(host.request, link, invite, approve),
-                      approve ? "approve" : "update",
-                    )
-                  }
-                />
-                <Members
-                  members={current().link.members ?? []}
-                  invites={current().link.invites ?? []}
-                  ownerDevices={current().link.ownerDevices?.length ?? 0}
-                  disabled={!canManage()}
-                  locale={host.locale}
-                  nowMs={latest(nowMs)}
-                  sessionTitle={sessionTitleFrom(host)}
-                  onRemove={remove}
-                />
-                <InviteForm
-                  disabled={!canManage()}
-                  locale={host.locale}
-                  onCreate={(email, role: MemberRole) =>
-                    run((link) => createInvite(host.request, link, email, role))
-                  }
-                />
+                <section class="ocid-access__group" aria-labelledby="ocid-access-people">
+                  <h2 id="ocid-access-people">People</h2>
+                  <Show when={!latest(ownDevicePub)}>
+                    <div class="callout info" role="note">
+                      This browser can view people but cannot change access. Use an approved owner
+                      browser to invite, approve, or remove people.
+                    </div>
+                  </Show>
+                  <PendingRequests
+                    invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
+                    fingerprints={latest(fingerprints)}
+                    disabled={!canManage()}
+                    locale={host.locale}
+                    onDecide={(invite, approve) =>
+                      void run(
+                        (link) => decideInvite(host.request, link, invite, approve),
+                        approve ? "approve" : "update",
+                      )
+                    }
+                  />
+                  <Members
+                    members={current().link.members ?? []}
+                    invites={current().link.invites ?? []}
+                    ownerDevices={current().link.ownerDevices?.length ?? 0}
+                    disabled={!canManage()}
+                    locale={host.locale}
+                    nowMs={latest(nowMs)}
+                    sessionTitle={sessionTitleFrom(host)}
+                    onRemove={remove}
+                  />
+                  <InviteForm
+                    disabled={!canManage()}
+                    locale={host.locale}
+                    onCreate={(email, role: MemberRole) =>
+                      run((link) => createInvite(host.request, link, email, role))
+                    }
+                  />
+                </section>
               </Show>
             </Show>
           </Show>

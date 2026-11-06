@@ -10,10 +10,10 @@ import { PeoplePage } from "./people-page.js";
 import type { StatusResult } from "./types.js";
 import "./control-ui.css";
 
-/** The People destination in the Control UI sidebar's Pages catalog. */
-export const PEOPLE_PAGE_ID = "people";
+/** The Access destination in the Control UI sidebar's Pages catalog. */
+export const ACCESS_PAGE_ID = "access";
 
-const mountPeople: ControlUiView = (container, context) => {
+const mountAccess: ControlUiView = (container, context) => {
   const dispose = render(() => <PeoplePage host={context.host} />, container);
   return { dispose };
 };
@@ -32,7 +32,7 @@ async function canSeePeople(host: ControlUiHost): Promise<boolean> {
 }
 
 /**
- * Registers the owner-only People page and its sidebar destination while enabled.
+ * Registers the owner-only Access page and its sidebar destination while enabled.
  * Connection changes recheck the Gateway-owned flag and owner admission.
  */
 export default defineControlUiPlugin({
@@ -48,14 +48,14 @@ export default defineControlUiPlugin({
       }
       if (enabled && !disposePage) {
         const page = host.ui.registerPage({
-          id: PEOPLE_PAGE_ID,
-          label: "People",
-          mount: mountPeople,
+          id: ACCESS_PAGE_ID,
+          label: "Remote access",
+          mount: mountAccess,
         });
         const navigation = host.ui.registerNavigation({
-          id: PEOPLE_PAGE_ID,
-          label: "People",
-          page: { id: PEOPLE_PAGE_ID },
+          id: ACCESS_PAGE_ID,
+          label: "Access",
+          page: { id: ACCESS_PAGE_ID },
           icon: "users",
           defaultVisible: false,
         });

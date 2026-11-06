@@ -1,4 +1,4 @@
-// People owns its display copy; Gateway and protocol refusal codes stay unchanged.
+// The Access page owns its display copy; Gateway and protocol refusal codes stay unchanged.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** The attempted operation, used only to describe failures at the display boundary. */

@@ -127,7 +127,7 @@ suite.define(() => {
               uiHints: {},
               version: "test",
             },
-            // The disabled Gateway advertises no People plugin. Server-side filtering has its own proof.
+            // The disabled Gateway advertises no Access plugin. Server-side filtering has its own proof.
             "plugins.controlUi.list": { revision: "id-off", plugins: [], diagnostics: [] },
             "sessions.search": { results: [], sessions: [] },
             "openclawId.status": {
@@ -195,7 +195,7 @@ suite.define(() => {
           const pages = await openSidebarPages(page);
           await pages.getByRole("link", { name: "Sessions", exact: true }).waitFor();
           expect
-            .soft(await pages.getByRole("link", { name: "People", exact: true }).count())
+            .soft(await pages.getByRole("link", { name: "Access", exact: true }).count())
             .toBe(0);
           expect.soft(await pages.locator('a[href*="openclaw-id-access"]').count()).toBe(0);
           await expectNoIdUi(pages);
@@ -253,10 +253,10 @@ suite.define(() => {
           await input.fill("Settings");
           await results.getByRole("option").filter({ hasText: "Settings" }).first().waitFor();
           await expectNoIdUi(palette);
-          await input.fill("People");
-          await gateway.waitForRequest("sessions.search", { match: { query: "People" } });
+          await input.fill("Remote access");
+          await gateway.waitForRequest("sessions.search", { match: { query: "Remote access" } });
           await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
-          expect.soft(await results.getByText("People", { exact: true }).count()).toBe(0);
+          expect.soft(await results.getByText("Remote access", { exact: true }).count()).toBe(0);
           await expectNoIdUi(palette);
           await checkpoint("command palette");
           expect.soft(await gateway.getRequests("chat.send")).toEqual([]);
@@ -264,13 +264,13 @@ suite.define(() => {
           await input.waitFor({ state: "hidden" });
           expect.soft(await composer.inputValue()).toBe("Keep this unsent draft");
 
-          await page.goto(`${suite.server.baseUrl}plugin?plugin=openclaw-id-access&id=people`);
+          await page.goto(`${suite.server.baseUrl}plugin?plugin=openclaw-id-access&id=access`);
           await page.getByText("Plugin panel unavailable", { exact: true }).waitFor();
           expect
-            .soft(await page.getByRole("heading", { name: "People", exact: true }).count())
+            .soft(await page.getByRole("heading", { name: "Remote access", exact: true }).count())
             .toBe(0);
           await expectNoIdUi(page.locator("body"));
-          await checkpoint("direct People URL");
+          await checkpoint("direct Access URL");
         } finally {
           await checkpoint("final document");
           await writeFile(

@@ -2,7 +2,7 @@
   "name": "@openclaw/openclaw-id-access",
   "version": "2026.10.9",
   "private": true,
-  "description": "OpenClaw ID People page for the Control UI",
+  "description": "OpenClaw ID remote access page for the Control UI",
   "type": "module",
   "dependencies": {
     "@openclaw/openclaw-id-protocol": "workspace:*",

@@ -14,9 +14,20 @@
 }
 
 .ocid-access h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+}
+
+.ocid-access h3 {
   margin: 0 0 var(--space-2);
   color: var(--text-strong);
   font-size: 16px;
+}
+
+.ocid-access__group {
+  display: grid;
+  gap: var(--space-5);
 }
 
 .ocid-access__header {

@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-// The sections of the People page. Each takes plain data and callbacks, so the
+// The People sections of the Access page. Each takes plain data and callbacks, so the
 // page owns all Gateway access and the sections can be restyled independently.
 import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 import { createSignal, For, latest, Show } from "solid-js";
@@ -45,7 +45,7 @@ export function InviteForm(props: {
   };
   return (
     <section class="ocid-access__section" aria-labelledby="ocid-access-invite">
-      <h2 id="ocid-access-invite">Invite someone</h2>
+      <h3 id="ocid-access-invite">Invite someone</h3>
       <p class="ocid-access__hint">
         Choose their access, then send them the link. You approve their request here. The link
         expires in 7 days.
@@ -117,7 +117,7 @@ export function PendingRequests(props: {
 }) {
   return (
     <section class="ocid-access__section" aria-labelledby="ocid-access-pending">
-      <h2 id="ocid-access-pending">Waiting for you</h2>
+      <h3 id="ocid-access-pending">Waiting for you</h3>
       <Show
         when={props.invites.length > 0}
         fallback={<p class="ocid-access__empty">No one is waiting for approval.</p>}
@@ -258,7 +258,7 @@ export function Members(props: {
   const open = () => props.invites.filter((invite) => invite.status === "open");
   return (
     <section class="ocid-access__section" aria-labelledby="ocid-access-members">
-      <h2 id="ocid-access-members">Members</h2>
+      <h3 id="ocid-access-members">Members</h3>
       <p class="ocid-access__hint">
         Who can open this claw. Only you can change this, from one of your own devices.
       </p>
