@@ -115,14 +115,15 @@ struct ChatSourcePreviewProjector {
                 // Cards depend only on this reply, the earlier rows of its run and the context.
                 if context != self.context || changedRuns.contains(runID) || entry.sourceIDs != sourceIDs {
                     var used: [(Candidate, RenderedCandidate)] = []
-                    entry.previews = Self.previews(links: entry.links, entries: sources, context: context) { candidate in
-                        let value = rendered[candidate] ?? self.renderedCandidates[candidate] ?? RenderedCandidate(
-                            title: Self.title(candidate.title, source: candidate.name),
-                            excerpt: Self.excerpt(candidate.excerpt, source: candidate.name))
-                        rendered[candidate] = value
-                        used.append((candidate, value))
-                        return value
-                    }
+                    entry.previews = Self
+                        .previews(links: entry.links, entries: sources, context: context) { candidate in
+                            let value = rendered[candidate] ?? self.renderedCandidates[candidate] ?? RenderedCandidate(
+                                title: Self.title(candidate.title, source: candidate.name),
+                                excerpt: Self.excerpt(candidate.excerpt, source: candidate.name))
+                            rendered[candidate] = value
+                            used.append((candidate, value))
+                            return value
+                        }
                     entry.sourceIDs = sourceIDs
                     entry.rendered = used
                     replaced = replaced || wasCited
