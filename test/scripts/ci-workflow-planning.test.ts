@@ -1692,14 +1692,8 @@ describe("ci workflow guards", () => {
                 .map((group) => ({
                   check_name: `check-${group}`,
                   group,
-                  runner:
-                    group !== "dependencies"
-                      ? "blacksmith-4vcpu-ubuntu-2404"
-                      : "blacksmith-16vcpu-ubuntu-2404",
-                  runner_label:
-                    group === "dependencies"
-                      ? "blacksmith-4vcpu-ubuntu-2404"
-                      : "blacksmith-2vcpu-ubuntu-2404",
+                  runner: `blacksmith-${group === "dependencies" ? 16 : 4}vcpu-ubuntu-2404`,
+                  runner_label: `blacksmith-${group === "dependencies" ? 4 : 2}vcpu-ubuntu-2404`,
                 })),
         );
         expect(manifest.outputs.split_pr_guards).toBe(
@@ -2124,16 +2118,12 @@ describe("ci workflow guards", () => {
               },
             ],
       );
-      expect(checkRows).toEqual(
-        expect.arrayContaining([
-          {
-            check_name: "check-npm-lock",
-            task: "npm-lock",
-            runner: "blacksmith-4vcpu-ubuntu-2404",
-            runner_label: "blacksmith-2vcpu-ubuntu-2404",
-          },
-        ]),
-      );
+      expect(checkRows).toContainEqual({
+        check_name: "check-npm-lock",
+        task: "npm-lock",
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        runner_label: "blacksmith-2vcpu-ubuntu-2404",
+      });
       const compactExtensions =
         options.runnerProfile !== "github" &&
         !options.historicalCompatibility &&
@@ -6370,32 +6360,27 @@ describe("ci workflow guards", () => {
           headRepository: "contributor/openclaw",
           authorAssociation,
         };
+        const route = (
+          runner: string,
+          override: Parameters<typeof evaluateWorkflowExpression>[1] = {},
+        ) => evaluateWorkflowExpression(runner, { ...fork, ...override });
         for (const runner of [plannerRunner, typeRunner, lintRunner]) {
-          expect(evaluateWorkflowExpression(runner, fork)).toBe("blacksmith-4vcpu-ubuntu-2404");
+          expect(route(runner)).toBe("blacksmith-4vcpu-ubuntu-2404");
           for (const override of [
             { runnerBackend: "github" },
             { runAttempt: 2 },
             { eventName: "workflow_dispatch" },
             { repository: "contributor/openclaw" },
           ] as const) {
-            expect(evaluateWorkflowExpression(runner, { ...fork, ...override })).toBe(
-              "ubuntu-24.04",
-            );
+            expect(route(runner, override)).toBe("ubuntu-24.04");
           }
         }
         // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
-        if (runnerBackend !== "hybrid") {
-          expect(evaluateWorkflowExpression(typeRunner, { ...fork, frozenTarget: true })).toBe(
-            "ubuntu-24.04",
-          );
+        for (const runner of runnerBackend === "hybrid" ? [lintRunner] : [typeRunner, lintRunner]) {
+          expect(route(runner, { frozenTarget: true })).toBe("ubuntu-24.04");
         }
-        expect(evaluateWorkflowExpression(lintRunner, { ...fork, frozenTarget: true })).toBe(
-          "ubuntu-24.04",
-        );
         for (const stripe of [1, 2, 3, 4, 5]) {
-          expect(evaluateWorkflowExpression(lintRunner, { ...fork, matrix: { stripe } })).toBe(
-            "blacksmith-4vcpu-ubuntu-2404",
-          );
+          expect(route(lintRunner, { matrix: { stripe } })).toBe("blacksmith-4vcpu-ubuntu-2404");
         }
       }
     }
@@ -6433,43 +6418,38 @@ describe("ci workflow guards", () => {
       "createNodeTestShardBundles",
     );
     const artifactRunner = workflow.jobs["build-artifacts"]["runs-on"];
-    for (const [frozenTarget, expected] of [
-      ["false", "blacksmith-4vcpu-ubuntu-2404"],
-      ["true", "blacksmith-4vcpu-ubuntu-2404"],
-      ["", "blacksmith-4vcpu-ubuntu-2404"],
-    ] as const) {
+    for (const frozenTarget of ["false", "true", ""]) {
       const context = {
         eventName: "push",
         repository: "openclaw/openclaw",
         runAttempt: 1,
         preflightOutputs: { frozen_target: frozenTarget },
       } as const;
+      const runOn = (override: Parameters<typeof evaluateWorkflowExpression>[1]) =>
+        evaluateWorkflowExpression(artifactRunner, { ...context, ...override });
       for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
         for (const eventName of ["push", "pull_request"] as const) {
           expect(
-            evaluateWorkflowExpression(artifactRunner, { ...context, runnerBackend, eventName }),
+            runOn({ runnerBackend, eventName }),
             `build-artifacts: ${runnerBackend || "default"}/${eventName}/frozen=${frozenTarget}`,
-          ).toBe(expected);
+          ).toBe("blacksmith-4vcpu-ubuntu-2404");
         }
       }
       expect(
-        evaluateWorkflowExpression(artifactRunner, {
-          ...context,
+        runOn({
           eventName: "pull_request",
           authorAssociation: "NONE",
           headRepository: "fork/openclaw",
         }),
         "build-artifacts: untrusted fork first attempt",
-      ).toBe(expected);
+      ).toBe("blacksmith-4vcpu-ubuntu-2404");
       for (const override of [
         { runnerBackend: "github" },
         { runnerBackend: "hybrid", runAttempt: 2 },
         { eventName: "workflow_dispatch" },
         { eventName: "pull_request", headRepository: "fork/openclaw", runAttempt: 2 },
       ] as const) {
-        expect(evaluateWorkflowExpression(artifactRunner, { ...context, ...override })).toBe(
-          "ubuntu-24.04",
-        );
+        expect(runOn(override)).toBe("ubuntu-24.04");
       }
     }
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
@@ -6509,13 +6489,12 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );
+    const fullCheckRows = evaluateWorkflow(workflow.jobs["check-shard"].strategy.matrix, {
+      eventName: "workflow_dispatch",
+      preflightOutputs: readFullCheckOutputs(),
+    }).include;
     for (const task of ["dependencies", "test-types"]) {
-      expect(
-        evaluateWorkflow(workflow.jobs["check-shard"].strategy.matrix, {
-          eventName: "workflow_dispatch",
-          preflightOutputs: readFullCheckOutputs(),
-        }).include,
-      ).toContainEqual({
+      expect(fullCheckRows).toContainEqual({
         check_name: `check-${task}`,
         task,
         runner: "blacksmith-16vcpu-ubuntu-2404",
@@ -6523,30 +6502,19 @@ describe("ci workflow guards", () => {
       });
     }
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
-    expect(readFrozenAdditionalCheckRows()).toContainEqual({
-      check_name: "check-additional-runtime-topology-architecture",
-      group: "runtime-topology-architecture",
-      runner: "blacksmith-16vcpu-ubuntu-2404",
-      runner_label: "blacksmith-4vcpu-ubuntu-2404",
-    });
-    expect(readFrozenAdditionalCheckRows()).toContainEqual({
-      check_name: "check-session-accessor-boundary",
-      group: "session-accessor-boundary",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-      runner_label: "blacksmith-2vcpu-ubuntu-2404",
-    });
-    expect(readFrozenAdditionalCheckRows()).toContainEqual({
-      check_name: "check-export-name-collisions",
-      group: "export-name-collisions",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-      runner_label: "blacksmith-2vcpu-ubuntu-2404",
-    });
-    expect(readFrozenAdditionalCheckRows()).toContainEqual({
-      check_name: "check-sqlite-session-schema-baseline",
-      group: "sqlite-session-schema-baseline",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-      runner_label: "blacksmith-2vcpu-ubuntu-2404",
-    });
+    for (const [group, checkName, logical, physical] of [
+      ["runtime-topology-architecture", "check-additional-runtime-topology-architecture", 16, 4],
+      ["session-accessor-boundary", "check-session-accessor-boundary", 4, 2],
+      ["export-name-collisions", "check-export-name-collisions", 4, 2],
+      ["sqlite-session-schema-baseline", "check-sqlite-session-schema-baseline", 4, 2],
+    ] as const) {
+      expect(readFrozenAdditionalCheckRows()).toContainEqual({
+        check_name: checkName,
+        group,
+        runner: `blacksmith-${logical}vcpu-ubuntu-2404`,
+        runner_label: `blacksmith-${physical}vcpu-ubuntu-2404`,
+      });
+    }
   });
 
   it.each(["restore-main", "save-main", "publish-run", "restore-run"])(
@@ -7082,27 +7050,24 @@ describe("ci workflow guards", () => {
       ].filter((row: { check_name: string }) => row.check_name === "check-guards-architecture");
       expect(architectureGuards).toHaveLength(eventName === "pull_request" ? 1 : 0);
       expect(manifest.outputs.run_check_additional).toBe("true");
+      const specialRows: Record<string, readonly [string, number, number]> = {
+        "source-contracts": ["check-source-contracts", 4, 2],
+        "plugin-sdk-api-diff": ["report-plugin-sdk-api-diff", 32, 8],
+        "extension-package-boundary": [
+          "check-additional-extension-package-boundary",
+          frozen ? 32 : 16,
+          frozen ? 8 : 4,
+        ],
+      };
       for (const row of rows) {
-        if (row.group === "source-contracts") {
+        const expected = specialRows[row.group];
+        if (expected) {
+          const [check_name, logical, physical] = expected;
           expect(row).toEqual({
-            check_name: "check-source-contracts",
-            group: "source-contracts",
-            runner: "blacksmith-4vcpu-ubuntu-2404",
-            runner_label: "blacksmith-2vcpu-ubuntu-2404",
-          });
-        } else if (row.group === "plugin-sdk-api-diff") {
-          expect(row).toEqual({
-            check_name: "report-plugin-sdk-api-diff",
-            group: "plugin-sdk-api-diff",
-            runner: "blacksmith-32vcpu-ubuntu-2404",
-            runner_label: "blacksmith-8vcpu-ubuntu-2404",
-          });
-        } else if (row.group === "extension-package-boundary") {
-          expect(row).toEqual({
-            check_name: "check-additional-extension-package-boundary",
-            group: "extension-package-boundary",
-            runner: frozen ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
-            runner_label: frozen ? "blacksmith-8vcpu-ubuntu-2404" : "blacksmith-4vcpu-ubuntu-2404",
+            check_name,
+            group: row.group,
+            runner: `blacksmith-${logical}vcpu-ubuntu-2404`,
+            runner_label: `blacksmith-${physical}vcpu-ubuntu-2404`,
           });
         } else {
           expect(readFrozenAdditionalCheckRows()).toContainEqual(row);
@@ -11317,52 +11282,23 @@ describe("ci workflow guards", () => {
     ] as const;
     expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
     const sameRepo = { headRepository: "openclaw/openclaw" };
+    const fork = { headRepository: "contributor/openclaw" };
+    // Capacity is author-independent; exact restores still require a same-repository PR.
     const routingScenarios = [
-      ["same-repo pull request first attempt", sameRepo, true, "true"],
-      [
-        "same-repo pull request with GitHub backend",
-        { ...sameRepo, runnerBackend: "github" },
-        false,
-        "false",
-      ],
-      [
-        "same-repo pull request with hybrid backend",
-        { ...sameRepo, runnerBackend: "hybrid" },
-        true,
-        "true",
-      ],
-      ["same-repo pull request retry", { ...sameRepo, runAttempt: 2 }, false, "false"],
-      [
-        "same-repo pull request with hybrid backend retry",
-        { ...sameRepo, runnerBackend: "hybrid", runAttempt: 2 },
-        false,
-        "false",
-      ],
-      [
-        "canonical hybrid push retry",
-        { eventName: "push", runnerBackend: "hybrid", runAttempt: 2 },
-        false,
-        "false",
-      ],
-      // Runner capacity is author-independent; exact dependency restores still require a same-repository PR.
-      [
-        "fork pull request from returning contributor",
-        { authorAssociation: "CONTRIBUTOR", headRepository: "contributor/openclaw" },
-        true,
-        "false",
-      ],
-      [
-        "fork pull request from unknown author",
-        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
-        true,
-        "false",
-      ],
-      ["workflow dispatch", { eventName: "workflow_dispatch" }, false, "false"],
-      ["canonical push retry", { eventName: "push", runAttempt: 2 }, true, "true"],
+      [sameRepo, true, "true"],
+      [{ ...sameRepo, runnerBackend: "github" }, false, "false"],
+      [{ ...sameRepo, runnerBackend: "hybrid" }, true, "true"],
+      [{ ...sameRepo, runAttempt: 2 }, false, "false"],
+      [{ ...sameRepo, runnerBackend: "hybrid", runAttempt: 2 }, false, "false"],
+      [{ eventName: "push", runnerBackend: "hybrid", runAttempt: 2 }, false, "false"],
+      [{ ...fork, authorAssociation: "CONTRIBUTOR" }, true, "false"],
+      [{ ...fork, authorAssociation: "NONE" }, true, "false"],
+      [{ eventName: "workflow_dispatch" }, false, "false"],
+      [{ eventName: "push", runAttempt: 2 }, true, "true"],
     ] as const;
     for (const { blacksmithRunner, job, matrix, name: jobName, setup } of routedUiE2eJobs) {
-      for (const [scenarioName, context, blacksmith, dependencyCache] of routingScenarios) {
-        const assertionName = `${jobName}: ${scenarioName}`;
+      for (const [context, blacksmith, dependencyCache] of routingScenarios) {
+        const assertionName = `${jobName}: ${JSON.stringify(context)}`;
         expect(
           String(job.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
             String(evaluateWorkflow(expression, { ...context, matrix })),
@@ -13746,51 +13682,35 @@ describe("ci workflow guards", () => {
       matrix: { part_count: 4 },
       preflightOutputs: { compatibility_target: "false" },
     };
-    for (const eventName of ["push", "schedule"] as const) {
-      expect(
-        evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
-          ...smokeRunnerContext,
-          eventName,
-        }),
-      ).toBe("blacksmith-2vcpu-ubuntu-2404");
-    }
-    const smokeRunnerFallbacks: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>[] = [
-      { ref: "refs/heads/extended-stable/2026.9.33" },
-      { eventName: "pull_request" },
-      { matrix: { part_count: 6 } },
-      { matrix: {} },
-      { runnerBackend: "blacksmith" },
-      { runnerBackend: "runson" },
-      { runnerBackend: "" },
-      { runnerProfile: "blacksmith" },
-      { frozenTarget: true },
-      { preflightOutputs: { compatibility_target: "true" } },
-      { preflightOutputs: { compatibility_target: "" } },
-      { preflightOutputs: {} },
-      { preflightOutputs: { compatibility_target: "false", frozen_target: "" } },
+    const smokeRoutes: [Partial<Parameters<typeof evaluateWorkflowExpression>[1]>, number][] = [
+      [{ eventName: "push" }, 2],
+      [{ eventName: "schedule" }, 2],
+      [{ ref: "refs/heads/extended-stable/2026.9.33" }, 4],
+      [{ eventName: "pull_request" }, 4],
+      [{ matrix: { part_count: 6 } }, 4],
+      [{ matrix: {} }, 4],
+      [{ runnerBackend: "blacksmith" }, 4],
+      [{ runnerBackend: "runson" }, 4],
+      [{ runnerBackend: "" }, 4],
+      [{ runnerProfile: "blacksmith" }, 4],
+      [{ frozenTarget: true }, 4],
+      [{ preflightOutputs: { compatibility_target: "true" } }, 4],
+      [{ preflightOutputs: { compatibility_target: "" } }, 4],
+      [{ preflightOutputs: {} }, 4],
+      [{ preflightOutputs: { compatibility_target: "false", frozen_target: "" } }, 4],
+      [{ runnerBackend: "github" }, 0],
+      [{ runAttempt: 2 }, 0],
+      [{ eventName: "workflow_dispatch" }, 0],
+      [{ repository: "contributor/openclaw" }, 0],
     ];
-    for (const override of smokeRunnerFallbacks) {
+    for (const [override, cpus] of smokeRoutes) {
       expect(
         evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
           ...smokeRunnerContext,
           ...override,
         }),
         JSON.stringify(override),
-      ).toBe("blacksmith-4vcpu-ubuntu-2404");
-    }
-    for (const override of [
-      { runnerBackend: "github" },
-      { runAttempt: 2 },
-      { eventName: "workflow_dispatch" },
-      { repository: "contributor/openclaw" },
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
-          ...smokeRunnerContext,
-          ...override,
-        }),
-        JSON.stringify(override),
-      ).toBe("ubuntu-24.04");
+      ).toBe(cpus ? `blacksmith-${cpus}vcpu-ubuntu-2404` : "ubuntu-24.04");
     }
     expect(
       evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
@@ -14174,48 +14094,46 @@ it.each([
   expect(readJsonOutput(result.outputs, "skills_python_targets_json")).toEqual(expected);
 });
 
-describe("Blacksmith physical runner allocation", () => {
-  it("preserves planner profiles while requesting physical capacity and the Gateway memory floor", () => {
-    const profiles = [4, 8, 16, 32, 16];
-    const manifest = runCiManifestFixture({
-      bundledPlanner: true,
-      runnerBackend: "blacksmith",
-      eventName: "push",
-      nodeTestShards: profiles.map((size, index) => ({
-        checkName: `physical-allocation-${index}`,
-        shardName: `physical-allocation-${index}`,
-        runner: `blacksmith-${size}vcpu-ubuntu-2404`,
-        requiresDist: false,
-        groups: [
-          {
-            shard_name: `physical-allocation-${index}`,
-            configs: ["test/vitest/bundled.config.ts"],
-            requiresDist: false,
-            runner: `blacksmith-${size}vcpu-ubuntu-2404`,
-            ...(index === 4 ? { minTotalMemoryBytes: 28 * 1024 ** 3 } : {}),
-          },
-        ],
-      })),
-    });
-    expect(manifest.status, manifest.output).toBe(0);
-    const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
-    const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
-    const physicalSizes = [2, 2, 4, 8, 8];
-    for (const [index, size] of profiles.entries()) {
-      const row = rows.find(
-        (entry: { check_name: string }) => entry.check_name === `physical-allocation-${index}`,
-      );
-      expect(row.runner).toBe(`blacksmith-${size}vcpu-ubuntu-2404`);
-      expect(
-        evaluateWorkflowExpression(job["runs-on"], {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runnerBackend: "blacksmith",
-          runAttempt: 1,
-          matrix: row,
-          preflightOutputs: manifest.outputs,
-        }),
-      ).toBe(`blacksmith-${physicalSizes[index]}vcpu-ubuntu-2404`);
-    }
+it("preserves planner profiles while requesting physical capacity and the Gateway memory floor", () => {
+  const profiles = [4, 8, 16, 32, 16];
+  const manifest = runCiManifestFixture({
+    bundledPlanner: true,
+    runnerBackend: "blacksmith",
+    eventName: "push",
+    nodeTestShards: profiles.map((size, index) => ({
+      checkName: `physical-allocation-${index}`,
+      shardName: `physical-allocation-${index}`,
+      runner: `blacksmith-${size}vcpu-ubuntu-2404`,
+      requiresDist: false,
+      groups: [
+        {
+          shard_name: `physical-allocation-${index}`,
+          configs: ["test/vitest/bundled.config.ts"],
+          requiresDist: false,
+          runner: `blacksmith-${size}vcpu-ubuntu-2404`,
+          ...(index === 4 ? { minTotalMemoryBytes: 28 * 1024 ** 3 } : {}),
+        },
+      ],
+    })),
   });
+  expect(manifest.status, manifest.output).toBe(0);
+  const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+  const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+  const physicalSizes = [2, 2, 4, 8, 8];
+  for (const [index, size] of profiles.entries()) {
+    const row = rows.find(
+      (entry: { check_name: string }) => entry.check_name === `physical-allocation-${index}`,
+    );
+    expect(row.runner).toBe(`blacksmith-${size}vcpu-ubuntu-2404`);
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        eventName: "push",
+        repository: "openclaw/openclaw",
+        runnerBackend: "blacksmith",
+        runAttempt: 1,
+        matrix: row,
+        preflightOutputs: manifest.outputs,
+      }),
+    ).toBe(`blacksmith-${physicalSizes[index]}vcpu-ubuntu-2404`);
+  }
 });
