@@ -324,13 +324,8 @@ async function executeLocale(
     JSON.stringify(promisePath),
     JSON.stringify(pathToFileURL(promisePath).href),
   );
-  const namespaces: string[] = [];
   for (const match of baseSource.matchAll(/import\("(virtual:[^"]+)"\)/g)) {
     const specifier = match[1]!;
-    const namespace = specifier.startsWith("virtual:openclaw-control-ui-locale-config-hints/")
-      ? "configHints"
-      : specifier.split("/").at(-1)!;
-    namespaces.push(namespace);
     const source = await loadLocaleSource(load, `\0${specifier}`);
     executableSource = executableSource.replace(
       JSON.stringify(specifier),
@@ -348,9 +343,7 @@ async function executeLocale(
     await module.getLazyLocaleCatalog(catalog)?.load(namespace);
   };
   const loadAll = async () => {
-    for (const namespace of namespaces) {
-      await loadNamespace(namespace);
-    }
+    await module.getLazyLocaleCatalog(catalog)?.prepare(loadControlUiSourceCatalog());
   };
   if (!deferNamespaces) {
     await loadAll();

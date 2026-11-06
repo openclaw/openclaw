@@ -238,7 +238,17 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
             return `export default ${JSON.stringify(partition.configHints)};`;
           }
           if (request.namespace) {
-            return `export default ${JSON.stringify(partition.namespaces[request.namespace] ?? {})};`;
+            const siblingErrors =
+              request.namespace === "runtimeErrors"
+                ? controlUiLocaleErrorNamespaces
+                    .filter((namespace) => namespace !== "runtimeErrors")
+                    .map(
+                      (namespace) =>
+                        `export const ${namespace} = ${JSON.stringify(partition.namespaces[namespace] ?? {})};`,
+                    )
+                    .join("\n")
+                : "";
+            return `export default ${JSON.stringify(partition.namespaces[request.namespace] ?? {})};\n${siblingErrors}`;
           }
           const shareErrorImport =
             "runtimeErrors" in partition.namespaces &&
@@ -259,9 +269,9 @@ const loadRuntimeErrors = () => getOrCreatePromise(pendingErrors, "errors", () =
           ].map(([namespace, specifier]) => {
             const load = `import(${JSON.stringify(specifier)})`;
             if (shareErrorImport && controlUiLocaleErrorNamespaces.includes(namespace!)) {
-              // WebKit can fetch one chunk for each simultaneous facade import.
-              // Load the shared asset once before resolving its other namespace exports.
-              return `${JSON.stringify(namespace)}: ${namespace === "runtimeErrors" ? "loadRuntimeErrors" : `async () => { await loadRuntimeErrors(); return ${load}; }`}`;
+              // Share the import itself: extra facade imports can wait behind boot work
+              // even after the browser has finished downloading their shared asset.
+              return `${JSON.stringify(namespace)}: ${namespace === "runtimeErrors" ? "loadRuntimeErrors" : `() => loadRuntimeErrors().then((catalog) => ({ default: catalog.${namespace} }))`}`;
             }
             return `${JSON.stringify(namespace)}: () => ${load}`;
           });
