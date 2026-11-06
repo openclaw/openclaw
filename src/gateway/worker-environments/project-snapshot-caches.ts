@@ -34,16 +34,33 @@ export const NORMALIZE_PROJECT_SNAPSHOT_CACHES_JS = `(root, input, sourceRef, pr
   if (names.length !== 1 || names[0] !== input.cacheKey) fail("cache-inventory", "prepared");
   const current = directory(prepared, input.cacheKey, "prepared");
   if (fs.readdirSync(current).sort().join("\\0") !== "home\\0workspace") fail("unapproved-entry", "prepared");
-  const manifests = directory(root, "manifests", "manifests");
-  const retained = new Set([sourceRef, preparedRef].map((ref) => ref.slice(7)));
-  for (const name of fs.readdirSync(manifests)) {
-    if (!/^[a-f0-9]{64}[.](?:json|memo)$/.test(name)) fail("unapproved-entry", "manifests");
-    const file = path.join(manifests, name);
+  const hostManifests = directory(root, "manifests", "manifests");
+  const home = directory(current, "home", "prepared");
+  const preparedManifests = directory(directory(home, ".openclaw-worker", "manifests"), "manifests", "manifests");
+  const artifact = (parent, name) => {
+    const file = path.join(parent, name);
     const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.nlink !== 1 || fs.realpathSync(file) !== file) fail("cache-path", "manifests");
-    const selected = retained.has(name.slice(0, -5));
-    if (selected && name.endsWith(".json")) verifyManifest(file, "sha256:" + name.slice(0, -5));
-    if (!selected) removals.push(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(file) !== file) fail("cache-path", "manifests");
+    return file;
+  };
+  const sourceDigest = sourceRef.slice(7), preparedDigest = preparedRef.slice(7);
+  const completion = directory(preparedManifests, "prepared", "manifests");
+  const sources = fs.readdirSync(completion);
+  if (sources.length !== 1 || sources[0] !== sourceDigest) fail("cache-inventory", "manifests");
+  const witness = directory(completion, sourceDigest, "manifests");
+  const witnesses = fs.readdirSync(witness);
+  if (witnesses.length !== 1 || witnesses[0] !== preparedDigest + ".json") fail("cache-inventory", "manifests");
+  verifyManifest(artifact(witness, witnesses[0]), preparedRef);
+  const retained = new Set([sourceDigest, preparedDigest]);
+  for (const manifests of [hostManifests, preparedManifests]) {
+    for (const name of fs.readdirSync(manifests)) {
+      if (manifests === preparedManifests && name === "prepared") continue;
+      if (!/^[a-f0-9]{64}[.](json|memo)$/.test(name)) fail("unapproved-entry", "manifests");
+      const file = artifact(manifests, name);
+      const selected = retained.has(name.slice(0, -5));
+      if (selected && name.endsWith(".json")) verifyManifest(file, "sha256:" + name.slice(0, -5));
+      if (!selected) removals.push(file);
+    }
   }
   // Validate the entire plan before removing anything; obsolete owned content needs no rescan.
   for (const target of removals) fs.rmSync(target, { recursive: true });

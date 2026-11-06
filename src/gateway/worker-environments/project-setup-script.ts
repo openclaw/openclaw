@@ -120,6 +120,8 @@ const env = { PATH: process.env.PATH, HOME: machineHome, LANG: "C.UTF-8", GIT_CO
     [JSON.stringify("core.fsmonitor"), JSON.stringify("false")],
   ],
 )}, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+// Phase state belongs to this worker invocation, not repository-provided environment.
+env.OPENCLAW_INTERNAL_WORKSPACE_MANIFEST_READ_ONLY = inspectOnly ? "1" : "0";
 const ownedDirectory = (parent, name, create = false) => {
   const target = path.join(parent, name);
   if (create && !fs.existsSync(target)) fs.mkdirSync(target, { mode: 0o700 });
