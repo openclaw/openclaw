@@ -116,8 +116,13 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
       return null;
     }
     const params = new URLSearchParams(url.hash.slice(1));
+    // Vendored consumers may provide DOM types without DOM.Iterable.
+    let fieldCount = 0;
+    params.forEach(() => {
+      fieldCount += 1;
+    });
     if (
-      [...params.keys()].length !== LINK_FIELDS.length ||
+      fieldCount !== LINK_FIELDS.length ||
       LINK_FIELDS.some((field) => params.getAll(field).length !== 1)
     ) {
       return null;

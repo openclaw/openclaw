@@ -52,12 +52,15 @@ async function verify(
         : verifier === "redemption"
           ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
           : verifier === "reset"
-            ? await verifyRootResetSignature(statement as SignedStatement<"RootReset">, binding.body)
-          : await verifyOwnerStatement(
-              statement as SignedStatement<"OwnerDeviceCert">,
-              anchor,
-              options,
-            );
+            ? await verifyRootResetSignature(
+                statement as SignedStatement<"RootReset">,
+                binding.body,
+              )
+            : await verifyOwnerStatement(
+                statement as SignedStatement<"OwnerDeviceCert">,
+                anchor,
+                options,
+              );
   return result.ok ? "ok" : result.code;
 }
 

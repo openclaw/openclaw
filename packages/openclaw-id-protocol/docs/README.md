@@ -71,3 +71,10 @@ docs/           these documents
 ```
 
 Run the tests: `pnpm test packages/openclaw-id-protocol`.
+
+Check portable source types without Node ambient types or `DOM.Iterable`:
+`node scripts/run-tsgo.mjs -p packages/openclaw-id-protocol/tsconfig.portable.json`.
+The language library is ES2023 because canonicalization and snapshots use `Array.toSorted`.
+Avoid DOM iterators even when the local compiler exposes them in `DOM`: vendored Discovery
+and loader consumers may use DOM declarations that require a separate `DOM.Iterable` library.
+Their vendor builds remain the final consumer compatibility check.
