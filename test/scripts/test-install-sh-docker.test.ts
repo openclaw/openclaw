@@ -1146,35 +1146,38 @@ printf 'status=%s\\n' "$status"
     );
   });
 
-  it("retries failed non-root package indexes without installing from incomplete lists", () => {
-    const dockerfile = readFileSync(NONROOT_DOCKERFILE_PATH, "utf8");
-    const start = dockerfile.indexOf("  set -eux;");
-    const end = dockerfile.indexOf("\n\n", start);
-    const install = dockerfile.slice(start, end).replace(/\\\r?\n/gu, " ");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `
-      apt-get() {
-        if [[ "$1" == update ]]; then
-          echo update
-          # APT normally tolerates failed indexes; strict mode must reject them.
-          [[ " $* " != *" APT::Update::Error-Mode=any "* ]]
-        else
-          echo unexpected-install
-        fi
-      }
-      sleep() { :; }
-      ${install}
-    `,
-      ],
-      { encoding: "utf8" },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout.trim().split("\n")).toEqual(["update", "update", "update"]);
-    expect(result.stderr).toContain("apt-get update failed (attempt 3)");
-  });
+  it.each([NONROOT_DOCKERFILE_PATH, "scripts/docker/install-sh-smoke/Dockerfile"])(
+    "retries failed package indexes without installing from incomplete lists: %s",
+    (dockerfilePath) => {
+      const dockerfile = readFileSync(dockerfilePath, "utf8");
+      const start = dockerfile.indexOf("  set -eux;");
+      const end = dockerfile.indexOf("\n\n", start);
+      const install = dockerfile.slice(start, end).replace(/\\\r?\n/gu, " ");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+        apt-get() {
+          if [[ "$1" == update ]]; then
+            echo update
+            # APT normally tolerates failed indexes; strict mode must reject them.
+            [[ " $* " != *" APT::Update::Error-Mode=any "* ]]
+          else
+            echo unexpected-install
+          fi
+        }
+        sleep() { :; }
+        ${install}
+      `,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout.trim().split("\n")).toEqual(["update", "update", "update"]);
+      expect(result.stderr).toContain("apt-get update failed (attempt 3)");
+    },
+  );
 
   it("does not execute or retain a non-root installer after curl fails", () => {
     const fixture = runFailedInstallerDownload(true);
