@@ -40,8 +40,12 @@ export const setupInferenceLog = createSubsystemLogger("system-agent/setup-infer
  * A failing candidate must never leave config pointing at a broken model.
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
-
-export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
+/**
+ * A remote API answering a one-word, tool-free prompt either replies well inside this
+ * or is not usable for chat; the setup dialog waits on it, so don't hold it for 90 s.
+ * Local servers, CLI runners and native harnesses keep the full budget for startup.
+ */
+export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";

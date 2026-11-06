@@ -197,6 +197,8 @@ export function createPluginsPage(options: {
     };
   };
 
+  onSettled(() => context.overlays.subscribe(publish));
+
   const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
   const mutationPresentation = createPluginsMutationPresentation({
@@ -295,6 +297,7 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      promptLaunch.reset();
       catalogTask.cancel();
       details.inspection.release();
       details.catalog.release();
@@ -347,13 +350,9 @@ export function createPluginsPage(options: {
       event.stopPropagation();
       return;
     }
-    if (state.detail) {
+    // Settings details bubble to the shell's shared, location-aware parent navigation.
+    if (state.detail && surface === "discovery") {
       setState({ detail: null });
-      if (surface === "settings") {
-        context.replace("plugin-settings", {
-          pathname: pathForRoute("plugin-settings", context.basePath),
-        });
-      }
       event.stopPropagation();
     }
   };
@@ -573,6 +572,8 @@ export function createPluginsPage(options: {
     return pluginMutationBlockedReason({
       connected,
       hasAdminAccess: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+      actorKind:
+        context.gateway.snapshot.hello?.auth.roleAllowsAdmin === false ? "member" : "browser",
       mutationAllowed,
     });
   }

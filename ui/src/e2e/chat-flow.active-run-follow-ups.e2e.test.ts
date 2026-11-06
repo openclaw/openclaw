@@ -672,6 +672,55 @@ suite.define(() => {
     await expectRequestCountStable(gateway, "chat.send", 1);
   });
 
+  it("parks queued follow-ups after Stop until Resume sends the next one", async () => {
+    const { page, gateway } = await chatFixture(suite);
+
+    await followUpSettings(page, "queue");
+    await page.goto(`${suite.server.baseUrl}chat`);
+
+    const composer = chatComposer(page);
+    await sendMessage(page, "start the run the user will stop");
+    const initial = requireRecord((await gateway.waitForRequest("chat.send")).params);
+    const runId = requireString(initial.idempotencyKey, "stopped run");
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
+    await stop.waitFor({ timeout: 10_000 });
+    for (const text of ["first parked follow-up", "second parked follow-up"]) {
+      await composer.fill(text);
+      await composer.press("Enter");
+      await page.locator(".chat-queue__item", { hasText: text }).waitFor({ timeout: 10_000 });
+    }
+
+    await stop.click();
+    await gateway.waitForRequest("chat.abort");
+    const paused = page.locator('[data-chat-queue-global-state="paused"]');
+    await paused.getByText("Queue paused", { exact: true }).waitFor({ timeout: 10_000 });
+    // A correction typed before the abort settles is not parked: it goes out next.
+    await composer.fill("send this one now");
+    await composer.press("Enter");
+    await gateway.emitGatewayEvent("chat", chatEvent(runId, "agent:main:main", "aborted"));
+
+    const direct = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);
+    expect(direct).toMatchObject({ message: "send this one now" });
+    const directRunId = requireString(direct.idempotencyKey, "direct run");
+    await gateway.emitGatewayEvent(
+      "chat",
+      chatEvent(directRunId, "agent:main:main", "final", {
+        message: timedText("assistant", "Sent right away."),
+      }),
+    );
+    await chatTranscript(page).getByText("Sent right away.", { exact: true }).waitFor();
+    await paused.waitFor({ state: "visible" });
+    await expectRequestCountStable(gateway, "chat.send", 2);
+
+    await paused.getByRole("button", { name: "Resume", exact: true }).click();
+    const sends = await waitForRequests(gateway, "chat.send", 3);
+    expect(requireRecord(sends[2]?.params)).toMatchObject({ message: "first parked follow-up" });
+    await paused.waitFor({ state: "detached", timeout: 10_000 });
+    await page
+      .locator(".chat-queue__item", { hasText: "second parked follow-up" })
+      .waitFor({ timeout: 10_000 });
+  });
+
   it("projects one disconnected state for an offline steer follow-up", async () => {
     const { page, gateway } = await chatFixture(suite);
 

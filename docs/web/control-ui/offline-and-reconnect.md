@@ -13,8 +13,9 @@ What survives a dropped connection, and how the Control UI recovers when it retu
 An initial connection has a two-second grace period before connection feedback
 appears. A failed or closed connection shows feedback immediately, and retries
 keep it visible until the Gateway connects. Cached conversations retain their
-header controls; the connection indicator fills the header's existing gap without
-moving controls or covering conversation rows. Resolving a session link or loading
+header controls; on desktop the connection indicator floats centered below the
+pane header, for example **Reconnecting… · Saved conversation**, without moving
+header controls or the transcript. Resolving a session link or loading
 history does not imply a lost connection.
 
 Returning to a suspended tab or regaining network connectivity can recover a
@@ -198,9 +199,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links can restore their scoped transcript without waiting for
 the sidebar roster or the socket to open. A prepared snapshot supplies the header,
-transcript, and composer in the first pane frame. Cached content stays visible
-while live history and route confirmation finish; those checks do not show the
-header connection indicator. Dashboard layouts restore before the pane renders, and embedded
+transcript, and composer in the first pane frame, including the selected context-window
+badge and last run action. Stop stays disabled until the live connection confirms
+permission to stop the run. Cached content stays visible while live history and route
+confirmation finish; those checks do not show the header connection indicator.
+Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.

@@ -119,9 +119,9 @@ async function assertFeedback(page: Page) {
   await error.locator("summary").click();
   expect(await error.locator("details").getAttribute("open")).not.toBeNull();
   expect(await error.locator("code").textContent()).toContain("Synthetic module failure");
-  expect(
-    await page.locator('[data-example="Refresh stale"] [role="status"]').textContent(),
-  ).toContain("stale");
+  expect(await page.locator('[data-example="Refresh stale"] [role="status"]').textContent()).toBe(
+    "Showing last known data.",
+  );
   expect(
     await page.locator('[data-example="Refresh failed"] [role="alert"]').textContent(),
   ).toContain("Synthetic refresh failure");
@@ -131,7 +131,7 @@ async function assertFeedback(page: Page) {
   expect(
     await page.getByRole("button", { name: "Busy panel", exact: true }).getAttribute("aria-busy"),
   ).toBe("true");
-  expect(await page.locator("kbd").last().textContent()).toBe("Ctrl+K");
+  expect(await page.locator("kbd").last().textContent()).toBe("CtrlK");
   const copy = page.locator('[data-example="Actions and shortcuts"] .chat-copy-btn').nth(0);
   await copy.click();
   await expect.poll(() => copy.getAttribute("data-copy-state")).toBe("copied");

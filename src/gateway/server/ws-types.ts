@@ -79,6 +79,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   preparedRecipientProfileId?: string;
   preparedSessionProfile?: UserProfileIdentity;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+  /** Initialized even for broad (undefined) access; must match this connection's published hello. */
+  profileActivity?: { viewerId: string | null | undefined };
   clientIp?: string;
   /** Server-attested inputs for rechecking browser-origin policy after config publication. */
   browserOrigin?: GatewayWsBrowserOrigin;

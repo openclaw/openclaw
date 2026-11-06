@@ -234,7 +234,9 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
     hello: gatewayHelloForMethods(["channels.pairing.list"], []),
   });
   await waitForSolid(() => {
-    expect(f.container.textContent).toContain("operator.pairing access");
+    expect(f.container.textContent).toContain(
+      "You don’t have permission to review DM access requests.",
+    );
     expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
   });
   retired.resolve(pairingSnapshot());

@@ -121,7 +121,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       sliderUnanchored,
       reasoningValueText,
       reasoningValueLabel,
-      defaultThinkingValue: props.thinking.inherited.value,
       ultrafast,
       triggerLabel,
       triggerTitle,

@@ -21,6 +21,13 @@ the release-only proofs described in the scheduled-workflow guide.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 
+The Node Runtime Conformance workflow selects TypeScript and Rust proofs from
+exact PR revisions using the same input lists as scheduled proof reuse.
+TypeScript-only tooling changes omit Rust; Rust configuration changes omit
+TypeScript. Shared protocol versions, fixtures, and crate changes retain both.
+Deleted, unknown, malformed, or capped diff inputs retain both proofs. Manual
+runs and existing scheduled proof policies remain unchanged.
+
 ### PR vs hourly vs release
 
 Ordinary `pull_request` runs, including contributions from forks, use the
@@ -100,6 +107,16 @@ SwiftFormat run inside the moved Apple jobs and move with them; no new jobs are
 introduced. Standalone native Periphery workflows and iOS screenshot jobs retain
 their existing selection.
 
+For ordinary current-checkout PRs, known Python skill changes select that skill's
+complete Ruff and pytest suite. Shared, missing, unknown or mixed inputs retain
+all skill suites. Scheduled and release runs retain full coverage.
+
+Android phone source changes can skip Wear unit tests. Wear test/debug-only
+changes can skip phone unit tests. Both phone lint variants remain selected,
+including when third-party lint moves from the omitted Wear row to its phone
+row. Wear production strings feed phone generation, so those changes, shared
+modules, build inputs, missing files and full validation retain all unit rows.
+
 ### Published-driver update cell
 
 `scripts/lib/ci-published-driver-update-plan.mts` excludes ordinary PRs, even
@@ -176,6 +193,8 @@ Affected `main` pushes and exact-head `release_gate` fallbacks retain one requir
 When neither simulator group is selected, smoke uses a generic simulator build destination and skips simulator selection, boot, and SimSlim preparation. Selected groups keep separate `test-without-building` invocations against the same built products. The preflight and iOS job summaries record each group's selection and reasons. Repository variable `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` (or `1`) retains both groups for selected historical PR jobs; it cannot re-enable iOS on an ordinary PR. Main, scheduled, manual, release-gate, and compatibility planning retain full group selection. Existing historical execution contracts remain unchanged.
 
 Smoke still omits Rust tests and the broader app/notification lifecycle and Watch simulator suites. A failed, cancelled, or unexpectedly skipped smoke still fails `openclaw/ci-gate`.
+
+ESP-specific tests do not run in mobile CI, including full manual/release validation and screenshot capture. The iOS app still builds its ESP feature, and its standalone ESP tests remain available for local execution. ESP-only test and vendored-library changes do not select simulator test groups.
 
 Hourly main-tier CI retains `ios-build (tests)`, including Rust, voice cleanup, native Access, and every focused app/notification lifecycle test, including its Watch messaging and activation coverage. Managed attachment UI/export proof, Watch operation simulator suites, and Watch delivery UI proof belong to full-tier manual/release validation; hourly runs also exclude screenshot capture. Main-tier and smoke builds use the selected simulator's native architecture without compiler indexing; voice and lifecycle tests retain logs and xcresult bundles without Xcode's verbose diagnostic collection. Only a canceled selected scheduled `ios-build` on upstream `main` can pass the aggregate with a coalescing notice; this delegates proof to a later job rather than validating the canceled revision. Other failures, unexpected skips, and cancellations remain failures. See [scheduled iOS aggregation](/ci/scheduled-workflows#hourly-main-ci).
 

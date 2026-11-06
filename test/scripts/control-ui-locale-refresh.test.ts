@@ -105,7 +105,6 @@ async function createFixture() {
   put(root, "scripts/control-ui-i18n.ts", "generator policy\n");
   put(root, "source/input.txt", [...original]);
   for (const locale of locales) {
-    put(root, "ui/src/i18n/.i18n/glossary." + locale + ".json", "[]\n");
     for (const assets of assetRoots) {
       put(root, assets + "/" + locale + ".tm.jsonl", "");
       put(root, assets + "/" + locale + ".meta.json", metadata(locale));
@@ -183,7 +182,7 @@ it("rejects a replacement history before importing matching artifact envelopes",
   expect(runGit(f.root, ["status", "--porcelain"])).toBe("");
 });
 
-it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
+it.each(["canonical", "metadata", "policy", "ownership"])(
   "discards worker memory when %s changes without overwriting canonical inputs",
   async (change) => {
     const f = await createFixture();
@@ -191,8 +190,6 @@ it.each(["canonical", "metadata", "glossary", "policy", "ownership"])(
       put(f.root, svMemory, workerMemory("sv").replace("Behåll", "Korrigerad"));
     } else if (change === "metadata") {
       put(f.root, svMetadata, metadata("sv", { fallbackKeys: ["keep"] }));
-    } else if (change === "glossary") {
-      put(f.root, "ui/src/i18n/.i18n/glossary.sv.json", [{ source: "Keep", target: "Korrigerad" }]);
     } else if (change === "policy") {
       put(f.root, "scripts/control-ui-i18n.ts", "new generator policy");
     } else {

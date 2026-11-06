@@ -6,7 +6,11 @@ import { copyMarkdownLabel } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { ChatItem, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatItem,
+  NormalizedMessage,
+  MessageGroup as MessageGroupData,
+} from "../../../lib/chat/chat-types.ts";
 import {
   prepareChatMessageRender,
   type ChatMessageRenderPreparation,
@@ -21,18 +25,23 @@ import {
   resolveFullMessageRecovery,
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
+import type { readChatInputDelivery } from "../chat-thread-items.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
   registerMessageActionElements,
   type MessageActionElements,
 } from "./chat-message-action-elements.ts";
+import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
+import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import {
   hasActionRowReactionPicker,
   type MessageReactionOptions,
 } from "./chat-message-reaction-model.ts";
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
+import { ChatInputDeliveryStatus } from "./chat-message-send-status-view.tsx";
+import { MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { ReadAloud } from "./chat-read-aloud.tsx";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
@@ -203,7 +212,7 @@ export function ReplyButton(props: {
   onReply: (target: MessageReplyTarget) => void;
 }) {
   return (
-    <openclaw-tooltip prop:content={t("chat.messages.reply")}>
+    <openclaw-tooltip prop:content={t("chat.messages.reply")} prop:describe={false}>
       <button
         class="chat-reply-btn"
         type="button"
@@ -213,5 +222,45 @@ export function ReplyButton(props: {
         <Icon name="messageSquare" />
       </button>
     </openclaw-tooltip>
+  );
+}
+
+export function MessageActionsRow(props: {
+  messageKey?: string;
+  details: MessageActionDetails | null | undefined;
+  options: NativeMessageGroupOptions;
+  class?: string;
+  reactionGroup?: MessageGroupData;
+  timestamp?: number;
+  inputDelivery?: ReturnType<typeof readChatInputDelivery>;
+}) {
+  let owner: HTMLDivElement | undefined;
+  return (
+    <div
+      ref={(element) => (owner = element)}
+      class={props.class ?? "chat-group-footer-actions"}
+      data-message-actions-for={props.messageKey}
+    >
+      <Show when={props.reactionGroup}>
+        {(group) => (
+          <GroupMessageReactions
+            group={group()}
+            actionDetails={props.details}
+            isStreaming={false}
+            options={props.options}
+          />
+        )}
+      </Show>
+      <MessageActions
+        details={props.details}
+        options={props.options}
+        actionOwner={() => owner}
+        messageKey={props.messageKey}
+      />
+      <Show when={props.timestamp !== undefined}>
+        <MessageMeta timestamp={props.timestamp!} meta={null} />
+      </Show>
+      <ChatInputDeliveryStatus delivery={props.inputDelivery ?? null} />
+    </div>
   );
 }

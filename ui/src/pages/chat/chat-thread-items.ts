@@ -486,6 +486,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
   return buildLocalUserMessage({
     text: item.text,
     workContext: item.workContext,
+    appContext: item.appContext,
     mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,
@@ -560,6 +561,21 @@ export function insertionIndexesForBounds(
     minimum: afterIndex + 1,
     maximum: beforeIndex >= 0 ? beforeIndex : items.length,
   };
+}
+
+export function appendActiveRunItem(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+  item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+): void {
+  // Queued custody is a ceiling for the whole live response, not just its text.
+  // Moving its working indicator past that ceiling splits and remeasures the run.
+  if (bounds) {
+    const { maximum } = insertionIndexesForBounds(items, bounds);
+    items.splice(maximum, 0, item);
+  } else {
+    items.push(item);
+  }
 }
 
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {

@@ -28,6 +28,7 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -42,11 +43,7 @@ import {
   currentUpdateCheckLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
-import {
-  compareSemverStrings,
-  resolveNpmChannelTag,
-  type UpdateCheckResult,
-} from "./update-check.js";
+import { resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import {
   prepareStartupUpdateInstall,
