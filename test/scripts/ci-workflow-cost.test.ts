@@ -70,14 +70,13 @@ describe("Darwin tooling event scope", () => {
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
   });
 
-  it("executes the complete macOS distribution owner without another admission condition", () => {
+  it("executes native tooling once with unconditional macOS distribution coverage", () => {
     const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
-    const steps = workflow.jobs.darwin.steps.filter(
-      (step: { run?: string }) =>
-        step.run ===
-        "node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1",
+    const steps = workflow.jobs.darwin.steps.filter((step: { run?: string }) =>
+      step.run?.startsWith("node scripts/run-vitest.mjs "),
     );
     expect(steps).toHaveLength(1);
+    expect(steps[0].run.split(/\s+/u)).toContain("test/scripts/package-mac-dist.test.ts");
     expect(steps[0].if).toBeUndefined();
   });
 });
