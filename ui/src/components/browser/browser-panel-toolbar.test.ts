@@ -178,6 +178,70 @@ describe("Browser toolbar", () => {
   const toolbarFavicon = (panel: HTMLElement) =>
     panel.querySelector<HTMLImageElement>(".bp-toolbar-favicon img");
 
+  it.each([
+    ["Enter", "composing"],
+    ["Escape", "composing"],
+    ["Enter", "legacy"],
+    ["Escape", "legacy"],
+    ["Enter", "webkit-keyup"],
+    ["Enter", "webkit-blur"],
+  ])("leaves address %s to the IME (%s)", async (key, mode) => {
+    stubScreenshotMedia();
+    const { client, request } = createBrowserPageClient("asset", "https://assets.test/a.png");
+    const panel = panelFor(client);
+    mountSolid(() => panel);
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "https://example.test/ime-draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    const navigations = () =>
+      request.mock.calls.filter(
+        ([, envelope]) =>
+          envelope !== null &&
+          typeof envelope === "object" &&
+          "path" in envelope &&
+          envelope.path === "/navigate",
+      );
+    if (mode.startsWith("webkit")) {
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    }
+    const composing = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      isComposing: mode === "composing",
+      keyCode: mode === "legacy" ? 229 : 0,
+    });
+    input.dispatchEvent(composing);
+    await panel.updateComplete;
+    expect(composing.defaultPrevented).toBe(false);
+    expect(navigations()).toHaveLength(0);
+    expect(input.value).toBe("https://example.test/ime-draft");
+    expect(document.activeElement).toBe(input);
+
+    if (mode === "webkit-blur") {
+      input.blur();
+      input.focus();
+    } else {
+      input.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
+    }
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    if (key === "Enter") {
+      await waitForSolid(() => expect(navigations()).toHaveLength(1));
+      expect(navigations()[0]?.[1]).toMatchObject({
+        method: "POST",
+        body: { url: "https://example.test/ime-draft" },
+      });
+    } else {
+      await panel.updateComplete;
+      expect(navigations()).toHaveLength(0);
+      expect(input.value).toBe("https://assets.test/a.png");
+    }
+    expect(document.activeElement).not.toBe(input);
+  });
+
   it("retires replaced favicon requests without replacing the address draft or focus", async () => {
     const panel = await mountToolbar();
     const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
