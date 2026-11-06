@@ -1,0 +1,2 @@
+# Canonically equivalent Slack allowlist names: NFC-equivalent display-name resolution proof (#190443).
+390
