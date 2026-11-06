@@ -57,6 +57,7 @@ import {
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import { registerTelegramGuestHandler } from "./guest.js";
 import {
   prepareTelegramPollAnswerContextAsync,
   settleTelegramPollAnswerContext,
@@ -226,6 +227,12 @@ export async function createTelegramBotCore(
   });
 
   bot.use(createTelegramSequentializer());
+  const guestHandler = registerTelegramGuestHandler({
+    bot,
+    accountId: account.accountId,
+    runtime,
+    abortSignal: opts.accountAbortSignal,
+  });
 
   // A fast vote can know its route before outbound verification finishes. Hold
   // only that route's sequential lane until registration succeeds or declines it.
@@ -393,6 +400,7 @@ export async function createTelegramBotCore(
         resolveByConversation: () => null,
       };
   bot.stop = (async (...args: Parameters<typeof originalStop>) => {
+    guestHandler.stop();
     if (disabledBindingAdapter) {
       bindingOwnerStopped = true;
       unregisterSessionBindingAdapter({

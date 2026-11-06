@@ -48,6 +48,7 @@ type TelegramSequentialKeyContext = {
   editedMessage?: Message;
   editedChannelPost?: Message;
   update?: {
+    guest_message?: Message;
     message?: Message;
     edited_message?: Message;
     channel_post?: Message;
@@ -139,6 +140,11 @@ function getTelegramSequentialMessage(ctx: TelegramSequentialKeyContext): Messag
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
+  const guest = ctx.update?.guest_message;
+  if (guest) {
+    // Guest chats are not ordinary bot-visible chats, even when numeric IDs match.
+    return `telegram:guest:${guest.chat.id}:${guest.from?.id ?? "unknown"}`;
+  }
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
