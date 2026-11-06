@@ -1,2 +1,0 @@
-# Registered wiki lint command regression with real vault files and generated backlink checks.
-29

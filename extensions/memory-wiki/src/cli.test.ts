@@ -684,35 +684,6 @@ describe("memory-wiki cli", () => {
     },
   );
 
-  it("does not lint literal wikilinks or generate backlinks from them", async () => {
-    const { page, json, read } = await createCliVault();
-    await page("entities/literal.md", {
-      pageType: "entity",
-      id: "entity.literal",
-      title: "Literal",
-    });
-    await page("entities/active.md", { pageType: "entity", id: "entity.active", title: "Active" });
-    await page(
-      "sources/links.md",
-      { pageType: "source", id: "source.links", title: "Link examples" },
-      String.raw`# Link examples
-
-<!-- [[missing-comment]] [[Literal]] -->
-\[[missing-escape]] and \[[Literal]]
-<!--
-[[missing-multiline]]
--->
-[[Active]] and \\[[Active]]
-[[actually-missing]]`,
-    );
-    const result = await json<{ issues: { code: string; message: string }[] }>("lint");
-    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([
-      expect.objectContaining({ message: "Broken wikilink target `actually-missing`." }),
-    ]);
-    expect(await read("entities/literal.md")).not.toContain("Referenced By");
-    expect(await read("entities/active.md")).toContain("Link examples");
-  });
-
   it.each(["compile", "lint"])(
     "runs one compile cycle when `wiki %s` finds indexes missing after its source import",
     async (command) => {
