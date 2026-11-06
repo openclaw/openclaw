@@ -834,6 +834,8 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
       [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
+      [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
+      [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],

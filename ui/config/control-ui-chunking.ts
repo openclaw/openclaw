@@ -231,6 +231,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
     case "ui/src/components/solid/connect-command.tsx":
+    case "ui/src/components/cloud-profile-icon-data.ts":
+    case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
     case "ui/src/components/solid/tabs.tsx":
