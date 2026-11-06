@@ -38,6 +38,11 @@
   color: var(--text);
 }
 
+/* Reserve the viewport gutter even when a compact menu fits above its trigger. */
+.oc-overlay.chat-picker-overlay[data-placement^="top"] {
+  margin-block-start: 8px;
+}
+
 @position-try --chat-picker-fit {
   /* A long catalog must leave room for search and choices before this side wins. */
   max-height: min(var(--oc-overlay-max-height, 420px), max(200px, calc(100% - 16px)));
@@ -3779,7 +3784,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   align-items: center;
   gap: 12px;
   min-height: 36px;
-  padding: 0 0 0 var(--oc-menu-item-padding-inline, 8px);
+  padding: 0;
+  padding-inline-start: var(--oc-menu-item-padding-inline, 8px);
 }
 
 .chat-controls__speed-options--plain {

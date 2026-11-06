@@ -304,9 +304,6 @@ a.activity-current-work__row:hover {
 .activity-feed__people-count {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.activity-feed__people-count {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
