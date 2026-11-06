@@ -56,7 +56,9 @@ const denialControlSource = `
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
   tempDirs.cleanup();
 });
@@ -128,13 +130,13 @@ describe.runIf(process.platform === "darwin")("native npm staging under Seatbelt
         env[`npm_config_${key}`] = env[`NPM_CONFIG_${key.toUpperCase()}`];
       }
       const signal = AbortSignal.timeout(180_000);
-      const command = (argv: string[], sandbox = false) =>
+      const command = (argv: string[], sandbox = false, cwd = root) =>
         runCommandWithTimeout(
           sandbox ? ["/usr/bin/sandbox-exec", "-f", path.join(root, "stage.sb"), ...argv] : argv,
           {
             env,
             signal,
-            cwd: root,
+            cwd,
             timeoutMs: 45_000,
             killProcessTree: true,
             requireProcessTreeExtinction: true,
@@ -142,8 +144,8 @@ describe.runIf(process.platform === "darwin")("native npm staging under Seatbelt
             terminateOnOutputLimit: true,
           },
         );
-      const succeeded = async (argv: string[], sandbox = false) => {
-        const result = await command(argv, sandbox);
+      const succeeded = async (argv: string[], sandbox = false, cwd = root) => {
+        const result = await command(argv, sandbox, cwd);
         expect(result.code, result.stdout + result.stderr).toBe(0);
         return result.stdout;
       };
@@ -337,6 +339,7 @@ describe.runIf(process.platform === "darwin")("native npm staging under Seatbelt
             JSON.stringify([version, reportPath, sandbox]),
           ],
           sandbox,
+          repoRoot,
         );
         return JSON.parse(await fs.readFile(reportPath, "utf8"));
       };
