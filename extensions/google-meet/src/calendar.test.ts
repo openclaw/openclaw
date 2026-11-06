@@ -64,11 +64,11 @@ describe("Google Meet calendar URL extraction", () => {
       eventQuery: "target",
     });
     expect(result.events).toMatchObject([{ event: { id: "target" }, selected: true }]);
-    const urls = fetch.mock.calls.map(([url]) => new URL(String(url)));
+    const urls = fetch.mock.calls.map(([url]) => new URL(url instanceof Request ? url.url : url));
     expect(urls.map((url) => url.searchParams.get("pageToken"))).toEqual([null, "second", "third"]);
     for (const url of urls) {
       url.searchParams.delete("pageToken");
-      expect(url.toString()).toBe(urls[0].toString());
+      expect(url.toString()).toBe(urls[0]?.toString());
     }
   });
 });
