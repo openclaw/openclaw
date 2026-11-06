@@ -1,46 +1,74 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { createComponent, createSignal, merge } from "solid-js";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
 import { observeResize } from "../../../lib/reactive/observers.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { admittedDetailsAutomationsCache } from "./chat-details-content.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import {
+  card,
+  detailsFixtureProps as props,
+  createDetailsBrowserFixture,
+} from "./chat-details.browser.test-support.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
+import { pullRequest } from "./chat-pull-requests.test-support.ts";
 import "../../../styles/components.css";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";
-import progressStyles from "../../../styles/chat/progress-card.css?inline";
 
-const card: ProgressCard = {
-  sessionKey: "agent:main:details",
-  revision: 1,
-  updatedAt: 1_000,
-  steps: [
-    { step: "Inspect layout", status: "completed" },
-    { step: "Verify the change", status: "in_progress" },
-  ],
-};
 const mounted: HTMLElement[] = [];
-function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
-  return {
-    sessionKey: card.sessionKey,
-    currentAgentId: "main",
-    selectedSession: { key: card.sessionKey, kind: "direct" },
-    messages: [],
-    gatewayScope: {},
-    progressCard: card,
-    progressCardLifetime: {},
-    progressCardIdentity: card.sessionKey,
-    detailsWorkspace: { root: "/workspace/details", label: "details" },
-    ...overrides,
-  };
-}
+
+it.each([
+  { viewport: 1000, width: 700, role: "dialog" },
+  { viewport: 1700, width: 1400, role: "complementary" },
+])(
+  "follows empty desktop section arrivals and removals ($role)",
+  async ({ viewport, width, role }) => {
+    await page.viewport(viewport, 900);
+    const view = await fixture(
+      props({ progressCard: undefined, detailsWorkspace: undefined }),
+      width,
+      false,
+      "desktop",
+    );
+    await waitForSolid(() => expect(view.controller).toBeDefined());
+    if (role === "dialog") {
+      await waitForSolid(() => expect(view.panel.hidden).toBe(true));
+      view.open(view.trigger);
+      flush();
+    }
+    await waitForSolid(() =>
+      expect(view.panel.querySelector(".chat-details-desktop-body")).not.toBeNull(),
+    );
+    await expect.poll(() => view.panel.hidden).toBe(true);
+    expect(view.panel.inert).toBe(true);
+    expect(view.pane.style.getPropertyValue("--chat-details-gutter")).toBe("");
+    view.updateChat({ progressCard: card });
+    await expect.poll(() => view.panel.getAttribute("role")).toBe(role);
+    view.updateChat({ progressCard: undefined });
+    await expect.poll(() => view.panel.hidden).toBe(true);
+    expect(view.panel.inert).toBe(true);
+    view.updateChat({
+      detailsWorkspace: { root: "/workspace/details", label: "details", branch: "fix/sidebar" },
+    });
+    await expect.poll(() => view.panel.getAttribute("role")).toBe(role);
+  },
+);
 async function fixture(
   value = props(),
   width = 600,
@@ -48,77 +76,14 @@ async function fixture(
   nativePresentation?: ChatDetailsViewProps["nativePresentation"],
   contentPending?: boolean,
 ) {
-  const styles = document.createElement("style");
-  styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
-  document.head.append(styles);
-  const frame = document.createElement("div");
-  frame.className = "chat-main__conversation-frame";
-  frame.style.cssText = `position:relative;width:${width}px;height:560px;margin-left:20px`;
-  const conversation = document.createElement("div");
-  conversation.className = "chat-main__conversation";
-  conversation.style.cssText =
-    "position:absolute;inset-block:0;inset-inline-start:0;inset-inline-end:var(--chat-details-space,0px)";
-  const footer = document.createElement("div");
-  footer.className = "chat-footer";
-  footer.style.cssText = "position:absolute;bottom:0;width:100%;height:100px";
-  const pane = document.createElement("openclaw-chat-pane");
-  pane.className = "sidebar-region";
-  pane.style.cssText = `display:block;position:relative;width:${width}px;height:640px;margin:30px 20px`;
-  pane.style.setProperty("--desktop-side-reserve", "0px");
-  pane.style.setProperty("--desktop-divider-reserve", "0px");
-  pane.append(frame);
-  frame.hidden = fullscreen;
-  const header = document.createElement("div");
-  if (fullscreen) {
-    pane.prepend(header);
-  }
-  document.body.append(pane);
-  let details: ChatDetails | undefined;
-  const [current, setCurrent] = createSignal<ChatDetailsViewProps>({
-    chat: value,
-    elements: { pane, frame, footer, header: fullscreen ? header : undefined },
-    presentation: true,
-    mobile: false,
+  return createDetailsBrowserFixture(
+    value,
+    mounted,
+    width,
+    fullscreen,
     nativePresentation,
     contentPending,
-    conversationVisible: !fullscreen,
-    externalTrigger: fullscreen,
-    setRef: (handle) => (details = handle),
-  });
-  const update = (patch: Partial<ChatDetailsViewProps>) =>
-    setCurrent((previous) => ({ ...previous, ...patch }));
-  const view = mountSolid(
-    () =>
-      createComponent(
-        ChatDetails,
-        merge(() => current()),
-      ),
-    { container: fullscreen ? header : frame },
   );
-  const element = view.container.querySelector("openclaw-chat-details")!;
-  conversation.append(footer);
-  frame.append(conversation);
-  mounted.push(pane, styles);
-  flush();
-  const progress = pane.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
-  return {
-    element,
-    update,
-    updateChat: (patch: Partial<ChatDetailsProps>) =>
-      update({ chat: { ...current().chat!, ...patch } }),
-    open: (source: HTMLElement) => details?.open(source),
-    frame,
-    elements: current().elements!,
-    pane,
-    footer,
-    get session() {
-      return pane.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
-    },
-    progress,
-    conversation,
-    panel: pane.querySelector<HTMLElement>(".chat-details")!,
-    trigger: element.querySelector<HTMLButtonElement>(".chat-details-toggle")!,
-  };
 }
 async function toggle(details: HTMLDetailsElement) {
   const changed = new Promise<void>((resolve) => {
@@ -242,6 +207,302 @@ describe("chat Details presentation", () => {
     },
   );
 
+  it.each([
+    {
+      label: "People count",
+      section: "people",
+      details: {
+        selectedSession: {
+          key: card.sessionKey,
+          kind: "direct",
+          participantCount: 2,
+          participants: [],
+        },
+      },
+    },
+    {
+      label: "People identities",
+      section: "people",
+      details: {
+        selectedSession: {
+          key: card.sessionKey,
+          kind: "direct",
+          owner: {
+            actor: { type: "human", id: "alex", identity: { type: "profile", id: "alex" } },
+          },
+          participants: [{ identity: { type: "profile", id: "blair" } }],
+        },
+      },
+    },
+    {
+      label: "Environment Changes",
+      section: "environment",
+      details: {
+        environment: {
+          uncommitted: { sessionKey: card.sessionKey, additions: 1, deletions: 0, files: [] },
+        },
+      },
+    },
+    {
+      label: "Environment host",
+      section: "environment",
+      details: {
+        selectedSession: {
+          key: card.sessionKey,
+          kind: "direct",
+          placement: {
+            state: "active",
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            stateChangedAtMs: 1,
+            providerId: "cloud",
+            profileId: "worker",
+            environmentId: "machine",
+            workspaceBaseManifestRef: "manifest",
+            remoteWorkspaceDir: "/workspace/details",
+            activeOwnerEpoch: 1,
+            workerBundleHash: "bundle",
+          },
+        },
+      },
+    },
+    {
+      label: "Outputs read error",
+      section: "outputs",
+      details: {
+        outputs: {
+          artifacts: null,
+          artifactsError: "Artifacts unavailable",
+          dashboard: null,
+          dashboardError: null,
+          onOpenArtifact: vi.fn(),
+          renderArtifactIcon: () => null,
+          onViewAll: vi.fn(),
+          renderViewAllIcon: () => null,
+        },
+      },
+    },
+    {
+      label: "partial Automations cache",
+      section: "automations",
+      details: {
+        cachedDetails: {
+          locale: "en",
+          automations: {
+            rows: [{ id: "job", name: "Cached automation", state: "idle" }],
+            more: false,
+          },
+        },
+      },
+    },
+    {
+      label: "published PR links",
+      section: "pull-requests",
+      details: { pullRequests: [pullRequest()] },
+    },
+    {
+      label: "partial Subagents cache",
+      section: "subagents",
+      details: {
+        cachedDetails: { locale: "en", subagents: { total: 1, rows: [], counts: [] } },
+      },
+    },
+  ] satisfies Array<{
+    label: string;
+    section: "people" | "environment" | "outputs" | "subagents" | "automations" | "pull-requests";
+    details: Partial<ChatDetailsProps>;
+  }>)("reserves $label geometry before deferred content mounts", async ({ section, details }) => {
+    await page.viewport(1700, 900);
+    const view = await fixture(
+      props({
+        progressCard: undefined,
+        detailsWorkspace: undefined,
+        desktopPresentation: {
+          peopleLabel: "People",
+          outputsLabel: "Outputs",
+          subagentsWorkingLabel: "Working",
+        },
+        ...details,
+      }),
+      1320,
+      false,
+      "desktop",
+      true,
+    );
+    const before = view.conversation.getBoundingClientRect();
+    expect(getComputedStyle(view.conversation).right).toBe("313px");
+    expect(view.panel.hidden).toBe(false);
+    if (details.cachedDetails) {
+      await waitForSolid(() =>
+        expect(view.panel.querySelector(`[data-details-group="${section}"]`)).not.toBeNull(),
+      );
+    }
+    view.update({ contentPending: false });
+    await waitForSolid(() =>
+      expect(view.panel.querySelector(`[data-details-group="${section}"]`)).not.toBeNull(),
+    );
+    const after = view.conversation.getBoundingClientRect();
+    expect([after.x, after.y, after.width, after.height]).toEqual([
+      before.x,
+      before.y,
+      before.width,
+      before.height,
+    ]);
+  });
+
+  it("releases cached Automation geometry after settled denial or empty inventory and resets owner facts", async () => {
+    await page.viewport(1700, 900);
+    const first = createDeferred<CronJobsListResult<CronCompactJob>>();
+    const request = createGatewayRequestMock();
+    request.mockReturnValueOnce(first.promise);
+    const hello = gatewayHelloForMethods(["cron.list"]);
+    const snapshot = {
+      ...createApplicationGateway().gateway.snapshot,
+      phase: "connected" as const,
+      hello: { ...hello, auth: { ...hello.auth, scopes: ["operator.read"] } },
+    };
+    const { gateway } = createApplicationGateway({
+      ...snapshot,
+      client: createTestGatewayClient(request),
+    });
+    const view = await fixture(
+      props({
+        progressCard: undefined,
+        detailsWorkspace: undefined,
+        pullRequestsGateway: gateway,
+        cachedDetails: {
+          locale: "en",
+          automations: {
+            rows: [{ id: "job", name: "Cached automation", state: "idle" }],
+            more: false,
+          },
+        },
+      }),
+      1320,
+      false,
+      "desktop",
+    );
+    const section = () => view.panel.querySelector('[data-details-group="automations"]');
+    await waitForSolid(() => {
+      expect(section()).not.toBeNull();
+      expect(request).toHaveBeenCalled();
+    });
+    expect(getComputedStyle(view.conversation).right).toBe("313px");
+    first.reject(new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Not allowed" }));
+    await waitForSolid(() => {
+      expect(section()).toBeNull();
+      expect(getComputedStyle(view.conversation).right).toBe("0px");
+    });
+    const next = createDeferred<CronJobsListResult<CronCompactJob>>();
+    request.mockReturnValue(next.promise);
+    const replacement = createApplicationGateway({
+      ...snapshot,
+      client: createTestGatewayClient(request),
+    }).gateway;
+    view.updateChat({ pullRequestsGateway: replacement });
+    await waitForSolid(() => {
+      expect(section()).not.toBeNull();
+      expect(getComputedStyle(view.conversation).right).toBe("313px");
+    });
+    next.resolve({
+      jobs: [],
+      snapshotRevision: "empty",
+      offset: 0,
+      limit: 50,
+      total: 0,
+      hasMore: false,
+      nextOffset: null,
+    });
+    await waitForSolid(() => {
+      expect(section()).toBeNull();
+      expect(getComputedStyle(view.conversation).right).toBe("0px");
+    });
+    request.mockReturnValue(createDeferred<CronJobsListResult<CronCompactJob>>().promise);
+    view.updateChat({
+      selectedSession: { key: card.sessionKey, kind: "direct", sessionId: "replacement-session" },
+    });
+    await waitForSolid(() => {
+      expect(section()).not.toBeNull();
+      expect(getComputedStyle(view.conversation).right).toBe("313px");
+    });
+  });
+
+  it("does not present cached Automations without current read access", async () => {
+    const { gateway, publish } = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["cron.list"]);
+    publish({ ...gateway.snapshot, hello: { ...hello, auth: { ...hello.auth, scopes: [] } } });
+    const view = await fixture(
+      props({
+        progressCard: undefined,
+        pullRequestsGateway: gateway,
+        cachedDetails: {
+          locale: "en",
+          automations: {
+            rows: [{ id: "job", name: "Cached automation", state: "idle" }],
+            more: false,
+          },
+        },
+      }),
+      1320,
+      false,
+      "desktop",
+      true,
+    );
+    expect(
+      admittedDetailsAutomationsCache(
+        { rows: [{ id: "job", name: "Cached automation", state: "idle" }], more: false },
+        gateway.snapshot,
+      ),
+    ).toBeUndefined();
+    await waitForSolid(() =>
+      expect(view.panel.querySelector(".chat-details-desktop-body")).not.toBeNull(),
+    );
+    await waitForSolid(() => expect(view.panel.hidden).toBe(true));
+    expect(getComputedStyle(view.conversation).right).toBe("0px");
+    expect(view.panel.querySelector('[data-details-group="automations"]')).toBeNull();
+  });
+
+  it.each([400, 820, 1280])(
+    "keeps conversation geometry across known Environment hydration at %ipx",
+    async (width) => {
+      await page.viewport(width, 900);
+      const view = await fixture(
+        props({
+          progressCard: undefined,
+          detailsWorkspace: { root: "/workspace/details", label: "details", branch: "fix/sidebar" },
+        }),
+        width - 40,
+        false,
+        "desktop",
+        true,
+      );
+      const message = document.createElement("p");
+      message.textContent = "Keep the conversation steady while known session details hydrate.";
+      view.conversation.prepend(message);
+      const bounds = () => {
+        const rect = view.conversation.getBoundingClientRect();
+        return [rect.x, rect.y, rect.width, rect.height];
+      };
+      const proofDir = import.meta.env.VITE_OPENCLAW_STATUS_PROOF_DIR;
+      if (proofDir) {
+        await page.screenshot({ path: `${proofDir}/hydration-${width}-pending.png` });
+      }
+      const before = bounds();
+      view.update({ contentPending: false });
+      flush();
+      if (width >= 1240) {
+        await expect
+          .poll(() => view.panel.querySelector('[data-details-group="environment"]'))
+          .not.toBeNull();
+      }
+      expect(bounds()).toEqual(before);
+      if (proofDir) {
+        await page.screenshot({ path: `${proofDir}/hydration-${width}-ready.png` });
+      }
+    },
+  );
+
   it.each(["transcript paint", "explicit open"] as const)(
     "holds automatic content until %s and retains it through later hydration",
     async (release) => {
@@ -256,10 +517,8 @@ describe("chat Details presentation", () => {
         true,
       );
       await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-      expect(panel.getAttribute("role")).toBe("complementary");
-      expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
-        panel.getBoundingClientRect().left,
-      );
+      expect(panel.hidden).toBe(false);
+      expect(getComputedStyle(conversation).right).toBe("313px");
       expect(panel.querySelector(".chat-details-session")).toBeNull();
 
       if (release === "transcript paint") {

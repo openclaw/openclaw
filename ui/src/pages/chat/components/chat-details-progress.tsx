@@ -20,6 +20,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
+import { ChatDetailsDesktopPresence } from "./chat-details-presence.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -69,7 +70,12 @@ export function ChatDetailsProgress(props: Props) {
     return progress && write ? { write, progress } : undefined;
   });
   return (
-    <openclaw-chat-details-progress>
+    <openclaw-chat-details-progress
+      data-details-group={props.desktop && props.props?.progressCard ? "progress" : undefined}
+    >
+      <Show when={props.desktop && props.props?.progressCard}>
+        <ChatDetailsDesktopPresence />
+      </Show>
       <Show when={receipt()} keyed>
         {(value) => {
           onSettled(() => value.write({ progress: value.progress }));

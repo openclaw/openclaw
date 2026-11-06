@@ -29,10 +29,16 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
-import "../../../styles/chat/summary-automations.css";
 import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import "../../../styles/chat/summary-automations.css";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
+import { admittedDetailsAutomationsCache } from "./chat-details-content.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import {
+  ChatDetailsSectionAvailability,
+  useDetailsAvailability,
+  type DetailsSectionAvailability,
+} from "./chat-details-presence.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
@@ -57,12 +63,17 @@ export type SessionAutomationInventoryProps = {
 export function createSessionAutomationInventory(
   props: SessionAutomationInventoryProps,
   host: () => HTMLElement | undefined,
+  readAvailabilityIdentity: () => unknown = () => undefined,
 ) {
   // Unrelated parent prop replacements must not reset inventory or presentation.
   const gateway = createMemo(() => props.gateway);
   const sessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
-  const binding = createMemo(() => ({ source: gateway(), key: sessionKey() }));
+  const binding = createMemo(() => ({
+    source: gateway(),
+    key: sessionKey(),
+    identity: readAvailabilityIdentity(),
+  }));
   let loadedBinding: ReturnType<typeof binding> | undefined;
   const [revision, setRevision] = createSignal(0);
   const publish = () => setRevision((value) => value + 1);
@@ -299,6 +310,10 @@ export function createSessionAutomationInventory(
 
   return {
     lifecycle,
+    availabilityIdentity: () => {
+      revision();
+      return loadedBinding === binding() ? loadedBinding.identity : undefined;
+    },
     jobs: (): readonly CronCompactJob[] => state().cronJobs,
     total: () => state().cronJobsTotal,
     hasMore: () => state().cronJobsHasMore,
@@ -368,7 +383,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       }
     };
   };
-  const inventory = createSessionAutomationInventory(props, () => host);
+  const detailsAvailability = useDetailsAvailability();
+  const inventory = createSessionAutomationInventory(
+    props,
+    () => host,
+    () => detailsAvailability?.identity(),
+  );
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
   const presentation = createMemo(() => props.presentationIdentity);
@@ -381,11 +401,27 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   });
   const formatSchedule = createSessionAutomationSchedule();
   const cached = () =>
-    !inventory.loaded() &&
-    !inventory.denied() &&
-    (!props.gateway?.snapshot.hello || inventory.readable())
-      ? props.cached
-      : undefined;
+    admittedDetailsAutomationsCache(
+      props.cached,
+      props.gateway?.snapshot,
+      inventory.loaded(),
+      inventory.denied(),
+      inventory.readable(),
+    );
+  const hasContent = () => inventory.jobs().length > 0 || (cached()?.rows.length ?? 0) > 0;
+  const availability = createMemo<DetailsSectionAvailability | undefined>(
+    () => {
+      const identity = inventory.availabilityIdentity();
+      return identity === undefined
+        ? undefined
+        : {
+            identity,
+            section: "automation",
+            available: Boolean((inventory.readable() || cached()) && hasContent()),
+          };
+    },
+    { equals: (a, b) => a?.identity === b?.identity && a?.available === b?.available },
+  );
   const pending = () => (cached() ? inventory.loading() : isPending(inventory.read));
   // Closing the row DOM must not erase the bounded offline preview.
   const jobs = createMemo<DetailsAutomation[]>(() =>
@@ -631,6 +667,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       {inventory.lifecycle}
+      <ChatDetailsSectionAvailability fact={availability()} />
       <ChatLazyBoundary>
         <Show when={receipt()} keyed>
           {(value) => {
@@ -639,7 +676,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           }}
         </Show>
         <Show when={inventory.readable() || cached()}>
-          <Show when={inventory.jobs().length > 0 || (cached()?.rows.length ?? 0) > 0}>
+          <Show when={hasContent()}>
             <Show
               when={props.desktop}
               fallback={

@@ -4,13 +4,12 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
-import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import {
   listSubagents,
   type ChatSubagentActivity as ChatSubagentActivityRow,
 } from "../chat-subagent-wait.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
+import { readDetailsSubagents } from "./chat-details-availability.ts";
 import {
   ChatDetailsDesktopSection,
   createDetailsDesktopReveal,
@@ -207,13 +206,11 @@ export function ChatDetailsBackground(
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
   const desktopPresentation = createMemo(() => props.desktopSubagents);
   const collection = createMemo(() => roster().filter((row) => row.listed));
-  const liveSummary = createMemo(() =>
-    desktopPresentation() && hasLoadedDetailsSubagents(props.details)
-      ? projectDetailsSubagents(collection())
-      : undefined,
+  const availability = createMemo(() =>
+    readDetailsSubagents(props.details, roster(), Boolean(desktopPresentation())),
   );
-  const summary = () =>
-    liveSummary() ?? (desktopPresentation() ? props.details.cachedDetails?.subagents : undefined);
+  const liveSummary = () => availability().liveSummary;
+  const summary = () => availability().summary;
   const receipt = createMemo(() =>
     liveSummary() && props.details.onDetailsSnapshot
       ? { summary: liveSummary()!, write: props.details.onDetailsSnapshot }
@@ -259,7 +256,7 @@ export function ChatDetailsBackground(
           return null;
         }}
       </Show>
-      <Show when={subagents().length > 0 || (summary()?.total ?? 0) > 0}>
+      <Show when={availability().visible}>
         <Show
           when={desktopSubagents()}
           fallback={

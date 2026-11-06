@@ -54,7 +54,9 @@ export function publicationPullRequest(
   return id ? pullRequests.find((pr) => chatPullRequestId(pr) === id) : undefined;
 }
 
-export function showWorkRow(props: ChatPullRequestsProps): boolean {
+export function showWorkRow(
+  props: Pick<ChatPullRequestsProps, "branch" | "branchDismissed" | "pullRequests" | "publication">,
+): boolean {
   return Boolean(
     (!props.branchDismissed && props.branch) ||
     (!props.pullRequests.length &&
@@ -66,11 +68,16 @@ export function showWorkRow(props: ChatPullRequestsProps): boolean {
   );
 }
 
+export function hasChatPublishedPullRequests(
+  props: Pick<ChatPullRequestsProps, "pullRequests" | "publication">,
+): boolean {
+  return props.pullRequests.length > 0 || props.publication?.result?.status === "published";
+}
+
 export function hasChatPullRequests(props: ChatPullRequestsProps): boolean {
-  return (
-    props.pullRequests.length > 0 ||
-    (props.publishedOnly ? props.publication?.result?.status === "published" : showWorkRow(props))
-  );
+  return props.publishedOnly
+    ? hasChatPublishedPullRequests(props)
+    : props.pullRequests.length > 0 || showWorkRow(props);
 }
 
 function readDismissedStore(storage: Storage): Record<string, string[]> {

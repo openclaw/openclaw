@@ -6,16 +6,16 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import { readDetailsEnvironment } from "./chat-details-availability.ts";
+import "./chat-details-environment-desktop.css";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
-import "./chat-details-environment-desktop.css";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
-import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
+import { hasEnvironmentTextChanges } from "./chat-environment-changes.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createChatMachinePresentation } from "./chat-pane-placement.tsx";
-import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
@@ -61,39 +61,11 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       </span>
     );
   }
-  const changes = () => {
-    const result = props.uncommitted;
-    return result && !result.unavailableReason && hasEnvironmentTextChanges(result)
-      ? result
-      : undefined;
-  };
-  const published = () => props.work?.publication?.result?.status === "published";
-  const work = () => {
-    const candidate = props.work;
-    // The Gateway omits branch facts when this checkout has a live PR. Keep
-    // uncertain attempts recoverable; a completed failure is not another publish offer.
-    if (
-      !candidate ||
-      published() ||
-      (!candidate.branch &&
-        !candidate.publication?.locked &&
-        candidate.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft"))
-    ) {
-      return undefined;
-    }
-    const publication = candidate.publication;
-    return showWorkRow(candidate) ||
-      (retainedPublication(publication) &&
-        (publication?.result?.status !== "published" || publication.error))
-      ? candidate
-      : undefined;
-  };
-  const live = createMemo(() => ({
-    branch: workspace()?.branch ?? work()?.branch?.branch,
-    worktree: Boolean(session()?.worktree),
-  }));
-  const facts = () =>
-    (!props.details.sessionFactsReady && props.details.cachedDetails?.environment) || live();
+  const availability = () => readDetailsEnvironment(props.details, props, props.work);
+  const changes = () => availability().changes;
+  const work = () => availability().work;
+  const live = createMemo(() => availability().live);
+  const facts = () => availability().facts;
   const branchName = () => facts().branch;
   const receipt = createMemo(() =>
     props.details.sessionFactsReady && props.details.onDetailsSnapshot
@@ -104,9 +76,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
     const result = work()?.branch ?? changes();
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
-  const hasContent = createMemo(() =>
-    Boolean(machineMenu() || host() || branchName() || work() || facts().worktree || changes()),
-  );
+  const hasContent = () => availability().visible;
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
   // Empty sections must keep reading even when the saved disclosure choice is closed.

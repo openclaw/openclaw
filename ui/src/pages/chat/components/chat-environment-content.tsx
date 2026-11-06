@@ -26,10 +26,6 @@ export function EnvironmentAction(props: {
   );
 }
 
-export function hasEnvironmentTextChanges(result?: { additions?: number; deletions?: number }) {
-  return (result?.additions ?? 0) > 0 || (result?.deletions ?? 0) > 0;
-}
-
 export function EnvironmentChangeCounts(props: { result: SessionsDiffResult }) {
   return (
     <span class="chat-environment__counts">

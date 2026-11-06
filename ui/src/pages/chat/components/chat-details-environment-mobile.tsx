@@ -5,11 +5,8 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
-import {
-  EnvironmentAction,
-  EnvironmentChangeCounts,
-  hasEnvironmentTextChanges,
-} from "./chat-environment-content.tsx";
+import { hasEnvironmentTextChanges } from "./chat-environment-changes.ts";
+import { EnvironmentAction, EnvironmentChangeCounts } from "./chat-environment-content.tsx";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,

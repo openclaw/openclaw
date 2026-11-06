@@ -1,0 +1,5 @@
+# Exact +814 net regression lines versus CI base d4ae77eae296fd8e.
+# Covers unresolved/failed viewer identity, owner-driven desktop section presence,
+# pre-paint dock geometry at 400/820/1280px, and the rendered Control UI RPC flow.
+# Redundant empty desktop lifecycle cases are consolidated into one table.
+814

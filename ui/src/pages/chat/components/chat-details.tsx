@@ -19,10 +19,12 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { hasDetailsContent } from "./chat-details-content.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsLoading } from "./chat-details-loading.tsx";
-import "../../../styles/chat/details.css";
+import { createDetailsContentBoundary } from "./chat-details-loading.tsx";
+import { createDetailsAvailabilityProjection } from "./chat-details-projection.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import "../../../styles/chat/details.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -130,7 +132,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   };
   const [wideEnough, setWideEnough] = createSignal(false);
   const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
-  const opened = () =>
+  const requested = () =>
     isPresented() &&
     (props.mobileHost
       ? (props.mobileHost.open || props.mobileHost.exiting) &&
@@ -138,17 +140,30 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
       : intent() === "open" || (intent() === "auto" && canDock()));
-  const outputsDemand = createMemo(() =>
-    desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
+  const detailsAvailability = createDetailsAvailabilityProjection(
+    presentation,
+    () => props.chat?.pullRequestsGateway,
+    desktop,
   );
-  // Mount cached chrome with the transcript; retain disclosure state while closed.
+  // Lazy owners can report zero mounted rows before consuming already-admitted data.
+  const opened = () =>
+    requested() &&
+    (!desktop() ||
+      hasDetailsContent(props.chat, detailsAvailability.facts()) ||
+      detailsAvailability.hasContent() === true);
+  const outputsDemand = createMemo(() =>
+    desktop() && requested() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
+  );
+  // Partial cache receipts are already warm. Mount their owners with the transcript;
+  // those owners still decide content and current read access.
   const cachedReady = () =>
-    props.chat?.cachedDetails?.subagents !== undefined &&
-    props.chat.cachedDetails.automations !== undefined;
+    props.chat?.cachedDetails?.subagents !== undefined ||
+    props.chat?.cachedDetails?.automations !== undefined;
   const [sessionOpened] = createSignal<boolean>(
     (previous) =>
       previous ||
-      (opened() && (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
+      (requested() &&
+        (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
   );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
@@ -571,17 +586,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       surface.remove();
     };
   });
-  function SessionContent(content: { children: Element; onLoading?: (loading: boolean) => void }) {
-    return (
-      <Show when={sessionOpened()}>
-        <ChatLazyBoundary
-          fallback={!cachedReady() && <ChatDetailsLoading onChange={content.onLoading} />}
-        >
-          {content.children}
-        </ChatLazyBoundary>
-      </Show>
-    );
-  }
+  const SessionContent = createDetailsContentBoundary(sessionOpened, cachedReady);
+  // Discovery follows requested intent even when an empty surface is not visibly opened.
   function DesktopContent() {
     const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
     return (
@@ -592,7 +598,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
               scrollport={scrollport()}
               onReady={handoff.onReady}
               props={props.chat}
-              presented={isPresented() && opened()}
+              presented={isPresented() && requested()}
+              onContentChange={detailsAvailability.onContentChange}
+              availabilityIdentity={detailsAvailability.identity()}
+              onSectionAvailability={detailsAvailability.report}
               dismissed={intent() === "closed"}
               progressMenuRef={(menu) => {
                 progressMenu = menu;
@@ -721,9 +730,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   </Show>
                 }
               >
-                <Show when={sessionOpened()}>
-                  <DesktopContent />
-                </Show>
+                {sessionOpened() && <DesktopContent />}
               </Show>
             )}
           </Show>
