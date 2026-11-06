@@ -34,10 +34,28 @@ struct RemotePortTunnelTests {
         #expect(forward == sandbox.port)
         #expect(gatewayOptions.count(where: { $0 == "-L" }) == 1)
         #expect(gatewayOptions.contains("28789:127.0.0.1:\(remotePort)"))
-        // An explicit bind address keeps ssh_config GatewayPorts from moving the listener to 0.0.0.0.
+        // GatewayPorts=no on the command line wins over ssh_config and keeps the listener on loopback.
         #expect(sandboxOptions.count(where: { $0 == "-L" }) == 1)
-        #expect(sandboxOptions.contains("127.0.0.1:\(sandbox.port):127.0.0.1:\(sandbox.port)"))
+        #expect(sandboxOptions.contains("GatewayPorts=no"))
         #expect(sandboxOptions.contains("ExitOnForwardFailure=yes"))
+    }
+
+    @Test func `widget sandbox forward receipt survives the shipped PortGuardian sweep`() {
+        // v2026.11.1 shares the version 2 ledger. Its sweep matches only `-L P:127.0.0.1:R` and drops any
+        // other receipt before checking the live parent, so a running stable build would erase this one.
+        let args = CommandResolver.sshArguments(
+            target: CommandResolver.SSHParsedTarget(user: "user", host: "host", port: 22),
+            identity: "",
+            options: RemotePortTunnel.sandboxForwardOptions(port: 18790, hostKeyPolicy: .strict))
+        let command = (["/usr/bin/ssh"] + args).joined(separator: " ")
+        let forward = args.firstIndex(of: "-L").map { args[$0 + 1] }
+        let record = PortGuardian.Record(
+            port: 18790, pid: 4242, command: "/usr/bin/ssh", mode: "remote", timestamp: 100)
+
+        #expect(forward == "18790:127.0.0.1:18790")
+        #expect(PortGuardian.classifyTunnelRecord(
+            record,
+            process: .init(parentPid: 987, startedAt: 99, fullCommand: command)) == .keep)
     }
 
     @Test func `occupied local sandbox port is unavailable until it is released`() throws {

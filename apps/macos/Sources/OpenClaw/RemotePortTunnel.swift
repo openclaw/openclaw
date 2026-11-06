@@ -338,10 +338,11 @@ final class RemotePortTunnel: @unchecked Sendable {
         self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-L", "\(localPort):127.0.0.1:\(remotePort)"]
     }
 
-    /// The explicit 127.0.0.1 bind address keeps ssh_config GatewayPorts and AddressFamily from moving
-    /// the listener to a wildcard or IPv6 address that availableSandboxForwardPort never probed.
+    /// Command-line GatewayPorts=no wins over ssh_config and keeps the listener on loopback. The `-L`
+    /// argument keeps the Gateway tunnel's shape without a bind address: v2026.11.1 shares the version 2
+    /// PortGuardian ledger and drops receipts whose command it cannot match, even while their app runs.
     static func sandboxForwardOptions(port: UInt16, hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
-        self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-L", "127.0.0.1:\(port):127.0.0.1:\(port)"]
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-o", "GatewayPorts=no", "-L", "\(port):127.0.0.1:\(port)"]
     }
 
     private static func baseOptions(hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
@@ -374,6 +375,8 @@ final class RemotePortTunnel: @unchecked Sendable {
     /// ssh binds the forward to 127.0.0.1 with SO_REUSEADDR, which succeeds beside a wildcard listener
     /// and would then take loopback traffic from it. Binding the same address without SO_REUSEADDR
     /// also fails for a wildcard holder, so success here means ssh can bind without shadowing anyone.
+    /// ssh also binds ::1 when it can; an IPv6-only wildcard holder of this port could then lose its ::1
+    /// traffic. That is accepted: it is rare and the forward ends with the Gateway route.
     static func sandboxPortIsFree(_ port: UInt16) -> Bool {
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
