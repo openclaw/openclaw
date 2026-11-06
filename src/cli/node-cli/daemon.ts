@@ -138,7 +138,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail(error instanceof Error ? error.message : String(error));
     return;
   }
-  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayTarget } =
+    gatewayOptions;
   if (port === null || !Number.isFinite(port) || port <= 0 || port > 65_535) {
     fail(
       opts.port !== undefined
@@ -268,6 +269,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
+    resumeSavedTarget: gatewayTarget?.kind === "openclaw-id",
     host,
     port,
     contextPath,
@@ -283,6 +285,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     runtimePath,
     wrapperPath,
   });
+  if (opts.authFromEnv && gatewayTarget?.kind === "openclaw-id") {
+    fail("OpenClaw ID nodes use their enrolled key, not --auth-from-env");
+    return;
+  }
   if (opts.authFromEnv) {
     programArguments.push("--auth-from-env");
   }

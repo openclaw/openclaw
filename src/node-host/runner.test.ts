@@ -11,6 +11,7 @@ import * as oneShotExit from "../cli/one-shot-exit.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
 import { NODE_RUNNER_INVENTORY_UPDATE_METHOD } from "../infra/node-runner-inventory.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
@@ -518,6 +519,17 @@ describe("runNodeHost", () => {
       );
     },
   );
+
+  it("keeps private socket paths out of connection-error stderr", async () => {
+    await expectStartupTimeout();
+    const socketPath = "/tmp/oc-node-diagnostic/gateway.sock";
+    registerSecretValueForRedaction(socketPath);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    lastCapturedOptions()?.onConnectError?.(new Error(`connect ENOENT ${socketPath}`));
+    expect(stderr).toHaveBeenCalledWith(
+      "node host gateway connect failed: connect ENOENT [private]\n",
+    );
+  });
 
   it("keeps pairing reconnect pauses visible without stopping the foreground host", async () => {
     await expectStartupTimeout();
