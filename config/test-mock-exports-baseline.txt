@@ -4538,7 +4538,6 @@
 ["src/gateway/server-methods/agent.mocks.test-utils.ts","../session-reset-service.js","1b8eaa216652b48f52ee2d103a48932c4d62b065c6fcfb1ff076139cf51c9189",1]
 ["src/gateway/server-methods/agent.subagent-registry.mocks.test-support.ts","../../agents/runtime-plugins.js","e17497a1468e9f9030d7d84012606eb8c609556f99e297958edfdb6a62acfe37",1]
 ["src/gateway/server-methods/agent.subagent-registry.mocks.test-support.ts","../../browser-lifecycle-cleanup.js","932978110f5fb27f9735a219708e6b01d58d1d4296e97f78171c9eff879c4ce9",1]
-["src/gateway/server-methods/agents-list.test.ts","../session-utils.js","18ad1bf3aa5f6a5189a73825bcc88f4ae2f8022ac538448e21530be4ec1df978",1]
 ["src/gateway/server-methods/agents-mutate.test.ts","../../agents/agent-dir-registry.js","b3c41d3276b4c35ddf1acf2bdb24933fa478bb906f10590ce13dd6d9f3b102ee",1]
 ["src/gateway/server-methods/agents-mutate.test.ts","../../commands/agents.config.js","81eff8faae2695a0fe9b9ad24491b6d3b6f86440263fa9dcbac43087c877de35",1]
 ["src/gateway/server-methods/agents-mutate.test.ts","../../config/sessions/legacy-main-session-migration.js","dbdb1873eed46c84d534062377bce78af47d364e21d10e4af04243158c6b86f0",1]
