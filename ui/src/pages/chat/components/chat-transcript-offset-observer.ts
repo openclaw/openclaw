@@ -273,6 +273,15 @@ export function observeTranscriptOffset(
       const actualOffset = element?.scrollTop;
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
     }
+    // Preparation has issued no motion; only a resize receipt can own a native offset change.
+    if (
+      delta !== 0 &&
+      owner.state.scrollCommand?.target === "end" &&
+      owner.state.scrollCommand.offset === undefined &&
+      !isTranscriptMaintenanceScroll(owner.state, element)
+    ) {
+      owner.cancelScroll();
+    }
     const programmatic = owner.isProgrammaticScroll();
     // The follow threshold releases pane policy before a command's last pixels settle.
     const readerDelta = programmatic || owner.state.scrollCommand !== null ? 0 : delta;

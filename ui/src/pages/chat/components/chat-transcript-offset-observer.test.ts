@@ -161,7 +161,7 @@ it.each([
   element.scrollTop = 12;
   element.dispatchEvent(new Event("scroll"));
   onOffset.mockClear();
-  state.scrollCommand = { target: "end", behavior: "smooth" };
+  state.scrollCommand = { target: "end", behavior: "smooth", offset: 20 };
   element.scrollTop = 19;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
   element.dispatchEvent(new Event("scroll"));

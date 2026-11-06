@@ -69,9 +69,7 @@ export class TranscriptReaderAnchor {
   readonly rowsMeasured = (indexes?: readonly number[]): boolean => {
     const { virtualizer } = this.host;
     const rows = virtualizer.getVirtualItems();
-    const required = indexes
-      ? indexes.map((index) => rows.find((row) => row.index === index))
-      : rows;
+    const required = indexes?.map((index) => rows.find((row) => row.index === index)) ?? rows;
     return required.every((item) => {
       if (!item) {
         return false;
@@ -177,7 +175,9 @@ export class TranscriptReaderAnchor {
       correction += delta;
       this.unlanded.set(key, (this.unlanded.get(key) ?? 0) + delta);
     }
-    this.host.renderer.queueAfterCommit(this.onRowsMeasured);
+    if (this.host.prependAnchor.messageKey !== null) {
+      this.host.renderer.queueAfterCommit(this.onRowsMeasured);
+    }
     if (!correction) {
       return;
     }

@@ -388,7 +388,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.rowRefs.observeConnected();
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.offsetState.reconcileInteractionResize(this.scrollElement, this.virtualizer);
-    if (!interactionResizePending) {
+    if (!interactionResizePending && this.prependAnchor.messageKey !== null) {
       this.renderer.queueAfterCommit(this.reconcilePosition);
     }
     if (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0)) {
