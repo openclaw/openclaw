@@ -530,7 +530,7 @@ it.each(["plugins.reload", "auth refresh", "tool handoff"] as const)(
 // Protect the service-to-agent-tool contract through the actual replacement loader.
 // Existing visitor tests only start an already-enabled plugin; registry recovery
 // fixtures substitute their own candidate loader and do not resolve agent tools.
-it.for(["cold start", "hot enable"] as const)(
+it.for(["cold start", "hot enable", "hot limits"] as const)(
   "%s lets a published agent runtime use the visitor service",
   (mode, { signal }) =>
     withOpenClawTestState({ label: "plugin-hot-runtime-store" }, async (state) => {
@@ -556,7 +556,7 @@ it.for(["cold start", "hot enable"] as const)(
         },
         tools: { allow: [visitorToolName] },
       });
-      let config = configFor(mode === "cold start");
+      let config = configFor(mode !== "hot enable");
       await using fixture = await createPublishedPluginFixture(state, config);
       const { initial, registryOwner, runtime, log } = fixture;
       // Match post-attach startup: publish configured model owners, start services,
@@ -600,10 +600,26 @@ it.for(["cold start", "hot enable"] as const)(
       assert(record);
       const gatewayInstance = getPluginInstance(record);
       assert(gatewayInstance);
+      if (mode === "hot limits") {
+        const held = await fixture.acquireTurn(published);
+        config = {
+          ...config,
+          plugins: {
+            ...config.plugins,
+            entries: {
+              [pluginId]: { enabled: true, config: { ...visitorConfig, maxVisitors: 75 } },
+            },
+          },
+        };
+        // The hot config owner commits without replacing the service or the held turn.
+        setRuntimeConfigSnapshot(config);
+        await fixture.refresh(config);
+        await held[Symbol.asyncDispose]();
+      }
       // Settle startup/catalog work before measuring the independent agent-run lease.
       await gatewayInstance.waitForRetainedWork(signal);
       const retainedBeforeRun = gatewayInstance.retainedWorkCount;
-      const runLease = await fixture.acquireTurn(published);
+      const runLease = await fixture.acquireTurn(mode === "hot limits" ? undefined : published);
       const tool = fixture
         .tools(visitorToolName, runLease, config)
         .find(({ name }) => name === visitorToolName);
@@ -619,6 +635,9 @@ it.for(["cold start", "hot enable"] as const)(
           },
         ],
       });
+      expect(runLease.snapshot.pluginRegistry?.plugins.find(({ id }) => id === pluginId)).toBe(
+        record,
+      );
       expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
       await runLease[Symbol.asyncDispose]();
       await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);

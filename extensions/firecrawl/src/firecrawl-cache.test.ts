@@ -56,6 +56,48 @@ describe("Firecrawl search cache", () => {
     }
   }
 
+  it.each(["search", "scrape"] as const)(
+    "keeps the %s endpoint and credential in the same operation scope",
+    async (operation) => {
+      const scrapeRequests: unknown[] = [];
+      const scrapeServer = createServer((request, response) => {
+        scrapeRequests.push([request.url, request.headers.authorization]);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ success: true, data: { markdown: "scoped content" } }));
+      });
+      try {
+        const scrapeUrl = `http://127.0.0.1:${await listenOnLoopback(scrapeServer)}`;
+        const tool = captureFirecrawlTools({
+          tools: { web: { search: { cacheTtlMinutes: 0 } } },
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webSearch: { apiKey: "scope-search-fixture", baseUrl },
+                  webFetch: { apiKey: "scope-scrape-fixture", baseUrl: scrapeUrl },
+                },
+              },
+            },
+          },
+        })(`firecrawl_${operation}`);
+        await tool.execute("scoped-request", {
+          query: "scoped search",
+          url: "https://example.com/scoped-scrape",
+        });
+        expect(authorizations).toEqual(
+          operation === "search" ? ["Bearer scope-search-fixture"] : [],
+        );
+        expect(scrapeRequests).toEqual(
+          operation === "scrape" ? [["/v2/scrape", "Bearer scope-scrape-fixture"]] : [],
+        );
+      } finally {
+        const closed = scrapeServer[Symbol.asyncDispose]();
+        scrapeServer.closeAllConnections();
+        await closed;
+      }
+    },
+  );
+
   it("keeps interleaved account results and warm reuse scoped to their credentials", async () => {
     const started = createDeferred<void>();
     const finish = createDeferred<void>();

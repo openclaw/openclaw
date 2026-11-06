@@ -34,6 +34,7 @@ export type HeaderSessionMenuMobileHost = {
 };
 
 const plainLabel = (label: string) => label.replace(/(?:…|\.{3})$/u, "");
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 const isItem = (entry: MenuEntry): entry is MenuItem =>
   entry.kind !== "content" && entry.kind !== "group";
 
@@ -130,7 +131,7 @@ export function createMobileHeaderSessionMenu(options: {
     keyboardSource?: HTMLElement;
   };
   const [pageRequests, setPageRequests] = createSignal<PageRequest[]>([]);
-  const body = (name: "assign-owner" | "group" | "advanced" | "icon" | "open-in") =>
+  const body = (name: "assign-owner" | "group" | "advanced" | "icon") =>
     options.view
       .compact(name)
       .filter((entry) => !entry.id.startsWith("compact:back") && entry.id !== "back-divider");
@@ -184,8 +185,7 @@ export function createMobileHeaderSessionMenu(options: {
       return [
         ...groups.filter(
           (entry) =>
-            isItem(entry) &&
-            entry.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
+            isItem(entry) && normalizeSearch(entry.label).includes(normalizeSearch(query().trim())),
         ),
         ...rows.filter((entry) => !groups.includes(entry)),
       ];
@@ -260,7 +260,6 @@ export function createMobileHeaderSessionMenu(options: {
                       .filter(
                         (entry) =>
                           !entry.id.includes("copy") &&
-                          !entry.id.includes("open-in") &&
                           !entry.id.startsWith("communication") &&
                           entry.id !== "delete-divider",
                       )
@@ -296,12 +295,6 @@ export function createMobileHeaderSessionMenu(options: {
                     )}
                     select={select}
                   />
-                </div>
-              </section>
-              <section>
-                <h3>{t("sessionsView.openInEditorMenu")}</h3>
-                <div class="session-actions-page__group">
-                  <PageEntries entries={body("open-in")} select={select} />
                 </div>
               </section>
             </>

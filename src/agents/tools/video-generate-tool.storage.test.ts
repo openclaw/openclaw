@@ -5,7 +5,7 @@ import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { VideoGenerationProvider } from "../../video-generation/types.js";
+import type { VideoGenerationProvider } from "../../video-generation/provider-types.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 

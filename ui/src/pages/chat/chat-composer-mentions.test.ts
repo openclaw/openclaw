@@ -34,7 +34,7 @@ it.each([
     "chat",
     "Review @Alex",
     [recipient],
-    history === "loading" ? "Loading chat" : undefined,
+    history === "loading" ? "Loading conversation…" : undefined,
   );
 
   view.edit(draft);

@@ -135,8 +135,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
             // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
-            app.scrollViews["chat-transcript"]
-                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).tap()
+            let gutterPoint = app.scrollViews["chat-transcript"]
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
+            // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let originPoint = origin.screenPoint
+            origin.withOffset(CGVector(
+                dx: gutterPoint.x - originPoint.x,
+                dy: gutterPoint.y - originPoint.y)).tap()
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
@@ -858,6 +864,43 @@ final class OpenClawSnapshotUITests: XCTestCase {
         stop.tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
         self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
+    }
+
+    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-text-draft-stop-active-response"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running.")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        self.waitForEnabled(stop)
+        input.tap()
+        input.typeText("Keep this follow-up draft")
+        self.attachScreenshot(named: "text-draft-during-active-response")
+        XCTAssertTrue(stop.exists, "Drafting must keep the current response stoppable")
+        XCTAssertTrue(stop.isHittable)
+        XCTAssertTrue(send.exists)
+        self.assertMinimumTouchTarget(stop)
+        self.assertNoHorizontalOverlap([stop, send])
+
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        XCTAssertEqual(input.value as? String, "Keep this follow-up draft")
+        self.waitForEnabled(send)
+        send.tap()
+        XCTAssertTrue(app.staticTexts["Keep this follow-up draft"].waitForExistence(timeout: 8))
     }
 
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {

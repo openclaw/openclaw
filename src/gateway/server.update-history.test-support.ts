@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
@@ -12,14 +11,7 @@ import * as database from "../state/openclaw-state-db.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
-export function registerGatewayUpdateHistoryTests(
-  getPort: () => number,
-  preparation: {
-    prepared: Array<{ pathname: string; location?: string; progressed: boolean }>;
-    turns: Promise<void>[];
-  },
-) {
-  const { prepared: snapshots, turns } = preparation;
+export function registerGatewayUpdateHistoryTests(getPort: () => number, snapshots: string[]) {
   const connect = async () => {
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${getPort()}`,
@@ -81,16 +73,10 @@ export function registerGatewayUpdateHistoryTests(
           const before = snapshots.length;
           const get = method === "update.runs.get";
           const result = await client.request(method, get ? { runId } : { limit: 1 });
-          await Promise.all(turns);
           const expired = { runId, status: "failed", reason: "legacy-driver-expired" };
           const expected = shape === "expired" ? expect.objectContaining(expired) : run;
           expect(result).toEqual(get ? { run: expected } : { runs: [expected] });
-          const rows = snapshots.slice(before).filter((row) => row.pathname === path);
-          expect(rows.map((row) => row.progressed)).toEqual(cache === "warm" ? [] : [true]);
-          if (cache === "closed") {
-            expect(rows[0]?.location).toBeDefined();
-            expect(existsSync(rows[0]!.location!)).toBe(false);
-          }
+          expect(snapshots.slice(before).filter((pathname) => pathname === path)).toEqual([]);
         }
       }
     },

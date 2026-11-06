@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { cleanStaleGatewayProcesses } from "../infra/restart-stale-pids.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { parseLaunchctlJob } from "./launchctl-job.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
@@ -360,9 +360,12 @@ export async function restartLaunchAgent(
     } = await resolveLaunchAgentGatewayContext(serviceEnv);
     if (cleanupPort !== null) {
       assertGatewayServiceUpdateCurrent();
-      cleanStaleGatewayProcessesSync(cleanupPort, {
+      await cleanStaleGatewayProcesses(cleanupPort, {
         env: cleanupEnv,
-        assertCurrent: assertGatewayServiceUpdateCurrent,
+        assertCurrent: () => {
+          assertGatewayServiceUpdateCurrent();
+          assertCurrent?.();
+        },
         // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
         // during enumeration must be protected before candidate filtering/signals.
         resolveProtectedPid: () => {

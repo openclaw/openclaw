@@ -159,7 +159,7 @@
   display: none;
 }
 
-.agent-chat__goal-resume {
+.agent-chat__goal-resume:not([aria-label]) {
   width: auto;
   gap: 5px;
   padding-inline: 7px;
@@ -167,7 +167,7 @@
   white-space: nowrap;
 }
 
-.agent-chat__goal-resume .agent-chat__goal-action-label {
+.agent-chat__goal-resume:not([aria-label]) .agent-chat__goal-action-label {
   display: inline;
 }
 

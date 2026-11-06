@@ -304,7 +304,7 @@ suite.define(() => {
         await page.reload();
         await page.getByText(prompt, { exact: true }).waitFor();
         await waitForReply(page, marker);
-        await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+        await page.getByRole("button", { name: "Stop", exact: true }).waitFor({
           state: "hidden",
         });
         await page.getByText(prompt, { exact: true }).scrollIntoViewIfNeeded();
@@ -433,7 +433,7 @@ suite.define(() => {
           }
           await waitForReply(page, marker);
           // Persisted replies can precede the browser's terminal event.
-          await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor({
             state: "hidden",
           });
           await screenshot(page, `${marker}-result`);

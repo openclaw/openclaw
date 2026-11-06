@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import {
   preparePluginGenerationArtifact,
   preparePluginSourceSnapshot,
@@ -52,51 +53,54 @@ async function withSnapshot(
 }
 
 it("prepares independent runtime instances from worker-published immutable source", async () => {
-  await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
-    fs.writeFileSync(entry, "export const value = 99;");
-    const left = await preparePluginGenerationArtifact({
-      rootDir,
-      source: entry,
-      sourceSnapshot: { stateDir, descriptor },
-    });
-    const right = await preparePluginGenerationArtifact({
-      rootDir,
-      source: entry,
-      sourceSnapshot: { stateDir, descriptor },
-    });
-    const unrelated = await preparePluginGenerationArtifact({ rootDir, source: entry });
-    const collect = () =>
-      collectPluginSourceSnapshots({
-        stateDir,
-        retainedPaths: new Set(),
-        retiredSnapshots: [descriptor],
-        assertCurrent() {},
+  await withSnapshot(async (fixture) => {
+    await withPluginGenerationSourceCustody(async () => {
+      const { stateDir, rootDir, entry, descriptor } = fixture;
+      fs.writeFileSync(entry, "export const value = 99;");
+      const left = await preparePluginGenerationArtifact({
+        rootDir,
+        source: entry,
+        sourceSnapshot: { stateDir, descriptor },
       });
-    try {
-      expect(left.artifact.rootDir).not.toBe(right.artifact.rootDir);
-      expect(fs.readFileSync(left.artifact.resolve(entry), "utf8")).toBe(
-        "export const value = 42;",
-      );
-      expect(fs.readFileSync(right.artifact.resolve(entry), "utf8")).toBe(
-        "export const value = 42;",
-      );
-      const outside = path.join(stateDir, "late.js");
-      fs.writeFileSync(outside, "export const value = 'late';");
-      expect(() => left.artifact.captureResolvedModule(outside)).toThrow(
-        PluginSnapshotDependencyError,
-      );
-      expect((await collect()).removed).toEqual([]);
-      await left.artifact.disposeAsync();
-      expect((await collect()).removed).toEqual([]);
-      expect(fs.readFileSync(right.artifact.resolve(entry), "utf8")).toContain("42");
-      await right.artifact.disposeAsync();
-      expect((await collect()).removed).toEqual([descriptor.artifact.path]);
-      expect(fs.readFileSync(unrelated.artifact.resolve(entry), "utf8")).toContain("99");
-    } finally {
-      await left.artifact.disposeAsync();
-      await right.artifact.disposeAsync();
-      await unrelated.artifact.disposeAsync();
-    }
+      const right = await preparePluginGenerationArtifact({
+        rootDir,
+        source: entry,
+        sourceSnapshot: { stateDir, descriptor },
+      });
+      const unrelated = await preparePluginGenerationArtifact({ rootDir, source: entry });
+      const collect = () =>
+        collectPluginSourceSnapshots({
+          stateDir,
+          retainedPaths: new Set(),
+          retiredSnapshots: [descriptor],
+          assertCurrent() {},
+        });
+      try {
+        expect(left.artifact.rootDir).not.toBe(right.artifact.rootDir);
+        expect(fs.readFileSync(left.artifact.resolve(entry), "utf8")).toBe(
+          "export const value = 42;",
+        );
+        expect(fs.readFileSync(right.artifact.resolve(entry), "utf8")).toBe(
+          "export const value = 42;",
+        );
+        const outside = path.join(stateDir, "late.js");
+        fs.writeFileSync(outside, "export const value = 'late';");
+        expect(() => left.artifact.captureResolvedModule(outside)).toThrow(
+          PluginSnapshotDependencyError,
+        );
+        expect((await collect()).removed).toEqual([]);
+        await left.artifact.disposeAsync();
+        expect((await collect()).removed).toEqual([]);
+        expect(fs.readFileSync(right.artifact.resolve(entry), "utf8")).toContain("42");
+        await right.artifact.disposeAsync();
+        expect((await collect()).removed).toEqual([descriptor.artifact.path]);
+        expect(fs.readFileSync(unrelated.artifact.resolve(entry), "utf8")).toContain("99");
+      } finally {
+        await left.artifact.disposeAsync();
+        await right.artifact.disposeAsync();
+        await unrelated.artifact.disposeAsync();
+      }
+    });
   });
 });
 

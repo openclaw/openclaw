@@ -109,13 +109,17 @@ writeFileSync("checker-args", JSON.stringify(process.argv.slice(2)));
     },
   );
 
-  it("executes package-script checks with the pinned pnpm CLI", () => {
+  it.each([
+    [0, "docs/proof with spaces.md"],
+    [7, "docs/proof with spaces.md"],
+    [0, "docs/proof & metadata.md"],
+  ] as const)("executes package-script checks (status=%s, path=%s)", (exitCode, docPath) => {
     const root = createTempDir("openclaw-hook-pnpm-");
     mkdirSync(path.join(root, "docs"));
-    writeFileSync(path.join(root, "docs/proof.md"), "# Proof\n");
+    writeFileSync(path.join(root, docPath), "# Proof\n");
     writeFileSync(
       path.join(root, "lint-fixture.cjs"),
-      "require('node:fs').writeFileSync('lint-ran', 'ok')",
+      `require('node:fs').writeFileSync('lint-ran', JSON.stringify(process.argv.slice(2))); process.exit(${exitCode});`,
     );
     writeFileSync(
       path.join(root, "package.json"),
@@ -126,14 +130,26 @@ writeFileSync("checker-args", JSON.stringify(process.argv.slice(2)));
       }),
     );
     execFileSync("git", ["init", "--quiet"], { cwd: root });
-    execFileSync("git", ["add", "docs/proof.md"], { cwd: root });
+    execFileSync("git", ["add", docPath], { cwd: root });
     const script = path.resolve(
       import.meta.dirname,
       "../../scripts/pre-commit/check-staged-freshness.mts",
     );
     const result = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(readFileSync(path.join(root, "lint-ran"), "utf8")).toBe("ok");
+    if (process.platform === "win32" && docPath.includes("&")) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unsafe Windows cmd.exe argument");
+      expect(existsSync(path.join(root, "lint-ran"))).toBe(false);
+      return;
+    }
+    expect(result.status, result.stdout + result.stderr).toBe(exitCode ? 1 : 0);
+    expect(JSON.parse(readFileSync(path.join(root, "lint-ran"), "utf8"))).toEqual([
+      "--no-globs",
+      docPath,
+    ]);
+    if (exitCode) {
+      expect(result.stderr).toContain("docs markdown lint failed");
+    }
   });
 
   it.each([

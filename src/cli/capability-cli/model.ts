@@ -19,7 +19,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { defaultRuntime } from "../../runtime.js";
-import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import {
+  AsyncWorkScope,
+  captureAsyncWorkTracker,
+  getAsyncWorkSignal,
+} from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "../program/helpers.js";
@@ -158,6 +162,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
+        const signal = getAsyncWorkSignal();
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
         if (
           [opts.prompt, opts.promptFile, opts.promptStdin].filter((value) => value !== undefined)
@@ -169,7 +174,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
         if (opts.promptFile !== undefined) {
           const { root } = await import("../../infra/fs-safe.js");
           const promptRoot = await root(process.cwd());
-          prompt = await promptRoot.readText(opts.promptFile, { maxBytes: 1_048_576 });
+          prompt = decodeUtf8Input(
+            await promptRoot.readBytes(opts.promptFile, { maxBytes: 1_048_576 }),
+            "--prompt-file",
+          );
         }
         if (opts.promptStdin) {
           const { readByteStreamWithLimit } =
@@ -342,6 +350,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
                           ? prepared.model.maxTokens
                           : undefined,
                       ...(thinking ? { reasoning: thinking } : {}),
+                      signal,
                     },
                   });
                   const text = collectTextContentBlocks(result.content).join("").trim();
@@ -440,6 +449,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             idempotencyKey: randomIdempotencyKey(),
           },
           expectFinal: true,
+          signal,
           timeoutMs: 120_000,
           clientName: hasModelOverride
             ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT

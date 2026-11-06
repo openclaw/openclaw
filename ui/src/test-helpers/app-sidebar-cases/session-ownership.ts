@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { openSessionMenu, sessionMenuChoice, selectSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   createGateway,
@@ -9,6 +8,7 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { sidebarGatewayHello } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
   registerSessionOwnershipAvatarTests,
@@ -23,8 +23,9 @@ async function expectSort(sidebar: SidebarLifecycleState, mode: string, keys: st
 
 function sessionSharingHello(hasMultipleIdentities: boolean) {
   return {
+    ...sidebarGatewayHello(),
     policy: { hasMultipleSessionSharingIdentities: hasMultipleIdentities },
-  } as ApplicationGatewaySnapshot["hello"];
+  };
 }
 
 function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {

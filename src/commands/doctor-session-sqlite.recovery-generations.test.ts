@@ -52,7 +52,7 @@ function historyFor(store: TestStore, sessionKey?: string) {
 }
 
 function expectOutcome(
-  report: ReturnType<typeof inspectSessionSqliteRecovery>,
+  report: Awaited<ReturnType<typeof inspectSessionSqliteRecovery>>,
   archivePath: string,
   outcome: string,
 ) {
@@ -504,7 +504,7 @@ describe("runDoctorSessionSqlite", () => {
           claimSessionSqliteMigrationGithubIssue(manifestPath, issue, { assertCurrent: vi.fn() }),
         ).toMatchObject({ status: "claimed" });
       }
-      const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+      const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
       expectOutcome(preview, archivePath, "verification-required");
       const result = await retireRecovery(store, undefined, preview);
       expectOutcome(result, archivePath, "removed");

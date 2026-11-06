@@ -408,6 +408,7 @@ export function createSessionActorWorker(
       target,
       { epoch: randomUUID(), sequence: 0 },
       currentToken,
+      resident,
     );
     const hydratedToken = token(database, target, hydrated.hot.dependencySessionIds);
     // Hydration is synchronous in the serialized execution owner.

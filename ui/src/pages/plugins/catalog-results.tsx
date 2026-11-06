@@ -9,9 +9,11 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
+import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryEntry,
@@ -45,6 +47,7 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   iconLoading?: (url: string) => boolean;
   pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
+  installTitle?: string;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
   /** Installed inventory; publishes local state before catalog pages are read again. */
@@ -173,6 +176,7 @@ function CatalogCard(props: {
                       }
                       pluginName={props.plugin.catalog.name}
                       busy={busy()}
+                      title={props.state.installTitle}
                       disabled={!canInstall()}
                       progress={progress()}
                       onInstall={() => props.state.onInstall(props.plugin.id)}
@@ -421,7 +425,9 @@ function RawResults(props: CatalogResultsState): JSX.Element {
   return (
     <>
       {!props.connected ? (
-        <p class="plugin-catalog-results__empty">{t("pluginsPage.discoveryOffline")}</p>
+        <SettingsSection>
+          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
+        </SettingsSection>
       ) : items().length === 0 ? (
         renderCatalogEmptyState()
       ) : (
@@ -542,7 +548,12 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     return null;
   };
   let input!: HTMLInputElement;
+  // Focusing the search on a phone would open the keyboard on arrival.
+  const focusOnArrival = !isPhoneLayout();
   onSettled(() => {
+    if (!focusOnArrival) {
+      return undefined;
+    }
     input.dataset.autofocused = "true";
     input.focus();
     let secondFrame = 0;
@@ -563,8 +574,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       <CatalogDiscoverySearch>
         <input
           type="search"
-          class="oc-input"
-          autofocus
+          class="settings-input"
+          autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}

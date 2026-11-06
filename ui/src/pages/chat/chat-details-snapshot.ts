@@ -26,13 +26,22 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
     ]
       .slice(0, rows.length > (mobile ? 3 : 5) ? 4 : 5)
       .map(({ key, label, status }) => ({ key, label, status })),
-    counts: (["running", "waiting", "queued", "done", "stopped"] as const)
+    // At most two statuses: Working beside the avatars, then Queued or Done. Waiting parents
+    // count as working; failed and stopped runs count as done because agents retry around them.
+    counts: (["running", "queued", "done"] as const)
       .map((status) => ({
         status,
-        count: rows.filter((row) => (row.status === "failed" ? "done" : row.status) === status)
-          .length,
+        count: rows.filter(
+          (row) =>
+            (isDetailsSubagentWorking(row)
+              ? "running"
+              : row.status === "queued"
+                ? "queued"
+                : "done") === status,
+        ).length,
       }))
-      .filter((entry) => entry.count > 0),
+      .filter((entry) => entry.count > 0)
+      .slice(0, 2),
   };
 }
 

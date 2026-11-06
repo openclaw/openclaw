@@ -90,6 +90,19 @@ overrides, never alternate release identities. No release arguments are required
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
+Store and TestFlight CI archives reuse Xcode's content-addressed compilation cache.
+Only compiler-cache storage is transferred; DerivedData, signed archives, IPAs,
+and signing material are excluded. Transfers are optional and time-limited, so a
+cache miss still compiles and validates the release normally. The cache is shared
+by both destinations and separated by Xcode build, runner OS, and architecture;
+the compiler invalidates entries when its inputs change.
+
+Local releases use the same archive path. To retain compiler results locally, set
+`OPENCLAW_IOS_COMPILATION_CACHE_DIR` to a dedicated directory, such as
+`$HOME/Library/Caches/openclaw/ios-release-cas`. Leave it unset to use the ordinary
+archive behavior. Deleting that dedicated directory discards only cached compiler
+results. Archive/export validation and upload behavior are unchanged.
+
 ## TestFlight distribution
 
 Run **iOS Store Release** with operation **testflight** from `main`:
@@ -136,7 +149,11 @@ artifacts so a partial distribution cannot silently regenerate its notes.
 After processing, the pipeline saves the immutable source ref, writes the saved
 What to Test notes, assigns the external group, and submits for TestFlight review
 when the build is eligible. Automatic tester notification distributes the build
-after Apple approves it. The result distinguishes pending review from a build
+after Apple approves it. Distribution readback checks the external group,
+automatic notification, and exact saved notes up to 12 times, with 10 seconds
+between mismatches. Only reads repeat; distribution is not resubmitted. If the
+checks still disagree, the error names the mismatched fields for saved-artifact
+staging recovery. The result distinguishes pending review from a build
 available to testers; the runner does not wait for human review. Apple determines
 whether each build requires review, so the schedule is a daily distribution
 attempt rather than a guarantee of daily availability.
@@ -197,6 +214,15 @@ with an existing runtime bundle. The temporary clone is removed on success or
 failure. This also applies when the one-time missing-runtime download produces
 the same fallback. Healthy cryptex mounts and already staged disk images skip this
 repair. Local runs leave installation to the operator.
+
+An unavailable runtime can still have its downloaded fallback DMG. Repair checks
+for that package before deleting the registration and uses the same clone-and-stage
+path. This avoids downloading the asset again and creating shared registrations
+whose cleanup can remove the replacement runtime. Missing cached packages keep
+the existing delete-and-download repair. If Apple removes only the
+registration, repair waits up to two minutes for the retained asset to re-register
+before the existing targeted deletion retry; a temporarily empty inventory does
+not establish that cleanup finished.
 
 Registrations already marked `Deleting` are left to CoreSimulator and excluded
 from repair candidates. More than one remaining registration still stops the

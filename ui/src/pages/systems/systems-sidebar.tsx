@@ -53,12 +53,25 @@ function shortId(id: string): string {
   return id.slice(id.lastIndexOf(":") + 1, id.lastIndexOf(":") + 7);
 }
 
-export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" {
-  return row.environment.id === "gateway"
-    ? "host"
-    : row.environment.type === "node"
-      ? "node"
-      : "worker";
+function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" | "device" {
+  if (row.environment.id === "gateway") {
+    return "host";
+  }
+  if (row.environment.type === "node") {
+    return "node";
+  }
+  // Provider metadata distinguishes provisioned cloud devices from generic workers.
+  return row.environment.worker && row.environment.worker.providerId !== "device"
+    ? "worker"
+    : "device";
+}
+
+export function systemKindLabel(row: SystemsInventoryRow): string {
+  const kind = systemKind(row);
+  const profile = row.environment.worker?.profileId;
+  return kind === "worker" && profile
+    ? t("systems.cloudProfile", { profile })
+    : t("systems." + kind);
 }
 
 export function systemStatus(row: SystemsInventoryRow): string {
@@ -268,14 +281,22 @@ function SystemsInventory(props: { controller: Systems }) {
           </p>
         ) : null}
         <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
-        <For each={["node", "worker"] as const}>
+        <For each={["node", "worker", "device"] as const}>
           {(kind) => {
             const group = createMemo(() => rows().filter((row) => systemKind(row) === kind));
             return (
               <Show when={group().length}>
                 <section class="systems-group">
                   <h3>
-                    <span>{t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
+                    <span>
+                      {t(
+                        kind === "node"
+                          ? "systems.nodes"
+                          : kind === "worker"
+                            ? "systems.workers"
+                            : "systems.devices",
+                      )}
+                    </span>
                     <span class="systems-group__count">{group().length}</span>
                   </h3>
                   <For each={group()}>{renderRow}</For>

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
+import { resolveGitHubPublicationFailure } from "../github-publication-failure.js";
 import { applyWorkspaceSourceOverlay } from "./workspace-manifest-overlay.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -147,6 +148,25 @@ it("preserves null, SHA-1, and SHA-256 base commits", () => {
     (baseCommit) => readManifest({ ...manifest, baseCommit }),
     "unsupported shape",
   );
+});
+
+it("preserves actionable inventory-limit guidance through publication failure mapping", () => {
+  const directories = Array.from({ length: 250_001 }, (_, index) => String(index));
+  for (const read of [
+    () => readManifest({ ...manifest, entries: directories.map(directory) }),
+    () => serializeManifest({ ...manifest, entries: [], directories }),
+  ]) {
+    let failure: unknown;
+    try {
+      read();
+    } catch (error) {
+      failure = error;
+    }
+    expect(resolveGitHubPublicationFailure(failure)).toEqual({
+      code: "workspace_changed",
+      nextAction: expect.stringMatching(/250001.*limit 250000.*\.gitignore.*retrying/s),
+    });
+  }
 });
 
 it("rejects duplicate or unsorted manifest paths", () => {

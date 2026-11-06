@@ -6,6 +6,7 @@ import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -36,7 +37,6 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   loadSessionEntryReadOnly as readEntry,
   loadTranscriptEventsSync as readEvents,
@@ -631,7 +631,7 @@ function expectMaintenanceArchived(f: ReturnType<typeof maintenanceFixture>) {
     .filter((name) => name.startsWith("old.jsonl.deleted."));
   expect(archives).toHaveLength(1);
   expect(
-    readSessionArchiveContentSync(path.join(f.archiveDirectory, archives[0]!))
+    readSessionArchiveText(path.join(f.archiveDirectory, archives[0]!))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line)),

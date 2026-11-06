@@ -1,0 +1,3 @@
+# Selected terminal observations: attempt boundary, selected errors, fallback exhaustion,
+# recovery omission, and the cron public-hook projection. No message content retained.
+319

@@ -56,7 +56,7 @@ it.each(["edit", "add"] as const)(
     await waitForProviders(page);
     if (mode === "edit") {
       const row = await expandProvider(page, "openai");
-      row.querySelector<HTMLButtonElement>('button[aria-label="Set API key: OpenAI"]')!.click();
+      row.querySelector<HTMLButtonElement>('button[aria-label="Replace API key: OpenAI"]')!.click();
     } else {
       await openApiKeyProvider(page, "anthropic");
     }
@@ -157,7 +157,7 @@ it("updates rendered facts from accepted catalog, auth, and notified mutable own
   settingsAgentSelection.state.selectedId = "writer";
   notifySelection();
   await waitForSolid(() => {
-    expect(page.renderRoot.textContent).toContain("Connections for Writer");
+    expect(page.renderRoot.textContent).toContain("Accounts for Writer");
     expect(page.renderRoot.textContent).not.toContain("Renamed Main");
   });
 });

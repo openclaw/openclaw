@@ -66,6 +66,7 @@ export function compactCronJobFixture(job: CronJob): CronCompactJob {
     lastRunError: job.state.lastError ?? null,
     runningAtMs: job.state.runningAtMs,
     autoDisabled: job.state.autoDisabled,
+    admissionDeferred: job.state.admissionDeferred,
   };
 }
 

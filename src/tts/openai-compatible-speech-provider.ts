@@ -8,7 +8,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 
 type OpenAiCompatibleSpeechProviderBaseConfig = {
   apiKey?: string;

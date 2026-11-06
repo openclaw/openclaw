@@ -454,7 +454,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       assert(maintenance);
       try {
         await maintenance.run(async () => {
-          admit(() => repairOpenClawStateDatabaseIndexesForDoctor());
+          await repairOpenClawStateDatabaseIndexesForDoctor();
           await prepareDoctorDatabaseMigrations({
             env: process.env,
             databasePaths: [databasePath],

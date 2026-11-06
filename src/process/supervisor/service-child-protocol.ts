@@ -5,6 +5,7 @@ import type { BrokerError } from "../spawn-broker/protocol.js";
 
 export type ServiceChildStart = {
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   type: "start" | "prepare";
   generation: string;
   command: string;

@@ -116,6 +116,38 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   expect(view.container.textContent).toContain("Review the layout");
 });
 
+it("replaces cached progress after a failed child read settles", async () => {
+  const progressCard = {
+    sessionKey: "agent:main:arrival",
+    revision: 1,
+    updatedAt: 1,
+    steps: [{ step: "Review the layout", status: "in_progress" as const }],
+  };
+  const view = mountDetails({
+    connected: true,
+    progressCardInitialLoading: false,
+    progressCard,
+    runActive: false,
+    selectedSession: { key: progressCard.sessionKey, kind: "direct", status: "done", endedAt: 2 },
+    cachedDetails: {
+      locale: "en",
+      progress: {
+        revision: 1,
+        updatedAt: 1,
+        hasActiveRun: true,
+        sessionStatus: "running",
+        startedAt: 1,
+        runtime: { known: true, connected: true, hasActiveSubagentRun: true },
+      },
+    },
+  });
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("Waiting for delegated work"),
+  );
+  view.update({ subagentSessionsUnavailable: true });
+  await waitForSolid(() => expect(view.container.textContent).toContain("No active work"));
+});
+
 it("admits each real Environment content source without an empty section", async () => {
   const view = mountDetails();
   expect(view.group("environment")).toBeNull();
