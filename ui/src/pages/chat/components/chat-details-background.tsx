@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { projectDetailsSubagents, type DetailsSubagentActivity } from "../chat-details-snapshot.ts";
+import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import {
   listSubagents,
@@ -37,8 +37,8 @@ type Props = {
     workingLabel: string;
   };
 };
-type Tally = DetailsSubagentActivity["tally"];
-type State = keyof Tally;
+type State = "running" | "queued" | "failed" | "stopped" | "done";
+type Tally = Record<State, number>;
 const PREVIEW_ROWS = 3;
 
 // The bar fills settled work from the start; the text leads with what is still going.
@@ -51,34 +51,12 @@ function subagentState(row: ChatSubagentActivityRow): State {
   return row.status === "waiting" ? "running" : row.status;
 }
 
-function projectSubagentActivity(rows: readonly ChatSubagentActivityRow[]) {
-  const tally: DetailsSubagentActivity["tally"] = {
-    running: 0,
-    queued: 0,
-    failed: 0,
-    stopped: 0,
-    done: 0,
-  };
+function tally<T>(rows: readonly T[], state: (row: T) => State): Tally {
+  const counts = { running: 0, queued: 0, failed: 0, stopped: 0, done: 0 };
   for (const row of rows) {
-    tally[row.status === "waiting" ? "running" : row.status] += 1;
+    counts[state(row)] += 1;
   }
-  return {
-    total: rows.length,
-    tally,
-    rows: rows
-      .slice(0, PREVIEW_ROWS)
-      .map(
-        ({ key, label, status, listed, activity, progress, session: { startedAt, endedAt } }) => ({
-          key,
-          label,
-          status,
-          listed,
-          activity,
-          progress,
-          session: { startedAt, endedAt },
-        }),
-      ),
-  };
+  return counts;
 }
 
 function attentionOrder<T>(rows: readonly T[], state: (row: T) => State): T[] {
@@ -233,37 +211,23 @@ export function ChatDetailsBackground(
   const desktopPresentation = createMemo(() => props.desktopSubagents);
   const collection = createMemo(() => roster().filter((row) => row.listed));
   const liveSummary = createMemo(() =>
-    desktopPresentation() && activityReady() ? projectDetailsSubagents(collection()) : undefined,
+    desktopPresentation() && activityReady() ? projectDetailsSubagents(subagents()) : undefined,
   );
   const summary = () =>
     liveSummary() ?? (desktopPresentation() ? props.details.cachedDetails?.subagents : undefined);
-  const cachedActivity = () =>
+  const cachedActivity = createMemo(() =>
     !activityReady() && desktopPresentation()
-      ? props.details.cachedDetails?.subagentActivity
-      : undefined;
-  const writeActivity = createMemo(() => {
-    const write = props.details.onDetailsSnapshot;
-    return activityReady() &&
-      !props.details.subagentSessionsUnavailable &&
-      desktopPresentation() &&
-      write
-      ? (rows: readonly ChatSubagentActivityRow[]) =>
-          write({ subagentActivity: projectSubagentActivity(rows) })
-      : undefined;
-  });
-  const receipt = createMemo(() =>
-    liveSummary() && props.details.onDetailsSnapshot
-      ? {
-          summary: props.details.subagentSessionsUnavailable
-            ? projectDetailsSubagents([])
-            : liveSummary()!,
-          write: props.details.onDetailsSnapshot,
-          emptyActivity:
-            props.details.subagentSessionsUnavailable ||
-            (desktopSubagents() ? unlisted() : subagents()).length === 0,
-        }
+      ? summary()?.rows.filter((row) => row.listed === false)
       : undefined,
   );
+  const recordSubagents = (rows: readonly ChatSubagentActivityRow[]) => {
+    if (desktopPresentation() && activityReady()) {
+      props.details.onDetailsSnapshot?.({
+        subagents: projectDetailsSubagents(props.details.subagentSessionsUnavailable ? [] : rows),
+      });
+    }
+  };
+  const receipt = createMemo(() => liveSummary() && subagents());
   const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
     const presentation = desktopPresentation();
     const snapshot = props.details;
@@ -272,7 +236,7 @@ export function ChatDetailsBackground(
     if (!presentation || !openChild || !openCollection) {
       return undefined;
     }
-    const current = () => props.presented && props.details === snapshot;
+    const current = () => props.presented && props.details === snapshot && activityReady();
     return {
       rows: collection(),
       presentation: summary(),
@@ -290,9 +254,15 @@ export function ChatDetailsBackground(
       },
     };
   });
-  const subagentTally = createMemo(
-    () => cachedActivity()?.tally ?? projectSubagentActivity(subagents()).tally,
-  );
+  const subagentTally = createMemo(() => {
+    const counts = tally(activityReady() ? subagents() : [], subagentState);
+    if (!activityReady()) {
+      for (const entry of summary()?.counts ?? []) {
+        counts[entry.status === "waiting" ? "running" : entry.status] += entry.count;
+      }
+    }
+    return counts;
+  });
   const openSubagents = () => {
     if (props.presented) {
       props.details.onOpenSubagents?.();
@@ -302,22 +272,11 @@ export function ChatDetailsBackground(
     <>
       <Show when={receipt()} keyed>
         {(value) => {
-          onSettled(() =>
-            value.write({
-              subagents: value.summary,
-              ...(value.emptyActivity ? { subagentActivity: projectSubagentActivity([]) } : {}),
-            }),
-          );
+          onSettled(() => recordSubagents(value));
           return null;
         }}
       </Show>
-      <Show
-        when={
-          subagents().length > 0 ||
-          (summary()?.total ?? 0) > 0 ||
-          (cachedActivity()?.total ?? 0) > 0
-        }
-      >
+      <Show when={subagents().length > 0 || (summary()?.total ?? 0) > 0}>
         <Show
           when={desktopSubagents()}
           fallback={
@@ -327,7 +286,7 @@ export function ChatDetailsBackground(
               kind="subagents"
               title={t("chat.sessionDetails.subagents")}
               tally={subagentTally()}
-              total={cachedActivity()?.total ?? subagents().length}
+              total={summary()?.total ?? subagents().length}
               icon="bot"
               openAllLabel={t("chat.sessionDetails.allSubagents")}
               onOpenAll={props.details.onOpenSubagents ? openSubagents : undefined}
@@ -337,8 +296,8 @@ export function ChatDetailsBackground(
               {props.presented && (
                 <ChatSubagentActivity
                   rows={subagents()}
-                  presentation={cachedActivity()?.rows}
-                  onPresentation={writeActivity()}
+                  presentation={cachedActivity()}
+                  onPresentation={recordSubagents}
                   limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
                   onOpenSubagent={props.details.onOpenSubagent}
                   onOpenSession={props.details.onSessionSelect}
@@ -366,13 +325,13 @@ export function ChatDetailsBackground(
                 when={
                   props.presented &&
                   desktopPresentation()!.expanded &&
-                  (unlisted().length > 0 || (cachedActivity()?.total ?? 0) > 0)
+                  (unlisted().length > 0 || (cachedActivity()?.length ?? 0) > 0)
                 }
               >
                 <ChatSubagentActivity
                   rows={unlisted()}
-                  presentation={cachedActivity()?.rows}
-                  onPresentation={writeActivity()}
+                  presentation={cachedActivity()}
+                  onPresentation={(rows) => recordSubagents([...collection(), ...rows])}
                   onOpenSession={props.details.onSessionSelect}
                 />
               </Show>

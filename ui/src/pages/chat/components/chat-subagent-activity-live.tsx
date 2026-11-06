@@ -1,4 +1,4 @@
-import { Show, createMemo, createStore, onSettled } from "solid-js";
+import { createMemo, createStore, onSettled } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { pickFreshestObserverDigest } from "../../../lib/observer-digest.ts";
@@ -103,7 +103,7 @@ function SubagentActivityLive(
     };
   });
   const rows = createMemo(() => {
-    return props.rows.map((row) => {
+    const value = props.rows.map((row) => {
       const live = digests[row.key];
       const stored = row.session.observerDigest;
       const digest = pickFreshestObserverDigest(
@@ -118,23 +118,12 @@ function SubagentActivityLive(
           live && digest === live && live.planProgress?.total ? live.planProgress : undefined,
       };
     });
+    onSettled(() => {
+      if (!props.presentation) props.onPresentation?.(value);
+    });
+    return value;
   });
-  const receipt = createMemo(() =>
-    props.onPresentation && !props.presentation
-      ? { rows: rows(), write: props.onPresentation }
-      : undefined,
-  );
-  return (
-    <>
-      <Show when={receipt()} keyed>
-        {(value) => {
-          onSettled(() => value.write(value.rows));
-          return null;
-        }}
-      </Show>
-      <SubagentActivity {...props} rows={rows()} />
-    </>
-  );
+  return <SubagentActivity {...props} rows={rows()} />;
 }
 
 export const ChatSubagentActivity = defineSolidBridge<SubagentActivityProps>(

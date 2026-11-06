@@ -72,36 +72,29 @@ export const detailsSnapshotSchema = json.optional(
       json.object({
         total: nonnegative,
         rows: json.array(
-          json.object({ key: sessionKeySchema, label: json.text, status: subagentStatus }),
-          5,
-        ),
-        counts: json.array(json.object({ status: subagentStatus, count: nonnegative }), 5),
-      }),
-    ),
-    subagentActivity: json.optional(
-      json.object({
-        total: nonnegative,
-        tally: json.object({
-          running: nonnegative,
-          queued: nonnegative,
-          failed: nonnegative,
-          stopped: nonnegative,
-          done: nonnegative,
-        }),
-        rows: json.array(
           json.object({
             key: sessionKeySchema,
             label: json.text,
             status: subagentStatus,
-            listed: json.boolean,
+            listed: json.optional(json.boolean),
             activity: json.optional(json.text),
             progress: json.optional(json.object({ completed: nonnegative, total: nonnegative })),
-            session: json.object({
-              startedAt: json.optional(nonnegative),
-              endedAt: json.optional(nonnegative),
-            }),
+            session: json.optional(
+              json.object({
+                startedAt: json.optional(nonnegative),
+                endedAt: json.optional(nonnegative),
+              }),
+            ),
           }),
-          3,
+          8,
+        ),
+        counts: json.array(
+          json.object({
+            status: subagentStatus,
+            count: nonnegative,
+            listed: json.optional(json.boolean),
+          }),
+          8,
         ),
       }),
     ),

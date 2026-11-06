@@ -7,7 +7,7 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagent-activity.css";
-import type { DetailsSubagentActivity } from "../chat-details-snapshot.ts";
+import type { DetailsSubagent } from "../chat-details-snapshot.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -16,7 +16,7 @@ registerEnglishCatalog(registerChatDetailsEnglish);
 export type SubagentActivityProps = {
   rows: readonly ChatSubagentActivity[];
   /** A bounded display receipt, never a hydrated child roster. */
-  presentation?: DetailsSubagentActivity["rows"];
+  presentation?: readonly DetailsSubagent[];
   onPresentation?: (rows: readonly ChatSubagentActivity[]) => void;
   onOpenSubagent?: (key: string) => void;
   onOpenSession?: (key: string) => void;
@@ -33,11 +33,7 @@ const STATUS_KEYS = {
   stopped: "chat.sessionDetails.stopped",
 } as const;
 
-function SubagentActivityRow(
-  props: SubagentActivityProps & {
-    row: ChatSubagentActivity | DetailsSubagentActivity["rows"][number];
-  },
-) {
+function SubagentActivityRow(props: SubagentActivityProps & { row: DetailsSubagent }) {
   const status = () => t(STATUS_KEYS[props.row.status]);
   const open = () =>
     props.presentation
@@ -72,9 +68,9 @@ function SubagentActivityRow(
       </span>
       <span class="chat-subagent-activity__status">{props.row.activity || status()}</span>
       <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
-        <Show when={props.row.status !== "queued" && props.row.session.startedAt}>
+        <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
           {(startedAt) => (
-            <ElapsedTime startMs={startedAt()} endMs={props.row.session.endedAt ?? null} />
+            <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
           )}
         </Show>
       </span>

@@ -218,11 +218,12 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
 
 it("retains cached Subagents until the roster observes its parent, then adopts no children", async () => {
   const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+  const open = vi.fn();
   const view = mountDetails({
     selectedSession: undefined,
     subagentSessionsHydrated: true,
-    onOpenSubagent() {},
-    onOpenSubagents() {},
+    onOpenSubagent: open,
+    onOpenSubagents: open,
     onDetailsSnapshot: remember,
     cachedDetails: {
       locale: "en",
@@ -252,6 +253,11 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
     view.update(facts);
     await advance();
     expect(view.group("subagents")?.textContent).toContain("Review");
+    view
+      .group("subagents")!
+      .querySelector<HTMLButtonElement>("button[data-subagent-session-key]")!
+      .click();
+    expect(open).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
   }
   view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
@@ -273,16 +279,15 @@ it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
       onDetailsSnapshot: remember,
       cachedDetails: {
         locale: "en",
-        subagentActivity: {
+        subagents: {
           total: 1,
-          tally: { running: 0, queued: 0, failed: 0, stopped: 0, done: 1 },
+          counts: [{ status: "done", count: 1, listed: false }],
           rows: [
             {
               key: "agent:main:review",
               label: "Cached review",
               status: "done",
               listed: false,
-              session: {},
             },
           ],
         },
@@ -333,10 +338,10 @@ it.each(["empty", "unavailable", "unavailable-with-parent-facts"] as const)(
     }
     expect(remember).toHaveBeenCalledWith(
       expect.objectContaining({
-        subagentActivity: {
+        subagents: {
           total: 0,
           rows: [],
-          tally: { running: 0, queued: 0, failed: 0, stopped: 0, done: 0 },
+          counts: [],
         },
       }),
     );
