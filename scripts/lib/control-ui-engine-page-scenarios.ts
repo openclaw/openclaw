@@ -1892,6 +1892,17 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
         return { visitReadyMs: timing.readyMs, contentReadyMs: timing.contentReadyMs };
       },
     };
+    const revisit: EngineScenario = {
+      ...visit,
+      id: `page-${id}-revisit`,
+      expected: `Warm return to ${coverage.path} after its first visit.`,
+      prepare: async (page) => {
+        await enter(page);
+        const destination = id === "about" ? "connection" : "about";
+        await navigate(page, destination);
+        await ready(page, destination, definitions[destination]!);
+      },
+    };
     const leave: EngineScenario = {
       ...common,
       id: `page-${id}-leave`,
@@ -1906,7 +1917,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       },
     };
     if (!definition.action) {
-      return [visit, leave].concat(noChanges);
+      return [visit, revisit, leave].concat(noChanges);
     }
     const action: EngineScenario = {
       ...common,
@@ -1954,7 +1965,7 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           };
         },
       };
-      return [visit, action, leave, firstAdvancedOpen].concat(noChanges);
+      return [visit, revisit, action, leave, firstAdvancedOpen].concat(noChanges);
     }
     if (id === "terminal") {
       const composerInput: EngineScenario = {
@@ -1993,8 +2004,8 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
           return { typedCharacters: command.length, inputSent: true };
         },
       };
-      return [visit, action, leave, composerInput].concat(noChanges);
+      return [visit, revisit, action, leave, composerInput].concat(noChanges);
     }
-    return [visit, action, leave].concat(noChanges);
+    return [visit, revisit, action, leave].concat(noChanges);
   });
 }
