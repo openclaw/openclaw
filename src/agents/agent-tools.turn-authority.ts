@@ -3,7 +3,11 @@ import {
   gateAgentToolExecution,
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
-import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import {
+  bindAgentToolExecutionLocation,
+  copyAgentToolMetadata,
+  getAgentToolExecutionLocation,
+} from "./agent-tool-metadata.js";
 import { guardOwnerTool } from "./scheduled-owner-tool-guard.js";
 import { toolPolicyRestrictsTools, type ToolPolicyLike } from "./tool-policy.js";
 import { CRON_SCOPED_READ_ACTIONS, isAutomationsToolName } from "./tools/automations-tool-name.js";
@@ -106,7 +110,7 @@ export function resolveTurnToolSurface(params: {
     // Copying hook metadata also copies the availability binding; re-mark the denial
     // so dependent affordances (for example collector spawns) never treat it as callable.
     // A split executor stays marked: only this turn's own reads pass, never descendants.
-    return markAgentToolExecutionUnavailable(
+    const denied = markAgentToolExecutionUnavailable(
       copyAgentToolMetadata(
         tool,
         scopedReads && turnTool
@@ -114,6 +118,12 @@ export function resolveTurnToolSurface(params: {
           : gated,
       ),
     );
+    // A worker placement runs placement tools from its own implementation; send the
+    // denied call to the Gateway, which returns this refusal, so it gets no launch authority.
+    if (getAgentToolExecutionLocation(denied).kind === "placement") {
+      bindAgentToolExecutionLocation(denied, { kind: "gateway" });
+    }
+    return denied;
   });
   return {
     tools,
