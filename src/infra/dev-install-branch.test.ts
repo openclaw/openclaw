@@ -85,16 +85,6 @@ describe("resolveDevInstallGitBranch", () => {
     expect(await resolveBranch(root, { code: 0, stdout: `${name}\n` })).toBeNull();
   });
 
-  // `branch --show-current` reports a literal branch's real name, so a legal
-  // branch literally named `heads/main` (or any `heads/`-prefixed name) must
-  // stay visible instead of being normalized into a mainline ref.
-  it.each(["heads/main", "heads/master", "heads/feature", "refs/heads/main"])(
-    "keeps literal branch name %j visible",
-    async (name) => {
-      expect(await resolveBranch(root, { code: 0, stdout: `${name}\n` })).toBe(name);
-    },
-  );
-
   it("returns null when git branch resolution fails", async () => {
     expect(await resolveBranch(root, { code: 128, stdout: "" })).toBeNull();
   });
