@@ -19,7 +19,7 @@ describe("agent model discovery imports", () => {
     ).toEqual([]);
   });
 
-  it("prepares an API-key catalog without loading OAuth or full config runtimes", async () => {
+  it("discovers an API-key catalog without full plugin, OAuth, or config runtimes", async () => {
     await withOpenClawTestState(
       { label: "catalog-auth-import", applyEnv: false },
       async (state) => {
@@ -28,7 +28,9 @@ describe("agent model discovery imports", () => {
           import.meta.url,
         );
         const context = new URL("./models-config.providers.catalog-context.ts", import.meta.url);
-        const provider = new URL("../../extensions/openai/openai-provider.ts", import.meta.url);
+        const discovery = new URL("../plugins/provider-discovery.runtime.ts", import.meta.url);
+        const metadata = new URL("../plugins/plugin-metadata-snapshot.ts", import.meta.url);
+        const bundledDir = fileURLToPath(new URL("../../extensions", import.meta.url));
         const loader = fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url));
         const result = await runNodeScript(
           [
@@ -43,7 +45,7 @@ import { mock } from "node:test";
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const resolved = nextResolve(specifier, context);
-    if (["/auth-profiles/oauth", "/config/config", "/config/io.runtime", "/config/zod-schema"].some(
+    if (["/extensions/openai/index", "/auth-profiles/oauth", "/config/config", "/config/io.runtime", "/config/zod-schema"].some(
       (owner) => [".ts", ".js"].some((extension) => resolved.url.endsWith(owner + extension)),
     )) throw new Error("API-key catalog loaded unused auth/config owner: " + resolved.url);
     return resolved;
@@ -51,10 +53,23 @@ registerHooks({
 });
 const { prepareProviderDiscoveryAuth } = await import(${JSON.stringify(entry.href)});
 const { prepareProviderCatalogRun } = await import(${JSON.stringify(context.href)});
-const { buildOpenAIProvider } = await import(${JSON.stringify(provider.href)});
+const { planPluginDiscoveryRuntime } = await import(${JSON.stringify(discovery.href)});
+const { loadPluginMetadataSnapshot } = await import(${JSON.stringify(metadata.href)});
 const key = "synthetic-catalog-key";
 const agentDir = ${JSON.stringify(state.agentDir())};
-const env = { CATALOG_KEY: key };
+const env = {
+  CATALOG_KEY: key,
+  OPENCLAW_BUNDLED_PLUGINS_DIR: ${JSON.stringify(bundledDir)},
+  OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+};
+const config = { plugins: { allow: ["openai"], slots: { memory: "none" } } };
+const pluginMetadataSnapshot = loadPluginMetadataSnapshot({ config, env, allowCurrent: false });
+const discoveryPlan = planPluginDiscoveryRuntime({
+  config, env, pluginMetadataSnapshot, onlyPluginIds: ["openai"],
+});
+assert.equal(discoveryPlan.kind, "entries");
+const provider = discoveryPlan.providers.find(({ id }) => id === "openai");
+assert.ok(provider?.catalog);
 const auth = { apiKey: key, mode: "api_key", source: "config" };
 const authStore = { version: 1, profiles: {
   "openai:env": { type: "api_key", provider: "openai", keyRef: { source: "env", provider: "default", id: "CATALOG_KEY" } },
@@ -72,7 +87,7 @@ globalThis.fetch = mock.fn(async (url, init) => {
   return Response.json({ data: [{ id: "gpt-5.5", object: "model" }] });
 });
 const prepared = await prepareProviderCatalogRun({
-  provider: buildOpenAIProvider(), config: {}, agentDir, workspaceDir: agentDir,
+  provider, config, agentDir, workspaceDir: agentDir,
   env, authStore, ...preparedAuth, isActive: () => true,
 });
 const catalog = await prepared.provider.catalog.run(prepared);

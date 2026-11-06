@@ -46,7 +46,7 @@ type ProviderDiscoveryEntryResult = {
   complete: boolean;
   pluginRecords: PluginManifestRecord[];
   entryPluginIds: Set<string>;
-  runtimeManifestCatalogPluginIds: Set<string>;
+  runtimeManifestCatalogProviders: Map<string, Set<string>>;
 };
 
 function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugin[] {
@@ -165,9 +165,14 @@ function prepareManifestCatalogDiscovery(
   pluginRecords: readonly PluginManifestRecord[],
   config: OpenClawConfig,
   includeProviders: boolean,
-): Pick<ProviderDiscoveryEntryResult, "providers" | "runtimeManifestCatalogPluginIds"> {
+): Pick<ProviderDiscoveryEntryResult, "providers" | "runtimeManifestCatalogProviders"> {
   const providers: ProviderPlugin[] = [];
-  const runtimeManifestCatalogPluginIds = new Set<string>();
+  const runtimeManifestCatalogProviders = new Map<string, Set<string>>();
+  const requireRuntimeProvider = (pluginId: string, providerId: string) => {
+    const providerIds = runtimeManifestCatalogProviders.get(pluginId) ?? new Set<string>();
+    providerIds.add(normalizeProviderId(providerId));
+    runtimeManifestCatalogProviders.set(pluginId, providerIds);
+  };
   for (const plugin of pluginRecords) {
     if (!plugin.modelCatalog) {
       continue;
@@ -175,14 +180,13 @@ function prepareManifestCatalogDiscovery(
     const ownedProviders = new Set(
       plugin.providers.map((provider) => normalizeProviderId(provider)),
     );
-    if (
-      Object.entries(plugin.modelCatalog.discovery ?? {}).some(
-        ([provider, discovery]) =>
-          (discovery === "runtime" || discovery === "refreshable") &&
-          ownedProviders.has(normalizeProviderId(provider)),
-      )
-    ) {
-      runtimeManifestCatalogPluginIds.add(plugin.id);
+    for (const [provider, discovery] of Object.entries(plugin.modelCatalog.discovery ?? {})) {
+      if (
+        (discovery === "runtime" || discovery === "refreshable") &&
+        ownedProviders.has(normalizeProviderId(provider))
+      ) {
+        requireRuntimeProvider(plugin.id, provider);
+      }
     }
     if (!plugin.modelCatalog.providers) {
       continue;
@@ -192,7 +196,7 @@ function prepareManifestCatalogDiscovery(
     const authScopes = getProviderOwnerIndex({ plugins: [plugin], diagnostics: [] }).authScopes;
     for (const entry of plan.entries) {
       if (entry.discovery === "runtime" || entry.discovery === "refreshable") {
-        runtimeManifestCatalogPluginIds.add(plugin.id);
+        requireRuntimeProvider(plugin.id, entry.provider);
         continue;
       }
       if (!includeProviders || entry.rows.length === 0) {
@@ -219,7 +223,7 @@ function prepareManifestCatalogDiscovery(
       });
     }
   }
-  return { providers, runtimeManifestCatalogPluginIds };
+  return { providers, runtimeManifestCatalogProviders };
 }
 
 function resolveProviderDiscoveryEntryPlugins(
@@ -241,7 +245,7 @@ function resolveProviderDiscoveryEntryPlugins(
   });
   const pluginIdSet = new Set(pluginIds);
   const pluginRecords = manifestRegistry.plugins.filter((plugin) => pluginIdSet.has(plugin.id));
-  const { providers: manifestProviders, runtimeManifestCatalogPluginIds } =
+  const { providers: manifestProviders, runtimeManifestCatalogProviders } =
     prepareManifestCatalogDiscovery(
       pluginRecords,
       params.config ?? {},
@@ -255,7 +259,7 @@ function resolveProviderDiscoveryEntryPlugins(
       manifestEntryPluginIds.add(pluginId);
       // Mixed static/runtime catalogs are useful for entries-only discovery, but
       // they are not complete coverage; the runtime plugin must fill the rest.
-      if (!runtimeManifestCatalogPluginIds.has(pluginId)) {
+      if (!runtimeManifestCatalogProviders.has(pluginId)) {
         entryPluginIds.add(pluginId);
       }
     }
@@ -266,7 +270,7 @@ function resolveProviderDiscoveryEntryPlugins(
     complete,
     pluginRecords,
     entryPluginIds,
-    runtimeManifestCatalogPluginIds,
+    runtimeManifestCatalogProviders,
   };
   const entriesOnlyComplete =
     new Set([...entryPluginIds, ...manifestEntryPluginIds]).size === pluginIdSet.size;
@@ -292,6 +296,17 @@ function resolveProviderDiscoveryEntryPlugins(
       // Entry loading is all-or-nothing: discarded results no longer cover their owners.
       // Keep static manifest coverage for the scope-aware full-loader fallback.
       return { ...result, complete: false, entryPluginIds: manifestEntryPluginIds };
+    }
+  }
+  // A live descriptor covers only its own provider. Mixed plugins still need
+  // full registration when another runtime catalog has no discovery entry.
+  for (const provider of providers) {
+    if (provider.pluginId && hasLiveProviderDiscoveryHook(provider)) {
+      const required = runtimeManifestCatalogProviders.get(provider.pluginId);
+      required?.delete(normalizeProviderId(provider.id));
+      if (required?.size === 0) {
+        runtimeManifestCatalogProviders.delete(provider.pluginId);
+      }
     }
   }
   return { ...result, providers: [...manifestProviders, ...providers] };
@@ -349,7 +364,7 @@ export function planPluginDiscoveryRuntime(
     entryResult.providers.length > 0 &&
     entryResult.complete &&
     runtimeEntryProviders.length === entryResult.providers.length &&
-    entryResult.runtimeManifestCatalogPluginIds.size === 0
+    entryResult.runtimeManifestCatalogProviders.size === 0
   ) {
     return {
       kind: "entries",
@@ -358,7 +373,7 @@ export function planPluginDiscoveryRuntime(
   }
   let fullPluginIds = params.onlyPluginIds;
   let retainedProviders: ProviderPlugin[] | undefined;
-  if (runtimeEntryProviders.length > 0 || entryResult.runtimeManifestCatalogPluginIds.size > 0) {
+  if (runtimeEntryProviders.length > 0 || entryResult.runtimeManifestCatalogProviders.size > 0) {
     // Runtime manifest owners do not cover siblings without discovery entries.
     // Preserve the selected scope; unscoped discovery stays credential-bounded.
     fullPluginIds = sortUniqueStrings([
@@ -369,7 +384,7 @@ export function planPluginDiscoveryRuntime(
             (params.onlyPluginIds !== undefined || hasProviderAuthEnvCredential(plugin, env)),
         )
         .map((plugin) => plugin.id),
-      ...entryResult.runtimeManifestCatalogPluginIds,
+      ...entryResult.runtimeManifestCatalogProviders.keys(),
     ]);
     if (fullPluginIds.length === 0) {
       return {
