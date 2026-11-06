@@ -23,6 +23,7 @@ import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { mountChatThread } from "./components/chat-thread.test-support.ts";
@@ -76,12 +77,7 @@ describe("mounted pane session event ownership", () => {
       sessionId: row.sessionId,
       sessionInfo: row,
       messages: [
-        {
-          role: "user",
-          content: "Review the report",
-          timestamp: 1_000,
-          __openclaw: { id: "request" },
-        },
+        nativeMessage("user", "Review the report", 1_000, { id: "request", seq: 1 }),
         {
           role: "toolResult",
           toolName: "read",
@@ -89,8 +85,15 @@ describe("mounted pane session event ownership", () => {
           runId: "work-run",
           content: "Report read",
           timestamp: 2_000,
+          __openclaw: { seq: 2 },
         },
-        { role: "assistant", runId: "work-run", content: "Report reviewed", timestamp: 3_000 },
+        {
+          role: "assistant",
+          runId: "work-run",
+          content: "Report reviewed",
+          timestamp: 3_000,
+          __openclaw: { seq: 3 },
+        },
       ],
     };
     const { context, mount } = createMountedPanes([row], "main", undefined, {

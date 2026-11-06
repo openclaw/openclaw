@@ -28,6 +28,7 @@ const progressCard = (steps: { step: string; status: string }[], updatedAt: numb
 
 function history(prefix: string, baseTs = Date.now() - 100_000) {
   return Array.from({ length: 50 }, (_, index) => ({
+    __openclaw: { id: `scroll-history-${index}`, seq: index + 1 },
     content: [
       { text: prefix + " " + index + "\n" + "extra transcript line\n".repeat(4), type: "text" },
     ],

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { captureChatDetailsSnapshot, projectDetailsSubagents } from "./chat-details-snapshot.ts";
+import { messageWeight } from "./chat-history-cost.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -12,8 +13,9 @@ import {
   readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { serializedArrayItemWeight } from "./session-snapshot-budget.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 function createCacheContext(
   assistantAgentId = "ops",
@@ -63,6 +65,34 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("shares immutable serialization weight across resident and snapshot accounting", () => {
+    const payload = { text: 'quote " backslash \\ newline\n雪🦊' };
+    const toJSON = vi.fn(() => payload);
+    const message = { toJSON };
+    const arrayWeight = JSON.stringify([payload]).length;
+    for (let read = 0; read < 2; read++) {
+      expect(messageWeight(message)).toBe(arrayWeight - 1);
+      expect(serializedArrayItemWeight(message)).toBe(arrayWeight - 2);
+    }
+    expect(toJSON).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "evicts unserializable cached rows before claimed=%s admission",
+    (claimed) => {
+      const circular: { self?: unknown } = {};
+      circular.self = circular;
+      const { write, read, append } = createCacheContext();
+      for (const message of [circular, 1n]) {
+        write(widgetSnapshot(["retained before invalid receipt"]));
+        expect(read()).toBeDefined();
+        expect(() => messageWeight(message)).toThrow();
+        append("home", message, claimed ? {} : undefined);
+        expect(read()).toBeNull();
+      }
+    },
+  );
+
   it("publishes changed older edges without inventing numeric coverage", () => {
     const { cache, write, read } = createCacheContext();
     const persisted = vi.fn();
@@ -77,6 +107,38 @@ describe("session message cache", () => {
     expect(persisted).toHaveBeenCalledTimes(3);
     expect(read()?.pagination).toEqual({ hasMore: true, needsBoundary: true });
     expect(read()?.messages).toBe(messages);
+  });
+
+  it("publishes source-only intrinsic coverage changes with the same messages and edges", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn((_key: string, snapshot: ChatSessionSnapshot, weight: number) => {
+      expect(weight).toBe(JSON.stringify(snapshot).length);
+    });
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const messages = ["first", "last"].map((id, index) => ({
+      role: "assistant",
+      content: id,
+      __openclaw: { id, seq: index + 1 },
+    }));
+    const snapshot = widgetSnapshot(messages, "session-1", {
+      pagination: { hasMore: false, totalMessages: 2, segments: [] },
+    });
+    write(snapshot);
+    for (const [intrinsicSource, writes] of [
+      ["id:first", 2],
+      ["id:last", 3],
+      [undefined, 4],
+    ] as const) {
+      const pagination = {
+        ...snapshot.pagination,
+        ...(intrinsicSource ? { intrinsicSource } : {}),
+      };
+      write({ ...snapshot, pagination });
+      write({ ...snapshot, pagination: { ...pagination } });
+      expect(read()?.messages).toBe(messages);
+      expect(read()?.pagination).toEqual(pagination);
+      expect(persisted).toHaveBeenCalledTimes(writes);
+    }
   });
 
   it("persists changed session display facts once without repeating unchanged writes", () => {
@@ -99,6 +161,26 @@ describe("session message cache", () => {
     write({ ...snapshot, sessionState: { ...sessionState, archived: false, chrome } });
     expect(persisted).toHaveBeenCalledTimes(3);
     expect(read()?.sessionState?.chrome).toEqual(chrome);
+  });
+
+  it("publishes changed context usage once while retaining the admitted conversation", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const contextUsage = { used: 1_800, limit: 96_000, approximate: false, fromLastPrompt: true };
+    const sessionState = { unarchiveAllowed: true, contextUsage };
+    const snapshot = widgetSnapshot(["saved conversation"], "session-1", { sessionState });
+    write(snapshot);
+    write({ ...snapshot, sessionState: { ...sessionState, contextUsage: { ...contextUsage } } });
+    expect(persisted).toHaveBeenCalledTimes(1);
+    const nextUsage = { ...contextUsage, used: 2_000 };
+    write({ ...snapshot, sessionState: { ...sessionState, contextUsage: nextUsage } });
+    expect(persisted).toHaveBeenCalledTimes(2);
+    expect(read()?.sessionState?.contextUsage).toEqual(nextUsage);
+    expect(read()?.messages).toBe(snapshot.messages);
+    write({ ...snapshot, sessionState: { ...sessionState, contextUsage: undefined } });
+    expect(persisted).toHaveBeenCalledTimes(3);
+    expect(read()?.sessionState?.contextUsage).toBeUndefined();
   });
 
   it("publishes each admitted snapshot once with its pruned thumbnail weight", () => {
@@ -503,6 +585,60 @@ describe("session message cache", () => {
     expect(messages(target)).toEqual([cached, final]);
   });
 
+  it("charges only the admitted envelope after an unclaimed append retires segments", () => {
+    const { cache, write, read, append } = createCacheContext();
+    const cached = { role: "assistant", content: "cached", __openclaw: { seq: 1 } };
+    const delivered = { role: "user", content: "delivered", __openclaw: { seq: 2 } };
+    write(
+      widgetSnapshot([cached], "session-1", {
+        pagination: {
+          hasMore: false,
+          segments: [{ sources: ["seq:1"], hasOlder: false, hasNewer: false }],
+        },
+      }),
+    );
+    const publish = vi.fn();
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
+    append("home", delivered);
+    const snapshot = read();
+    expect(snapshot?.messages).toEqual([cached, delivered]);
+    expect(snapshot?.pagination).toEqual({ hasMore: false });
+    expect(publish).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      snapshot,
+      JSON.stringify(snapshot).length,
+    );
+  });
+
+  it("retires row display bytes outside the display window after an unclaimed append", () => {
+    const { cache, write, read, append } = createCacheContext();
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: "assistant",
+      content: "cached",
+      __openclaw: { id: `m-${index}`, seq: index + 1 },
+    }));
+    const thumbnail = new Blob(["old preview"], { type: "image/webp" });
+    const first = {
+      images: { source: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
+    };
+    const last = { links: { source: { title: "Retained preview" } } };
+    write(widgetSnapshot(messages, "session-1", { rowDisplay: { "m-0": first, "m-79": last } }));
+    expect(read()?.rowDisplay?.["m-0"]).toBe(first);
+    const publish = vi.fn();
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
+    const delivered = { role: "user", content: "delivered", __openclaw: { id: "m-80", seq: 81 } };
+    append("home", delivered);
+    const snapshot = read();
+    expect(snapshot?.messages).toEqual([...messages, delivered]);
+    expect(snapshot?.rowDisplay).toEqual({ "m-79": last });
+    expect(snapshot?.rowDisplay?.["m-79"]).toBe(last);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      snapshot,
+      JSON.stringify(snapshot).length,
+    );
+  });
+
   it("does not retain history across backing session changes", () => {
     const { write, read, layout: createLayout } = createCacheContext();
     write(widgetSnapshot(["old"], "session-1", { widgetHeights: { "canvas:preview": 700 } }));
@@ -613,6 +749,69 @@ describe("session message cache", () => {
     expect(retained.at(-1)).toBe(messages.at(-1));
     expect(envelopes).toBeLessThanOrEqual(2);
   });
+
+  it.each([
+    { name: "retained", intrinsicIndexes: [3_998, 3_999], retained: true },
+    { name: "retired", intrinsicIndexes: [1, 2], retained: false },
+  ])(
+    "charges the canonical trimmed envelope after the intrinsic source is $name",
+    ({ intrinsicIndexes, retained }) => {
+      const { cache, write, read } = createCacheContext();
+      const persisted = vi.fn((_key: string, snapshot: ChatSessionSnapshot, weight: number) => {
+        expect(weight).toBe(JSON.stringify(snapshot).length);
+      });
+      observeChatCache(cache, { write: persisted, delete: vi.fn() });
+      const messages = Array.from({ length: 4_000 }, (_, index) => ({
+        role: "assistant",
+        content: "x".repeat(4 * 1024),
+        __openclaw: {
+          id: intrinsicIndexes.includes(index) ? "intrinsic" : `m-${index}`,
+          seq: intrinsicIndexes.includes(index) ? intrinsicIndexes[0]! + 1 : index + 1,
+        },
+      }));
+      const stringify = vi.spyOn(JSON, "stringify");
+      try {
+        write({
+          messages,
+          rowDisplay: { "m-3997": { links: { source: { title: "Retained linked task" } } } },
+          pagination: {
+            hasMore: true,
+            olderCursor: "older:head",
+            nextOffset: 4_000,
+            hasNewer: true,
+            newerCursor: "newer:tail",
+            intrinsicSource: "id:intrinsic",
+            totalMessages: 4_000,
+          },
+          sessionId: "session-1",
+        });
+        const envelopes = stringify.mock.calls.filter(
+          ([value]) => Array.isArray(value?.messages) && value.messages.length === 0,
+        ).length;
+        const snapshot = read();
+        expect(persisted).toHaveBeenCalledOnce();
+        expect(snapshot?.messages.length).toBeGreaterThan(2_000);
+        expect(snapshot?.messages.length).toBeLessThan(messages.length);
+        expect(snapshot?.messages.at(-1)).toBe(messages.at(-1));
+        expect(snapshot?.pagination).toEqual({
+          hasMore: true,
+          needsBoundary: true,
+          hasNewer: true,
+          needsNewerBoundary: true,
+          totalMessages: 4_000,
+          ...(retained ? { intrinsicSource: "id:intrinsic" } : {}),
+        });
+        expect(
+          snapshot?.messages.filter((message) =>
+            intrinsicIndexes.some((index) => message === messages[index]),
+          ),
+        ).toHaveLength(retained ? 2 : 0);
+        expect(envelopes).toBeLessThanOrEqual(retained ? 2 : 3);
+      } finally {
+        stringify.mockRestore();
+      }
+    },
+  );
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {
     const { write, read } = createCacheContext();

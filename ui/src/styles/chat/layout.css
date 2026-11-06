@@ -758,8 +758,7 @@ openclaw-pending-session-create {
    it becomes the virtualizer scrollMargin, so drift misaligns row offsets. */
 .chat-history-boundary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  grid-template-rows: 44px;
+  grid-template: 44px / minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
   overflow: hidden;
   height: 44px;
   align-items: center;
@@ -772,7 +771,6 @@ openclaw-pending-session-create {
 
 .chat-history-boundary__line {
   position: relative;
-  flex: 1 1 0;
   height: 1px;
   overflow: hidden;
   background: var(--border);
@@ -799,7 +797,9 @@ openclaw-pending-session-create {
 
 .chat-history-boundary__action {
   display: inline-flex;
-  min-width: 160px;
+  min-width: min(160px, 100%);
+  max-width: 100%;
+  overflow: hidden;
   height: 44px;
   flex-direction: column;
   gap: 2px;

@@ -2,6 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { selectChatInputDisplay } from "./chat-input-display.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "./chat-progress.ts";
@@ -12,7 +13,6 @@ import {
   createChatSearchMatcher,
   queuedSendThreadMessage,
 } from "./chat-thread-items.ts";
-import { selectChatInputDisplay } from "./history-merge.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 

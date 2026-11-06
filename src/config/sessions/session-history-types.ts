@@ -18,6 +18,10 @@ import type {
   SessionTranscriptSummaryResult,
 } from "../../gateway/session-transcript-summary.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
+import type {
+  TranscriptReadContinuity,
+  TranscriptReadContinuityResult,
+} from "../../sessions/transcript-anchor-page.js";
 import type { ConversationRecord } from "./conversation-registry.types.js";
 import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
@@ -79,6 +83,7 @@ export type ChatHistoryPage = {
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
+  continuity?: TranscriptReadContinuityResult;
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
@@ -114,6 +119,7 @@ export type ChatHistoryPageParams = {
   offset: number | undefined;
   messageId: string | undefined;
   pageCursor?: ChatHistoryPageCursor;
+  continuity?: TranscriptReadContinuity;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
 };

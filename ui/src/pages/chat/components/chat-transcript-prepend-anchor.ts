@@ -21,6 +21,32 @@ export class TranscriptPrependAnchor {
     return this.pending?.messageKey ?? null;
   }
 
+  bookmark(element: HTMLDivElement | null) {
+    const anchor = captureTranscriptPrependAnchor(
+      element,
+      this.messageKeys,
+      this.messageElements.values(),
+    );
+    return anchor && element
+      ? {
+          messageKey: anchor.messageKey,
+          rowKey: anchor.rowKey,
+          offset: anchor.top - element.getBoundingClientRect().top,
+        }
+      : null;
+  }
+
+  restoreBookmark(
+    bookmark: { messageKey: string; rowKey: string | null; offset: number },
+    element: HTMLDivElement,
+  ): void {
+    this.pending = {
+      ...bookmark,
+      top: element.getBoundingClientRect().top + bookmark.offset,
+      measured: false,
+    };
+  }
+
   /** Keep the retained bubble mounted against the committed, not candidate, row map. */
   extractRange(
     range: Range,

@@ -6,8 +6,9 @@ import type { ApplicationContext } from "../../../app/context.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
-import type { ChatSessionScrollPosition } from "../scroll.ts";
+import type { ChatReadingBookmark, ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
+import { flushMessageOverflowMeasurements } from "./chat-message-overflow.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { measureTranscriptRow, readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type {
@@ -16,6 +17,7 @@ import type {
 } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
 import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
+import type { TranscriptNativeScroll } from "./chat-transcript-scroll-events.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -27,13 +29,21 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
+  getSessionId?: () => string | null;
+  canRestoreBookmark?: () => boolean;
+  // False means unavailable; undefined retires one attempt without losing the saved reader.
+  restoreBookmark?: (
+    bookmark: ChatReadingBookmark,
+    isCurrent: () => boolean,
+  ) => Promise<boolean | undefined>;
   /** Sidebar commits originate on the pane element, separate from its state owner. */
   geometryEventTarget?: HTMLElement;
   getComposerFloat?: () => HTMLElement | null;
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
-  onReaderScroll?: (towardEnd?: boolean) => void;
-  onNativeScroll?: (event: Event) => void;
+  onReaderScroll?: (towardEnd?: boolean, source?: "bookmark") => void;
+  onNativeScroll?: (scroll: TranscriptNativeScroll) => void;
+  onHistoryIntent?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
   /** A queued send/latest command supersedes reader anchoring before its first frame. */
@@ -108,6 +118,7 @@ export function createTranscriptPresentation(
   rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
   measureRow = measureTranscriptRow,
+  onMeasured?: (row: HTMLElement, height: number) => void,
 ) {
   const redraw = {};
   let pendingChange: (() => void) | undefined;
@@ -121,7 +132,13 @@ export function createTranscriptPresentation(
   };
   let resizeOffsetSynced = false;
   const readConnectedRows = (): (() => boolean) | null => {
-    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
+    flushMessageOverflowMeasurements();
+    const apply = readConnectedTranscriptRows(
+      scrollElement(),
+      virtualizer,
+      rowElements(),
+      onMeasured,
+    );
     return apply
       ? () => {
           beforeMeasure();

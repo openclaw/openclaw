@@ -19,8 +19,11 @@ import {
   type ChatCommandTarget,
 } from "./chat-commands.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
-import { setChatError } from "./chat-history-state.ts";
-import { publishChatSessionProjectionMessages } from "./history-merge.ts";
+import { readChatHistoryStartCapability, setChatError } from "./chat-history-state.ts";
+import { boundChatLocalOutput } from "./chat-history-window.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { readChatQueueForScope } from "./chat-queue.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 function isChatCommandModelCacheOwnerCurrent(
@@ -157,6 +160,12 @@ export async function dispatchCapturedChatSlashCommand(
     request?.release();
   }
 
+  if (result.trackRunId && targetIsCurrent()) {
+    host.chatRunId = result.trackRunId;
+    host.chatStream = "";
+    host.chatSending = false;
+  }
+
   if (result.content && targetIsCurrent()) {
     injectCommandResult(host, result.content);
   }
@@ -168,12 +177,6 @@ export async function dispatchCapturedChatSlashCommand(
       });
     }
     return "failed";
-  }
-
-  if (result.trackRunId && targetIsCurrent()) {
-    host.chatRunId = result.trackRunId;
-    host.chatStream = "";
-    host.chatSending = false;
   }
 
   if (result.action === "refresh" && targetIsCurrent()) {
@@ -189,12 +192,37 @@ export async function dispatchCapturedChatSlashCommand(
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {
-  publishChatSessionProjectionMessages(host, [
-    ...host.chatMessages,
+  const storage = { available: false };
+  const queued = readChatQueueForScope(host, host.sessionKey, undefined, storage);
+  // Gateway custody can precede transcript publication without joining the local queue.
+  // A paged or unavailable view cannot establish absence for start placement.
+  const pending = getChatPendingInputs(host);
+  const emptySource =
+    storage.available &&
+    pending &&
+    pending.before === undefined &&
+    !pending.loading &&
+    !pending.error &&
+    pending.page.total === 0 &&
+    pending.page.items.length === 0 &&
+    pending.queuedCount === 0 &&
+    pending.queuedInputs.length === 0 &&
+    !queued.some((item) => !item.localCommandName) &&
+    !host.chatSending &&
+    !host.chatRunId &&
+    !host.hasPendingInitialTurn?.(host.sessionKey)
+      ? readChatHistoryStartCapability(host)
+      : undefined;
+  reduceChatSessionProjection(
+    host,
     {
-      role: "system",
-      content,
-      timestamp: Date.now(),
+      type: "localOutput",
+      message: boundChatLocalOutput({
+        role: "system",
+        content,
+        timestamp: Date.now(),
+      }),
     },
-  ]);
+    { emptySource },
+  );
 }

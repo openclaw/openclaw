@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
@@ -17,17 +18,26 @@ import {
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
-import type { ChatItemsFacts } from "./chat-thread-facts.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
+import {
+  sameChatItemsStructuralInput,
+  sameEntries,
+  sameFields,
+  type ChatItemsFacts,
+} from "./chat-thread-facts.ts";
+import { retireChatGroupingSources } from "./chat-thread-grouping.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
+import { retireCoalescedMessageSources } from "./chat-tool-activity-coalesce.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
   generation: number;
   input: BuildChatItemsProps | null;
+  sources: WeakSet<object>;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -89,7 +99,90 @@ const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>()
 const expansionListeners = new WeakMap<ReadonlyMap<string, unknown>, Set<() => void>>();
 const explicitToolExpansions = new WeakMap<ReadonlyMap<string, unknown>, Set<string>>();
 
-export function resetChatThreadState(paneId?: string): void {
+/** Release retired dependencies without throwing away independent survivor rows. */
+export function retireChatThreadSources(paneId: string, messages: readonly unknown[]): void {
+  const sources = new Set(messages);
+  for (const projections of chatItemsByPane.get(paneId)?.values() ?? []) {
+    for (const view of ["visible", "unfiltered"] as const) {
+      const cached = projections[view];
+      if (!cached) {
+        continue;
+      }
+      // Hidden panes may retire repeatedly without another build. Keep only weak
+      // raw-source membership, never old inputs or prepend facts that retain bodies.
+      cached.input = null;
+      cached.liveStream = null;
+      cached.facts = undefined;
+      for (const value of messages) {
+        const source = asRecord(value);
+        if (source) {
+          cached.sources.delete(source);
+        }
+      }
+      const retained = (value: unknown) => {
+        const source = asRecord(value);
+        return (
+          source !== null &&
+          cached.sources.has(source) &&
+          source["__openclawToolStreamLive"] !== true
+        );
+      };
+      cached.items = cached.items.filter((item) => {
+        const dependencies =
+          item.kind === "group"
+            ? [
+                ...item.messages.map((entry) => entry.message),
+                ...[item.replyToMessage, item.replyTurnSource, item.replyCurrentSource].flatMap(
+                  (entry) => (entry ? [entry.message] : []),
+                ),
+              ]
+            : item.kind === "message"
+              ? [item.message]
+              : item.kind === "stream" && item.replyToMessage
+                ? [item.replyToMessage.message]
+                : [];
+        const keep =
+          (item.kind === "message" || (item.kind === "group" && !item.isStreaming)) &&
+          dependencies.every(retained);
+        if (!keep) {
+          // Synthetic Canvas/tool rows can key shared memos through a surviving
+          // raw neighbor. Retire those derived owners, not certified raw survivors.
+          for (const value of dependencies) {
+            const source = asRecord(value);
+            if (source && !cached.sources.has(source)) {
+              sources.add(source);
+            }
+          }
+        }
+        return keep;
+      });
+    }
+  }
+  const retired = [...sources];
+  retireChatGroupingSources([...retired, ...retireCoalescedMessageSources(retired)]);
+}
+
+export function resetChatThreadState(
+  paneId?: string,
+  retiredMessages: readonly unknown[] = [],
+): void {
+  const sources = [...retiredMessages];
+  const panes = paneId ? [chatItemsByPane.get(paneId)] : [...chatItemsByPane.values()];
+  for (const sessions of panes) {
+    for (const projections of sessions?.values() ?? []) {
+      for (const view of ["visible", "unfiltered"] as const) {
+        for (const item of projections[view]?.items ?? []) {
+          if (item.kind === "message") {
+            sources.push(item.message);
+          } else if (item.kind === "group") {
+            sources.push(...item.messages.map((entry) => entry.message));
+          }
+        }
+      }
+    }
+  }
+  // Coalesced and Canvas projections can own grouping keys distinct from raw rows.
+  retireChatGroupingSources([...sources, ...retireCoalescedMessageSources(sources)]);
   if (paneId) {
     chatItemsByPane.delete(paneId);
     return;
@@ -163,14 +256,6 @@ const CHAT_ITEM_FIELDS = {
   question: ["questionId", "startedAt"],
   senderSession: ["sessionKey", "agentId", "label"],
 } as const;
-
-function sameFields<T extends object>(
-  previous: T | null | undefined,
-  next: T | null | undefined,
-  fields: readonly (keyof T)[],
-): boolean {
-  return fields.every((field) => previous?.[field] === next?.[field]);
-}
 
 function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
   if (previous.kind !== next.kind || previous.key !== next.key) {
@@ -310,77 +395,6 @@ function stabilizeChatItems(
   return sameEntries(stabilized, previous) ? previous : stabilized;
 }
 
-function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): boolean {
-  return (
-    previous === next ||
-    (previous !== undefined &&
-      next !== undefined &&
-      previous.length === next.length &&
-      previous.every((entry, index) => entry === next[index]))
-  );
-}
-
-function sameChatItemsStructuralInput(
-  previous: BuildChatItemsProps,
-  next: BuildChatItemsProps,
-): boolean {
-  const previousReasoning = previous.reasoning?.items;
-  const nextReasoning = next.reasoning?.items;
-  const previousActive = activeChatReasoning(previous.reasoning);
-  const nextActive = activeChatReasoning(next.reasoning);
-  return (
-    previous.sessionKey === next.sessionKey &&
-    previous.archiveNotice?.key === next.archiveNotice?.key &&
-    previous.archiveNotice?.label === next.archiveNotice?.label &&
-    previous.runId === next.runId &&
-    previous.compactionStatus === next.compactionStatus &&
-    previous.locale === next.locale &&
-    previous.messages === next.messages &&
-    previous.toolMessages === next.toolMessages &&
-    previous.guardianNotices === next.guardianNotices &&
-    previous.streamSegments === next.streamSegments &&
-    previous.streamStartedAt === next.streamStartedAt &&
-    previous.reasoning?.runId === next.reasoning?.runId &&
-    previous.showReasoning === next.showReasoning &&
-    previousReasoning?.length === nextReasoning?.length &&
-    (previousReasoning?.every(
-      (item, index) =>
-        item === nextReasoning?.[index] ||
-        (item === previousActive &&
-          nextReasoning?.[index] === nextActive &&
-          sameFields(previousActive, nextActive, ["itemId", "startedAt"])),
-    ) ??
-      true) &&
-    previous.queue === next.queue &&
-    previous.initialTurnId === next.initialTurnId &&
-    // renderChat derives this list of immutable Gateway records on every render,
-    // including scroll-driven ones; identity would rebuild all loaded history.
-    sameEntries(previous.pendingInputs, next.pendingInputs) &&
-    previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
-    previous.workerSetupPending === next.workerSetupPending &&
-    previous.showToolCalls === next.showToolCalls &&
-    previous.persistCommentary === next.persistCommentary &&
-    previous.runWorking === next.runWorking &&
-    previous.runFinalizing === next.runFinalizing &&
-    previous.runActive === next.runActive &&
-    previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
-    previous.subagentWait?.runId === next.subagentWait?.runId &&
-    (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
-    previous.questionPrompts === next.questionPrompts &&
-    // Loading only suppresses progress indicators on an initially empty thread.
-    (previous.loading === next.loading || (!next.runWorking && !next.subagentWait)) &&
-    sameEntries(previous.replyPeople, next.replyPeople) &&
-    previous.replyLocalPerson === next.replyLocalPerson &&
-    previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery &&
-    previous.messageRecovery?.messages === next.messageRecovery?.messages &&
-    previous.messageRecovery?.revision === next.messageRecovery?.revision &&
-    previous.messageRecovery?.displayFacts === next.messageRecovery?.displayFacts &&
-    previous.messageRecovery?.canFetchFullMessage === next.messageRecovery?.canFetchFullMessage &&
-    previous.messageRecovery?.agentId === next.messageRecovery?.agentId
-  );
-}
-
 function liveStreamIdentity(input: BuildChatItemsProps): string {
   return JSON.stringify([input.sessionKey, input.runId ?? null, input.streamStartedAt]);
 }
@@ -448,6 +462,7 @@ export function buildCachedChatItems(
   const cached = (projections[projection] ??= {
     generation: 0,
     input: null,
+    sources: new WeakSet<object>(),
     items: [],
     liveStream: null,
   });
@@ -464,6 +479,13 @@ export function buildCachedChatItems(
     if (updateCachedLiveStream(cached, input)) {
       cached.input = input;
       return cached.items;
+    }
+  }
+  cached.sources = new WeakSet();
+  for (const value of [...input.messages, ...input.toolMessages]) {
+    const source = asRecord(value);
+    if (source) {
+      cached.sources.add(source);
     }
   }
   const previous = cached.input;

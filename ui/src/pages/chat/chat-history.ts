@@ -13,9 +13,14 @@ import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
-import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
+import { CHAT_HISTORY_REQUEST_LIMIT, loadOlderChatHistoryPage } from "./chat-history-request.ts";
+import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
-import { clearHistoryCursor, historySessionId } from "./chat-history-snapshot.ts";
+import {
+  admitChatHistoryPages,
+  clearHistoryCursor,
+  historySessionId,
+} from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -24,6 +29,10 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
+import { buildMessageItems } from "./chat-thread-items.ts";
+import type { ChatHistoryStartCapability } from "./history-merge.ts";
+import { beginChatScrollIntent, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import type { ChatReadingBookmark, ChatScrollHost } from "./scroll.ts";
 import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
@@ -46,19 +55,100 @@ export function requiresChatHistoryReload(
   );
 }
 
-export async function reloadChatHistoryWindow(state: ChatHistoryHost): Promise<void> {
+export async function reloadChatHistoryWindow(
+  state: ChatHistoryHost,
+  ownsIntent?: () => boolean,
+): Promise<void> {
   const ownsConnection = captureChatConnectionOwner(state);
   const sessionKey = state.sessionKey;
   const agentId = resolveChatAgentId(state);
   // Cursor reset is not an empty snapshot. Keep the observed reset until
   // authoritative hydration adopts history with pending and live custody.
-  chatHistoryRequests(state).windowReset = {
-    isCurrent: () =>
-      ownsConnection() && state.sessionKey === sessionKey && resolveChatAgentId(state) === agentId,
-  };
+  const requests = chatHistoryRequests(state);
+  // A reader may cancel Latest's tail replacement. An already observed source
+  // reset remains authoritative independently of that cancellable command.
+  if (!ownsIntent || !requests.windowReset?.isCurrent()) {
+    requests.windowReset = {
+      isCurrent: () =>
+        (!ownsIntent || ownsIntent()) &&
+        ownsConnection() &&
+        state.sessionKey === sessionKey &&
+        resolveChatAgentId(state) === agentId,
+    };
+  }
   clearHistoryCursor(state, sessionKey, agentId);
   if (!(await loadChatHistory(state, { supersedeInFlight: true }))) {
     throw new Error(state.chatError ?? t("chat.thread.earlierInterrupted"));
+  }
+}
+
+/** Reopen a missing cached reader through the same source-bound page owner. */
+export async function restoreChatHistoryBookmark(
+  state: ChatHistoryHost,
+  bookmark: ChatReadingBookmark,
+  ownsPane: () => boolean,
+  signal?: AbortSignal,
+): Promise<boolean | undefined> {
+  const ownsConnection = captureChatConnectionOwner(state);
+  const sessionKey = state.sessionKey;
+  const agentId = resolveChatAgentId(state);
+  const isCurrent = () =>
+    !signal?.aborted &&
+    ownsPane() &&
+    ownsConnection() &&
+    state.sessionKey === sessionKey &&
+    state.currentSessionId === bookmark.sessionId &&
+    resolveChatAgentId(state) === agentId;
+  const containsBookmark = () =>
+    buildMessageItems(state.chatMessages).some(
+      (item) =>
+        item.key === bookmark.messageKey &&
+        nativeHistoryMessageSourceIdentity(item.message) === bookmark.source,
+    );
+  if (!isCurrent()) {
+    return signal?.aborted ? undefined : false;
+  }
+  if (containsBookmark()) {
+    return true;
+  }
+  try {
+    // A saved inner offset needs surrounding rows. A boundary's one-source
+    // reopen can clamp a short target to the bottom before that offset is reached.
+    const result = await loadOlderChatHistoryPage(
+      state,
+      { messageId: bookmark.messageId, sessionId: bookmark.sessionId },
+      signal,
+      isCurrent,
+    );
+    if (!isCurrent()) {
+      return signal?.aborted ? undefined : false;
+    }
+    if (!result) {
+      throw new Error(t("chat.thread.earlierInterrupted"));
+    }
+    if (requiresChatHistoryReload(result, bookmark.sessionId)) {
+      await reloadChatHistoryWindow(state);
+      return signal?.aborted ? undefined : false;
+    }
+    if (
+      !buildMessageItems(result.messages ?? []).some(
+        (item) =>
+          item.key === bookmark.messageKey &&
+          nativeHistoryMessageSourceIdentity(item.message) === bookmark.source,
+      )
+    ) {
+      throw new Error(t("chat.messages.originalUnavailable"));
+    }
+    admitChatHistoryPages(state, [result], "around");
+    if (!containsBookmark()) {
+      throw new Error(t("chat.messages.originalUnavailable"));
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      state.lastError = error instanceof Error ? error.message : String(error);
+    }
+    return signal?.aborted ? undefined : false;
   }
 }
 
@@ -146,6 +236,7 @@ export async function loadChatHistory(
     inFlight.refresh = refresh;
     return refresh.promise;
   }
+  const sourceReceipt: { emptySource?: ChatHistoryStartCapability } = {};
   const promise = hydrateChatHistory(
     state,
     client,
@@ -156,6 +247,7 @@ export async function loadChatHistory(
     method,
     inputRunIds,
     requestKeyPrefix,
+    sourceReceipt,
   ).then((result) => {
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.request === promise) {
@@ -177,6 +269,7 @@ export async function loadChatHistory(
           sessionKey,
           requestAgentId,
           sessionInfo: result.sessionInfo,
+          emptySource: sourceReceipt.emptySource,
           // A read begun during creation cannot prove that its provisional key expired.
           sessionId: historySessionId(result) ?? (creationPending ? undefined : null),
         });
@@ -278,3 +371,41 @@ export type ChatEventPayload = {
   localModelMayStillBeFinishing?: boolean;
   yielded?: true;
 };
+
+export function restoreChatHistoryTail(
+  state: ChatHistoryHost & ChatScrollHost,
+  options?: { smooth?: boolean },
+): void {
+  // Latest owns the intent now, before deferred scrolling or a held page can settle.
+  state.chatCancelScroll?.();
+  const scroll = () => {
+    resetChatScroll(state);
+    scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
+  };
+  if (state.chatHistoryPagination.hasNewer) {
+    const ownsConnection = captureChatConnectionOwner(state);
+    const sessionKey = state.sessionKey;
+    const agentId = resolveChatAgentId(state);
+    state.beforeHistoryTailRestore?.();
+    const intent = beginChatScrollIntent(state);
+    const isCurrent = () =>
+      intent.isCurrent() &&
+      ownsConnection() &&
+      state.sessionKey === sessionKey &&
+      resolveChatAgentId(state) === agentId;
+    void reloadChatHistoryWindow(state, intent.isCurrent)
+      .then(() => {
+        if (isCurrent()) {
+          scroll();
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent()) {
+          state.lastError = formatChatHistoryLoadError(error);
+        }
+      })
+      .finally(intent.cancel);
+  } else {
+    scroll();
+  }
+}

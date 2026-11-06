@@ -20,6 +20,8 @@ import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import {
   observeTranscriptOffset,
+  isTranscriptMaintenanceScroll,
+  isTranscriptProgrammaticScroll,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -167,15 +169,17 @@ it("publishes native scroll policy and row position in one Solid update", async 
     });
     virtualizer.scrollElement = viewport;
     virtualizer.targetWindow = window;
+    const offsetState = new TranscriptOffsetState();
     onTestFinished(
       observeTranscriptOffset(
         {
-          state: new TranscriptOffsetState(),
+          state: offsetState,
           getScrollElement: () => viewport,
           endAnchor: new TranscriptEndAnchor(() => {}),
           prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
           canFollowEnd: () => false,
-          isProgrammaticScroll: () => false,
+          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(offsetState, viewport),
+          isMaintenanceScroll: () => isTranscriptMaintenanceScroll(offsetState, viewport),
           cancelScroll: vi.fn(),
           onLayoutCorrection: vi.fn(),
           invalidate: vi.fn(),

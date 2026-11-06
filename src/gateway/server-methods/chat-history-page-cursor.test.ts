@@ -1,6 +1,14 @@
+import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { admitChatHistoryPages } from "../../../ui/src/pages/chat/chat-history-snapshot.ts";
+import { prepareChatHistorySegment } from "../../../ui/src/pages/chat/chat-history-window.ts";
+import { makeChatHost } from "../../../ui/src/pages/chat/chat-host.test-support.ts";
+import {
+  getChatSessionProjection,
+  publishChatSessionProjection,
+} from "../../../ui/src/pages/chat/history-merge.ts";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptEvent,
@@ -9,6 +17,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { decodeChatHistoryPageCursor } from "../chat-history-page-cursor.js";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import {
@@ -123,6 +132,53 @@ it("keeps every source fragment when a one-message tail is followed by older his
     expect(older.hasMore).toBe(false);
   });
 });
+
+it.each(["olderCursor", "newerCursor"] as const)(
+  "refines the same %s from eighty raw sources to one complete projected source",
+  async (direction) => {
+    await withHistoryState(async () => {
+      const fragments = Array.from({ length: 401 }, (_, index) => ({
+        type: "text",
+        text: `Fragment ${index}`,
+        textSignature: JSON.stringify({ v: 1, id: `fragment-${index}`, phase: "commentary" }),
+      }));
+      const { read } = await seedHistory([
+        makeMessage("Before", { role: "user" }),
+        { role: "assistant", content: fragments },
+        makeMessage("After", { role: "user" }),
+      ]);
+      const initial = await read({
+        messageId: direction === "olderCursor" ? "message-2" : "message-0",
+        limit: 1,
+      });
+      const cursor = expectDefined(initial[direction], "original opaque edge");
+      const broad = await read({ cursor, limit: 80, maxBytes: 256 * 1024 });
+      const refined = await read({ cursor, limit: 1, maxBytes: 256 * 1024 });
+      expect(messageIds(broad)).toEqual(
+        direction === "olderCursor"
+          ? ["message-0", ...Array.from({ length: 401 }, () => "message-1")]
+          : [...Array.from({ length: 401 }, () => "message-1"), "message-2"],
+      );
+      expect(messageIds(refined)).toEqual(Array.from({ length: 401 }, () => "message-1"));
+      expect(refined.messages).toEqual(
+        (broad.messages as unknown[]).filter(
+          (message) => readChatHistoryMessageId(message) === "message-1",
+        ),
+      );
+      const continuation = await read({
+        cursor: expectDefined(refined[direction], "refined opaque continuation"),
+        limit: 1,
+      });
+      expect(messageIds(continuation)).toEqual([
+        direction === "olderCursor" ? "message-0" : "message-2",
+      ]);
+      const reverse = direction === "olderCursor" ? "newerCursor" : "olderCursor";
+      expect(messageIds(await read({ cursor: continuation[reverse], limit: 1 }))).toEqual(
+        messageIds(refined),
+      );
+    });
+  },
+);
 
 it.each(["anchor", "tail", "offset"] as const)(
   "walks both sides of a byte-limited %s page without gaps and rejects replaced transcripts",
@@ -239,6 +295,80 @@ it.each([false, true])("terminates a hidden prefix with tool-only tail=%s", asyn
         undefined,
       ]);
     }
+  });
+});
+
+it("consumes a sparse empty tail's raw cursor after an earlier live receipt is admitted", async () => {
+  await withHistoryState(async () => {
+    const { read } = await seedHistory([
+      { role: "user", content: "Earlier question" },
+      { role: "user", content: "Late user receipt" },
+      makeMessage("Visible reply before the hidden suffix"),
+      ...Array.from({ length: 300 }, () => makeMessage("x".repeat(1024), { display: false })),
+    ]);
+    const tail = await read({ limit: 1, maxBytes: 1024 });
+    expect(tail).toMatchObject({ messages: [], hasMore: true });
+    expect(tail.newerCursor).toBeUndefined();
+    const cursor = expectDefined(
+      typeof tail.olderCursor === "string" ? tail.olderCursor : undefined,
+      "sparse raw older cursor",
+    );
+    const receiptPage = await read({ messageId: "message-1", limit: 1 });
+    expect(messageIds(receiptPage)).toEqual(["message-1"]);
+    const receipt = expectDefined(
+      Array.isArray(receiptPage.messages) ? receiptPage.messages[0] : undefined,
+      "durable user receipt",
+    );
+    const pagination = { hasMore: true as const, olderCursor: cursor };
+    const live = reduceSessionProjection(createSessionProjection(), {
+      type: "messagePersisted",
+      message: receipt,
+    });
+    const host = makeChatHost({
+      sessionKey: scope.sessionKey,
+      currentSessionId: scope.sessionId,
+      chatHistoryPagination: {
+        ...pagination,
+        segments: [prepareChatHistorySegment([], pagination)],
+      },
+    });
+    publishChatSessionProjection(host, live);
+    publishChatSessionProjection(host, getChatSessionProjection(host));
+    expect(host.chatMessages).toEqual([receipt]);
+    expect(host.chatHistoryPagination).toMatchObject({ hasMore: true, olderCursor: cursor });
+    expect(host.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([
+      "id:message-1",
+    ]);
+
+    const older = await read({ cursor, limit: 80, maxBytes: 256 * 1024 });
+    expect(messageIds(older)).toEqual(["message-0", "message-1", "message-2"]);
+    expect(older.olderCursor).toBeUndefined();
+    const messages = expectDefined(
+      Array.isArray(older.messages) ? older.messages : undefined,
+      "older messages",
+    );
+    const result = {
+      messages,
+      newerCursor: typeof older.newerCursor === "string" ? older.newerCursor : undefined,
+    };
+    expect(admitChatHistoryPages(host, [result], "older")).toBe("messages");
+    const expected = ["message-0", "message-1", "message-2"];
+    expect(host.chatMessages.map(readChatHistoryMessageId)).toEqual(expected);
+    expect(host.chatHistoryPagination.hasMore).toBe(false);
+    expect(host.chatHistoryPagination.hasNewer).toBeUndefined();
+    expect(host.chatHistoryPagination.segments?.[0]?.sources).toEqual(
+      expected.map((id) => `id:${id}`),
+    );
+    expect(host.chatHistoryPagination.segments?.at(-1)).toMatchObject({
+      sources: [],
+      olderCursor: cursor,
+      hasOlder: true,
+      hasNewer: false,
+    });
+    expect(admitChatHistoryPages(host, [result], "older")).toBe(false);
+    expect(host.chatMessages.map(readChatHistoryMessageId)).toEqual(expected);
+    expect(host.chatHistoryPagination.hasMore).toBe(false);
+    expect(host.chatHistoryPagination.hasNewer).toBeUndefined();
   });
 });
 
@@ -390,3 +520,48 @@ it("keeps recovery context when an older cursor excludes the successful boundary
     ]);
   });
 });
+
+it.each(["source ID", "tool identity"])(
+  "publishes a bounded unavailable source with oversized %s in the resident transcript",
+  (oversized) => {
+    const messages = [1, 2, 3].map((seq) =>
+      Object.assign(
+        {
+          role: "assistant",
+          content: `Message ${seq}`,
+          __openclaw: { id: `source-${seq}`, seq },
+        },
+        seq === 2
+          ? oversized === "source ID"
+            ? { __openclaw: { id: "z".repeat(4000), seq } }
+            : { role: "toolResult", toolName: "z".repeat(4000), toolCallId: "call" }
+          : {},
+      ),
+    );
+    const page = prepareChatHistoryResponsePage(
+      {
+        messages,
+        pagination: { offset: 0, totalMessages: 3, rawPageMessages: 3 },
+      },
+      { entry: undefined, maxHistoryBytes: 1024, messageId: undefined },
+    );
+    expect(page.messages).toHaveLength(3);
+    expect(page.messages[1]).toMatchObject({
+      content: [{ text: expect.stringContaining("chat.history unavailable") }],
+    });
+    expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(1024);
+    const host = makeChatHost({ sessionKey: scope.sessionKey, currentSessionId: scope.sessionId });
+    expect(admitChatHistoryPages(host, [page], "around")).toBe("messages");
+    expect(host.chatMessages).toEqual(page.messages);
+    expect(page.messages[1]).toHaveProperty("__openclaw", { seq: 2 });
+    expect(host.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([
+      "id:source-1",
+      "seq:2",
+      "id:source-3",
+    ]);
+    publishChatSessionProjection(host, getChatSessionProjection(host));
+    expect(host.chatMessages).toEqual(page.messages);
+    expect(host.chatHistoryPagination.hasMore).toBe(false);
+    expect(host.chatHistoryPagination.hasNewer).toBeUndefined();
+  },
+);

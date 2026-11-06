@@ -1,10 +1,13 @@
-import { vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { StagedOlderHistoryPage } from "./chat-history-request.ts";
+import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   createRenderTestChatPane,
   createTestChatPane as createBaseTestChatPane,
@@ -13,7 +16,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import { resetChatScroll } from "./scroll.ts";
 
-export { nativeHistoryMessage } from "./chat-pane.test-support.ts";
+export { nativeHistoryMessage, transcriptScrollFact } from "./chat-pane.test-support.ts";
 
 export function createRefreshChatPane(client?: GatewayBrowserClient) {
   const baseContext = createInitializationContext();
@@ -32,11 +35,16 @@ export function createRefreshChatPane(client?: GatewayBrowserClient) {
   return { pane, state, context };
 }
 
-export type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
+type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
   loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
-  stagedOlder: { page: unknown; load: Promise<void> | null };
+  loadNewerMessages: () => Promise<boolean>;
+  stagedHistory: {
+    controller: AbortController;
+    page: StagedOlderHistoryPage | null;
+    load: Promise<void> | null;
+  };
   replyMessageStatus: (messageId: string) => string | undefined;
-  openReplyMessage: (messageId: string) => void;
+  openReplyMessage: (messageId: string) => Promise<void>;
   currentReplyNavigationId: (sessionKey: string) => string | null;
   visuallyPresented: boolean;
 };
@@ -59,13 +67,23 @@ export function createTestChatPane(
   return { pane, state };
 }
 
+export function expectNativeHistoryRange(
+  messages: readonly unknown[],
+  first: number,
+  count: number,
+) {
+  expect(messages.map(nativeHistorySeq)).toEqual(
+    Array.from({ length: count }, (_, index) => first + index),
+  );
+}
+
 export function nativeHistorySeq(message: unknown): number | undefined {
   const metadata = (message as { __openclaw?: { seq?: unknown } })["__openclaw"];
   return typeof metadata?.seq === "number" ? metadata.seq : undefined;
 }
 
 export function appendChatThread(
-  pane: TestChatPane,
+  pane: Pick<BaseTestChatPane, "append" | "transcript">,
   options: { clientHeight?: number; scrollHeight?: number; scrollTop?: number } = {},
 ) {
   const thread = document.createElement("div");
@@ -101,8 +119,10 @@ export function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>) {
   return { ...result, scrollToOffset, thread };
 }
 
-export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}) {
-  const pages: Record<number, () => unknown> = { ...overrides };
+type HistoryPageFactory = () => ChatHistoryResult | Promise<ChatHistoryResult>;
+
+export function stagedPagesRequest(overrides: Record<number, HistoryPageFactory> = {}) {
+  const pages: Record<number, HistoryPageFactory> = { ...overrides };
   for (const offset of [2, 4, 6]) {
     pages[offset] ??= () => ({
       messages: [7 - offset, 8 - offset].map((seq) => nativeHistoryMessage(seq)),
@@ -122,3 +142,111 @@ export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}
 
 export const createStagedPrefetchPane = (request: ReturnType<typeof vi.fn>) =>
   createPaginatedChatPane(request, 7);
+
+type HistoryPageOverrides = Partial<Omit<ChatHistoryResult, "messages">>;
+
+export function historyPage(seqs = [1, 2], extra: HistoryPageOverrides = {}) {
+  return {
+    messages: seqs.map((seq) => nativeHistoryMessage(seq)),
+    ...pagination(),
+    ...extra,
+  };
+}
+
+export function packetHistoryPane(total = 480) {
+  const packet = (start: number, end: number): ChatHistoryResult => ({
+    messages: Array.from({ length: end - start + 1 }, (_, index) =>
+      nativeHistoryMessage(start + index),
+    ),
+    hasMore: start > 1,
+    ...(start > 1 ? { olderCursor: `older-${start - 1}` } : {}),
+    ...(end < total ? { newerCursor: `newer-${end + 1}` } : {}),
+    totalMessages: total,
+  });
+  const request = vi.fn(async (_method: string, params: { cursor: string }) => {
+    const [direction, raw] = params.cursor.split("-");
+    const edge = Number(raw);
+    return direction === "older"
+      ? packet(Math.max(1, edge - 79), edge)
+      : packet(edge, Math.min(total, edge + 79));
+  });
+  const { pane, state } = createTestChatPane({
+    client: { request } as unknown as GatewayBrowserClient,
+  });
+  admitChatHistoryPages(state, [packet(total - 79, total)], "around");
+  let reader = `seq:${total - 40}`;
+  state.readTranscriptReaderSnapshot = () => ({
+    anchor: reader,
+    visibleSources: reader ? [reader] : [],
+  });
+  return {
+    pane,
+    state,
+    request,
+    moveReader: (seq: number) => {
+      reader = `seq:${seq}`;
+    },
+  };
+}
+
+export function sparsePrefetchRequest(overrides: Record<number, HistoryPageFactory> = {}) {
+  return stagedPagesRequest({
+    2: () => historyPage([], pagination(20, 4)),
+    4: () => historyPage([], pagination(20, 6)),
+    6: () => historyPage([], pagination(20, 8)),
+    8: () => historyPage([5, 6], pagination(20, 10)),
+    10: () => historyPage([3, 4], pagination(20, 12)),
+    12: () => historyPage([1, 2], pagination(20)),
+    ...overrides,
+  });
+}
+
+export function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPagination {
+  return nextOffset === undefined
+    ? { hasMore: false, totalMessages }
+    : { hasMore: true, nextOffset, olderCursor: `older-${nextOffset}`, totalMessages };
+}
+
+export function installHistoryObserver(intersect = true) {
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  const construct =
+    vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
+  let rootMargin: string | undefined;
+  class FakeIntersectionObserver {
+    readonly root: IntersectionObserver["root"] | undefined;
+    constructor(
+      private readonly callback: IntersectionObserverCallback,
+      options?: IntersectionObserverInit,
+    ) {
+      rootMargin = options?.rootMargin;
+      this.root = intersect ? undefined : (options?.root ?? null);
+      construct(callback, this as unknown as IntersectionObserver);
+    }
+    disconnect() {
+      disconnect();
+    }
+    observe(target: Element) {
+      observe(target);
+      if (intersect) {
+        this.callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+  }
+  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  return { observe, disconnect, construct, rootMargin: () => rootMargin };
+}
+
+export function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
+  const sentinel = document.createElement("div");
+  sentinel.className = "chat-history-sentinel";
+  thread.append(sentinel);
+  pane.historySentinel = sentinel;
+  return sentinel;
+}

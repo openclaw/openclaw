@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import { handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
+import { canAutoFollowChat, handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
@@ -42,8 +42,9 @@ function contentRow(key: string, label = key): TestContentRow {
 function createPolicyTranscript(paneId: string) {
   const policy = makeChatHost({ chatHasAutoScrolled: true });
   const transcript = makeTranscript(() => paneId, {
-    canFollowEnd: () => !policy.chatFollowLocked,
+    canFollowEnd: () => canAutoFollowChat(policy),
     onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+    onNativeScroll: (scroll) => handleChatScroll(policy, scroll),
   });
   return {
     policy,
@@ -107,9 +108,6 @@ function connectPolicy(
   policy.chatScrollElement = () => container;
   policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
   policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
-  const onScroll = (event: Event) => handleChatScroll(policy, event);
-  container.addEventListener("scroll", onScroll);
-  cleanups.push(() => container.removeEventListener("scroll", onScroll));
 }
 async function mountRestoration(paneId: string, height: number) {
   const flushFrames = stubAnimationFrames();
@@ -347,7 +345,7 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   };
   policy.chatScrollElement = () => container;
   policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
-  container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
+  policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
   resize(container, 600);
   flushFrames();
   nativeScroll(container, total + 84 - 600);

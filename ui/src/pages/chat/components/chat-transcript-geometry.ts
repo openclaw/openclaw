@@ -1,4 +1,4 @@
-import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
+import type { Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
@@ -136,10 +136,18 @@ export function isTranscriptRangeCommitted(
   });
 }
 
+export function readTranscriptRowHeight(element: HTMLElement): number {
+  // Rows are border-boxes; CSS layout height stays fractional and unscaled
+  // inside board/sidebar transitions.
+  const height = Number.parseFloat(getComputedStyle(element).height);
+  return Number.isFinite(height) ? height : element.offsetHeight;
+}
+
 export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   rowElements: Iterable<HTMLElement>,
+  onMeasured?: (row: HTMLElement, height: number) => void,
 ): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
@@ -152,7 +160,7 @@ export function readConnectedTranscriptRows(
   }
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
-  const measurements: Array<{ index: number; height: number }> = [];
+  const measurements: Array<{ row: HTMLElement; index: number; height: number }> = [];
   // Refs can arrive out of order during prepends; preserve DOM-order corrections.
   const rows = [...rowElements]
     .filter((row) => scrollElement.contains(row) && row.dataset.preparedRow !== "true")
@@ -161,12 +169,14 @@ export function readConnectedTranscriptRows(
     );
   for (const row of rows) {
     const index = virtualizer.indexFromElement(row);
-    // Rows are border-boxes; read their fractional layout height, not a scaled
-    // client rect when a containing board or sidebar is transitioning.
-    const height = Number.parseFloat(getComputedStyle(row).height);
-    measurements.push({ index, height: Number.isFinite(height) ? height : row.offsetHeight });
+    measurements.push({ row, index, height: readTranscriptRowHeight(row) });
   }
   return () => {
+    // A positioning owner accounts for these native facts before virtual writes can
+    // notify or retire it. Persisted virtual footprints are not native measurements.
+    for (const { row, height } of measurements) {
+      onMeasured?.(row, height);
+    }
     let changed = false;
     for (const { index, height } of measurements) {
       const key = virtualizer.options.getItemKey(index);
@@ -186,12 +196,13 @@ export function measureTranscriptRow(
   const parked =
     element.dataset.preparedRow === "true" && !element.hasAttribute("data-preparing-row");
   if (!parked && (entry || !virtualizer.targetWindow?.ResizeObserver)) {
-    // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const box = entry?.borderBoxSize?.[0];
-    const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
-    // A deferred zero can describe a hidden pane or an earlier parked row.
-    // Preserve that geometry even if the pane or row is visible again.
-    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
+    // TanStack defers observer entries; they can predate a foreground read.
+    // Treat delivery as invalidation so old sizes cannot roll that read back.
+    const size = readTranscriptRowHeight(element);
+    if (
+      size !== 0 ||
+      (element.getBoundingClientRect().width !== 0 && virtualizer.scrollElement?.clientHeight !== 0)
+    ) {
       return size;
     }
   }

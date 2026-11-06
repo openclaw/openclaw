@@ -6,6 +6,7 @@ import {
 } from "../../../../src/infra/agent-activity-events.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory,
@@ -24,6 +25,7 @@ import {
 import { loadChatHistory } from "./chat-history.ts";
 import {
   admitChatSubmission,
+  getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
@@ -378,7 +380,10 @@ it.each([
     kind === "shorter replacement"
       ? []
       : kind === "ordered live baseline"
-        ? [message("user", "Continue"), message("assistant", "Saved.")]
+        ? [
+            message("user", "Continue", { id: "prompt", seq: 1 }),
+            message("assistant", "Saved.", { id: "saved", seq: 2 }),
+          ]
         : [
             message("user", "Continue", { id: "prompt", seq: 1, runId }),
             message("assistant", "Saved.", { id: "saved", seq: 2, runId }),
@@ -425,6 +430,60 @@ it("does not resurrect delayed history after a newer intervening run completes",
   response.resolve(history);
   await loading;
   expect(state).toMatchObject({ chatRunId: null, chatStream: null });
+});
+
+it("adopts buffered history after the same run starts without a message", async () => {
+  const history = activeSnapshot("run-started", "Buffered history.");
+  const { state, response } = delayed(history);
+  const loading = loadChatHistory(state);
+  emit(state, "run-started", { state: "delta", seq: 1 });
+  response.resolve(history);
+  await loading;
+  expect(state.chatRunId).toBe("run-started");
+  expect(tail(state)).toBe("Buffered history.");
+});
+
+it("releases an unrelated body during pending history without treating retirement as activity", async () => {
+  const history = activeSnapshot("run-recovered", "Buffered history.");
+  const { state, response } = delayed(history);
+  const seed = () => {
+    const content = [{ type: "text", text: "retired body ".repeat(4_000) }];
+    const body = { role: "assistant", content, __openclaw: { id: "old-body", seq: 1 } };
+    reduceChatSessionProjection(state, {
+      type: "runTerminal",
+      runId: "old-run",
+      status: "completed",
+      message: body,
+    });
+    const pinned = message("assistant", "retained error");
+    reduceChatSessionProjection(state, {
+      type: "runTerminal",
+      runId: "error-pin",
+      status: "error",
+      message: pinned,
+    });
+    return {
+      body: new WeakRef(body),
+      content: new WeakRef(content),
+      pinned: new WeakRef(pinned),
+      control: new WeakRef({}),
+    };
+  };
+  const references = seed();
+  const loading = loadChatHistory(state);
+  const revision = getChatSessionProjection(state).runs["old-run"]?.revision;
+  reduceChatSessionProjection(state, { type: "residencyChanged", messages: [] });
+  expect(getChatSessionProjection(state).runs["old-run"]?.revision).toBe(revision);
+  const alive = (reference: WeakRef<object>) => reference.deref() !== undefined;
+  await collectGarbageForTest();
+  expect(alive(references.control)).toBe(false);
+  expect(alive(references.body)).toBe(false);
+  expect(alive(references.content)).toBe(false);
+  expect(alive(references.pinned)).toBe(true);
+  response.resolve(history);
+  await loading;
+  expect(state.chatRunId).toBe("run-recovered");
+  expect(tail(state)).toBe("Buffered history.");
 });
 
 it("retains newer live startup progress through delayed history", async () => {

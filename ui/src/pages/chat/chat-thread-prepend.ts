@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { transcriptMessageSourceKey } from "./chat-thread-items.ts";

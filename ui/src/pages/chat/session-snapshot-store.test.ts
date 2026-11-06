@@ -11,13 +11,15 @@ import {
 } from "../../lib/chat/control-ui-database.runtime.ts";
 import { chatThumbnailWeight } from "../../lib/chat/row-display-facts.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   cacheChatSessionSnapshot,
+  applyChatCacheSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
@@ -220,6 +222,141 @@ describe("persistent chat session snapshots", () => {
   const { connected, makeStore } = useSessionSnapshotStoreFixture();
   beforeEach(() => {
     writer = makeStore();
+  });
+
+  it.each([true, false])(
+    "reopens both detached cache boundaries after store restore (trim: %s)",
+    async (trim) => {
+      const messages = Array.from({ length: trim ? 400 : 80 }, (_, index) => ({
+        role: "assistant",
+        content: `message-${index + 81}`,
+        __openclaw: { id: `source-${index + 81}`, seq: index + 81 },
+      }));
+      await seed({
+        messages,
+        sessionId: "session-1",
+        pagination: {
+          hasMore: true,
+          hasNewer: true,
+          ...(trim
+            ? { olderCursor: "before-81", newerCursor: "after-480" }
+            : { needsBoundary: true, needsNewerBoundary: true }),
+        },
+      });
+      const restored = await readSnapshot();
+      assert(restored);
+      expect(restored.messages).toEqual(messages.slice(-80));
+      expect(restored.pagination).toMatchObject({
+        hasMore: true,
+        needsBoundary: true,
+        hasNewer: true,
+        needsNewerBoundary: true,
+      });
+      expect(restored.pagination.segments).toBeUndefined();
+      const host = makeChatHost();
+      applyChatCacheSnapshot(host, restored);
+      expect(host.chatMessages).toEqual(restored.messages);
+      expect(host.chatHistoryPagination).toMatchObject({
+        hasMore: true,
+        needsBoundary: true,
+        hasNewer: true,
+        needsNewerBoundary: true,
+      });
+      expect(host.chatHistoryPagination.newerCursor).toBeUndefined();
+    },
+  );
+
+  it.each([true, false])(
+    "serializes the admitted intrinsic fact only while its source survives disk trimming (retained=%s)",
+    async (retained) => {
+      const giant = Array.from({ length: 401 }, (_, index) => ({
+        role: "assistant",
+        content: `fragment-${index}`,
+        __openclaw: { id: "giant", seq: retained ? 90 : 1 },
+      }));
+      const ordinary = Array.from({ length: 89 }, (_, index) => ({
+        role: "user",
+        content: `message-${index}`,
+        __openclaw: { id: `ordinary-${index}`, seq: index + (retained ? 1 : 2) },
+      }));
+      await seed({
+        messages: retained ? [...ordinary, ...giant] : [...giant, ...ordinary],
+        sessionId: "session-1",
+        pagination: { hasMore: false, intrinsicSource: "id:giant" },
+      });
+      const stored = await readStoredChatSnapshotRecord(sessionKey);
+      expect(stored).toBeDefined();
+      const restored = await readSnapshot();
+      assert(restored);
+      expect(restored.messages).toEqual(retained ? giant : ordinary.slice(-80));
+      expect(restored.pagination.intrinsicSource).toBe(retained ? "id:giant" : undefined);
+      const host = makeChatHost();
+      applyChatCacheSnapshot(host, restored);
+      expect(host.chatMessages).toEqual(restored.messages);
+      expect(host.chatHistoryPagination.intrinsicSource).toBe(retained ? "id:giant" : undefined);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves only admitted intact packet provenance through strict store restore (certified=%s)",
+    async (certified) => {
+      const messages = [1, 2].map((seq) => ({
+        role: "assistant",
+        content: "message-" + seq,
+        __openclaw: { seq },
+      }));
+      await seed({
+        messages,
+        sessionId: "session-1",
+        pagination: {
+          hasMore: true,
+          olderCursor: "before-1",
+          hasNewer: true,
+          newerCursor: "after-2",
+          ...(certified
+            ? {
+                segments: [
+                  {
+                    sources: ["seq:1", "seq:2"],
+                    olderCursor: "before-1",
+                    newerCursor: "after-2",
+                    hasOlder: true,
+                    hasNewer: true,
+                    boundedPacket: true,
+                  },
+                ],
+              }
+            : {}),
+        },
+      });
+      const restored = await readSnapshot();
+      assert(restored);
+      expect(restored.messages).toEqual(messages);
+      const host = makeChatHost();
+      applyChatCacheSnapshot(host, restored);
+      expect(host.chatHistoryPagination.segments?.[0]?.boundedPacket).toBe(
+        certified ? true : undefined,
+      );
+      expect(host.chatHistoryPagination).toMatchObject({
+        olderCursor: "before-1",
+        newerCursor: "after-2",
+      });
+    },
+  );
+
+  it("preserves authoritative empty coverage through store read and cache application", async () => {
+    await seed({
+      messages: [],
+      sessionId: null,
+      pagination: { hasMore: false, completeSnapshot: true },
+    });
+    const restored = await readSnapshot();
+    assert(restored);
+    const host = makeChatHost();
+    applyChatCacheSnapshot(host, restored);
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatHistoryPagination).toMatchObject({ hasMore: false, completeSnapshot: true });
+    expect(host.chatHistoryPagination.hasNewer).toBeUndefined();
   });
 
   it("releases one read scope without retiring another reader or its replacement", () => {
@@ -498,14 +635,24 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
-  it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
-    await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 10));
-    if (mode === "prewarmed") {
-      void prewarmChatSnapshot(sessionKey);
-    }
-    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
-  });
+  it.each([
+    { mode: "direct", projectionVersion: 1 },
+    { mode: "prewarmed", projectionVersion: 1 },
+    { mode: "direct", projectionVersion: 10 },
+    { mode: "prewarmed", projectionVersion: 10 },
+    { mode: "direct", projectionVersion: 13 },
+    { mode: "prewarmed", projectionVersion: 13 },
+  ])(
+    "discards the previous projection ($mode, version $projectionVersion)",
+    async ({ mode, projectionVersion }) => {
+      await persist(writer, sessionKey, snapshot("current"));
+      await putRawRecord(envelope(sessionKey, snapshot("old"), projectionVersion));
+      if (mode === "prewarmed") {
+        void prewarmChatSnapshot(sessionKey);
+      }
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    },
+  );
 
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {
     const privateKey = "agent:main:dashboard:incognito-old";
@@ -663,24 +810,32 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
-  it.each([1, 7])("upgrades schema v%s without retaining obsolete transcripts", async (version) => {
-    const names = version === 1 ? [SNAPSHOTS] : [SNAPSHOTS, METADATA, SIDEBAR];
-    const database = await openDatabase(version, names);
-    const transaction = database.transaction(names, "readwrite");
-    const record = { sessionKey, payload: "retained" };
-    for (const name of names) {
-      transaction.objectStore(name).put(record);
-    }
-    await transactionDone(transaction);
-    database.close();
-    const reader = new SessionSnapshotStore();
-    await (version === 1 ? reader.delete(sessionKey) : reader.loadSavedAtIndex());
-    expect(await readRawRecord(sessionKey)).toBeUndefined();
-    expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
-    if (version === 7) {
-      expect(await readRawRecord(sessionKey, SIDEBAR)).toEqual(record);
-    }
-  });
+  it.each([1, 4, 7])(
+    "upgrades schema v%s without retaining obsolete transcripts",
+    async (version) => {
+      const names =
+        version === 1
+          ? [SNAPSHOTS]
+          : version === 4
+            ? [SNAPSHOTS, METADATA]
+            : [SNAPSHOTS, METADATA, SIDEBAR];
+      const database = await openDatabase(version, names);
+      const transaction = database.transaction(names, "readwrite");
+      const record = { sessionKey, payload: "retained" };
+      for (const name of names) {
+        transaction.objectStore(name).put(record);
+      }
+      await transactionDone(transaction);
+      database.close();
+      const reader = new SessionSnapshotStore();
+      await (version === 1 ? reader.delete(sessionKey) : reader.loadSavedAtIndex());
+      expect(await readRawRecord(sessionKey)).toBeUndefined();
+      expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
+      if (version === 7) {
+        expect(await readRawRecord(sessionKey, SIDEBAR)).toEqual(record);
+      }
+    },
+  );
 
   it.each(["all", "session"] as const)(
     "broadcasts %s invalidation without clearing unrelated peer memory",

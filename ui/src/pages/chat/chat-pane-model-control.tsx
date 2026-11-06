@@ -1,7 +1,7 @@
 import { createMemo } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
-import type { ChatComposerSnapshot } from "./session-message-cache.ts";
+import type { ChatComposerSnapshot } from "./session-snapshot-contract.ts";
 
 export function ChatPaneModelControl(props: {
   model: Parameters<typeof ChatModelControls>[0] & { snapshot?: ChatComposerSnapshot };

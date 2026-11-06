@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { rewindChatHistory } from "./chat-history-actions.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -13,7 +14,7 @@ import {
   persistChatComposerState,
 } from "./composer-draft-storage.ts";
 import { ChatComposerPersistence } from "./composer-persistence.ts";
-import { reduceChatSessionProjection } from "./history-merge.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
@@ -48,43 +49,121 @@ function createRewindHost(
 }
 
 describe("rewind composer ownership", () => {
-  it("keeps the committed prefix visible while rewind history reloads, without retaining its removed tail", async () => {
-    const history = createDeferred<ChatHistoryResult>();
-    const started = createDeferred();
-    const state = createRewindHost(Promise.resolve({ editorText: "edit me" }), undefined, () => {
-      started.resolve();
-      return history.promise;
-    });
-    const prefix = {
-      role: "assistant",
-      content: "Earlier reply",
-      __openclaw: { id: "before", seq: 1 },
-    };
-    const selected = { role: "user", content: "edit me", __openclaw: { id: "selected", seq: 2 } };
-    const removed = {
-      role: "assistant",
-      content: "Old answer",
-      __openclaw: { id: "removed", seq: 3 },
-    };
-    state.chatMessages = [prefix, selected, removed];
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId: "pending-send",
-      message: {
-        role: "user",
-        content: "Pending old send",
-        __openclaw: { idempotencyKey: "pending-send" },
-      },
-    });
-    const pending = rewindChatHistory(state, "selected", new ChatAttachmentReadLifecycle(() => {}));
-    await started.promise;
-    expect(state.chatMessages).toEqual([prefix]);
-    expect(state.chatMessages[0]).toBe(prefix);
-    history.resolve({ messages: [prefix] });
-    await pending;
-    expect(state.chatMessages).toEqual([prefix]);
-    expect(state.chatMessage).toBe("edit me");
-  });
+  it.each(["loaded", "failed"] as const)(
+    "keeps only committed native prefix and retires old coverage while rewind history is %s",
+    async (outcome) => {
+      const history = createDeferred<ChatHistoryResult>();
+      const started = createDeferred();
+      const state = createRewindHost(Promise.resolve({ editorText: "edit me" }), undefined, () => {
+        started.resolve();
+        return history.promise;
+      });
+      const prefix = {
+        role: "assistant",
+        content: "Earlier reply",
+        __openclaw: { id: "before", seq: 1 },
+      };
+      const selected = { role: "user", content: "edit me", __openclaw: { id: "selected", seq: 2 } };
+      const removed = {
+        role: "assistant",
+        content: "Old answer",
+        __openclaw: { id: "removed", seq: 3 },
+      };
+      const prefixPacket = prepareChatHistoryPacket(
+        [prefix],
+        { hasMore: true, olderCursor: "before-old-epoch" },
+        "after-prefix",
+      );
+      expect(prefixPacket.boundedPacket).toBe(true);
+      expect(
+        admitChatHistoryPages(
+          state,
+          [
+            {
+              messages: [prefix],
+              hasMore: true,
+              olderCursor: "before-old-epoch",
+              newerCursor: "after-prefix",
+              packet: prefixPacket,
+            },
+          ],
+          "around",
+        ),
+      ).toBe("messages");
+      const output = { role: "system", content: "Local command result", timestamp: 1 };
+      reduceChatSessionProjection(state, { type: "localOutput", message: output });
+      const newerPacket = prepareChatHistoryPacket(
+        [selected, removed],
+        { hasMore: true, olderCursor: "before-selected" },
+        "after-old-epoch",
+      );
+      expect(newerPacket.boundedPacket).toBe(true);
+      expect(
+        admitChatHistoryPages(
+          state,
+          [
+            {
+              messages: [selected, removed],
+              hasMore: true,
+              olderCursor: "before-selected",
+              newerCursor: "after-old-epoch",
+              packet: newerPacket,
+            },
+          ],
+          "newer",
+        ),
+      ).toBe("messages");
+      reduceChatSessionProjection(state, {
+        type: "sendPending",
+        runId: "pending-send",
+        message: {
+          role: "user",
+          content: "Pending old send",
+          __openclaw: { idempotencyKey: "pending-send" },
+        },
+      });
+      state.readTranscriptReaderSnapshot = () => ({
+        anchor: "id:before",
+        visibleSources: ["id:before"],
+      });
+      expect(state.chatMessages).toEqual([prefix, output, selected, removed, expect.anything()]);
+      expect(state.chatMessages[2]).toBe(selected);
+      expect(
+        getChatSessionProjection(state).entries.find((entry) => entry.message === output),
+      ).toMatchObject({ localOutput: true, afterSequence: 1 });
+      expect(state.chatHistoryPagination).toMatchObject({
+        hasMore: true,
+        olderCursor: "before-old-epoch",
+        hasNewer: true,
+        newerCursor: "after-old-epoch",
+        segments: [prefixPacket, newerPacket],
+      });
+      const pending = rewindChatHistory(
+        state,
+        "selected",
+        new ChatAttachmentReadLifecycle(() => {}),
+      );
+      await started.promise;
+      expect(state.chatMessages).toEqual([prefix]);
+      expect(state.chatMessages[0]).toBe(prefix);
+      expect(state.chatHistoryPagination).toEqual({ hasMore: false });
+      if (outcome === "loaded") {
+        history.resolve({ messages: [prefix] });
+      } else {
+        history.reject(new Error("offline after committed rewind"));
+      }
+      await pending;
+      expect(state.chatMessages).toEqual([prefix]);
+      expect(state.chatMessage).toBe("edit me");
+      expect(state.chatHistoryPagination).toMatchObject({ hasMore: false });
+      expect(state.chatHistoryPagination.hasNewer).not.toBe(true);
+      expect(state.chatHistoryPagination).not.toHaveProperty("olderCursor");
+      expect(state.chatHistoryPagination.newerCursor).toBeUndefined();
+      expect(
+        state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources) ?? [],
+      ).toEqual(outcome === "loaded" ? ["id:before"] : []);
+    },
+  );
 
   it.each(["accepted", "newer draft"] as const)(
     "retires pending attachment reads only for an accepted replacement: %s",
@@ -253,7 +332,11 @@ describe("rewind composer ownership", () => {
       const response = createDeferred<{ editorText: string }>();
       const history = createDeferred<ChatHistoryResult>();
       const requestedHistory = createDeferred();
-      const canonical = { role: "assistant", content: "retained prefix" };
+      const canonical = {
+        role: "assistant",
+        content: "retained prefix",
+        __openclaw: { id: "canonical", seq: 1 },
+      };
       const state = createRewindHost(response.promise, "main", () => {
         requestedHistory.resolve();
         return history.promise;

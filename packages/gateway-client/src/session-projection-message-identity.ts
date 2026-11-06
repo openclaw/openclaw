@@ -187,6 +187,10 @@ export function sameTranscriptIdentity(
 export type SessionProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;
+  /** Client-owned output is transient presentation, never transcript or run custody. */
+  localOutput?: true;
+  /** Explicit source admission placed this transient output before any durable history. */
+  atHistoryStart?: true;
   afterSequence?: number | null;
   live: boolean;
   pending: boolean;

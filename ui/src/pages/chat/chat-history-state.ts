@@ -15,7 +15,11 @@ import type {
 import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  type ChatHistoryStartCapability,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 
 export type InitialChatHistoryReceipt = {
@@ -70,6 +74,7 @@ type ChatHistoryLoadState =
       requestAgentId: string | undefined;
       sessionInfo: ChatHistoryResult["sessionInfo"];
       sessionId?: string | null;
+      emptySource?: ChatHistoryStartCapability;
     }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
@@ -260,6 +265,22 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
+/** Absence-sensitive placement requires the accepted read to remain the current load. */
+export function readChatHistoryStartCapability(
+  state: ChatState,
+): ChatHistoryStartCapability | undefined {
+  const load = getChatHistoryLoadState(state);
+  return load.phase === "committed" &&
+    load === chatHistoryRequests(state).acceptedHistory &&
+    state.connected &&
+    load.client === state.client &&
+    load.sessions === state.sessions &&
+    load.connectionEpoch === state.connectionEpoch &&
+    load.sessionKey === state.sessionKey
+    ? load.emptySource
+    : undefined;
+}
+
 /** Same-session refreshes retain the accepted transcript's identity until replacement commits. */
 export function getAcceptedChatHistorySession(state: ChatState) {
   const accepted = chatHistoryRequests(state).acceptedHistory;
@@ -429,7 +450,11 @@ export function readChatTranscriptAttachmentSource(state: ChatState) {
     connectionEpoch: state.connectionEpoch,
     messages: state.chatMessages,
     pagination: state.chatHistoryPagination,
-    coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
+    coverage: known
+      ? state.chatHistoryPagination.hasMore || state.chatHistoryPagination.hasNewer
+        ? "partial"
+        : "complete"
+      : "unknown",
     loading: isChatHistoryLoading(load),
     error: load.phase === "failed" ? load.message : undefined,
   } as const;

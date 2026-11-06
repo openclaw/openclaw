@@ -13,6 +13,7 @@ import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import { contentRows, emitTranscriptResize } from "./chat-transcript-fixture.test-support.tsx";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
@@ -26,8 +27,7 @@ import {
 const fixtureCleanups: Array<() => void> = [];
 const ownFixture = (cleanup: () => void) => fixtureCleanups.push(cleanup);
 
-function threadFixture(props: ReturnType<typeof threadProps>) {
-  const transcript = createTestTranscript();
+function threadFixture(props: ReturnType<typeof threadProps>, transcript = createTestTranscript()) {
   const container = document.body.appendChild(document.createElement("div"));
   const view = mountThread(container, transcript);
   ownFixture(() => {
@@ -522,9 +522,14 @@ describe("conversation position rail", () => {
     const props = threadProps("rail-interaction", "agent:main:first", messages);
     const historyIntent = vi.fn();
     props.onHistoryIntent = historyIntent;
-    const { transcript, container, view, rerender, markers, preview, query } = threadFixture(props);
+    const { transcript, container, view, rerender, markers, preview, query } = threadFixture(
+      props,
+      createChatTranscript(() => props.paneId, { onHistoryIntent: historyIntent }),
+    );
     rerender();
     transcript.start();
+    // The stable DOM ref attaches native input observers in its queued microtask.
+    await Promise.resolve();
     expect(markers()).toHaveLength(40);
     // Rail wheel input belongs to its scrollport, never transcript history.
     for (const type of ["wheel", "touchstart", "touchmove"]) {

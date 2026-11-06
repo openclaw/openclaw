@@ -7,6 +7,10 @@ import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-application-context.test-support.ts";
+import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+} from "./chat-history-request-params.ts";
 import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import { createRenderTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
@@ -198,13 +202,14 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     // owns reader intent after leaving the maintenance target.
     container.scrollTop = 720;
     container.dispatchEvent(new Event("scroll"));
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "chat.history",
       {
         sessionKey: state.sessionKey,
-        limit: 1000,
-        maxBytes: 3 * 1024 * 1024,
+        limit: CHAT_HISTORY_REQUEST_LIMIT,
+        maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
         toolResultMaxChars: 2_000,
         cursor: "older-2",
       },

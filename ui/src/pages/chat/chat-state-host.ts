@@ -25,6 +25,7 @@ import type {
   SidebarOpenResult,
   SidebarSelection,
 } from "./components/chat-sidebar-content-types.ts";
+import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll-events.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -111,7 +112,7 @@ export type ChatPageHost = ChatHost &
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
     loadAssistantIdentity: () => Promise<void>;
-    handleChatScroll: (event: Event) => void;
+    handleChatScroll: (scroll: TranscriptNativeScroll) => void;
     handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (

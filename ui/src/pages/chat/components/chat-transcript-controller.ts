@@ -6,6 +6,7 @@ import {
   type ChatScrollToEndOptions,
   type ChatSessionScrollPosition,
 } from "../scroll.ts";
+import { pruneTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import type { ChatTranscriptSession, TranscriptCallbacks } from "./chat-transcript-session.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
@@ -35,6 +36,11 @@ export function createChatTranscript(
     get renderedSessionKey(): string | null {
       return activeSessionKey;
     },
+    pruneRecovery(sessionKey: string, source: Parameters<typeof pruneTranscriptRecovery>[1]): void {
+      if (sessionVirtualizer && areUiSessionKeysEquivalent(activeSessionKey, sessionKey)) {
+        pruneTranscriptRecovery(sessionVirtualizer.expandedAssistantMessages, source);
+      }
+    },
     renderSession<T>(sessionKey: string, render: (transcript: ChatTranscriptSession) => T): T {
       if (!sessionVirtualizer || !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)) {
         sessionVirtualizer?.dispose();
@@ -51,6 +57,7 @@ export function createChatTranscript(
           initialOffset,
           (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
           callbacks,
+          savedPosition?.bookmark,
         );
         if (connected) {
           sessionVirtualizer.connect();
@@ -60,6 +67,9 @@ export function createChatTranscript(
     },
     get isMaintenanceScroll(): boolean {
       return sessionVirtualizer?.isMaintenanceScroll ?? false;
+    },
+    captureBookmark() {
+      return sessionVirtualizer?.captureBookmark() ?? null;
     },
     get isProgrammaticScroll(): boolean {
       return sessionVirtualizer?.isProgrammaticScroll ?? false;

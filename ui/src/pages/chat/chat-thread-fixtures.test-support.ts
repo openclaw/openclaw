@@ -1,5 +1,5 @@
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import type { BuildChatItemsProps } from "./chat-thread-build.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 
 export function message(
   role: string,

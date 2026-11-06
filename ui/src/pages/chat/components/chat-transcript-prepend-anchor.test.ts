@@ -244,6 +244,7 @@ it("preserves native wheel movement after a projection captures the reader", () 
     endAnchor: new TranscriptEndAnchor(() => {}),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
+    isMaintenanceScroll: () => false,
     cancelScroll: () => anchor.clear(),
     onLayoutCorrection: vi.fn(),
     invalidate: vi.fn(),
@@ -283,4 +284,24 @@ it("preserves native wheel movement after a projection captures the reader", () 
   } finally {
     dispose();
   }
+});
+
+it("restores the same message offset after its cached window and row geometry change", () => {
+  const { scroller, bubble, messageElements, instance, measureRows } = fixture(2400);
+  let contentTop = 275;
+  bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
+  scroller.scrollTop = 200;
+  const original = new TranscriptPrependAnchor(messageElements, vi.fn());
+  original.messageKeys = messages("visible");
+  const bookmark = original.bookmark(scroller)!;
+  expect(bookmark.offset).toBe(-25);
+  // A fresh owner sees a trimmed/reloaded window with different preceding height.
+  contentTop = 900;
+  scroller.scrollTop = 420;
+  const restored = new TranscriptPrependAnchor(messageElements, vi.fn());
+  restored.messageKeys = messages("visible");
+  restored.restoreBookmark(bookmark, scroller);
+  restored.update(scroller, instance, measureRows);
+  expect(scroller.scrollTop).toBe(825);
+  expect(bubble.getBoundingClientRect().top - scroller.getBoundingClientRect().top).toBe(-25);
 });

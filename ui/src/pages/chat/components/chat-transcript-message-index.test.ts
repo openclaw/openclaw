@@ -1,279 +1,42 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as fnv1a from "../../../../../src/shared/fnv1a.js";
+import * as fingerprint from "../../../../../src/shared/fnv1a.js";
+import * as historyIdentity from "../../../lib/chat/history-message-identity.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
-import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
 import { makeMessage } from "../chat-thread.test-support.ts";
-import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
+import {
+  buildCachedChatItems,
+  resetChatThreadState,
+  retireChatThreadSources,
+  setExpansionState,
+} from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
-  projectTranscriptChain,
-  projectTranscriptIndex,
-  projectTranscriptRows,
-} from "./chat-transcript-message-index.ts";
+  sessionKey,
+  finalAnswer,
+  makeTool,
+  partial,
+  history,
+  chatProps,
+  chatItems,
+  chainOptions,
+  labels,
+  type Chain,
+  type Index,
+  chainFor,
+  indexFor,
+  projectHistory,
+  framesOf,
+  onlyFrame,
+  transcriptParts,
+  kind,
+  messagesIn,
+  frameShows,
+  completedOutcome,
+  replyFrameShape,
+} from "./chat-transcript-message-index.test-support.ts";
+import { projectTranscriptIndex, projectTranscriptRows } from "./chat-transcript-message-index.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
-
-const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
-
-const finalAnswer = (id: string, seq: number, fields = {}) =>
-  makeMessage(id, seq, { phase: "final_answer", stopReason: "stop", ...fields });
-function makeTool(
-  id: string,
-  seq: number,
-  runId: string | undefined,
-  timestamp: number,
-  turnBoundary?: boolean,
-) {
-  return {
-    ...makeMessage(id, seq, { role: "toolResult", content: "Evidence", timestamp, runId }),
-    toolName: "read",
-    toolCallId: id,
-    __openclaw: { id, seq, runId, turnBoundary },
-  };
-}
-const partial = makeMessage("partial", 2);
-const history = [makeMessage("question", 1, { role: "user" }), partial];
-
-function chatProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
-  return {
-    paneId: "message-index",
-    sessionKey,
-    messages: history,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    ...overrides,
-  };
-}
-const chatItems = (overrides: Partial<BuildChatItemsProps> = {}) =>
-  buildChatItems(chatProps(overrides));
-
-const chainOptions = { sessionKey, runWorking: false, searchActive: false };
-const labels = { assistantName: "Assistant", userId: "reader", userName: "Reader" };
-type Chain = ReturnType<typeof projectTranscriptChain>;
-type Index = ReturnType<typeof projectTranscriptIndex>;
-type ChainOptions = Partial<Parameters<typeof projectTranscriptChain>[1]>;
-type RenderItem = Chain["transcriptItems"][number];
-function chainFor(items: Parameters<typeof projectTranscriptChain>[0], options: ChainOptions = {}) {
-  return projectTranscriptChain(items, { ...chainOptions, ...options });
-}
-function indexFor(chain: Chain, expanded = new Map<string, boolean>(), props = labels) {
-  return projectTranscriptIndex(chain, expanded, props);
-}
-function projectHistory(
-  messages: unknown[],
-  options: Partial<BuildChatItemsProps> & ChainOptions = {},
-) {
-  return chainFor(chatItems({ messages, ...options }), options);
-}
-const framesOf = (chain: Chain) => kind(chain.transcriptItems, "agent-run-frame");
-function onlyFrame(chain: Chain) {
-  const frames = framesOf(chain);
-  expect(frames).toHaveLength(1);
-  return frames[0]!;
-}
-const transcriptParts = (chain: Chain) =>
-  chain.transcriptItems.flatMap((item) => (item.kind === "agent-run-frame" ? item.parts : [item]));
-const kind = <K extends RenderItem["kind"]>(items: readonly RenderItem[], type: K) =>
-  items.filter((item): item is Extract<RenderItem, { kind: K }> => item.kind === type);
-const messagesIn = (items: readonly Parameters<typeof chatItemGroups>[0][]) =>
-  items.flatMap(chatItemGroups).flatMap((group) => group.messages.map(({ message }) => message));
-const frameShows = (frame: RenderItem | undefined, message: unknown) =>
-  frame?.kind === "agent-run-frame" && messagesIn(kind(frame.parts, "group")).includes(message);
-const completedOutcome = (message: unknown) => ({ kind: "completed", actionOwner: { message } });
-const replyFrameShape = (outcome: unknown, ...parts: unknown[]) => ({
-  kind: "agent-run-frame",
-  runId: "run-1",
-  boundaryId: "send:run-1",
-  outcome,
-  parts,
-});
-
-describe("long completed runs", () => {
-  function longRun(extra: unknown[] = [], steps = 300, run = 0) {
-    const suffix = run === 0 ? "" : `-${run}`;
-    const runId = `run-${run + 1}`;
-    const offset = run * 10_000;
-    return [
-      makeMessage(`question${suffix}`, offset + 1, { role: "user", runId }),
-      ...Array.from({ length: steps }, (_, index) => [
-        makeMessage(`step-${index}${suffix}`, offset + index * 2 + 2, {
-          runId,
-          phase: "commentary",
-          stopReason: "toolUse",
-          content: [
-            { type: "text", text: `Inspecting file ${index}` },
-            {
-              type: "toolCall",
-              id: `tool-${index}${suffix}`,
-              name: "read",
-              arguments: { path: `file-${index}.md` },
-            },
-          ],
-        }),
-        makeTool(
-          `tool-${index}${suffix}`,
-          offset + index * 2 + 3,
-          runId,
-          offset * 10 + index * 20 + 30,
-        ),
-      ]).flat(),
-      ...extra,
-      finalAnswer(`long-answer${suffix}`, offset + steps * 2 + 2 + extra.length, { runId }),
-    ];
-  }
-
-  it.each([
-    { name: "single run", runs: 1, steps: 99, windowed: false, retained: false },
-    { name: "combined runs", runs: 2, steps: 99, windowed: true, retained: false },
-    { name: "512-message medium boundary", runs: 1, steps: 255, windowed: true, retained: false },
-    { name: "514-message large boundary", runs: 1, steps: 256, windowed: true, retained: true },
-  ])("$name preserves window and preparation policy", ({ runs, steps, windowed, retained }) => {
-    const messages = Array.from({ length: runs }, (_, run) => longRun([], steps, run)).flat();
-    const chain = projectHistory(messages, { sessionKey: "agent:main:telegram:direct:42" });
-    const frames = framesOf(chain);
-    expect(frames).toHaveLength(runs);
-    const index = indexFor(chain);
-    const preparation = { retainDom: windowed, prewarm: windowed && !retained };
-    for (const [run, frame] of frames.entries()) {
-      const suffix = run === 0 ? "" : `-${run}`;
-      const first = index.messageRowKeysById.get(`step-0${suffix}`);
-      const last = index.messageRowKeysById.get(`step-${steps - 1}${suffix}`);
-      expect(first === frame.key).toBe(!windowed);
-      expect(first === last).toBe(!windowed);
-      expect(index.messageRowKeysById.get(`long-answer${suffix}`)).toBe(frame.key);
-      expect(index.rows.find((row) => row.key === first)).toMatchObject(preparation);
-    }
-  });
-
-  it.each([sessionKey, "agent:main:telegram:direct:42"])(
-    "windows completed work and maps distant replies to their own row in %s",
-    (key) => {
-      const chain = projectHistory(longRun(), { sessionKey: key });
-      const frame = onlyFrame(chain);
-      const expanded = new Map<string, boolean>();
-      for (const part of kind(frame.parts, "work-group")) {
-        setExpansionState(expanded, part.key, true);
-      }
-      const index = indexFor(chain, expanded);
-      const rows = index.rows.filter((row) => row.kind === "item");
-      const workRows = rows.filter((row) => row.item.kind === "agent-run-frame");
-      expect(workRows.length).toBeGreaterThan(1);
-      for (const row of workRows) {
-        if (row.item.kind !== "agent-run-frame" || !row.item.fragment) {
-          continue;
-        }
-        // Only middle fragments can restore geometry without reading source-run edge chrome.
-        const edge = row.item.fragment.first || row.item.fragment.last;
-        expect(row.revision === undefined).toBe(edge);
-      }
-      expect(index.messageRowKeysById.get("step-0")).not.toBe(
-        index.messageRowKeysById.get("step-299"),
-      );
-      expect(index.messageRowKeysById.get("long-answer")).toBe(frame.key);
-      expect(rows.at(-1)?.key).toBe(frame.key);
-      for (const row of workRows) {
-        const parts = row.item.kind === "agent-run-frame" ? row.item.parts : [];
-        const content = parts.filter((part) => part.kind !== "work-group");
-        expect(messagesIn(content).length).toBeLessThanOrEqual(1);
-      }
-      const summary = rows.find(
-        (row) => row.item.kind === "agent-run-frame" && row.item.parts[0]?.kind === "work-group",
-      );
-      if (summary) {
-        const collapsed = indexFor(chain);
-        expect(collapsed.rows.some((row) => row.key === summary.key)).toBe(true);
-      }
-    },
-  );
-
-  it.each([400, 512, 514])("keeps ordered message coverage in %i-message fragments", (count) => {
-    const messages = [
-      makeMessage("question", 1, { role: "user", runId: "run-1" }),
-      ...Array.from({ length: count - 2 }, (_, index) =>
-        makeMessage(`body-${index}`, index + 2, { runId: "run-1" }),
-      ),
-      finalAnswer("answer", count, { runId: "run-1" }),
-    ];
-    const chain = projectHistory(messages, { sessionKey: "agent:main:telegram:direct:42" });
-    const index = indexFor(chain);
-    const items = index.rows.flatMap((row) => (row.kind === "item" ? [row.item] : []));
-    expect(messagesIn(items)).toEqual(messages);
-    expect(index.messageRowKeysById.get("answer")).toBe(onlyFrame(chain).key);
-    expect(index.messageRowKeysById.get("body-0") === index.messageRowKeysById.get("body-1")).toBe(
-      count <= 512,
-    );
-    for (const item of items) {
-      expect(messagesIn([item]).length).toBeLessThanOrEqual(count <= 512 ? 2 : 1);
-    }
-  });
-
-  it("keeps widget-bearing completed runs in the retained frame", () => {
-    const canvas = makeMessage("canvas", 602, {
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            viewId: "cv_long_run",
-            url: "/__openclaw__/canvas/documents/cv_long_run/index.html",
-          },
-        },
-      ],
-    });
-    const messages = longRun([canvas]);
-    const key = "agent:main:telegram:direct:42";
-    const activeChain = projectHistory(messages.slice(0, -1), {
-      sessionKey: key,
-      runWorking: true,
-      runId: "run-1",
-      activeRunId: "run-1",
-      streamStartedAt: 1_000,
-    });
-    const activeFrame = onlyFrame(activeChain);
-    expect(activeFrame.outcome.kind).toBe("active");
-    expect(indexFor(activeChain).messageRowKeysById.get("canvas")).toBe(activeFrame.key);
-    const chain = projectHistory(messages, { sessionKey: key });
-    const frame = onlyFrame(chain);
-    expect(frame.key).toBe(activeFrame.key);
-    expect(
-      indexFor(chain).rows.filter((row) => row.kind === "item" && row.item === frame),
-    ).toHaveLength(1);
-    expect(indexFor(chain).messageRowKeysById.get("canvas")).toBe(frame.key);
-  });
-
-  it("retains the answer row when completed work follows the final answer", () => {
-    const chain = projectHistory([...longRun(), makeTool("late-tool", 603, "run-1", 6_030)], {
-      sessionKey: "agent:main:telegram:direct:42",
-    });
-    const frame = onlyFrame(chain);
-    expect(frame.outcome).toMatchObject(completedOutcome({ __openclaw: { id: "long-answer" } }));
-    expect(indexFor(chain).messageRowKeysById.get("long-answer")).toBe(frame.key);
-    expect(
-      indexFor(chain)
-        .rows.filter((row) => row.kind === "item")
-        .map((row) => row.key),
-    ).toEqual([chain.transcriptItems[0]!.key, frame.key]);
-  });
-
-  it("retains the summary row when completed work has no answer", () => {
-    const chain = projectHistory(longRun().slice(0, -1));
-    const frame = onlyFrame(chain);
-    expect(frame.outcome).toEqual({ kind: "completed", actionOwner: null });
-    const collapsed = indexFor(chain);
-    const expanded = new Map<string, boolean>();
-    for (const part of kind(frame.parts, "work-group")) {
-      setExpansionState(expanded, part.key, true);
-    }
-    expect(indexFor(chain, expanded).rows.map((row) => row.key)).toEqual(
-      collapsed.rows.map((row) => row.key),
-    );
-  });
-});
 
 it.each([
   { key: sessionKey, working: true, projected: false, untagged: false },
@@ -311,6 +74,98 @@ it.each([
   }
 });
 
+it.each(["older", "newer"] as const)(
+  "reuses retained terminal footprint work after %s history retirement",
+  (direction) => {
+    const sources = Array.from({ length: 480 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Footprint source ${index + 1}. ${"Stable transcript content. ".repeat(160)}`,
+      timestamp: (index + 1) * 10,
+      __openclaw: { id: `footprint-${index + 1}`, seq: index + 1 },
+    }));
+    const before = direction === "older" ? sources.slice(80) : sources.slice(0, 400);
+    const after = direction === "older" ? sources.slice(0, 400) : sources.slice(80);
+    const retained = before.filter((message) => after.includes(message));
+    const fresh = after.filter((message) => !before.includes(message));
+    const retainedSources = new Set<unknown>(retained);
+    const freshSources = new Set<unknown>(fresh);
+    const input = chatProps({ paneId: `footprint-${direction}`, messages: before });
+    const firstItems = buildCachedChatItems(input);
+    const firstChain = chainFor(firstItems, { messages: before });
+    const identity = vi.spyOn(historyIdentity, "nativeHistoryMessageIdentity");
+    const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+    try {
+      const firstIndex = indexFor(firstChain);
+      const firstRows = firstIndex.rows.filter((row) => row.kind === "item");
+      expect(firstRows).toHaveLength(400);
+      expect(messagesIn(firstRows.map((row) => row.item))).toEqual(before);
+      const hashInputs = new Map(
+        hash.mock.calls.map(([content], index) => [
+          `${content.length}:${hash.mock.results[index]!.value}`,
+          content,
+        ]),
+      );
+      const priorRows = new Map(before.map((message, index) => [message, firstRows[index]!]));
+      const retainedHashes = new Set(
+        retained.map((message) => hashInputs.get(priorRows.get(message)!.revision!)),
+      );
+      expect(retainedHashes.size).toBe(320);
+      expect(retainedHashes.has(undefined)).toBe(false);
+      identity.mockClear();
+      hash.mockClear();
+      retireChatThreadSources(
+        input.paneId,
+        before.filter((message) => !after.includes(message)),
+      );
+      const nextItems = buildCachedChatItems({ ...input, messages: after });
+      const nextChain = chainFor(nextItems, { messages: after });
+      const nextIndex = indexFor(nextChain);
+      const rows = nextIndex.rows.filter((row) => row.kind === "item");
+      expect(nextChain).not.toBe(firstChain);
+      expect(rows).toHaveLength(400);
+      expect(messagesIn(rows.map((row) => row.item))).toEqual(after);
+      expect(nextIndex.positionIndex.markers.map((marker) => marker.message)).toEqual(after);
+      for (const [index, message] of after.entries()) {
+        const row = rows[index]!;
+        expect(nextIndex.messageRowKeysById.get(message["__openclaw"].id)).toBe(row.key);
+        expect(nextIndex.loadedReplySources.get(message["__openclaw"].id)?.message).toBe(message);
+        const sourceKey = chatItemGroups(row.item)[0]!.messages[0]!.key;
+        expect(nextIndex.transcriptMessageKeys.get(sourceKey)).toBe(row.key);
+        const prior = priorRows.get(message);
+        if (prior) {
+          if (message === retained[0]) {
+            // The retained boundary gains/loses its preceding reply; adjacent
+            // reply chrome must refresh while its measured body stays reusable.
+            expect(row.item).not.toBe(prior.item);
+            expect(row.item).toMatchObject({
+              replyPreviousMessageId: direction === "older" ? "footprint-80" : undefined,
+            });
+          } else {
+            expect(row.item).toBe(prior.item);
+          }
+          expect(row.key).toBe(prior.key);
+          expect(row.revision).toBe(prior.revision);
+        }
+      }
+      expect(
+        identity.mock.calls.filter(([message]) => freshSources.has(message)).length,
+      ).toBeGreaterThan(0);
+      expect(
+        hash.mock.calls.filter(([content]) => !retainedHashes.has(content)).length,
+      ).toBeGreaterThan(0);
+      expect(identity.mock.calls.filter(([message]) => retainedSources.has(message))).toEqual([]);
+      expect(
+        hash.mock.calls
+          .filter(([content]) => retainedHashes.has(content))
+          .map(([content]) => content),
+      ).toEqual([hashInputs.get(priorRows.get(retained[0]!)!.revision!)]);
+    } finally {
+      identity.mockRestore();
+      hash.mockRestore();
+    }
+  },
+);
+
 it("changes the footprint revision when the same message ID receives new content", () => {
   const before = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
     .rows[0]!;
@@ -346,6 +201,55 @@ it("does not serialize settled history again when a live status changes the row 
   expect(serializations).toBe(1);
 });
 
+it.each(["content array", "content block"] as const)(
+  "invalidates a retained terminal item after same-envelope %s replacement",
+  (replacement) => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Before" }],
+      timestamp: 10,
+      __openclaw: { id: "replacement", seq: 1 },
+    };
+    const items = chatItems({ messages: [message] });
+    const project = () => {
+      const rows = indexFor(chainFor([...items])).rows.filter((row) => row.kind === "item");
+      expect(rows).toHaveLength(1);
+      return rows[0]!;
+    };
+    const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+    try {
+      const before = project();
+      expect(messagesIn(items)).toEqual([message]);
+      expect(before.kind).toBe("item");
+      hash.mockClear();
+      const unchanged = project();
+      expect(unchanged.kind === "item" && unchanged.item).toBe(
+        before.kind === "item" && before.item,
+      );
+      expect(unchanged.revision).toBe(before.revision);
+      expect(hash).not.toHaveBeenCalled();
+      const previousContent = message.content;
+      const previousBlock = message.content[0];
+      if (replacement === "content array") {
+        message.content = [{ type: "text", text: "After" }];
+      } else {
+        message.content[0] = { type: "text", text: "After" };
+      }
+      const after = project();
+      expect(message.content === previousContent).toBe(replacement === "content block");
+      expect(message.content[0]).not.toBe(previousBlock);
+      expect(after.kind === "item" && after.item).toBe(before.kind === "item" && before.item);
+      expect(after.key).toBe(before.key);
+      expect(after.revision).not.toBe(before.revision);
+      expect(hash).toHaveBeenCalledTimes(2);
+      hash.mockClear();
+      expect(project().revision).toBe(after.revision);
+      expect(hash).not.toHaveBeenCalled();
+    } finally {
+      hash.mockRestore();
+    }
+  },
+);
 it("fingerprints loaded rows once when an older page rebuilds the index", () => {
   const turn = (id: string, seq: number, content: string) =>
     makeMessage(id, seq, { role: seq % 2 ? "user" : "assistant", runId: `run-${seq}`, content });
@@ -357,7 +261,7 @@ it("fingerprints loaded rows once when an older page rebuilds the index", () => 
     turn(`older-${index}`, 1 + index, "Older"),
   );
   const before = indexFor(projectHistory(loaded)).rows;
-  const hash = vi.spyOn(fnv1a, "fnv1aUtf16");
+  const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
   const after = indexFor(projectHistory([...older, ...loaded])).rows;
   const hashed = hash.mock.calls.reduce((sum, [value]) => sum + value.length, 0);
   hash.mockRestore();
@@ -378,21 +282,31 @@ it("invalidates only a changed reaction row while retaining other cached footpri
     projectTranscriptIndex(chain, expanded, { ...labels, messageReactions: reactions }).rows.filter(
       (row) => row.kind === "item",
     );
-  const before = project(new Map());
-  const reacted = project(new Map([["answer", summaries]]));
-  expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
-  expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
-  expect(reacted[1]!.revision).toBe(before[1]!.revision);
-  const replay = project(
-    new Map([
-      ["answer", summaries],
-      ["outside-window", summaries],
-    ]),
-  );
-  expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
-  expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
-    before.map((row) => row.revision),
-  );
+  const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+  try {
+    const before = project(new Map());
+    hash.mockClear();
+    const reacted = project(new Map([["answer", summaries]]));
+    expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
+    expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
+    expect(reacted[1]!.revision).toBe(before[1]!.revision);
+    expect(hash).toHaveBeenCalledTimes(1);
+    hash.mockClear();
+    const replay = project(
+      new Map([
+        ["answer", summaries],
+        ["outside-window", summaries],
+      ]),
+    );
+    expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
+    expect(hash).not.toHaveBeenCalled();
+    expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
+      before.map((row) => row.revision),
+    );
+    expect(hash).toHaveBeenCalledTimes(1);
+  } finally {
+    hash.mockRestore();
+  }
 });
 
 it("leaves an attached live continuation out of reusable row geometry", () => {
@@ -404,11 +318,24 @@ it("leaves an attached live continuation out of reusable row geometry", () => {
   const settled = chainFor(items);
   const active = chainFor([...items, { kind: "reading-indicator", key: "waiting", startedAt: 32 }]);
   expect(active.continuations.size).toBe(1);
-  const before = indexFor(settled).rows[0]!;
-  const during = indexFor(active).rows[0]!;
-  expect(during.key).toBe(before.key);
-  expect(before.kind === "item" && before.revision).toEqual(expect.any(String));
-  expect(during.kind === "item" && during.revision).toBeUndefined();
+  const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+  try {
+    const before = indexFor(settled).rows[0]!;
+    hash.mockClear();
+    const during = indexFor(active).rows[0]!;
+    expect(during.key).toBe(before.key);
+    expect(before.kind === "item" && before.revision).toEqual(expect.any(String));
+    expect(during.kind === "item" && during.revision).toBeUndefined();
+    expect(hash).not.toHaveBeenCalled();
+    const restored = indexFor(chainFor([...items])).rows[0]!;
+    expect(restored.kind === "item" && restored.item).toBe(before.kind === "item" && before.item);
+    expect(restored.kind === "item" && restored.revision).toBe(
+      before.kind === "item" && before.revision,
+    );
+    expect(hash).not.toHaveBeenCalled();
+  } finally {
+    hash.mockRestore();
+  }
 });
 
 it("distinguishes terminal frame geometry when a hidden terminal changes its outcome", () => {
@@ -959,7 +886,10 @@ describe("system event presentation", () => {
       runId: "run-b",
       boundaryId: "send:run-b",
     });
-    const searched = projectHistory(messages, { searchActive: true });
+    const searched = chainFor(chatItems({ messages }), {
+      ...chainOptions,
+      searchActive: true,
+    });
     expect(searched.transcriptItems.filter((item) => item.kind === "notice")).toHaveLength(4);
     expect(searched.transcriptItems.some((item) => item.kind === "system-event-group")).toBe(false);
   });

@@ -2,6 +2,11 @@
 
 import { expect, it, vi } from "vitest";
 import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+} from "./chat-history-request-params.ts";
+import {
   createNativeShowEarlierPane,
   nativeHistoryMessage,
   nativeHistorySeq,
@@ -39,7 +44,9 @@ it("refreshes composer recall after leaving a round", async () => {
     "chat.history",
     expect.objectContaining({
       sessionKey: state.sessionKey,
-      limit: 1000,
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
       cursor: "older-2",
     }),
     { signal: expect.any(AbortSignal) },

@@ -49,9 +49,7 @@ export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
           role={props.error && !blocked() ? "alert" : undefined}
           title={props.error ?? undefined}
         >
-          {props.error && !blocked()
-            ? t("chat.thread.earlierUnavailable")
-            : t("chat.thread.earlierHint")}
+          {props.error && !blocked() ? props.error : t("chat.thread.earlierHint")}
         </span>
       </button>
       <span

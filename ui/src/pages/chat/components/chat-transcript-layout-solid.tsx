@@ -353,6 +353,9 @@ export class ChatTranscriptRenderer {
       element.className = "chat-thread-inner chat-thread-inner--virtual";
       element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
+      // The retained root needs stable host capabilities, not the first row
+      // snapshot. Capturing `next` would keep retired windows alive.
+      const { messageElements, measureRowRefFor } = next;
       // This retained transcript island outlives the computation that introduces its DOM.
       // Its session owner disposes the detached root, including while the pane is parked.
       this.disposeRoot = runWithOwner(null, () =>
@@ -377,12 +380,12 @@ export class ChatTranscriptRenderer {
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
           onSettled(() => listen(element, "click", capture, true));
           const content = () => (
-            <TranscriptMessageElementsContext value={next.messageElements}>
+            <TranscriptMessageElementsContext value={messageElements}>
               <TranscriptMediaDisconnect value={this.mediaDisconnect}>
                 <ContentPresentation value={active}>
                   <TranscriptRows
                     snapshot={snapshot()}
-                    measureRowRefFor={next.measureRowRefFor}
+                    measureRowRefFor={measureRowRefFor}
                     columnRef={(column) => {
                       this.column = column;
                     }}

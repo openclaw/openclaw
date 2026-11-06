@@ -1,4 +1,5 @@
 import { onSettled } from "solid-js";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { observeFontLoading } from "../../../lib/reactive/font-loading.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
@@ -32,20 +33,23 @@ function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): v
     return;
   }
   overflowMeasurementQueued = true;
-  queueMicrotask(() => {
-    overflowMeasurementQueued = false;
-    const measurements = [...pendingOverflowMeasurements];
-    pendingOverflowMeasurements.clear();
-    // Restore every full preview before reading layout, then apply every cut.
-    // Interleaving these phases forces a separate page layout for each message.
-    for (const entry of measurements) {
-      entry.element.style.removeProperty("--chat-disclosure-clamp");
-    }
-    const updates = measurements.map((entry) => entry.read());
-    for (const update of updates) {
-      update?.();
-    }
-  });
+  queueMicrotask(flushMessageOverflowMeasurements);
+}
+
+/** Commit pending preview cuts before a transcript captures final row sizes. */
+export function flushMessageOverflowMeasurements(): void {
+  overflowMeasurementQueued = false;
+  const measurements = [...pendingOverflowMeasurements];
+  pendingOverflowMeasurements.clear();
+  // Restore every full preview before reading layout, then apply every cut.
+  // Interleaving these phases forces a separate page layout for each message.
+  for (const entry of measurements) {
+    entry.element.style.removeProperty("--chat-disclosure-clamp");
+  }
+  const updates = measurements.map((entry) => entry.read());
+  for (const update of updates) {
+    update?.();
+  }
 }
 
 export function messageOverflowRef(
@@ -71,15 +75,11 @@ export function messageOverflowRef(
     const stopFontsLoaded = observeFontLoading(document.fonts, update);
     return () => {
       stopFontsLoaded?.();
-      if (measurement) {
-        pendingOverflowMeasurements.delete(measurement);
-        measurement = undefined;
-      }
     };
   });
-  return (element: Element) => {
+  return elementRef((element: Element) => {
     if (!(element instanceof HTMLElement)) {
-      return;
+      return undefined;
     }
     current = element;
     const read = () => {
@@ -175,6 +175,19 @@ export function messageOverflowRef(
         toggle.hidden = hidden;
       };
     };
-    measurement = { element, read };
-  };
+    const registered = { element, read };
+    measurement = registered;
+    // Refs precede the transcript's commit callback; its first size must include
+    // the partial-line cut rather than retiring an anchor against the CSS estimate.
+    scheduleOverflowMeasurement(registered);
+    // The ref owner retires queued work even before its first settle, and also
+    // releases a replaced node without cancelling its successor's measurement.
+    return () => {
+      pendingOverflowMeasurements.delete(registered);
+      if (measurement === registered) {
+        measurement = undefined;
+        current = undefined;
+      }
+    };
+  });
 }

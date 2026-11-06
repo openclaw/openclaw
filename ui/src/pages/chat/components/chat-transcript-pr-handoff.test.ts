@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { pendingSessionsYield } from "../chat-sessions-yield.ts";
-import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
+import { buildChatItems } from "../chat-thread-build.ts";
+import type { BuildChatItemsProps } from "../chat-thread-contract.ts";
 import { createProps, makeMessage } from "../chat-thread.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";

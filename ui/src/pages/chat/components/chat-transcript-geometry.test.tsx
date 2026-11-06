@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
+import { createRoot } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   handleMarkdownCodeBlockClick,
@@ -24,6 +25,7 @@ import {
   renderChatThread,
   mountTestTranscript,
 } from "../test-helpers/chat-transcript-native.tsx";
+import { flushMessageOverflowMeasurements, messageOverflowRef } from "./chat-message-overflow.ts";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
@@ -39,6 +41,7 @@ import {
 } from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
+import { createTranscriptPresentation } from "./chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -291,10 +294,12 @@ it("measures newly committed rows before observer registration using fractional 
   const row = requireElement(container, ".chat-virtual-row");
   const prepared = requireElement(container, '[data-virtual-row-key="prepared"]');
   const getStyle = globalThis.getComputedStyle;
-  vi.spyOn(globalThis, "getComputedStyle").mockImplementation((element, pseudo) => {
-    expect(element).not.toBe(prepared);
-    return getStyle(element, pseudo);
-  });
+  const readStyle = vi
+    .spyOn(globalThis, "getComputedStyle")
+    .mockImplementation((element, pseudo) => {
+      expect(element).not.toBe(prepared);
+      return getStyle(element, pseudo);
+    });
   vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: 2,
@@ -341,6 +346,8 @@ it("measures newly committed rows before observer registration using fractional 
     };
     expect(measureTranscriptRow(prepared, undefined, virtualizer)).toBe(87.625);
     expect(measureTranscriptRow(prepared, receipt, virtualizer)).toBe(87.625);
+    readStyle.mockRestore();
+    prepared.style.height = "120.375px";
     prepared.setAttribute("data-preparing-row", "true");
     expect(measureTranscriptRow(prepared, receipt, virtualizer)).toBe(120.375);
     expect(readConnectedTranscriptRows(container, virtualizer, rowRefs.elements)?.()).toBe(false);
@@ -375,7 +382,105 @@ it("settles retained rows only after their measured size commits", () => {
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
 });
 
-it("keeps fractional observer sizes as the sole skipped-row sizing input", async () => {
+it.each([false, true])(
+  "retires a disclosure disposed before first settle (microtask: %s)",
+  async (microtask) => {
+    const preview = document.createElement("div");
+    const toggle = document.createElement("button");
+    preview.style.setProperty("--chat-disclosure-clamp", "17px");
+    const readHeight = vi.fn(() => 200);
+    Object.defineProperty(preview, "scrollHeight", { get: readHeight });
+    const dispose = createRoot((stop) => {
+      messageOverflowRef(
+        () => ({ expanded: false, forwarded: false, connected: true }),
+        () => ({ toggle }),
+      )(preview);
+      return stop;
+    });
+    dispose();
+    if (microtask) {
+      await Promise.resolve();
+    } else {
+      flushMessageOverflowMeasurements();
+    }
+    expect(readHeight).not.toHaveBeenCalled();
+    expect(preview.style.getPropertyValue("--chat-disclosure-clamp")).toBe("17px");
+  },
+);
+
+it.each([false, true])(
+  "commits a newly admitted disclosure before measuring its row (settled: %s)",
+  (settled) => {
+    const container = transcriptContainer();
+    container.innerHTML =
+      '<div class="chat-virtual-row" data-index="0"><div class="preview"><p style="line-height: 21px">Preview text</p></div><button></button></div>';
+    const row = requireElement(container, ".chat-virtual-row");
+    const preview = requireElement(container, ".preview");
+    const text = requireElement(container, "p");
+    const toggle = container.querySelector("button")!;
+    Object.defineProperties(preview, {
+      clientHeight: { get: () => 105 },
+      scrollHeight: { get: () => 1_547 },
+      clientWidth: { get: () => 378 },
+    });
+    Object.defineProperty(text, "checkVisibility", { value: () => true });
+    Object.defineProperty(row, "offsetHeight", {
+      get: () =>
+        101.6875 +
+        (Number.parseFloat(preview.style.getPropertyValue("--chat-disclosure-clamp")) || 105),
+    });
+    Object.defineProperty(preview, "getBoundingClientRect", { value: () => new DOMRect() });
+    const range = document.createRange();
+    Object.defineProperty(range, "getClientRects", {
+      value: () => [3, 38, 59, 80, 101, 122].map((top) => new DOMRect(0, top, 378, 15)),
+    });
+    vi.spyOn(document, "createRange").mockReturnValue(range);
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 1,
+      estimateSize: () => 206.6875,
+      getScrollElement: () => container,
+      getItemKey: () => "preview",
+      measureElement: () => 206.6875,
+      observeElementRect: (_, callback) => callback({ width: 800, height: 600 }),
+      observeElementOffset: (_, callback) => callback(0, false),
+      scrollToFn: () => {},
+    });
+    // eslint-disable-next-line no-underscore-dangle -- Mount the real TanStack adapter lifecycle.
+    const disposeVirtualizer = virtualizer._didMount();
+    // eslint-disable-next-line no-underscore-dangle -- Bind its actual scroll element before measuring.
+    virtualizer._willUpdate();
+    virtualizer.getVirtualItems();
+    virtualizer.getTotalSize();
+    const disposePreview = createRoot((dispose) => {
+      messageOverflowRef(
+        () => ({ expanded: false, forwarded: false, connected: true }),
+        () => ({ toggle, text }),
+      )(preview);
+      return dispose;
+    });
+    try {
+      if (settled) {
+        flush();
+      }
+      // Neither a new ref nor a settled component has awaited its measurement microtask.
+      createTranscriptPresentation(
+        () => container,
+        virtualizer,
+        () => [row],
+        () => {},
+      ).measureRows();
+      expect(
+        Number.parseFloat(preview.style.getPropertyValue("--chat-disclosure-clamp")),
+      ).toBeCloseTo(113.54);
+      expect(virtualizer.itemSizeCache.get("preview")).toBeCloseTo(215.2275);
+    } finally {
+      disposePreview();
+      disposeVirtualizer();
+    }
+  },
+);
+
+it("keeps current fractional native sizes for skipped rows", async () => {
   saveChatSessionScrollPosition("fractional-rows", "agent:main:fractional-rows", {
     scrollTop: 0,
     anchorToEnd: false,
@@ -383,6 +488,9 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
   const rows = contentRows(4, "fractional:", "row");
   const { container, transcript, renderRows } = await mountTestTranscript("fractional-rows", rows);
   try {
+    for (const row of transcriptRows(container)) {
+      row.style.height = "100.375px";
+    }
     measureRows(container, 100.375);
     await flushDeferredRowPrune();
     renderRows(rows);
@@ -429,6 +537,7 @@ it.each([false, true])(
 
       const row = requireElement(container, ".chat-virtual-row");
       for (let index = 0; index < 4; index++) {
+        row.style.height = `${1240 + index}px`;
         emitTranscriptResize(row, 800, 1240 + index);
         renderRows(rows);
       }

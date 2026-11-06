@@ -31,6 +31,7 @@ import {
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
+import { restoreChatHistoryTail } from "./chat-history.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
@@ -73,7 +74,7 @@ import {
 } from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
-import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { handleChatScroll } from "./scroll.ts";
 import { cacheChatAvatarSource } from "./session-message-cache.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
@@ -294,11 +295,8 @@ export function createPageState(
   state.refreshCurrentChat = () => refreshPageChat(state);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
-  state.scrollToBottom = (options) => {
-    resetChatScroll(state);
-    scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
-  };
-  state.handleChatScroll = (event) => handleChatScroll(state, event);
+  state.scrollToBottom = (options) => restoreChatHistoryTail(state, options);
+  state.handleChatScroll = (scroll) => handleChatScroll(state, scroll);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
   state.applySettings = (patch) => {

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { makeChatHost } from "../chat-host.test-support.ts";
 import {
   canAutoFollowChat,
   type ChatScrollHost,
@@ -11,11 +12,16 @@ import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import {
   isTranscriptProgrammaticScroll,
+  isTranscriptMaintenanceScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
+import {
+  subscribeTranscriptScroll,
+  type TranscriptNativeScroll,
+} from "./chat-transcript-scroll-events.ts";
 import { createTranscriptPresentation } from "./chat-transcript-session.ts";
 import {
   installTranscriptDomMocks,
@@ -107,10 +113,13 @@ it.each([
     recordedEnd.push(endAnchor.isRecordedEnd(offset));
     order.push("virtualizer");
   });
-  const onNativeScroll = vi.fn((event: Event) => {
-    expect(event.currentTarget).toBe(element);
-    expect(event.target).toBe(element);
-    paneRecordedEnd.push(endAnchor.isRecordedEnd(element.scrollTop));
+  const onNativeScroll = vi.fn((scroll: TranscriptNativeScroll) => {
+    expect(scroll.viewport).toEqual({
+      scrollTop: element.scrollTop,
+      clientHeight: 100,
+      scrollHeight: 120,
+    });
+    paneRecordedEnd.push(endAnchor.isRecordedEnd(scroll.viewport.scrollTop));
     order.push("pane");
   });
   onTestFinished(
@@ -123,6 +132,7 @@ it.each([
         canFollowEnd: () => false,
         isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
         cancelScroll,
+        isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
         onLayoutCorrection: vi.fn(),
         invalidate: vi.fn(),
         onOffset,
@@ -140,12 +150,18 @@ it.each([
   recordedEnd.length = 0;
   element.scrollTop = 20;
   element.dispatchEvent(new Event("scroll"));
-  expect(order).toEqual(["composer", "virtualizer", "pane"]);
+  expect(order).toEqual(["composer", "pane", "virtualizer"]);
+  expect(onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 20, clientHeight: 100, scrollHeight: 120 },
+    delta: 20,
+    programmatic: false,
+    maintenance: false,
+  });
   expect(deliver).toHaveBeenCalledWith(20, true);
   expect(onOffset).toHaveBeenCalledOnce();
   expect(recordedEnd).toEqual([true]);
   expect(paneRecordedEnd).toEqual([true]);
-  expect(geometryReads).toEqual([false, false]);
+  expect(geometryReads).toEqual([false, false, false, false]);
   expect(onReaderScroll).toHaveBeenCalledExactlyOnceWith(true);
   onReaderScroll.mockClear();
   const nested = document.createElement("div");
@@ -210,6 +226,7 @@ it.each([
     chatFollowLocked: false,
     chatReadingHistory: false,
     chatNewMessagesBelow: false,
+    chatHistoryPagination: {},
     chatIsProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
   };
   handleChatScrollTakeover(policy);
@@ -233,11 +250,13 @@ it.each([
           prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
           canFollowEnd: () => canAutoFollowChat(policy),
           isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+          isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
           cancelScroll: vi.fn(),
           onLayoutCorrection: (before, after) => endAnchor.recordLayoutCorrection(before, after),
           invalidate: vi.fn(),
           onOffset: vi.fn(),
           onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+          onNativeScroll: (scroll) => handleChatScroll(policy, scroll),
           onComposerLayout: vi.fn(),
         },
         instance,
@@ -247,9 +266,6 @@ it.each([
   const { _didMount: mount, _willUpdate: update } = virtualizer;
   onTestFinished(mount());
   update();
-  const onScroll = (event: Event) => handleChatScroll(policy, event);
-  element.addEventListener("scroll", onScroll);
-  onTestFinished(() => element.removeEventListener("scroll", onScroll));
   element.dispatchEvent(new Event("scroll"));
 
   // ResizeObserver can synchronize physical movement before the native scroll event.
@@ -290,9 +306,11 @@ it.each([
       },
     },
   });
+  const heights = [100, 100, 100, 100];
   const rows = Array.from({ length: 4 }, (_, index) => {
     const row = element.appendChild(document.createElement("div"));
     row.dataset.index = String(index);
+    Object.defineProperty(row, "offsetHeight", { get: () => heights[index]! });
     return row;
   });
   const state = new TranscriptOffsetState();
@@ -315,6 +333,7 @@ it.each([
           prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+          isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
           cancelScroll: vi.fn(),
           onLayoutCorrection: vi.fn(),
           invalidate: vi.fn(),
@@ -343,6 +362,7 @@ it.each([
   for (const row of rows) {
     virtualizer.measureElement(row);
   }
+  heights[0] = 200;
   for (const observer of resizeObservers) {
     observer.emitTarget(rows[0]!, 800, 200);
   }
@@ -355,6 +375,7 @@ it.each([
     virtualizer.scrollToOffset(300, { behavior: "instant" });
     state.syncNativeOffset?.();
   } else {
+    heights[1] = 200;
     for (const observer of resizeObservers) {
       observer.emitTarget(rows[1]!, 800, 200);
     }
@@ -366,3 +387,494 @@ it.each([
     expect(element.scrollTop).toBe(expected);
   }
 });
+
+function observedMaintenance(useScrollendEvent = false) {
+  vi.useFakeTimers();
+  const state = new TranscriptOffsetState();
+  const element = document.createElement("div");
+  let maximum = 800;
+  let viewportHeight = 200;
+  let contentHeight = 1000;
+  Object.defineProperties(element, {
+    clientHeight: { get: () => viewportHeight },
+    scrollHeight: { get: () => contentHeight },
+  });
+  element.scrollTop = 800;
+  element.scrollTo = (options?: ScrollToOptions | number) => {
+    if (typeof options === "object") {
+      element.scrollTop = Math.max(0, Math.min(options.top ?? element.scrollTop, maximum));
+    }
+  };
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    useScrollendEvent,
+    count: 0,
+    getScrollElement: () => element,
+    estimateSize: () => 40,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = element;
+  virtualizer.targetWindow = window;
+  virtualizer.scrollOffset = element.scrollTop;
+  const programmatic = () => isTranscriptProgrammaticScroll(state, element);
+  const deliveries: Array<{ offset: number; scrolling: boolean; programmatic: boolean }> = [];
+  const owner = {
+    state,
+    getScrollElement: () => element,
+    endAnchor: new TranscriptEndAnchor(() => {}),
+    prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+    canFollowEnd: () => false,
+    isProgrammaticScroll: programmatic,
+    isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
+    cancelScroll: vi.fn(),
+    onLayoutCorrection: vi.fn(),
+    invalidate: vi.fn(),
+    onOffset: vi.fn(),
+    onReaderScroll: vi.fn(),
+    onNativeScroll: vi.fn(),
+    onComposerLayout: vi.fn(),
+  };
+  const connect = () =>
+    observeTranscriptOffset(owner, virtualizer, (offset, scrolling) => {
+      virtualizer.scrollOffset = offset;
+      virtualizer.isScrolling = scrolling;
+      deliveries.push({ offset, scrolling, programmatic: programmatic() });
+    });
+  const stop = connect();
+  onTestFinished(() => {
+    stop();
+    vi.useRealTimers();
+  });
+  return {
+    state,
+    element,
+    virtualizer,
+    deliveries,
+    owner,
+    programmatic,
+    stop,
+    connect,
+    resize: (next: number) => {
+      maximum = next;
+      contentHeight = maximum + viewportHeight;
+    },
+    resizeViewport: (next: number) => {
+      viewportHeight = next;
+      maximum = contentHeight - viewportHeight;
+    },
+    write: (offset: number) =>
+      scrollTranscriptOffset(
+        state,
+        { contentElement: null, layout: new TranscriptLayoutOwner(vi.fn()) },
+        0,
+        offset,
+        { behavior: "instant" },
+        virtualizer,
+      ),
+    native: (offset = element.scrollTop) => {
+      element.scrollTop = offset;
+      element.dispatchEvent(new Event("scroll"));
+    },
+  };
+}
+
+it.each(["native clamp", "capped editor"] as const)(
+  "preserves the captured viewport and acknowledges the real composer correction: %s",
+  (change) => {
+    const observed = observedMaintenance();
+    observed.native();
+    const { owner, element } = observed;
+    owner.canFollowEnd = () => true;
+    owner.endAnchor.invalidateComposerResize(true);
+    owner.onComposerLayout.mockImplementation((changed) => {
+      owner.endAnchor.commitComposerResize(element, changed, true, false);
+    });
+    if (change === "native clamp") {
+      observed.resizeViewport(300);
+    }
+    owner.onOffset.mockClear();
+    owner.onNativeScroll.mockClear();
+    observed.deliveries.length = 0;
+    observed.native(700);
+    const corrected = change === "native clamp" ? 700 : 800;
+    expect(owner.onOffset).toHaveBeenCalledExactlyOnceWith(0);
+    expect(owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+      viewport: {
+        scrollTop: 700,
+        clientHeight: change === "native clamp" ? 300 : 200,
+        scrollHeight: 1000,
+      },
+      delta: -100,
+      programmatic: true,
+      maintenance: true,
+    });
+    expect(element.scrollTop).toBe(corrected);
+    expect(observed.deliveries).toEqual([
+      { offset: corrected, scrolling: true, programmatic: true },
+    ]);
+    vi.advanceTimersToNextFrame();
+    observed.native();
+    expect(observed.deliveries.at(-1)?.programmatic).toBe(true);
+  },
+);
+
+it("keeps genuine reader movement when an unrelated composer write follows it", () => {
+  const observed = observedMaintenance();
+  observed.native(100);
+  observed.owner.onOffset.mockClear();
+  observed.owner.onNativeScroll.mockClear();
+  observed.owner.onComposerLayout.mockImplementationOnce(() => observed.write(300));
+  observed.native(200);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 1000 },
+    delta: 100,
+    programmatic: false,
+    maintenance: false,
+  });
+  expect(observed.element.scrollTop).toBe(300);
+  expect(observed.owner.onOffset).toHaveBeenCalledExactlyOnceWith(0);
+});
+
+it("accepts a newer nested root delivery without replaying the outer movement", () => {
+  const observed = observedMaintenance();
+  observed.native(100);
+  observed.owner.onOffset.mockClear();
+  observed.owner.onNativeScroll.mockClear();
+  observed.deliveries.length = 0;
+  observed.owner.onComposerLayout.mockImplementationOnce(() => observed.native(300));
+  observed.native(200);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 300, clientHeight: 200, scrollHeight: 1000 },
+    delta: 200,
+    programmatic: false,
+    maintenance: false,
+  });
+  expect(observed.owner.onOffset).toHaveBeenCalledExactlyOnceWith(200);
+  expect(observed.deliveries).toEqual([{ offset: 300, scrolling: true, programmatic: false }]);
+});
+
+it("keeps the root viewport through child scrolling and synchronous composer remapping", () => {
+  const observed = observedMaintenance();
+  const child = observed.element.appendChild(document.createElement("div"));
+  observed.native(100);
+  observed.owner.onNativeScroll.mockClear();
+  observed.owner.onComposerLayout.mockImplementationOnce(() => {
+    child.dispatchEvent(new Event("scroll"));
+    observed.element.scrollTop = 300;
+    observed.resize(1000);
+  });
+  observed.native(200);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 200, clientHeight: 200, scrollHeight: 1000 },
+    delta: 100,
+    programmatic: false,
+    maintenance: false,
+  });
+  expect(observed.owner.onComposerLayout).toHaveBeenCalledTimes(3);
+  expect(observed.deliveries.at(-1)?.offset).toBe(300);
+});
+
+it("delivers late maintenance readback after its previous event receipt retired", () => {
+  const observed = observedMaintenance();
+  observed.write(40);
+  expect(observed.element.scrollTop).toBe(40);
+  observed.native();
+  expect(observed.deliveries.at(-1)).toEqual({ offset: 40, scrolling: true, programmatic: true });
+  vi.advanceTimersToNextFrame();
+  expect(observed.programmatic()).toBe(false);
+
+  observed.native();
+  expect(observed.deliveries.at(-1)).toEqual({ offset: 40, scrolling: true, programmatic: true });
+  vi.advanceTimersToNextFrame();
+  expect(observed.programmatic()).toBe(false);
+});
+
+it.each(["debounced idle", "scrollend", "explicit sync"] as const)(
+  "retires a maintenance receipt delivered by %s",
+  (delivery) => {
+    const observed = observedMaintenance(delivery === "scrollend");
+    observed.write(40);
+    observed.native();
+    vi.advanceTimersToNextFrame();
+    expect(observed.programmatic()).toBe(false);
+    if (delivery === "debounced idle") {
+      vi.advanceTimersByTime(150);
+    } else if (delivery === "scrollend") {
+      observed.element.dispatchEvent(new Event("scrollend"));
+    } else {
+      observed.virtualizer.scrollOffset = 800;
+      observed.virtualizer.isScrolling = false;
+      observed.state.syncNativeOffset?.();
+    }
+    expect(observed.deliveries.at(-1)).toEqual({
+      offset: 40,
+      scrolling: false,
+      programmatic: true,
+    });
+    vi.advanceTimersToNextFrame();
+    expect(observed.programmatic()).toBe(false);
+  },
+);
+
+it("keeps the latest actual write owned when an older receipt frame retires", () => {
+  const observed = observedMaintenance();
+  observed.write(40);
+  observed.native();
+  observed.write(60);
+  vi.advanceTimersToNextFrame();
+  expect(observed.element.scrollTop).toBe(60);
+  expect(observed.programmatic()).toBe(true);
+  observed.native();
+  expect(observed.deliveries.at(-1)?.programmatic).toBe(true);
+  vi.advanceTimersToNextFrame();
+  expect(observed.programmatic()).toBe(false);
+});
+
+it("adopts the actual clamped target and releases it on different native movement", () => {
+  const observed = observedMaintenance();
+  observed.native(400);
+  observed.write(900);
+  expect(observed.element.scrollTop).toBe(800);
+  observed.native();
+  vi.advanceTimersToNextFrame();
+  observed.resize(600);
+  observed.native(600);
+  expect(observed.deliveries.at(-1)?.programmatic).toBe(true);
+  vi.advanceTimersToNextFrame();
+  observed.resize(1000);
+  observed.native();
+  expect(observed.deliveries.at(-1)?.programmatic).toBe(true);
+  vi.advanceTimersToNextFrame();
+  // Growth must not restore the target from before the native clamp.
+  observed.native(800);
+  expect(observed.deliveries.at(-1)?.programmatic).toBe(false);
+  observed.native(600);
+  expect(observed.deliveries.at(-1)?.programmatic).toBe(false);
+  expect(observed.owner.onOffset).toHaveBeenLastCalledWith(-200);
+});
+
+it.each(["wheel", "keydown", "pointerdown", "touchstart"] as const)(
+  "lets genuine %s input take over even at the last owned target",
+  (type) => {
+    const observed = observedMaintenance();
+    observed.write(40);
+    observed.native();
+    vi.advanceTimersToNextFrame();
+    const event = {
+      wheel: () => new WheelEvent("wheel", { deltaY: -40 }),
+      keydown: () => new KeyboardEvent("keydown", { key: "ArrowUp" }),
+      pointerdown: () => new PointerEvent("pointerdown"),
+      touchstart: () => new TouchEvent("touchstart"),
+    }[type]();
+    observed.element.dispatchEvent(event);
+    observed.native();
+    expect(observed.deliveries.at(-1)?.programmatic).toBe(false);
+    expect(observed.owner.onReaderScroll).toHaveBeenCalled();
+  },
+);
+
+it("publishes preceding native movement before marking a new correction", () => {
+  const observed = observedMaintenance();
+  const events: Array<{ delta: number; programmatic: boolean }> = [];
+  onTestFinished(
+    subscribeTranscriptScroll(observed.element, (event) => {
+      if (event.type === "offset") {
+        events.push({ delta: event.delta, programmatic: event.programmatic });
+      }
+    }),
+  );
+  observed.element.scrollTop = 780;
+  observed.write(40);
+  expect(events).toEqual([{ delta: -20, programmatic: false }]);
+  expect(observed.programmatic()).toBe(true);
+});
+
+it.each([
+  {
+    name: "owned clamp",
+    retired: false,
+    maximum: 20,
+    before: 20,
+    after: 5,
+    delta: -20,
+    owned: true,
+  },
+  {
+    name: "late owned clamp",
+    retired: true,
+    maximum: 20,
+    before: 20,
+    after: 5,
+    delta: -20,
+    owned: true,
+  },
+  {
+    name: "reader returning to old target",
+    retired: false,
+    maximum: 800,
+    before: 60,
+    after: 40,
+    delta: 20,
+    owned: false,
+  },
+  {
+    name: "late reader returning to old target",
+    retired: true,
+    maximum: 800,
+    before: 60,
+    after: 40,
+    delta: 20,
+    owned: false,
+  },
+])("classifies preceding movement at its pre-write coordinate: $name", (testCase) => {
+  const observed = observedMaintenance();
+  observed.write(40);
+  observed.native();
+  if (testCase.retired) {
+    vi.advanceTimersToNextFrame();
+    expect(observed.programmatic()).toBe(false);
+  }
+  observed.resize(testCase.maximum);
+  observed.element.scrollTop = testCase.before;
+  const events: Array<{ delta: number; programmatic: boolean }> = [];
+  onTestFinished(
+    subscribeTranscriptScroll(observed.element, (event) => {
+      if (event.type === "offset") {
+        events.push({ delta: event.delta, programmatic: event.programmatic });
+      }
+    }),
+  );
+  observed.write(testCase.after);
+  expect(events).toEqual([{ delta: testCase.delta, programmatic: testCase.owned }]);
+  expect(observed.programmatic()).toBe(true);
+});
+
+it.each([
+  { before: 780, after: 800, owned: true },
+  { before: 800, after: 780, owned: false },
+])("classifies the command threshold before writing $before to $after", (testCase) => {
+  const observed = observedMaintenance();
+  observed.native(600);
+  observed.state.scrollCommand = { target: "end", behavior: "smooth" };
+  observed.element.scrollTop = testCase.before;
+  const events: Array<{ delta: number; programmatic: boolean }> = [];
+  onTestFinished(
+    subscribeTranscriptScroll(observed.element, (event) => {
+      if (event.type === "offset") {
+        events.push({ delta: event.delta, programmatic: event.programmatic });
+      }
+    }),
+  );
+  observed.write(testCase.after);
+  expect(events).toEqual([{ delta: testCase.before - 600, programmatic: testCase.owned }]);
+});
+
+it("keeps the latest correction when a preceding-movement subscriber writes again", () => {
+  const observed = observedMaintenance();
+  const events: Array<{ delta: number; programmatic: boolean }> = [];
+  onTestFinished(
+    subscribeTranscriptScroll(observed.element, (event) => {
+      if (event.type === "offset") {
+        events.push({ delta: event.delta, programmatic: event.programmatic });
+        if (events.length === 1) {
+          observed.write(60);
+        }
+      }
+    }),
+  );
+  observed.element.scrollTop = 780;
+  observed.write(40);
+  expect(events).toEqual([
+    { delta: -20, programmatic: false },
+    { delta: 0, programmatic: true },
+  ]);
+  expect(observed.state.maintenanceScrollOffset).toBe(60);
+  expect(observed.programmatic()).toBe(true);
+});
+
+it("does not transfer a retired observer's target to its replacement", () => {
+  const observed = observedMaintenance();
+  observed.write(40);
+  observed.native();
+  observed.stop();
+  expect(observed.state.maintenanceScrollOffset).toBeNull();
+  expect(observed.state.recordProgrammaticScroll).toBeNull();
+  expect(observed.state.syncNativeOffset).toBeNull();
+  onTestFinished(observed.connect());
+  observed.native();
+  expect(observed.deliveries.at(-1)?.programmatic).toBe(false);
+  vi.advanceTimersToNextFrame();
+  expect(observed.programmatic()).toBe(false);
+});
+
+it("delivers policy only for native events, preserving generic write, sync and idle observations", () => {
+  const observed = observedMaintenance();
+  const events: Array<{ delta: number; scrolling: boolean }> = [];
+  onTestFinished(
+    subscribeTranscriptScroll(observed.element, (event) => {
+      if (event.type === "offset") {
+        events.push({ delta: event.delta, scrolling: event.scrolling });
+      }
+    }),
+  );
+  observed.native(800);
+  expect(observed.deliveries.at(-1)?.scrolling).toBe(true);
+  events.length = 0;
+  observed.owner.onNativeScroll.mockClear();
+  observed.element.scrollTop = 780;
+  observed.write(40);
+  expect(events[0]).toEqual({ delta: -20, scrolling: true });
+  expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
+  observed.element.scrollTop = 60;
+  observed.state.syncNativeOffset?.();
+  expect(events.at(-1)).toEqual({ delta: 20, scrolling: true });
+  expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
+  observed.native(80);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 80, clientHeight: 200, scrollHeight: 1_000 },
+    delta: 20,
+    programmatic: false,
+    maintenance: false,
+  });
+  vi.runAllTimers();
+  expect(events.at(-1)?.scrolling).toBe(false);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "restores native end anchoring only at the true tail (detached: %s)",
+  (detached) => {
+    const observed = observedMaintenance();
+    const policy = makeChatHost({
+      chatHasAutoScrolled: true,
+      chatScrollElement: () => observed.element,
+      chatIsProgrammaticScroll: observed.programmatic,
+      chatIsMaintenanceScroll: () =>
+        isTranscriptMaintenanceScroll(observed.state, observed.element),
+    });
+    if (detached) {
+      policy.chatHistoryPagination = {
+        hasMore: true,
+        olderCursor: "older",
+        hasNewer: true,
+        newerCursor: "newer",
+      };
+    }
+    observed.owner.canFollowEnd = () => canAutoFollowChat(policy);
+    observed.owner.onReaderScroll.mockImplementation((towardEnd) =>
+      handleChatScrollTakeover(policy, towardEnd),
+    );
+    observed.owner.onNativeScroll.mockImplementation((scroll) => handleChatScroll(policy, scroll));
+    observed.native(600);
+    policy.chatFollowLocked = true;
+    policy.chatReadingHistory = true;
+    observed.native(800);
+    expect(policy.chatFollowLocked).toBe(detached);
+    expect(policy.chatReadingHistory).toBe(detached);
+    observed.resize(900);
+    const follow = vi.fn();
+    observed.owner.endAnchor.reconcile(observed.element, canAutoFollowChat(policy), false, follow);
+    expect(follow).toHaveBeenCalledTimes(detached ? 0 : 1);
+  },
+);

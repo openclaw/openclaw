@@ -317,13 +317,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
     pageState.isRouteSessionPending = () => this.routeResolutionPending;
-    // Task tabs can precede main chat in DOM order; viewport reads and commands
-    // must resolve through the same transcript owner.
-    pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
-    pageState.chatIsMaintenanceScroll = () => this.transcript.isMaintenanceScroll;
-    pageState.chatScrollElement = () => this.transcript.scrollElement;
-    pageState.chatScrollToEnd = (options) => this.transcript.scrollToEnd(options);
-    pageState.chatCancelScroll = () => this.transcript.cancelScroll();
+    this.bindTranscriptViewport(pageState);
     pageState.reviewQueuedMessageEdit = () => this.reviewQueuedMessageEdit(pageState);
     pageState.createChatSession = () => this.createSession();
     pageState.forkChatSession = (title) => this.forkConversation(title);

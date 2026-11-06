@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -12,13 +11,15 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory as emptyActiveHistory,
   createState,
+  historyMessage as message,
+  publishLive,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory, type ChatEventPayload } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { reconcileChatRunFromSessionRow, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import {
@@ -32,11 +33,6 @@ function activeHistory(runId: string) {
   history.inFlightRun!.text = "intentionally ignored on web";
   return history;
 }
-const message = (role: "assistant" | "user", text: string, metadata?: Record<string, unknown>) => ({
-  role,
-  content: [{ type: "text", text }],
-  ...(metadata ? { __openclaw: metadata } : {}),
-});
 function withSessions<T extends object>(history: ChatHistoryResult, methods: T) {
   const state = createState(history);
   return Object.assign(state, {
@@ -60,19 +56,6 @@ function cached(state: TestState, messages = state.chatMessages) {
     },
   );
   return () => readChatMessagesFromCache(cache, state, { sessionKey: state.sessionKey });
-}
-function publishLive(
-  state: TestState,
-  live: unknown,
-  scope: ReturnType<typeof getChatSessionProjection>["scope"] = { sessionKey: state.sessionKey },
-) {
-  const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
-    type: "messagePersisted",
-    message: live,
-    scope,
-  });
-  publishChatSessionProjection(state, projection);
-  state.chatMessages = [...projection.messages];
 }
 function rewindState(history: ChatHistoryResult, response: Promise<SessionsRewindResult>) {
   const state = withSessions(history, { rewind: vi.fn(() => response) });
@@ -124,7 +107,7 @@ it("requests the configured default agent for the global workspace alias", async
 });
 
 it("rewinds cached history and restores only valid composer attachments", async () => {
-  const kept = message("assistant", "kept prefix");
+  const kept = message("assistant", "kept prefix", { id: "kept", seq: 1 });
   const result = {
     editorText: "@Alex edit this",
     editorAttachments: [
@@ -173,10 +156,19 @@ it("invalidates a rewind's source cache without changing the newly selected draf
 
 it("reconciles committed rewind history without overwriting a replacement draft", async () => {
   const pending = createDeferred<SessionsRewindResult>();
-  const canonical = message("assistant", "canonical history after rewind");
+  const canonical = message("assistant", "canonical history after rewind", {
+    id: "canonical",
+    seq: 1,
+  });
   const state = rewindState({ messages: [canonical] }, pending.promise);
+  const issued = createDeferred();
+  state.sessions.rewind.mockImplementation(() => {
+    issued.resolve();
+    return pending.promise;
+  });
   state.chatMessages = [message("assistant", "stale history")];
   const loading = rewind(state);
+  await issued.promise;
   state.connectionEpoch += 2;
   state.chatMessage = "new connection draft";
   const attachments = [
@@ -216,7 +208,7 @@ it("retries branch metadata after a reconnect read fails", async () => {
 it("rejects in-flight history after switching branches on the same session", async () => {
   const pending = createDeferred<ChatHistoryResult>();
   const old = message("assistant", "private old branch");
-  const next = message("assistant", "selected branch");
+  const next = message("assistant", "selected branch", { id: "selected", seq: 1 });
   const state = withSessions({ messages: [next] }, { switchBranch: vi.fn().mockResolvedValue({}) });
   state.sessionKey = "agent:main:branches";
   state.chatMessages = [old];
@@ -233,10 +225,20 @@ it("rejects in-flight history after switching branches on the same session", asy
 
 it("reconciles a committed branch switch after a same-client reconnect", async () => {
   const pending = createDeferred<object>();
-  const next = message("assistant", "selected branch after reconnect");
-  const state = withSessions({ messages: [next] }, { switchBranch: vi.fn(() => pending.promise) });
+  const next = message("assistant", "selected branch after reconnect", { id: "selected", seq: 1 });
+  const issued = createDeferred();
+  const state = withSessions(
+    { messages: [next] },
+    {
+      switchBranch: vi.fn(() => {
+        issued.resolve();
+        return pending.promise;
+      }),
+    },
+  );
   state.chatMessages = [message("assistant", "stale branch")];
   const loading = switchChatHistoryBranch(state, "stale-leaf");
+  await issued.promise;
   state.connectionEpoch += 2;
   pending.resolve({});
   await expect(loading).resolves.toBe(false);
@@ -308,170 +310,6 @@ it.each([
   },
 );
 
-describe("full tail after a long live turn", () => {
-  const prompt = message("user", "opening prompt", { id: "prompt", seq: 1 });
-  const call = (seq: number) => message("assistant", `call ${seq}`, { id: `call-${seq}`, seq });
-  const result = (seq: number) => ({
-    role: "toolResult",
-    content: [{ type: "text", text: `result ${seq}` }],
-    __openclaw: { id: `result-${seq}`, seq },
-  });
-  const transcript = [prompt, call(2), result(3), call(4), result(5), call(6), call(7)];
-  const sessionInfo = { key: "main", kind: "direct" as const, updatedAt: 1, sessionId: "session" };
-  const tailFrom = (start: number, totalMessages = transcript.length) => ({
-    messages: transcript.slice(start),
-    hasMore: true,
-    olderCursor: "older:tail",
-    nextOffset: transcript.length - start,
-    totalMessages,
-    sessionInfo: { ...sessionInfo, hasActiveRun: false, status: "killed" as const },
-  });
-
-  async function loadAfterLiveTurn(
-    tail: ChatHistoryResult,
-    older: () => Promise<ChatHistoryResult>,
-    {
-      cursorReset = true,
-      initialEnd = 1,
-      previousLeaf,
-      supersedeFallback = false,
-    }: {
-      cursorReset?: boolean;
-      initialEnd?: number;
-      previousLeaf?: string;
-      supersedeFallback?: boolean;
-    } = {},
-  ) {
-    const state = createState(tail);
-    state.currentSessionId = "session";
-    state.chatDisplayedLeafEntryId = undefined;
-    const pages: ChatHistoryResult[] = [
-      {
-        messages: transcript.slice(0, initialEnd),
-        totalMessages: initialEnd,
-        deltaCursor: "before-stop",
-        sessionInfo: { ...sessionInfo, hasActiveRun: true, activeLeafEntryId: previousLeaf },
-      },
-      tail,
-      ...(supersedeFallback ? [tail] : []),
-    ];
-    const fallbackStarted = createDeferred();
-    const fallbackResponse = createDeferred<ChatHistoryResult>();
-    let deferFallback = supersedeFallback;
-    const request = vi
-      .spyOn(state.client!, "request")
-      .mockImplementation(async (_method, params) => {
-        const cursor = (params as { cursor?: string }).cursor;
-        if (cursor === "older:tail") {
-          return older();
-        }
-        // Stop persists an aborted reply, so the delta cursor resets to a bounded tail.
-        if (cursor === "before-stop" && cursorReset) {
-          return { kind: "reset" };
-        }
-        const page = pages.shift();
-        if (deferFallback && page === tail) {
-          deferFallback = false;
-          fallbackStarted.resolve();
-          return fallbackResponse.promise;
-        }
-        return page;
-      });
-    await loadChatHistory(state);
-    // Live rows carry assistant turns only; tool results arrive as activity.
-    const scope = {
-      sessionKey: state.sessionKey,
-      sessionId: "session",
-      activeLeafEntryId: previousLeaf ?? null,
-    };
-    for (const row of [call(2), call(4), call(6)]) {
-      publishLive(state, row, scope);
-    }
-    const loading = loadChatHistory(state);
-    if (supersedeFallback) {
-      await fallbackStarted.promise;
-      const refreshed = loadChatHistory(state, { supersedeInFlight: true });
-      fallbackResponse.resolve(tail);
-      await refreshed;
-    }
-    await loading;
-    return { state, request };
-  }
-
-  it.each([
-    ["after a row the pane never held", 2],
-    ["at a row the pane held live", 3],
-  ])("reads the gap when the tail starts %s", async (_case, start) => {
-    const { state, request } = await loadAfterLiveTurn(tailFrom(start), async () => ({
-      messages: transcript.slice(0, start),
-      totalMessages: transcript.length,
-      sessionInfo,
-    }));
-    expect(request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ cursor: "before-stop" }),
-      expect.anything(),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ cursor: "older:tail" }),
-      expect.anything(),
-    );
-    expect(state.chatMessages).toEqual(transcript);
-    expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
-  });
-
-  it("restores the held prefix when Stop advances the leaf within the prior read", async () => {
-    const tail = tailFrom(2);
-    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
-    const { state } = await loadAfterLiveTurn(
-      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
-      older,
-      { initialEnd: 4, previousLeaf: "running-leaf" },
-    );
-    expect(state.chatMessages).toEqual(transcript);
-    expect(older).toHaveBeenCalledOnce();
-    expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
-  });
-
-  it("restores the held prefix when a refresh supersedes the Stop fallback", async () => {
-    const tail = tailFrom(2);
-    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
-    const { state } = await loadAfterLiveTurn(
-      { ...tail, sessionInfo: { ...tail.sessionInfo, activeLeafEntryId: "stopped-leaf" } },
-      older,
-      { initialEnd: 4, previousLeaf: "running-leaf", supersedeFallback: true },
-    );
-    expect(state.chatMessages).toEqual(transcript);
-    expect(older).toHaveBeenCalledOnce();
-    expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 7 });
-  });
-
-  it("keeps the retryable boundary when the gap read fails", async () => {
-    const { state } = await loadAfterLiveTurn(tailFrom(2), async () => {
-      throw new Error("offline");
-    });
-    expect(state.chatMessages).not.toContainEqual(prompt);
-    expect(state.chatHistoryPagination).toEqual({
-      hasMore: true,
-      olderCursor: "older:tail",
-      nextOffset: 5,
-      totalMessages: 7,
-    });
-    expect(state.lastError).toBeNull();
-  });
-
-  it.each([
-    ["the full read did not follow a cursor reset", tailFrom(2), { cursorReset: false }],
-    ["the gap exceeds one older page", tailFrom(2, 2000), {}],
-  ])("keeps the lazy boundary when %s", async (_case, tail, options) => {
-    const older = vi.fn(async () => ({ messages: transcript.slice(0, 2), sessionInfo }));
-    const { state } = await loadAfterLiveTurn(tail, older, options);
-    expect(older).not.toHaveBeenCalled();
-    expect(state.chatHistoryPagination).toMatchObject({ hasMore: true, olderCursor: "older:tail" });
-  });
-});
-
 it("clears live projection ownership after history access is denied", async () => {
   const state = createState({ messages: [] });
   const scopeError = missingScopeErrorShape({
@@ -489,10 +327,19 @@ it("clears live projection ownership after history access is denied", async () =
 });
 
 it("materializes live commentary when history replaces active tool activity", async () => {
-  const result = { role: "toolResult", toolCallId: "call-1", content: "tool output", timestamp: 3 };
+  const result = {
+    role: "toolResult",
+    toolCallId: "call-1",
+    content: "tool output",
+    timestamp: 3,
+    __openclaw: { id: "tool-result", seq: 2 },
+  };
   const state = createState({
     ...activeHistory("run-live"),
-    messages: [{ role: "user", content: "do it", timestamp: 1 }, result],
+    messages: [
+      { role: "user", content: "do it", timestamp: 1, __openclaw: { id: "user", seq: 1 } },
+      result,
+    ],
   });
   state.chatRunId = "run-live";
   state.settings = { ...state.settings, chatPersistCommentary: false };

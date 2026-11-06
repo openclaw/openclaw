@@ -54,6 +54,30 @@ export function parseRawTranscriptCursor(value: string): RawTranscriptCursor | u
   }
 }
 
+/** Facts come from the same admitted active projection as the selected page. */
+export function isTranscriptReadContinuous(
+  value: string,
+  facts: {
+    agentId: string;
+    sessionId: string;
+    generation: string | undefined;
+    frontier: number;
+    latestResetRawSeq: number | null;
+    previousLeafActive: boolean;
+  },
+): boolean {
+  const cursor = parseRawTranscriptCursor(value);
+  return Boolean(
+    cursor &&
+    cursor.agentId === facts.agentId &&
+    cursor.sessionId === facts.sessionId &&
+    cursor.generation === facts.generation &&
+    cursor.lastSeq <= facts.frontier &&
+    (facts.latestResetRawSeq === null || facts.latestResetRawSeq <= cursor.lastSeq) &&
+    facts.previousLeafActive,
+  );
+}
+
 export function bootstrapRawTranscriptCursor(
   scope: { agentId: string; sessionId: string },
   generation: string,

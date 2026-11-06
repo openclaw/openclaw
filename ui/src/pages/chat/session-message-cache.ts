@@ -1,49 +1,40 @@
-import {
-  createSessionProjection,
-  readSessionMessageSequence,
-  reduceSessionProjection,
-} from "@openclaw/gateway-client/browser";
-import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
+import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
-import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
-import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
   boundChatThumbnails,
-  CHAT_ROW_DISPLAY_WINDOW,
-  projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
   type ChatDisplayFacts,
-  type ChatRowDisplayFacts,
 } from "../../lib/chat/row-display-facts.ts";
 import { parseSnapshot } from "../../lib/snapshot-json.ts";
-import type {
-  ChatHeaderSharingSnapshot,
-  ChatHeaderViewersSnapshot,
-} from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
-import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
+import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
+import { withoutChatLocalOutputs } from "./chat-local-outputs.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
-import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  readChatLocalOutputs,
+} from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
-import type { ChatDetailsSnapshot } from "./session-details-snapshot-schema.ts";
+import {
+  MAX_CACHED_CHAT_WEIGHT,
+  boundChatSessionSnapshot,
+  serializedArrayItemWeight,
+  type CachedChatSessionSnapshot,
+} from "./session-snapshot-budget.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 export { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
-// JSON code-unit weight bounds retained payloads without allocating another
-// UTF-8 buffer on the route-switch path.
-export const MAX_CACHED_CHAT_SNAPSHOT_WEIGHT = 12 * 1024 * 1024;
-export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
-// History reconciliation replaces changed messages and retains unchanged
-// objects, so serialization weight can follow the same immutable identity.
-const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
@@ -89,45 +80,6 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
-
-// Display only: the live catalog and session owners still admit every action.
-export type ChatComposerSnapshot = Pick<
-  ModelCatalogEntry,
-  "id" | "provider" | "name" | "reasoning"
-> &
-  Pick<
-    GatewaySessionRow,
-    "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
-  > & {
-    contextWindowDisplay?: Pick<
-      GatewaySessionRow,
-      "contextWindow" | "contextWindowDefault" | "contextWindows"
-    >;
-    defaultPermissionMode?: GatewaySessionRow["permissionMode"];
-    speed?: ChatFastModePresentation;
-  };
-
-export type ChatSessionSnapshot = {
-  sessionState?: ChatSessionStateSnapshot;
-  headerViewers?: ChatHeaderViewersSnapshot;
-  headerSharing?: ChatHeaderSharingSnapshot | null;
-  details?: ChatDetailsSnapshot;
-  rowDisplay?: Record<string, ChatRowDisplayFacts>;
-  avatarSources?: Record<string, string | null>;
-  composer?: ChatComposerSnapshot | null;
-  // The board provider validates cached payloads before they can reach a view.
-  board?: { snapshot: unknown; receivedAtMs: number } | null;
-  widgetHeights?: Record<string, number>;
-  transcriptMetadata?: ChatTranscriptMetadata;
-  messageReactions?: Record<string, MessageReactionSummary[]>;
-  progressCard?: ProgressCard | null;
-  deltaCursor?: string;
-  historyState?: ChatHistoryState;
-  displayedLeafEntryId?: string | null;
-  messages: unknown[];
-  pagination: ChatHistoryPagination;
-  sessionId: string | null;
-};
 
 export function cacheChatAvatarSource(
   cache: ChatMessageCache,
@@ -321,11 +273,6 @@ export function createChatWidgetLayout() {
     });
 }
 
-type CachedChatSessionSnapshot = {
-  snapshot: ChatSessionSnapshot;
-  weight: number;
-};
-
 export type ChatMessageCache = Map<string, CachedChatSessionSnapshot>;
 
 /** Disk snapshots omit pairing secrets; discard only their connection-owned memory copies. */
@@ -414,19 +361,34 @@ export function applyChatCacheSnapshot(
   },
   snapshot: ChatSessionSnapshot,
 ): void {
+  const pagination = {
+    ...snapshot.pagination,
+    segments: snapshot.pagination.segments ?? [
+      prepareChatHistorySegment(
+        snapshot.messages,
+        snapshot.pagination,
+        snapshot.pagination.newerCursor,
+      ),
+    ],
+  };
+  // Initialize the old projection before installing incoming coverage; its
+  // empty first publication must not retire the accepted snapshot's source fact.
+  const scope = readChatSessionProjectionScope(state, {
+    sessionId: snapshot.sessionId,
+    ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
+      ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
+      : {}),
+  });
+  getChatSessionProjection(state, scope);
+  state.chatHistoryPagination = selectChatHistoryResidency(
+    snapshot.messages,
+    pagination,
+  ).pagination;
   reduceChatSessionProjection(
     state,
     { type: "snapshotLoaded", messages: snapshot.messages },
-    {
-      scope: readChatSessionProjectionScope(state, {
-        sessionId: snapshot.sessionId,
-        ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
-          ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
-          : {}),
-      }),
-    },
+    { scope },
   );
-  state.chatHistoryPagination = snapshot.pagination;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
   setChatHistoryCursor(state, snapshot.deltaCursor);
@@ -444,6 +406,11 @@ export function appendChatMessageToCache(
   if (!existing) {
     return;
   }
+  // A live tail receipt cannot bridge the newer gap of a detached cached page.
+  // Keep its legal window; explicit tail admission acquires those rows.
+  if (existing.snapshot.pagination.hasNewer) {
+    return;
+  }
   if (eventClaim) {
     let claims = appendedEventClaims.get(cache);
     if (!claims) {
@@ -455,8 +422,7 @@ export function appendChatMessageToCache(
     }
     claims.add(eventClaim);
   }
-  const messageWeight = serializedArrayItemWeight(message);
-  if (messageWeight === null) {
+  if (serializedArrayItemWeight(message) === null) {
     deleteChatSnapshot(cache, cacheKey, "cache-eviction");
     return;
   }
@@ -467,24 +433,16 @@ export function appendChatMessageToCache(
         envelope: eventClaim,
       }).messages.slice()
     : [...existing.snapshot.messages, message];
+  const { segments: _segments, ...pagination } = existing.snapshot.pagination;
   const snapshot = {
     ...existing.snapshot,
     messages,
+    // Appended durable rows extend a contiguous tail, not its old response
+    // segment. Restore prepares fresh membership and reopens any trimmed edge.
+    pagination,
   };
-  if (eventClaim) {
-    cacheChatSessionSnapshot(cache, host, target, snapshot);
-    return;
-  }
-  const weight = existing.weight + messageWeight + (existing.snapshot.messages.length > 0 ? 1 : 0);
-  if (weight > MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-    cacheChatSessionSnapshot(cache, host, target, snapshot);
-    return;
-  }
-  setSessionCacheValue(cache, cacheKey, {
-    snapshot,
-    weight,
-  });
-  trimChatSessionSnapshotCache(cache, cacheKey);
+  // Admission reweighs changed coverage and retires display facts outside its window.
+  cacheChatSessionSnapshot(cache, host, target, snapshot);
 }
 
 export function readChatMessagesFromCache(
@@ -508,8 +466,11 @@ export function cacheChatSessionSnapshot(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
-  incoming: ChatSessionSnapshot,
+  unfilteredSnapshot: ChatSessionSnapshot,
 ): void {
+  // Pane-local outcomes have no replay authority in any cache target. Read the
+  // existing projection only; cache writes must never initialize a display owner.
+  const incoming = withoutChatLocalOutputs(unfilteredSnapshot, readChatLocalOutputs(host));
   const cacheKey = resolveChatSnapshotKey(host, target);
   const existing = getSessionCacheValue(cache, cacheKey);
   const retained =
@@ -578,10 +539,7 @@ export function cacheChatSessionSnapshot(
     deleteChatSnapshot(cache, cacheKey, "cache-eviction");
     return;
   }
-  const rowDisplay = projectChatRowDisplay(snapshot);
-  const bounded = boundChatSessionSnapshot(
-    rowDisplay === snapshot.rowDisplay ? snapshot : { ...snapshot, rowDisplay },
-  );
+  const bounded = boundChatSessionSnapshot(snapshot);
   if (!bounded) {
     deleteChatSnapshot(cache, cacheKey, "cache-eviction");
     return;
@@ -598,105 +556,16 @@ export function readChatSessionSnapshot(
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
 }
 
-function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
-  const messageWeights: number[] = [];
-  for (const message of snapshot.messages) {
-    const weight = serializedArrayItemWeight(message);
-    if (weight === null) {
-      return null;
-    }
-    messageWeights.push(weight);
-  }
-  let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
-  let start = 0;
-  // Every trim before the row display window shares one envelope; measure it once,
-  // not once per dropped message group.
-  const trimmedPagination = trimmedChatHistoryPagination(snapshot.pagination);
-  const lastSharedTrim = snapshot.messages.length - CHAT_ROW_DISPLAY_WINDOW;
-  let sharedEnvelope: ReturnType<typeof measureChatSnapshotEnvelope> | undefined;
-  while (true) {
-    if (start > 0 && start === snapshot.messages.length) {
-      return null;
-    }
-    const pagination = start === 0 ? snapshot.pagination : trimmedPagination;
-    const shared = start > 0 && start <= lastSharedTrim;
-    const envelope =
-      (shared && sharedEnvelope) || measureChatSnapshotEnvelope(snapshot, start, pagination);
-    if (shared) {
-      sharedEnvelope = envelope;
-    }
-    const { rowDisplay } = envelope;
-    const weight =
-      envelope.weight === null
-        ? null
-        : envelope.weight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
-    if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-      return {
-        snapshot:
-          start === 0 && rowDisplay === snapshot.rowDisplay
-            ? snapshot
-            : {
-                ...snapshot,
-                rowDisplay,
-                ...(start > 0
-                  ? { messages: snapshot.messages.slice(start), pagination: { ...pagination } }
-                  : {}),
-              },
-        weight,
-      };
-    }
-    if (start >= snapshot.messages.length) {
-      return null;
-    }
-    const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
-    do {
-      retainedMessageWeight -= messageWeights[start] ?? 0;
-      start += 1;
-      if (boundarySeq === null) {
-        break;
-      }
-    } while (
-      start < snapshot.messages.length &&
-      readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
-    );
-  }
-}
-
-function measureChatSnapshotEnvelope(
-  snapshot: ChatSessionSnapshot,
-  start: number,
-  pagination: ChatHistoryPagination,
-) {
-  const rowDisplay = projectChatRowDisplay(snapshot, start);
-  try {
-    const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
-    return { rowDisplay, weight: JSON.stringify(envelope)?.length ?? 0 };
-  } catch {
-    return { rowDisplay, weight: null };
-  }
-}
-
-function serializedArrayItemWeight(value: unknown): number | null {
-  if (value && typeof value === "object") {
-    const cached = cachedMessageWeights.get(value);
-    if (cached !== undefined) {
-      return cached;
-    }
-  }
-  try {
-    const serialized = JSON.stringify([value]);
-    const weight = serialized ? Math.max(0, serialized.length - 2) : 0;
-    if (value && typeof value === "object") {
-      cachedMessageWeights.set(value, weight);
-    }
-    return weight;
-  } catch {
-    return null;
-  }
-}
-
 function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {
-  if (left.hasMore !== right.hasMore || left.totalMessages !== right.totalMessages) {
+  if (
+    left.hasMore !== right.hasMore ||
+    left.totalMessages !== right.totalMessages ||
+    left.intrinsicSource !== right.intrinsicSource ||
+    left.hasNewer !== right.hasNewer ||
+    left.newerCursor !== right.newerCursor ||
+    left.needsNewerBoundary !== right.needsNewerBoundary ||
+    JSON.stringify(left.segments) !== JSON.stringify(right.segments)
+  ) {
     return false;
   }
   if (left.hasMore && right.hasMore) {

@@ -140,7 +140,7 @@ suite.define(() => {
 
   it("shows an inline retry after earlier history fails on mobile and recovers in place", async () => {
     await suite.withPage(
-      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      { viewport: { width: 320, height: 844 }, isMobile: true, hasTouch: true },
       async ({ page }) => {
         const recent = {
           role: "assistant",
@@ -167,13 +167,32 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         await gateway.waitForRequest("chat.history");
+        const failure =
+          "The connection was interrupted. " +
+          "Additional diagnostic context. ".repeat(80) +
+          "Try again.";
         await gateway.rejectDeferred(
           "chat.history",
-          { code: "UNAVAILABLE", message: "The connection was interrupted. Try again." },
+          { code: "UNAVAILABLE", message: failure },
           { match: { cursor: "older-1" } },
         );
         const retry = pane.getByRole("button", { name: "Retry earlier messages", exact: true });
         await expect.poll(() => retry.count()).toBe(1);
+        expect(await retry.getByRole("alert").textContent()).toContain(failure);
+        const boundary = await pane.locator(".chat-history-boundary").boundingBox();
+        const action = await retry.boundingBox();
+        expect(boundary).not.toBeNull();
+        expect(action).not.toBeNull();
+        expect(boundary!.height).toBe(44);
+        expect(action!.height).toBe(44);
+        expect(action!.x).toBeGreaterThanOrEqual(boundary!.x);
+        expect(action!.x + action!.width).toBeLessThanOrEqual(boundary!.x + boundary!.width);
+        expect(
+          await retry.getByRole("alert").evaluate((element) => ({
+            clipped: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+          })),
+        ).toEqual({ clipped: true, overflow: "ellipsis" });
         await retry.click();
         await pane
           .getByText("Please check the report and compare the available options.", { exact: true })
@@ -200,16 +219,32 @@ suite.define(() => {
       Array.from({ length: count }, (_, index) => message(first + index));
     const gateway = await installMockGateway(page, {
       deferredRequests: [{ method: "chat.history", match: { cursor: "older-40" } }],
-      // A landed page stages the next one in the background; holding it keeps
-      // the post-load boundary state independent of that prefetch.
-      heldRequests: [{ method: "chat.history", match: { cursor: "older-60" } }],
+      // The second packet is delivered to certify overflow before one atomic
+      // publication. It remains staged until the next reader intent.
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
-        "chat.startup": historyPage(messages(41, 40), true, 40),
+        "chat.startup": historyPage(messages(441, 40), true, 40),
         "chat.history": {
           cases: [
-            { match: { cursor: "older-40" }, response: historyPage(messages(21, 20), true, 60) },
-            { match: { cursor: "older-60" }, response: historyPage(messages(1, 20), false) },
+            {
+              match: { cursor: "older-40" },
+              response: historyPage(
+                messages(361, 80).flatMap((source) =>
+                  Array.from({ length: 4 }, (_unused, fragment) => ({
+                    ...source,
+                    content: [
+                      {
+                        type: "text",
+                        text: "Conversation fragment " + source["__openclaw"].seq + "-" + fragment,
+                      },
+                    ],
+                  })),
+                ),
+                true,
+                60,
+              ),
+            },
+            { match: { cursor: "older-60" }, response: historyPage(messages(281, 80), false) },
           ],
         },
       },
@@ -220,7 +255,7 @@ suite.define(() => {
       );
     await page.goto(`${suite.server.baseUrl}chat`);
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-    await page.getByText("Conversation message 80", { exact: true }).waitFor();
+    await page.getByText("Conversation message 480", { exact: true }).waitFor();
     await expectHistoryBoundaryState(pane, false);
     const action = pane.locator(".chat-history-boundary__action");
     // Chromium keeps reporting a control that turns disabled as focused until its

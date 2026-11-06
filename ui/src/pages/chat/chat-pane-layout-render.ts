@@ -1,7 +1,5 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { merge } from "solid-js";
-import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import "./components/chat-details.tsx";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -14,10 +12,9 @@ import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
+import { ChatPaneHeaderLayout } from "./chat-pane-header-layout.ts";
+import type { ChatPaneLayoutRenderParams } from "./chat-pane-layout-contract.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
-import type { createChatPaneRails } from "./chat-pane-rails.ts";
-import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { hasTerminalRunStatus } from "./chat-run-working.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -47,25 +44,6 @@ import {
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
-
-type ChatPaneLayoutRenderParams = {
-  state: ChatPageHost;
-  selectedSession: GatewaySessionRow | undefined;
-  currentAgentId: string;
-  board: ResolvedBoardView;
-  sidebarLayout: SidebarLayout;
-  sessionWorkspace: ReturnType<typeof createChatPaneRails>["sessionWorkspace"] &
-    Pick<ChatProps, "onScrollPortRef">;
-  chatProps: ChatProps;
-  detailsActions: PaneDetailsActions;
-  observerDigest: SessionObserverDigest | null;
-  observerRunId: string | null;
-  catalog: boolean;
-  agentWorkspace: string | undefined;
-  workspaceGit: boolean;
-  openPanelSlot: (slot: SidebarSlotId) => void;
-  closePanelSlot: (slot: SidebarSlotId) => void;
-};
 
 export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
   private readonly detailsElements: ChatDetailsElements = {
@@ -105,6 +83,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
 
   private toolIcons?: PluginToolIcons;
   private readonly attachmentCatalog = new PaneAttachmentCatalog();
+
+  protected override retireTranscriptMessageSources(messages: readonly unknown[]): void {
+    this.attachmentCatalog.dispose();
+    super.retireTranscriptMessageSources(messages);
+  }
 
   override dispose(): void {
     this.attachmentCatalog.dispose();

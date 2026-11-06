@@ -137,16 +137,17 @@ export function applySessionMessagePayload(
       ...(producerRunId ? { runId: producerRunId } : {}),
     },
   };
-  const projection = reduceChatSessionProjection(
+  const receipt = { accepted: false };
+  reduceChatSessionProjection(
     state,
     {
       type: "messagePersisted",
       message,
       envelope: assistantOwnerRunId ? { ...event, runId: assistantOwnerRunId } : event,
     },
-    { scope, runActive },
+    { scope, runActive, messageReceipt: receipt },
   );
-  if (incoming.role === "assistant" && projection.messages.includes(message)) {
+  if (incoming.role === "assistant" && receipt.accepted) {
     prunePersistedAssistantStreamSegments(state, message);
     // Terminal rows replace the live tail; keyed commentary replaces only its segment.
     if (

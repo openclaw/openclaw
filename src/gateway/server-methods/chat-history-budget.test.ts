@@ -35,7 +35,7 @@ describe("replaceOversizedChatHistoryMessages", () => {
     expect(messages[0]).not.toBe(last);
   });
 
-  it("returns a metadata-free sentinel when even the placeholder is over budget", () => {
+  it("keeps bounded source sequence when even the placeholder is over budget", () => {
     const message = {
       role: "user",
       timestamp: 1,
@@ -47,8 +47,24 @@ describe("replaceOversizedChatHistoryMessages", () => {
     expect(messages[0]).toMatchObject({
       content: [{ text: expect.stringContaining("chat.history unavailable") }],
     });
-    expect(messages[0]).not.toHaveProperty("__openclaw");
+    expect(messages[0]).toHaveProperty("__openclaw", { seq: 1 });
   });
+  it.each([undefined, 0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "keeps an unsequenced unavailable outcome metadata-free (sequence=%s)",
+    (seq) => {
+      const [message] = replace([
+        {
+          role: "user",
+          content: "Pending input",
+          __openclaw: { id: "z".repeat(4000), seq },
+        },
+      ]);
+      expect(message).toMatchObject({
+        content: [{ text: expect.stringContaining("chat.history unavailable") }],
+      });
+      expect(message).not.toHaveProperty("__openclaw");
+    },
+  );
 });
 
 it("keeps oversized tool results recoverable with identity, error, and provenance", () => {

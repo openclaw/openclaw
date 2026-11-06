@@ -31,9 +31,29 @@ type TerminalProjectionEntry = {
 
 type TerminalProjectionRun = {
   message?: unknown;
+  primary?: SessionProjectionPrimary;
   status: string;
   acceptedFinalMessageIdentities?: readonly string[];
 };
+
+/** Semantic primary receipt; no display text, content blocks or message wrappers. */
+export type SessionProjectionPrimary = {
+  displayable: boolean;
+  identity: SessionMessageIdentity | null;
+  finalIdentity: string | null;
+  contentIdentity: string | null;
+};
+
+export function readSessionProjectionPrimary(message: unknown): SessionProjectionPrimary {
+  const displayable = hasDisplayableSessionMessage(message);
+  const contentIdentity = readFinalContentIdentity(message);
+  return {
+    displayable,
+    identity: readSessionMessageIdentity(message),
+    finalIdentity: displayable ? (readPersistedFinalIdentity(message) ?? contentIdentity) : null,
+    contentIdentity,
+  };
+}
 
 /** Tool-bearing assistant rows are continuations even without a tool stop reason. */
 export function isSessionProjectionToolContinuation(message: unknown): boolean {
@@ -71,9 +91,10 @@ function readPersistedFinalIdentity(message: unknown): string | null {
   return null;
 }
 
-function hasCompatiblePersistedFinalIdentity(currentMessage: unknown, incomingMessage: unknown) {
-  const current = readSessionMessageIdentity(currentMessage);
-  const incoming = readSessionMessageIdentity(incomingMessage);
+function hasCompatiblePersistedFinalIdentity(
+  current: SessionMessageIdentity | null,
+  incoming: SessionMessageIdentity | null,
+) {
   if (!current || !incoming || current.role !== incoming.role) {
     return false;
   }
@@ -163,13 +184,21 @@ export function readSessionProjectionFinalMessageIdentity(message: unknown): str
 export function canRecoverSessionProjectionFinal(
   currentMessage: unknown,
   incomingMessage: unknown,
+  primary = readSessionProjectionPrimary(currentMessage),
 ): boolean {
-  if (hasDisplayableSessionMessage(currentMessage)) {
+  if (primary.displayable) {
     return false;
   }
-  const currentIdentity = readPersistedFinalIdentity(currentMessage);
+  const current = primary.identity;
+  const identified =
+    current &&
+    (current.externalSource ||
+      (!current.isImported && current.id) ||
+      current.sequence !== null ||
+      (current.role === "assistant" && !current.isImported && current.idempotencyKey));
   return (
-    currentIdentity === null || hasCompatiblePersistedFinalIdentity(currentMessage, incomingMessage)
+    !identified ||
+    hasCompatiblePersistedFinalIdentity(current, readSessionMessageIdentity(incomingMessage))
   );
 }
 
@@ -183,7 +212,8 @@ export function hasSessionProjectionAcceptedFinal(
     identity &&
     run &&
     (run.acceptedFinalMessageIdentities?.includes(identity) ||
-      readSessionProjectionFinalMessageIdentity(run.message) === identity),
+      (run.primary?.finalIdentity ?? readSessionProjectionFinalMessageIdentity(run.message)) ===
+        identity),
   );
 }
 
@@ -206,7 +236,10 @@ export function findUniqueSnapshotTerminalMatch(
     return null;
   }
   const terminalContent = readFinalContentIdentity(current.message);
-  if (!terminalContent || readFinalContentIdentity(run.message) !== terminalContent) {
+  if (
+    !terminalContent ||
+    (run.primary?.contentIdentity ?? readFinalContentIdentity(run.message)) !== terminalContent
+  ) {
     return null;
   }
   let snapshotIndexes: Map<TerminalProjectionEntry, number> | undefined;
@@ -287,6 +320,7 @@ export function isUnsequencedLiveTerminal(
     current.identity.sequence === null &&
     run &&
     run.status !== "streaming" &&
-    readFinalContentIdentity(current.message) === readFinalContentIdentity(run.message),
+    readFinalContentIdentity(current.message) ===
+      (run.primary?.contentIdentity ?? readFinalContentIdentity(run.message)),
   );
 }

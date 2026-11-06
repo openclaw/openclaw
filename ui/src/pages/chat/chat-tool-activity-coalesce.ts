@@ -12,6 +12,7 @@ import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolBlockCardsCached, extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { retireChatGroupingSources } from "./chat-thread-grouping.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
 import { chatItemStartsDisplayTurn } from "./chat-turn-boundary.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
@@ -46,11 +47,58 @@ type Invocation = {
   projections: Projection[];
 };
 
-type CachedBundle = { inputs: unknown[]; message: ProjectedItem["message"] };
+type CachedBundle = { inputs: unknown[]; message: ProjectedItem["message"] | null };
 const messagesBySource = new WeakMap<object, Map<string, CachedBundle>>();
 type CachedTurn = { inputs: unknown[]; items: ChatItem[] };
 // Interleaved transcript builds share the cache without evicting other owners.
 const turnsByOwner = new WeakMap<object, CachedTurn>();
+
+function retireTurn(turn: CachedTurn): void {
+  retireChatGroupingSources(
+    turn.items.flatMap((item) => (item.kind === "message" ? [item.message] : [])),
+  );
+  turn.inputs = [];
+  turn.items = [];
+}
+
+function retireBundle(bundle: CachedBundle): void {
+  if (bundle.message) {
+    retireChatGroupingSources([bundle.message]);
+  }
+  bundle.inputs = [];
+  bundle.message = null;
+}
+
+/** Detach memo ownership only; peer panes keep their published projection intact. */
+export function retireCoalescedMessageSources(messages: readonly unknown[]): unknown[] {
+  const projected: unknown[] = [];
+  for (const value of messages) {
+    const source = asRecord(value);
+    if (!source) {
+      continue;
+    }
+    const turn = turnsByOwner.get(source);
+    if (turn) {
+      projected.push(
+        ...turn.items.flatMap((item) => (item.kind === "message" ? [item.message] : [])),
+      );
+      retireTurn(turn);
+      turnsByOwner.delete(source);
+    }
+    const bundles = messagesBySource.get(source);
+    if (bundles) {
+      for (const bundle of bundles.values()) {
+        if (bundle.message) {
+          projected.push(bundle.message);
+        }
+        retireBundle(bundle);
+      }
+      bundles.clear();
+      messagesBySource.delete(source);
+    }
+  }
+  return projected;
+}
 
 function resultBlock(card: ToolCard): Record<string, unknown> {
   return {
@@ -285,7 +333,10 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   }
   const rows = new Map<number, ProjectedItem[]>();
   const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
-  const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
+  const memoInputs = new Map<
+    ProjectedItem,
+    { owner: object; inputs: unknown[]; sources: object[] }
+  >();
   // Commentary beside a call always splits into its own row, even when the
   // call needs no merging, so no tool row renders outside its activity group.
   const unchanged = new Set(
@@ -393,6 +444,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
     }
     if (bundle) {
+      memoInputs
+        .get(bundle.item)!
+        .sources.push(
+          ...invocation.projections.map((projection) => projection.source.originalMessage),
+        );
       bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
       if (ownsActivity || Array.isArray(bundle.item.message.activity)) {
@@ -428,7 +484,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       },
     };
     bundles.set(bundleKey, { item, index, inputs });
-    memoInputs.set(item, { owner: owner.source.originalMessage, inputs });
+    memoInputs.set(item, {
+      owner: owner.source.originalMessage,
+      inputs,
+      sources: invocation.projections.map((projection) => projection.source.originalMessage),
+    });
   }
   for (const { item, index } of bundles.values()) {
     const row = rows.get(index) ?? [];
@@ -496,7 +556,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   // Assembly and prose/media interleaving are complete. Only messages are
   // reused: duplicate grouping can still mutate the returned item wrappers.
   const nextBySource = new Map<object, Map<string, CachedBundle>>();
-  for (const [item, { owner, inputs }] of memoInputs) {
+  for (const [item, { owner, inputs, sources: bundleSources }] of memoInputs) {
     inputs.push(item.message.content.length);
     for (const block of item.message.content) {
       const raw = asRecord(block);
@@ -507,17 +567,27 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
     }
     const cached = messagesBySource.get(owner)?.get(item.key);
-    if (
-      cached?.inputs.length === inputs.length &&
+    const bundle =
+      cached?.message &&
+      cached.inputs.length === inputs.length &&
       inputs.every((input, index) => input === cached.inputs[index])
-    ) {
-      item.message = cached.message;
+        ? cached
+        : { inputs, message: item.message };
+    item.message = bundle.message!;
+    // Any raw dependency can retire a bundle retained by its surviving call.
+    for (const source of new Set(bundleSources)) {
+      const next = nextBySource.get(source) ?? new Map<string, CachedBundle>();
+      next.set(item.key, bundle);
+      nextBySource.set(source, next);
     }
-    const next = nextBySource.get(owner) ?? new Map<string, CachedBundle>();
-    next.set(item.key, { inputs, message: item.message });
-    nextBySource.set(owner, next);
   }
   for (const [owner, next] of nextBySource) {
+    const retained = new Set(next.values());
+    for (const previous of messagesBySource.get(owner)?.values() ?? []) {
+      if (!retained.has(previous)) {
+        retireBundle(previous);
+      }
+    }
     messagesBySource.set(owner, next);
   }
   return result;
@@ -556,7 +626,19 @@ export function coalesceToolActivityMessages(
         ? cached
         : // coalesceTurn can return caller wrappers; store copies so later annotations stay out.
           { inputs, items: coalesceTurn(turn).map((item) => Object.assign({}, item)) };
-    turnsByOwner.set(owner!, entry);
+    // A retained first source must not own the rest of an evicted turn.
+    for (const item of turn) {
+      if (item.kind === "message") {
+        const source = asRecord(item.message);
+        if (source) {
+          const previous = turnsByOwner.get(source);
+          if (previous && previous !== entry) {
+            retireTurn(previous);
+          }
+          turnsByOwner.set(source, entry);
+        }
+      }
+    }
     // Grouping annotates wrappers, so stored wrappers are never returned.
     for (const item of entry.items) {
       result.push({ ...item });

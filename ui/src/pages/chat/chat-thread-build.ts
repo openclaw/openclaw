@@ -2,10 +2,8 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  type ChatGuardianNotice,
   type ChatItem,
   type MessageGroup,
   accumulatedStreamText,
@@ -49,13 +47,10 @@ import {
   collectCanvasTurns,
   reconcileLiveCanvasPreviews,
 } from "./chat-thread-canvas.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import {
-  placeChatInputs,
-  type ChatInputOrderState,
-  type ChatInputPlacementProps,
-} from "./chat-thread-inputs.ts";
+import { placeChatInputs, type ChatInputOrderState } from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   appendActiveRunItem,
@@ -87,42 +82,6 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
-
-export type BuildChatItemsProps = ChatInputPlacementProps & {
-  paneId: string;
-  sessionKey: string;
-  archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
-  runId?: string | null;
-  compactionStatus?: CompactionStatus | null;
-  /** Invalidates cached display copy when the active UI language changes. */
-  locale?: string;
-  messages: unknown[];
-  toolMessages: unknown[];
-  guardianNotices?: ChatGuardianNotice[];
-  streamSegments: ChatStreamSegment[];
-  reasoning?: ChatReasoning | null;
-  showReasoning?: boolean;
-  stream: string | null;
-  streamStartedAt: number | null;
-  showToolCalls: boolean;
-  persistCommentary?: boolean;
-  /** True while the agent is visibly working (isChatRunWorking). */
-  runWorking?: boolean;
-  /** The answer is visible or the runtime only owns background settlement. */
-  runFinalizing?: boolean;
-  /** True while the current session has an abortable live run. */
-  runActive?: boolean;
-  /** Set while a run that handed off is idle and its subagents are still running. */
-  subagentWait?: { startedAt: number; runId: string };
-  questionPrompts?: readonly QuestionPrompt[];
-  /** True while chat history is loading (initial load or background reload). */
-  loading?: boolean;
-  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
-  replyPeople?: readonly string[];
-  /** Key of the signed-in viewer, who authors local user messages without a sender. */
-  replyLocalPerson?: string;
-};
 
 export function buildChatItems(
   props: BuildChatItemsProps,

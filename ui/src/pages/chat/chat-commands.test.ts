@@ -21,7 +21,13 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { dispatchChatSlashCommand } from "./chat-commands.ts";
+import {
+  admitChatHistoryPages,
+  commitCurrentChatHistorySnapshot,
+} from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
+import { readChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 
 const commandByName = (name: string) => SLASH_COMMANDS.find((entry) => entry.name === name);
 const commandResult = (name: string) => ({ commands: [remoteCommand(name, name)] });
@@ -231,6 +237,100 @@ describe("refreshSlashCommands", () => {
 });
 
 describe("local command loading", () => {
+  it("keeps a real local command result in a segmented transcript", async () => {
+    const host = makeChatHost({
+      requestHandlers: {},
+      renderLifecycle: { afterCommit: () => () => undefined },
+    });
+    const saved = {
+      role: "user",
+      content: "saved message",
+      __openclaw: { id: "saved", seq: 1 },
+    };
+    admitChatHistoryPages(host, [{ messages: [saved] }], "around");
+    await expect(dispatchChatSlashCommand(host, "help", "")).resolves.toBe("completed");
+    expect(host.chatMessages).toEqual([
+      saved,
+      expect.objectContaining({ role: "system", content: expect.any(String) }),
+    ]);
+  });
+
+  it("keeps command output ordered through paging and its own settings refresh without caching it", async () => {
+    const saved = (seq: number) => ({
+      role: "user",
+      content: `saved-${seq}`,
+      __openclaw: { id: `saved-${seq}`, seq },
+    });
+    const initial = saved(2);
+    const newer = saved(3);
+    const older = saved(1);
+    const chatMessagesBySession: ChatMessageCache = new Map();
+    const host = makeChatHost({
+      chatMessagesBySession,
+      currentSessionId: "session-1",
+      renderLifecycle: { afterCommit: () => () => undefined },
+      requestHandlers: {
+        "sessions.patch": {
+          ok: true,
+          key: "agent:main",
+          path: "",
+          entry: { sessionId: "session-1" },
+        },
+      },
+    });
+    admitChatHistoryPages(host, [{ messages: [initial] }], "around");
+    host.refreshCurrentChat = vi.fn(async () => {
+      admitChatHistoryPages(host, [{ messages: [initial, newer] }], "around");
+      reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [initial, newer] });
+    });
+    await expect(dispatchChatSlashCommand(host, "model", "example/model")).resolves.toBe(
+      "completed",
+    );
+    expect(host.refreshCurrentChat).toHaveBeenCalledOnce();
+    const output = host.chatMessages[1];
+    expect(output).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("example/model"),
+    });
+    expect(host.chatMessages).toEqual([initial, output, newer]);
+    admitChatHistoryPages(host, [{ messages: [older, initial] }], "older");
+    expect(host.chatMessages).toEqual([older, initial, output, newer]);
+    admitChatHistoryPages(host, [{ messages: [newer] }], "around");
+    expect(host.chatMessages).toContain(output);
+    expect(host.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([
+      "id:saved-3",
+    ]);
+    commitCurrentChatHistorySnapshot(host);
+    expect(
+      readChatSessionSnapshot(chatMessagesBySession, host, { sessionKey: host.sessionKey })
+        ?.messages,
+    ).toEqual([newer]);
+    reduceChatSessionProjection(host, { type: "sessionReset" });
+    expect(host.chatMessages).toEqual([]);
+    expect(getChatSessionProjection(host).entries).toEqual([]);
+  });
+
+  it("retires old command outcomes under the same resident entry budget", async () => {
+    const host = makeChatHost({
+      requestHandlers: {},
+      renderLifecycle: { afterCommit: () => () => undefined },
+    });
+    await dispatchChatSlashCommand(host, "help", "");
+    const first = host.chatMessages[0];
+    for (let index = 0; index < 400; index += 1) {
+      await dispatchChatSlashCommand(host, "help", "");
+    }
+    expect(host.chatMessages).toHaveLength(400);
+    expect(host.chatMessages).not.toContain(first);
+    expect(getChatSessionProjection(host).entries.some((entry) => entry.message === first)).toBe(
+      false,
+    );
+    expect(host.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)).toEqual([]);
+    host.sessionKey = "agent:main:other";
+    reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [] });
+    expect(host.chatMessages).toEqual([]);
+  });
+
   it("does not run a command after its Gateway changes while loading", async () => {
     const host = makeChatHost({ requestHandlers: {} });
     const pending = dispatchChatSlashCommand(host, "model", "example/model");

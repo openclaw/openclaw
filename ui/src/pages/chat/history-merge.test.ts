@@ -8,12 +8,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { prepareChatHistoryPacket } from "./chat-history-window.ts";
 import {
   admitChatSubmission,
   getChatRunOwner,
   getChatSessionProjection as projectionFor,
   readChatSessionProjectionScope as scopeFor,
   reconcileChatInputCustody,
+  retireChatSubmissionDisplay,
   reduceChatSessionProjection as reduceChat,
   setChatRunOwner,
   publishChatSessionProjection as publish,
@@ -319,6 +322,22 @@ it("publishes each pane reducer transition and displayed transcript together", (
   expect(projectionFor(owner).entries).toEqual(composed.entries);
 });
 
+it("accepts custody after a scope change without publishing an unaccepted empty projection", () => {
+  const { owner, deliver } = initialFixture(false);
+  const delivered = deliver();
+  const previous = message("assistant", "held prior session");
+  snapshot(owner, [previous]);
+  const displayed = owner.chatMessages;
+  owner.sessionKey = "agent:main:replacement";
+  retireChatSubmissionDisplay(owner, new Set(["initial-run"]));
+  expect(owner.chatMessages).toBe(displayed);
+  expect(delivered.pending).toBe(true);
+  owner.sessionKey = delivered.sessionKey;
+  retireChatSubmissionDisplay(owner, new Set(["initial-run"]));
+  expect(delivered.pending).toBe(false);
+  expect(owner.chatMessages).toBe(displayed);
+});
+
 it.each([false, true])("owns initial adoption with cached seed: %s", (cached) => {
   const f = initialFixture();
   const { owner, initial: handoff } = f;
@@ -487,3 +506,32 @@ it.each(["page", "receipt", "custody-first"] as const)(
     expect(admitChatSubmission(owner, undefined, delivered)).toBe(false);
   },
 );
+
+it("retires native coverage at the canonical direct session-reset boundary", () => {
+  const row = persistedMessage("assistant", "Old transcript", "old-source", 1);
+  const packet = prepareChatHistoryPacket(
+    [row],
+    { hasMore: true, olderCursor: "old-before" },
+    "old-after",
+  );
+  expect(packet.boundedPacket).toBe(true);
+  const owner = {
+    ...emptyPane(),
+    chatMessages: [row],
+    chatHistoryPagination: {
+      hasMore: true,
+      olderCursor: "old-before",
+      hasNewer: true,
+      newerCursor: "old-after",
+      segments: [packet],
+    } satisfies ChatHistoryPagination,
+  };
+  projectionFor(owner);
+  reduceChat(owner, { type: "localOutput", message: { role: "system", content: "Local result" } });
+
+  reduceChat(owner, { type: "sessionReset" });
+
+  expect(owner.chatMessages).toEqual([]);
+  expect(owner.chatHistoryPagination).toEqual({ hasMore: false });
+  expect(projectionFor(owner).entries).toEqual([]);
+});

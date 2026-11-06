@@ -60,13 +60,17 @@ function resolveInFlightAssistantText(bufferedText: unknown): string | null {
 }
 
 function runProjectionsUnchanged(
-  previous: ReturnType<typeof getChatSessionProjection>["runs"],
-  current: ReturnType<typeof getChatSessionProjection>["runs"],
+  previous: RunObservations,
+  current: RunObservations,
   exceptRunId?: string,
 ): boolean {
   return (
-    Object.entries(previous).every(([id, run]) => id === exceptRunId || current[id] === run) &&
-    Object.entries(current).every(([id, run]) => id === exceptRunId || previous[id] === run)
+    Object.entries(previous).every(
+      ([id, run]) => id === exceptRunId || current[id]?.revision === run.revision,
+    ) &&
+    Object.entries(current).every(
+      ([id, run]) => id === exceptRunId || previous[id]?.revision === run.revision,
+    )
   );
 }
 
@@ -84,14 +88,31 @@ function hasExactHistoryTerminal(state: ChatState, runId: string): boolean {
   });
 }
 
-export function readRunProjections(state: ChatState, sessionKey: string, agentId?: string) {
-  return getChatSessionProjection(
+type RunObservations = Readonly<Record<string, { revision?: symbol; messageRevision?: symbol }>>;
+
+export function readRunProjections(
+  state: ChatState,
+  sessionKey: string,
+  agentId?: string,
+): RunObservations {
+  const runs = getChatSessionProjection(
     state,
     readChatSessionProjectionScope(state, {
       sessionKey,
       ...(agentId ? { agentId } : {}),
     }),
   ).runs;
+  // Pending history must not own the previous payload graph. Semantic tokens
+  // fence accepted activity while a residency-only release remains invisible.
+  return Object.fromEntries(
+    Object.entries(runs).map(([id, run]) => [
+      id,
+      {
+        revision: run.revision,
+        messageRevision: run.messageRevision,
+      },
+    ]),
+  );
 }
 
 export function applyHistoryRun(params: {
@@ -100,8 +121,8 @@ export function applyHistoryRun(params: {
   observedRunActivity?: boolean;
   sessionInfo: GatewaySessionRow | undefined;
   historyRun: ChatHistoryRunObservation | undefined;
-  previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
-  runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
+  previousRunProjections: RunObservations;
+  runProjectionsBeforeApply: RunObservations;
   currentRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
   resetStream: boolean;
   replayAgentEvent: typeof handleAgentEvent | undefined;
@@ -257,13 +278,13 @@ export function applyHistoryRun(params: {
   const snapshotStartedAt =
     typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
   const advancedDuringRead =
-    previousRunProjections[inFlightRunId]?.message !==
-    runProjectionsBeforeApply[inFlightRunId]?.message;
+    previousRunProjections[inFlightRunId]?.messageRevision !==
+    runProjectionsBeforeApply[inFlightRunId]?.messageRevision;
   // Ordered live frames already establish their baseline, including shrinking
   // replacements. A pending history snapshot cannot extend that baseline by text.
   if (advancedDuringRead && !replacesOwnedRun) {
     state.chatStream = resolveInFlightAssistantText(
-      extractText(runProjectionsBeforeApply[inFlightRunId]?.message),
+      extractText(getChatSessionProjection(state).runs[inFlightRunId]?.message),
     );
   } else {
     replaceChatStream(state, resolveInFlightAssistantText(run.text));

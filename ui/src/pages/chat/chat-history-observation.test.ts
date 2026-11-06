@@ -47,9 +47,9 @@ import {
   cacheChatSessionSnapshot,
   observeChatCache,
   resolveChatSnapshotKey,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
@@ -68,7 +68,7 @@ function history(row: GatewaySessionRow): ChatHistoryResponse {
   return {
     sessionInfo: row,
     sessionId: row.sessionId,
-    messages: [{ role: "assistant", content: "Observed transcript" }],
+    messages: [{ role: "assistant", content: "Observed transcript", __openclaw: { seq: 1 } }],
   };
 }
 
@@ -541,7 +541,9 @@ it.each([false, true])(
     await vi.waitFor(() => expect(getChatHistoryLoadState(state).phase).toBe("committed"));
     renderCurrent();
     expect(container.querySelector(".chat-history-error")).toBeNull();
-    expect(state.chatMessages).toEqual([{ role: "assistant", content: "Observed transcript" }]);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: "Observed transcript", __openclaw: { seq: 1 } },
+    ]);
     expect
       .soft(h.sessions.state.result?.sessions.find((row) => row.key === key))
       .toMatchObject(fresh);

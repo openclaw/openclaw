@@ -19,6 +19,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { selectChatInputDisplay } from "./chat-input-display.ts";
 import {
   buildPendingInputQueueItems,
   getChatPendingInputs,
@@ -44,7 +45,6 @@ import type { SidebarContent, SidebarOpenResult } from "./components/chat-sideba
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
-import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";

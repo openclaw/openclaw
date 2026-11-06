@@ -675,7 +675,7 @@ describe("buildCachedChatItems", () => {
     expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
     publishChatSessionProjectionMessages(
       owner,
-      prependUniqueNativeMessages([older, { ...current }], owner.chatMessages),
+      prependUniqueNativeMessages([older, { ...current }], owner.chatMessages).messages,
     );
     expect(owner.chatMessages).toHaveLength(2);
     expect(owner.chatMessages[1]).toBe(current);
