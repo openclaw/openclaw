@@ -10,6 +10,8 @@ export type ToastOptions = {
   /** The title. Rich content lets a message name a destination the operator can actually
    * open, instead of spelling out a settings path the toast then makes them find. */
   message: string | Node;
+  /** Distinguishes actionable notices that share copy; repeats of the same key replace each other. */
+  dedupeKey?: string;
   /** Muted second line, for the sentence that follows the title. */
   description?: string;
   /** Raw error shown only when expanded; redacted by the shared error renderer. */
@@ -270,13 +272,17 @@ class ToastOwner {
 
   show(options: ToastOptions) {
     const lane = toastLane(options);
-    // A panel holds one notice, and a repeated message restarts instead of stacking.
+    // A panel holds one notice; other lanes deduplicate by explicit identity or unkeyed copy.
     for (const toast of this.live) {
       if (
         !toast.leaving &&
         toast.lane === lane &&
         (lane === "anchored" ||
-          (typeof options.message === "string" && toast.options.message === options.message))
+          (options.dedupeKey !== undefined
+            ? toast.options.dedupeKey === options.dedupeKey
+            : toast.options.dedupeKey === undefined &&
+              typeof options.message === "string" &&
+              toast.options.message === options.message))
       ) {
         this.finish(toast, "replaced");
       }

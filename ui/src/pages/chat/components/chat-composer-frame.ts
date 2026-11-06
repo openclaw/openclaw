@@ -79,7 +79,7 @@ export function createChatComposerContext(
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
   const isBusy = props.sending || streaming;
-  const canAbort = Boolean(props.canAbort && props.onAbort);
+  const canAbort = Boolean(props.canAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),

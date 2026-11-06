@@ -108,7 +108,8 @@ openclaw-new-session-page,
   color: var(--session-header-control-active-color);
 }
 
-:is(.new-session-page__draft-toggle-label, .new-session-page__incognito-toggle-label) {
+.new-session-page__draft-toggle-label,
+.new-session-page__incognito-toggle-label {
   font-size: 12px;
 }
 

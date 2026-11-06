@@ -6,7 +6,6 @@ import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
-import * as turnBoundary from "../chat-turn-boundary.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
@@ -14,7 +13,7 @@ import {
   createAttachmentBlock,
   createMessageGroup,
 } from "./chat-message.test-support.ts";
-import { projectTurnMediaMessages } from "./chat-turn-media-gallery.ts";
+import { projectThreadMediaMessages } from "./chat-thread-media-gallery.ts";
 
 const container = document.createElement("div");
 afterEach(() => {
@@ -28,7 +27,7 @@ afterEach(() => {
 
 const forwardedSource = { kind: "inter_session", sourceTool: "sessions_send" };
 const streamMessage = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
-const messageKeys = (index: ReturnType<typeof projectTurnMediaMessages>, key: string) =>
+const messageKeys = (index: ReturnType<typeof projectThreadMediaMessages>, key: string) =>
   index.get(key)?.map((entry) => entry.key);
 
 function group(key: string, role = "assistant", extra: Partial<MessageGroup> = {}) {
@@ -40,7 +39,7 @@ function group(key: string, role = "assistant", extra: Partial<MessageGroup> = {
   });
 }
 
-it("retains turn membership across renders and stream deltas while reading fresh stream text", () => {
+it("retains thread membership across renders and stream deltas while reading fresh stream text", () => {
   const input = {
     paneId: "video-pane",
     sessionKey: "video-session",
@@ -52,16 +51,17 @@ it("retains turn membership across renders and stream deltas while reading fresh
     showToolCalls: true,
   };
   const items = buildCachedChatItems(input);
-  const byMessage = projectTurnMediaMessages(items);
+  const byMessage = projectThreadMediaMessages(items);
   const live = items.find((item) => item.kind === "stream");
   expect(live?.kind).toBe("stream");
   const key = live!.key;
   const firstMessage = byMessage.get(key)!.at(-1)!.message;
-  const boundary = vi.spyOn(turnBoundary, "chatItemStartsUserTurn");
 
-  projectTurnMediaMessages(buildCachedChatItems(input));
-  const next = projectTurnMediaMessages(buildCachedChatItems({ ...input, stream: "Second clip" }));
-  expect(boundary).not.toHaveBeenCalled();
+  expect(projectThreadMediaMessages(buildCachedChatItems(input))).toBe(byMessage);
+  const next = projectThreadMediaMessages(
+    buildCachedChatItems({ ...input, stream: "Second clip" }),
+  );
+  expect(next).toBe(byMessage);
   expect(next.get(key)?.map((entry) => entry.message)).toEqual([
     input.messages[0],
     streamMessage("Second clip"),
@@ -69,23 +69,21 @@ it("retains turn membership across renders and stream deltas while reading fresh
   expect(firstMessage).toEqual(streamMessage("First clip"));
 
   // A full build can preserve its array; its generation still owns invalidation.
-  boundary.mockClear();
   const rebuilt = buildCachedChatItems({ ...input, stream: "Second clip", queue: [] });
   expect(rebuilt).toBe(items);
-  projectTurnMediaMessages(rebuilt);
-  expect(boundary).toHaveBeenCalled();
+  expect(projectThreadMediaMessages(rebuilt)).not.toBe(byMessage);
 
   const replacement = { ...input.messages[0], provenance: forwardedSource };
-  const replaced = projectTurnMediaMessages(
+  const replaced = projectThreadMediaMessages(
     buildCachedChatItems({ ...input, messages: [replacement], stream: "Second clip" }),
   );
   expect(messageKeys(replaced, key)).toEqual([key]);
 });
 
-it("projects a whole turn across run frames, but never another user turn, divider, or forwarded session", () => {
+it("projects local user and assistant media across turns and dividers, excluding foreign sessions", () => {
   const a = group("a", "assistant", { runId: "run-a" });
   const b = group("b", "assistant", { runId: "run-b" });
-  const index = projectTurnMediaMessages([
+  const index = projectThreadMediaMessages([
     group("user", "user"),
     a,
     group("tool", "tool"),
@@ -97,11 +95,10 @@ it("projects a whole turn across run frames, but never another user turn, divide
     group("forwarded", "assistant", { senderSession: { sessionKey: "other-session" } }),
     group("e"),
   ]);
-  expect(["a", "b"].map((key) => messageKeys(index, key))).toEqual([
-    ["a", "b"],
-    ["a", "b"],
-  ]);
-  expect(["c", "d", "e"].map((key) => messageKeys(index, key))).toEqual([["c"], ["d"], ["e"]]);
+  const keys = ["user", "a", "b", "next-user", "c", "d", "e"];
+  for (const key of keys) {
+    expect(messageKeys(index, key)).toEqual(keys);
+  }
   expect([index.has("forwarded"), index.has("tool")]).toEqual([false, false]);
   const provenanceOnly = group("foreign");
   provenanceOnly.messages[0]!.message = {
@@ -109,9 +106,12 @@ it("projects a whole turn across run frames, but never another user turn, divide
     content: "Foreign video",
     provenance: forwardedSource,
   };
-  const forwarded = projectTurnMediaMessages([a, provenanceOnly, b]);
+  const forwarded = projectThreadMediaMessages([a, provenanceOnly, b]);
   expect(forwarded.has("foreign")).toBe(false);
-  expect(["a", "b"].map((key) => messageKeys(forwarded, key))).toEqual([["a"], ["b"]]);
+  expect(["a", "b"].map((key) => messageKeys(forwarded, key))).toEqual([
+    ["a", "b"],
+    ["a", "b"],
+  ]);
 });
 
 it("keeps duplicate video slots and each sibling message's source authority, but not persisted mirrors", async () => {
@@ -153,7 +153,7 @@ it("keeps duplicate video slots and each sibling message's source authority, but
     assistantAvatar: null,
     sessionKey: "agent:main:video-gallery",
     mediaOwner: harness,
-    getTurnMediaMessages: () => turn,
+    getThreadMediaMessages: () => turn,
     onOpenImage: (item) => {
       opened = item;
     },

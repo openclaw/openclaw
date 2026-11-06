@@ -158,6 +158,7 @@ export function createUserTurnTranscriptRecorder(
     if (candidate.content !== replacementText) {
       delete metadata.humanMentions;
       delete metadata.workContext;
+      delete metadata.appContext;
     }
     const next = { ...candidate, content: replacementText };
     delete next["__openclaw"];

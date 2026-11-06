@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
+  GATEWAY_EVENT_ID_PEOPLE_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
@@ -24,6 +25,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 // must not passively receive chat-class broadcasts.
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [SESSION_READ_SCOPE],
+  [GATEWAY_EVENT_ID_PEOPLE_CHANGED]: [ADMIN_SCOPE],
   chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
   "chat.metadata.changed": [SESSION_READ_SCOPE],
