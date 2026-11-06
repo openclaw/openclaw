@@ -54,6 +54,9 @@ const { values } = parseArgs({
     profile: { type: "string", default: "local" },
     "idle-ms": { type: "string", default: "5000" },
     trace: { type: "boolean", default: false },
+    "no-rpc-observer": { type: "boolean", default: false },
+    "observe-ms": { type: "string", default: "0" },
+    "prepare-ms": { type: "string", default: "0" },
     samples: { type: "string", default: "1" },
     sessions: { type: "string", default: "12000" },
     agents: { type: "string", default: "40" },
@@ -120,7 +123,7 @@ await generateTeamShapeFixture(fixtureOptions);
 const configPath = path.join(root, "openclaw.json");
 const config = JSON.parse(await readFile(configPath, "utf8"));
 const token = "synthetic-rpc-payloads-token";
-const url = `http://127.0.0.1:${proxyPort}`;
+const url = `http://127.0.0.1:${values.profile === "local" ? port : proxyPort}`;
 config.gateway = {
   ...config.gateway,
   auth: { mode: "token", token },
@@ -381,6 +384,9 @@ async function ready(page: Page, route?: RouteId) {
     await page.locator("openclaw-app-shell").waitFor({ state: "visible", timeout: 90000 });
   }
   const readyAt = performance.now();
+  if (values["no-rpc-observer"]) {
+    return readyAt;
+  }
   // Readiness is route-specific above; settle records the remaining admitted RPC work separately.
   await page.waitForFunction(
     () => {
@@ -430,12 +436,14 @@ const report: {
   fixture: unknown;
   profile: string;
   entry: string;
+  rpcObserver: boolean;
   observations: unknown[];
   errors: unknown[];
 } = {
   fixture: JSON.parse(await readFile(path.join(root, "team-shape-summary.json"), "utf8")),
   profile: values.profile,
   entry,
+  rpcObserver: !values["no-rpc-observer"],
   observations: [],
   errors: [],
 };
@@ -490,9 +498,12 @@ try {
             ? { extraHTTPHeaders: { "x-forwarded-for": "198.51.100.10" } }
             : {}),
         });
-        await context.addInitScript({
-          content: `globalThis.__name = (fn) => fn; (${installControlUiRpcObserver.toString()})();`,
-        });
+        await context.addInitScript({ content: "globalThis.__name = (fn) => fn;" });
+        if (!values["no-rpc-observer"]) {
+          await context.addInitScript({
+            content: `(${installControlUiRpcObserver.toString()})();`,
+          });
+        }
         await context.addInitScript(
           ({ identity: deviceIdentity, key: storageKey, token: sessionToken }) => {
             localStorage.setItem("openclaw-device-identity-v1", JSON.stringify(deviceIdentity));
@@ -505,9 +516,10 @@ try {
           },
         );
         const page = await context.newPage();
-        page.on("pageerror", (error) =>
-          report.errors.push({ engine, sample, error: error.message }),
-        );
+        page.on("pageerror", (error) => {
+          report.errors.push({ engine, sample, error: error.message });
+          console.error(`${engine} page error: ${error.message}`);
+        });
         async function measure(name: string, action: () => Promise<unknown>, route?: RouteId) {
           await control("begin");
           const measurement = await startEngineMeasurement(page, engineName, {
@@ -519,13 +531,20 @@ try {
           try {
             await action();
             readyAt = await ready(page, route);
+            // Minimum window from action start; first readiness remains a separate metric.
+            const remaining = Number(values["observe-ms"]) - (performance.now() - start);
+            if (remaining > 0) {
+              await page.waitForTimeout(remaining);
+            }
           } catch (cause) {
             error = String(cause);
           }
           const settledMs = performance.now() - start;
           const metrics = await measurement.stop();
           const server = await control("end");
-          const records = await page.evaluate(() => Reflect.get(window, "openclawRpcPayloads"));
+          const records = await page.evaluate(
+            () => Reflect.get(window, "openclawRpcPayloads") ?? [],
+          );
           const rendered = await page.evaluate(() => ({
             title: document.title,
             text: document.querySelector(".content")?.textContent?.slice(0, 300),
@@ -553,15 +572,20 @@ try {
             `${engine} ${name}: ${settledMs.toFixed(1)} ms${error ? ` ERROR ${error}` : ""}`,
           );
           await page.evaluate(() => {
-            window.openclawRpcPayloads!.length = 0;
+            if (window.openclawRpcPayloads) {
+              window.openclawRpcPayloads.length = 0;
+            }
           });
         }
         try {
           if (values["routes-only"]) {
             await page.goto(`${url}${pathForRoute(bootRoute)}`);
             await ready(page, bootRoute);
+            await page.waitForTimeout(Number(values["prepare-ms"]));
             await page.evaluate(() => {
-              window.openclawRpcPayloads!.length = 0;
+              if (window.openclawRpcPayloads) {
+                window.openclawRpcPayloads.length = 0;
+              }
             });
           } else {
             await measure(
@@ -601,7 +625,9 @@ try {
             await evaluateControlUiContext(page, (app) => app.navigate("new-session"));
             await ready(page, "new-session");
             await page.evaluate(() => {
-              window.openclawRpcPayloads!.length = 0;
+              if (window.openclawRpcPayloads) {
+                window.openclawRpcPayloads.length = 0;
+              }
               window.openclawRpcPhase = "streaming";
             });
             await measure("streaming", async () => {
@@ -628,6 +654,20 @@ try {
               );
             });
           }
+        } catch (cause) {
+          report.errors.push({ engine, sample, stage: "sample", error: String(cause) });
+          await writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
+          if (values.screenshots) {
+            try {
+              await page.screenshot({
+                path: path.join(output, `${engine}-sample-error.png`),
+                timeout: 5000,
+              });
+            } catch (error) {
+              console.error(`${engine} error screenshot unavailable: ${String(error)}`);
+            }
+          }
+          throw cause;
         } finally {
           await context.close();
         }
@@ -714,6 +754,11 @@ async function compare() {
         ...(values.trace ? ["--trace"] : []),
         ...(values.stream ? ["--stream"] : []),
         ...(values["routes-only"] ? ["--routes-only"] : []),
+        ...(values["no-rpc-observer"] ? ["--no-rpc-observer"] : []),
+        "--observe-ms",
+        values["observe-ms"],
+        "--prepare-ms",
+        values["prepare-ms"],
       ];
       const worker = spawn(
         process.execPath,

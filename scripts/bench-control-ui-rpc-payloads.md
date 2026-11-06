@@ -66,6 +66,17 @@ records only route visits, idle, and optional streaming. It does not claim a
 warm boot; use the ordinary census to measure persisted cold/warm startup.
 SIGINT/SIGTERM close the active browser and wait for owned Gateway teardown.
 
+For latency and CPU acceptance, use `--no-rpc-observer --observe-ms 2000` in a
+separate comparison. This leaves browser JSON parsing and WebSocket delivery
+untouched; its report intentionally contains no browser RPC records. The
+observation window runs for at least the specified milliseconds from each
+action's start, while `readyMs` still records first readiness. Use the instrumented
+census for bytes and parse/apply attribution, not a pure application CPU claim.
+For route comparisons, `--prepare-ms 5000` also allows background boot reads to
+finish before the measured navigation. It is outside the observation window.
+The local profile connects directly to the Gateway; only the remote profile uses
+the TCP link.
+
 Artifacts contain synthetic data, but system metadata and build paths can still
 appear in screenshots. Inspect and sanitize before uploading. Remove superseded
 large output at closeout, retaining only reports and cited proof.
