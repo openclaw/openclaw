@@ -58,6 +58,7 @@ it.each(["body", "revalidation"] as const)(
     const res = new ServerResponse(req);
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
+    requestScope.client.connect.scopes = ["operator.write"];
     requestScope.hasCurrentClientAuthority.mockReset().mockReturnValue(true);
     requestScope.revalidate.mockReset().mockImplementation(async () => {
       entered.resolve();

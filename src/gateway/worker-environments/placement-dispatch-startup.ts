@@ -31,6 +31,7 @@ import type {
   WorkerPlacementAuthorization,
   WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -336,6 +337,8 @@ export function createWorkerPlacementDispatchStartup(options: {
         assertAttachmentCurrent();
         requireAttachedEnvironment();
       };
+      const profileAllowsSetup =
+        requireWorkerProfile(params.environment.profileSnapshot.settings).runSetupScript !== false;
       const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
       let lifecycleHomeDir: string | undefined;
       let assertPreparedBindingCurrent: (() => void) | undefined;
@@ -403,6 +406,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 generation: placement.generation,
                 gitAuthor,
                 runSetupScript: request.runSetupScript,
+                setupDisabled: !profileAllowsSetup,
                 assertCurrent: assertWorkspaceCurrent,
               })
             : await tunnel.syncWorkspace({
@@ -427,7 +431,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       }
       assertWorkspaceCurrent();
       const runProjectLifecycleCommand = environments.runProjectLifecycleCommand;
-      if (preparation?.recipe && preparation.runSetupScript !== false) {
+      if (preparation?.recipe && preparation.runSetupScript !== false && profileAllowsSetup) {
         params.markPhase?.("lifecycleCommands");
         await runWorkerProjectLifecycle({
           recipe: preparation.recipe,
