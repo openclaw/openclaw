@@ -1,6 +1,6 @@
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
@@ -721,7 +721,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       throw error;
     }
     // An operator's signal is not a package failure; the caller reports the interruption.
-    if (collectNestedErrorCandidates(error).some((cause) => extractErrorCode(cause) === "interrupted")) {
+    if (
+      collectNestedErrorCandidates(error).some((cause) => extractErrorCode(cause) === "interrupted")
+    ) {
       throw error;
     }
     const failedStep = await classifyPackageUpdatePermissionFailure(

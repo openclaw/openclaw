@@ -297,14 +297,14 @@ export function createUpdateCommandFailureResult(
   const reason = revocation
     ? revocation.code
     : ownershipFailure && admission
-        ? "config-read-failed"
-        : preMutationFailure || pkgOwnershipFailure
-          ? cause.reason
-          : admissionFailure
-            ? "managed-service-preflight"
-            : lockFailure
-              ? "file_lock_timeout"
-              : "update-failed";
+      ? "config-read-failed"
+      : preMutationFailure || pkgOwnershipFailure
+        ? cause.reason
+        : admissionFailure
+          ? "managed-service-preflight"
+          : lockFailure
+            ? "file_lock_timeout"
+            : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
