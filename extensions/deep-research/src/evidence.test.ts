@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Calculation, ResearchFinding, ResearchSource } from "./contract.js";
+import type { ResearchFinding, ResearchSource } from "./contract.js";
 import { evidenceProblem, renderResearchReport } from "./evidence.js";
 
 const quote = "In 2026, Alpha reported 12 km and Beta reported 4 km of river restoration.";
@@ -14,7 +14,7 @@ const sources: ResearchSource[] = [
   },
 ];
 const input = (value: number) => ({ value, unit: "km", asOf: "2026", sourceId: "S1", quote });
-const finding = (): ResearchFinding & { calculation: Calculation } => ({
+const finding = (): Required<ResearchFinding> => ({
   statement: "The combined restoration in 2026 was 16 km.",
   evidence: [{ sourceId: "S1", quote }],
   support: "quote-matched",
