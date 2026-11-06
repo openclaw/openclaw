@@ -1723,7 +1723,7 @@ describe("ci workflow guards", () => {
               ...context,
               matrix,
             }),
-          ).toBe(matrix.runner);
+          ).toBe(matrix.runner_label ?? matrix.runner);
           const independentStep = requiredWorkflowStep(additional.steps, "Run independent checks");
           const rowContext = { ...context, matrix };
           expect(evaluateWorkflowCondition(independentStep.if, rowContext)).toBe(true);
