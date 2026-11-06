@@ -108,7 +108,7 @@ const verificationSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export function sourceAllowed(raw: string, request: ResearchRequest): boolean {
+function sourceAllowed(raw: string, request: ResearchRequest): boolean {
   let url: URL;
   try {
     url = new URL(raw);
