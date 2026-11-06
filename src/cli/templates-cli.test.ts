@@ -228,6 +228,20 @@ describe("templates cli", () => {
     expect(existsSync(workspace)).toBe(false);
   });
 
+  it("refuses an explicitly empty workspace override", async () => {
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
+    await add(["--dry-run", "--workspace", "", "--json"], root);
+    expect(output()).toMatchObject({
+      agent: { workspace: "" },
+      blockers: expect.arrayContaining([expect.objectContaining({ code: "invalid_workspace" })]),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ kind: "workspace", blocked: true }),
+      ]),
+    });
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(existsSync(workspace)).toBe(false);
+  });
+
   it("redacts credentials and sanitizes MCP targets in add previews", async () => {
     const manifestPath = await writeManifest({
       ...cliTestHelpers.minimalManifest,
