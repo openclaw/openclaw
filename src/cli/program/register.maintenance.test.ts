@@ -6,6 +6,7 @@ import { parseReleasedDoctorLintReport } from "../../infra/test-fixtures/update-
 import { ExitError } from "../../runtime.js";
 import { UpdateSchemaRefusalError } from "../../state/openclaw-update-schema-refusal.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
+import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { expectNoCalls } from "./program.test-helpers.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   dashboardCommand: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
   runDoctorLintCli: vi.fn(),
+  requestOneShotSettledExitWatchdog: vi.fn(),
 }));
 
 const { doctorCommand, triageCommand, dashboardCommand, runtime } = mocks;
@@ -40,6 +42,11 @@ vi.mock("../../commands/doctor-lint.js", async (importOriginal) => ({
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
+}));
+
+vi.mock("../one-shot-exit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../one-shot-exit.js")>()),
+  requestOneShotSettledExitWatchdog: mocks.requestOneShotSettledExitWatchdog,
 }));
 
 function jsonFailure(message: string) {
@@ -90,6 +97,13 @@ afterEach(() => {
 });
 
 describe("registered maintenance commands", () => {
+  it("bounds a leaked handle only for the executable's Doctor", async () => {
+    await runCli("doctor --fix --non-interactive");
+    expectNoCalls(mocks.requestOneShotSettledExitWatchdog);
+    await withCliProcessScope(() => runCli("doctor --fix --non-interactive"));
+    expect(mocks.requestOneShotSettledExitWatchdog).toHaveBeenCalledOnce();
+  });
+
   const mapping = JSON.stringify({
     from: "openai/gpt-daybreak-blue-latest",
     to: "openai/gpt-6.1-sol",
