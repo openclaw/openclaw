@@ -101,7 +101,9 @@ function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
                   <div class="portals-empty__note">{t("portalsPage.unsupported")}</div>
                 </Show>
                 <Show when={state().error}>
-                  <InlineAlert tone="danger">{state().error}</InlineAlert>
+                  <InlineAlert tone="danger" role="none">
+                    {state().error}
+                  </InlineAlert>
                 </Show>
               </>
             }
@@ -442,7 +444,9 @@ function PortalReadiness(props: {
       <Errored
         fallback={(error, reset) => (
           <section class="portals-empty" role="alert">
-            <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>
+            <InlineAlert tone="danger" role="none">
+              {formatUiError(error())}
+            </InlineAlert>
             <button
               class="btn"
               type="button"

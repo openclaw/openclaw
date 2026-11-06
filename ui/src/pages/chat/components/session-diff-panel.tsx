@@ -91,8 +91,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   // Local scope choices survive until a new request from this owner arrives.
   const [scope, setScope] = createSignal<SessionDiffScope>((previous) => {
     const request = props.scopeRequest;
-    const owner = props.owner;
-    return request?.owner === owner ? request.scope : (previous ?? { scope: "all" });
+    return request?.owner === props.owner ? request.scope : (previous ?? { scope: "all" });
   });
   const [split, setSplit] = createSignal(preferences.split);
   const [wrap, setWrap] = createSignal(preferences.wrap);

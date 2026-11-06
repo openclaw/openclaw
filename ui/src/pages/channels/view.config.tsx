@@ -116,7 +116,9 @@ export function ChannelConfigFeedback(params: { channelId: string; props: Channe
           )}
         </Show>
         <Show when={blockedSetup()}>
-          <InlineAlert tone="warning">{t("channels.hub.saveBeforeSetup")}</InlineAlert>
+          <InlineAlert tone="warning" role="none">
+            {t("channels.hub.saveBeforeSetup")}
+          </InlineAlert>
         </Show>
       </div>
     </Show>

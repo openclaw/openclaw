@@ -256,7 +256,7 @@ export function Config(props: ConfigProps) {
     equals: (previous, next) => previous.completion === next.completion,
   });
   const hasSchema = createMemo(() => Boolean(props.schema));
-  const readSchema = () => {
+  const schemaReady = createMemo(() => {
     const hasAcceptedSchema = hasSchema();
     return schemaRead().completion?.then((result) => {
       if (!result.ok && !hasAcceptedSchema) {
@@ -264,8 +264,7 @@ export function Config(props: ConfigProps) {
       }
       return result.ok ? undefined : result.error;
     });
-  };
-  const schemaReady = createMemo(readSchema);
+  });
   const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
   function RawEditor() {
     void warmJson5().catch(() => undefined);

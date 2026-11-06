@@ -178,9 +178,6 @@
   min-height: 44px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
-}
-
-.agent-chat__composer-status-band {
   width: 100%;
   padding: 8px 14px;
   white-space: nowrap;
@@ -1209,6 +1206,12 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .agent-chat__composer-alert .callout__dismiss {
+    width: 44px;
+    height: 44px;
+    margin-block: -8px;
+  }
+
   .agent-chat__composer-actions:has(> .chat-talk-control:not(.chat-talk-control--active)) {
     flex-direction: row;
   }

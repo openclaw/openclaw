@@ -3,9 +3,9 @@ import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { Radio } from "../../components/solid/radio.tsx";
-import "../../components/modal-dialog.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
+import "../../components/modal-dialog.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import {
   DocsLink,
   SettingsEmpty,

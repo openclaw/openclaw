@@ -139,7 +139,7 @@ export function ModelSetupSignIn(props: {
         {status()}
       </span>
       <Show when={stillWaiting()}>
-        <InlineAlert tone="warning" class="wizard-sign-in__callout">
+        <InlineAlert tone="warning" class="wizard-sign-in__callout" role="none">
           {t("modelSetup.wizard.stillWaiting")}
         </InlineAlert>
       </Show>
