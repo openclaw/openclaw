@@ -39,6 +39,10 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   return resolvedMode === "light" ? `${family}-light` : family;
 }
 
+// Bumps whenever a palette sheet settles, so accents resolved before it re-resolve.
+let paletteRevision = 0;
+export const themePaletteRevision = () => paletteRevision;
+
 /** Publish theme colors only after their stylesheet is available. */
 export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void): void {
   if (typeof document === "undefined" || theme === "claw" || !isBuiltinThemeId(theme)) {
@@ -50,12 +54,14 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
   const id = `openclaw-theme-palette-${theme}`;
   const existing = document.getElementById(id);
   if (existing instanceof HTMLLinkElement && existing.sheet) {
+    paletteRevision++;
     ready();
     return;
   }
   const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
   const finish = (event: Event) => {
     stops.forEach((stop) => stop());
+    paletteRevision++;
     if (event.type === "error") {
       // Failed assets must not strand startup; normal CSS defaults stay readable.
       // Remove the failed link so a later selection can retry rather than wait forever.

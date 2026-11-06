@@ -1,0 +1,3 @@
+# Pin one accent projection per input change, a rebuild after a palette sheet loads,
+# and environment cleanup with an unchanged seam color.
+18

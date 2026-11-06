@@ -8,6 +8,7 @@ import { applyControlUiPresentation } from "./control-ui-environment-presentatio
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
+import { syncThemePaletteStylesheet } from "./theme.ts";
 
 afterEach(() => {
   applyControlUiAccent();
@@ -16,6 +17,7 @@ afterEach(() => {
   document.documentElement.removeAttribute("style");
   document.body.style.removeProperty("background-color");
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("Control UI accent presentation", () => {
@@ -106,7 +108,6 @@ describe("Control UI accent presentation", () => {
       syncControlUiSystemChrome();
       expect(reads).not.toHaveBeenCalled();
     } finally {
-      reads.mockRestore();
       for (const meta of [...metas, unrelatedMeta]) {
         meta.remove();
       }
@@ -204,6 +205,24 @@ describe("Control UI accent presentation", () => {
       sampler.mockRestore();
     }
   });
+
+  it("projects once per input change and again after a palette sheet loads", () => {
+    const palette = document.head.appendChild(document.createElement("link"));
+    palette.id = "openclaw-theme-palette-dash";
+    syncThemePaletteStylesheet("dash", () => {});
+    const reads = vi.spyOn(globalThis, "getComputedStyle");
+    const environment = { label: "edge", color: "amber" } as const;
+    // One projection plus a favicon read per environment pass; cleanup keeps the accent.
+    applyControlUiPresentation({ environment, seamColor: "#123456" });
+    applyControlUiAccent();
+    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+    expect(document.documentElement.hasAttribute("data-openclaw-environment")).toBe(false);
+    expect(reads).toHaveBeenCalledTimes(3);
+    palette.dispatchEvent(new Event("load"));
+    applyControlUiAccent();
+    expect(reads).toHaveBeenCalledTimes(4);
+    palette.remove();
+  });
 });
 
 describe("Live display preference presentation", () => {
@@ -279,7 +298,6 @@ describe("Live display preference presentation", () => {
         }
         expect(reads).not.toHaveBeenCalled();
       } finally {
-        vi.restoreAllMocks();
         unsubscribe();
         theme.dispose();
         gateway.stop();

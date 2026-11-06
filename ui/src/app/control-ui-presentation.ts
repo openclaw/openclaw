@@ -8,6 +8,7 @@ import { resolveThemeColor, resolveThemeColors } from "../lib/theme-color.ts";
 import { controlUiAccentFocus, controlUiAccentStates } from "./accent-contrast.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
+import { themePaletteRevision } from "./theme.ts";
 
 const ACCENT_CSS_VARIABLES = [
   "--ring",
@@ -225,6 +226,10 @@ export function syncControlUiSystemChrome(
   publishBackground(resolveThemeColor(computedStyle, "--bg"), canvas);
 }
 
+// The last projection's inputs and the --ring it wrote; repeated boot and config
+// passes with unchanged inputs skip the style writes and forced recalcs.
+let appliedAccent = "";
+
 export function applyControlUiAccent(userAccent?: string): void {
   userAccentOverride = userAccent;
   const root = document.documentElement;
@@ -233,6 +238,12 @@ export function applyControlUiAccent(userAccent?: string): void {
     userAccentOverride === "theme" ? undefined : (userAccentOverride ?? operatorSeamColor);
   const hex = accent?.trim().replace(/^#/, "");
   const color = hex && /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
+  // Lazily loaded palette sheets and the custom theme tag can change the computed accent
+  // behind unchanged theme attributes.
+  const key = `${color} ${root.dataset.theme} ${root.dataset.themeMode} ${themePaletteRevision()} ${document.getElementById("openclaw-custom-theme")?.textContent}`;
+  if (appliedAccent === key + root.style.getPropertyValue("--ring")) {
+    return;
+  }
   // Remove the previous projection before resolving the current theme's palette.
   for (const property of ACCENT_CSS_VARIABLES) {
     root.style.removeProperty(property);
@@ -292,6 +303,7 @@ export function applyControlUiAccent(userAccent?: string): void {
     "--focus-glow",
     "0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow)",
   );
+  appliedAccent = key + root.style.getPropertyValue("--ring");
 }
 
 export function applyControlUiOperatorSeamColor(seamColor?: string): void {
