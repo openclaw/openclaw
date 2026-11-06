@@ -23,7 +23,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../../../infra/device-auth-store.js";
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
-import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
+import { ensureDeviceToken, revokeDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import * as pairingWorker from "../../../infra/device-pairing-worker.js";
 import * as devicePairing from "../../../infra/device-pairing.js";
 import { getPairedDevice, listDevicePairing } from "../../../infra/device-pairing.js";
@@ -47,11 +47,7 @@ import {
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
-import {
-  GatewayClient,
-  type GatewayClientOptions,
-  type GatewayReconnectPausedInfo,
-} from "../../client.js";
+import { GatewayClient, type GatewayClientOptions } from "../../client.js";
 import {
   loadDeviceIdentity,
   openTrackedWs,
@@ -675,7 +671,7 @@ describe("gateway connect pairing exemptions", () => {
     },
   );
 
-  test("returns terminal identity details and pauses a rejected real device-token client", async () => {
+  test("admits bootstrap and cached device credentials without granting unidentified operators role scopes", async () => {
     const origin = "https://localhost";
     const auth = { mode: "token", token: "local-secret" } as const;
     await configureGateway(auth, origin, { roles: rolePolicy("guest") });
@@ -684,100 +680,112 @@ describe("gateway connect pairing exemptions", () => {
       controlUiEnabled: true,
       wsHeaders: { origin },
     });
-
-    let provisionClient: GatewayClient | undefined;
-    let client: GatewayClient | undefined;
-    let provisionTimeout: NodeJS.Timeout | undefined;
-    let pauseTimeout: NodeJS.Timeout | undefined;
+    const clients: GatewayClient[] = [];
+    let boundaryWs: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
     try {
       const issued = await issueDeviceBootstrapToken({
         profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
       });
+      const bootstrapIdentity = loadDeviceIdentity("roles-bootstrap-owner");
+      const bootstrapScopes = [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES];
       const response = await connectReq(started.ws, {
         skipDefaultAuth: true,
+        prePairDevice: false,
         bootstrapToken: issued.token,
         role: "operator",
-        scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+        scopes: bootstrapScopes,
         client: CONTROL_UI_CLIENT,
-        deviceIdentityPath: loadDeviceIdentity("roles-bootstrap-owner").identityPath,
+        deviceIdentityPath: bootstrapIdentity.identityPath,
       });
-
+      // Exempting pairing admission does not supply a verified human or owner profile.
       expect(response).toMatchObject({
+        ok: true,
+        payload: { type: "hello-ok", auth: { role: "operator", scopes: [] } },
+      });
+      expect(await getPairedDevice(bootstrapIdentity.identity.deviceId)).toMatchObject({
+        approvedScopes: bootstrapScopes,
+        tokens: { operator: { scopes: bootstrapScopes } },
+      });
+      expect(await rpcReq(started.ws, "sessions.list", {})).toMatchObject({
         ok: false,
-        error: {
-          code: "NOT_PAIRED",
-          message:
-            "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
-          details: { code: ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED },
-        },
+        error: { code: "FORBIDDEN", message: "missing scope: operator.read" },
       });
 
       const loaded = loadDeviceIdentity("roles-device-token-owner");
       const baseClientOptions = controlUiOptions(started.port, origin, loaded.identity);
-      const provisioned = new Promise<void>((resolve, reject) => {
-        provisionTimeout = setTimeout(
-          () => reject(new Error("timeout waiting for the shared-secret client to connect")),
-          2_500,
-        );
-        provisionClient = new GatewayClient({
-          ...baseClientOptions,
-          token: auth.token,
-          onHelloOk: () => resolve(),
-          onConnectError: reject,
+      const connect = (token?: string) =>
+        new Promise<{ client: GatewayClient; hello: HelloOk }>((resolve, reject) => {
+          const client = new GatewayClient({
+            ...baseClientOptions,
+            token,
+            onHelloOk: (hello) => resolve({ client, hello }),
+            onConnectError: reject,
+          });
+          clients.push(client);
+          client.start();
         });
-        provisionClient.start();
-      });
-      await provisioned;
-      if (provisionTimeout) {
-        clearTimeout(provisionTimeout);
-      }
-      await provisionClient?.stopAndWait();
-      const deviceToken = (
-        await readDeviceAuthTokenForTest({
-          deviceId: loaded.identity.deviceId,
-          role: "operator",
-        })
-      )?.token;
-      expect(deviceToken).toBe(
-        (await getPairedDevice(loaded.identity.deviceId))?.tokens?.operator?.token,
-      );
+      const provisioned = await connect(auth.token);
+      expect(provisioned.hello.auth.scopes).toEqual(["operator.read"]);
+      const deviceToken = provisioned.hello.auth.deviceToken;
       if (!deviceToken) {
         throw new Error("expected shared-secret connection to issue a device token");
       }
-
-      const connectAttempts = vi.fn();
-      const paused = new Promise<GatewayReconnectPausedInfo>((resolve, reject) => {
-        pauseTimeout = setTimeout(
-          () => reject(new Error("timeout waiting for the Gateway client to pause reconnect")),
-          2_500,
-        );
-        client = new GatewayClient({
-          ...baseClientOptions,
-          hostDeps: { beforeConnect: connectAttempts },
-          onReconnectPaused: resolve,
-        });
-        client.start();
-      });
-
-      await expect(paused).resolves.toMatchObject({
-        detailCode: ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_100);
-      });
-      expect(connectAttempts).toHaveBeenCalledTimes(1);
       expect(
         (await readDeviceAuthTokenForTest({ deviceId: loaded.identity.deviceId, role: "operator" }))
           ?.token,
       ).toBe(deviceToken);
+      await provisioned.client.stopAndWait();
+
+      // The real client reloads the cached token without any shared secret.
+      const reconnected = await connect();
+      expect(reconnected.hello.auth.scopes).toEqual([]);
+      expect(await getPairedDevice(loaded.identity.deviceId)).toMatchObject({
+        approvedScopes: ["operator.read"],
+        tokens: { operator: { token: deviceToken, scopes: ["operator.read"] } },
+      });
+      await expect(reconnected.client.request("sessions.list", {})).rejects.toThrow(
+        "missing scope: operator.read",
+      );
+      await expect(reconnected.client.request("users.self", {})).rejects.toThrow();
+      await reconnected.client.stopAndWait();
+
+      // No helper pre-pairing or default shared secret may repair a denied credential.
+      const tokenOptions = {
+        client: CONTROL_UI_CLIENT,
+        role: "operator",
+        deviceToken,
+        deviceIdentityPath: loaded.identityPath,
+        skipDefaultAuth: true,
+        prePairDevice: false,
+      };
+      boundaryWs = await openTrackedWs(started.port, { origin });
+      expect(
+        await connectReq(boundaryWs, { ...tokenOptions, scopes: ["operator.write"] }),
+      ).toMatchObject({
+        ok: false,
+        error: { details: { code: ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH } },
+      });
+      expect((await getPairedDevice(loaded.identity.deviceId))?.approvedScopes).toEqual([
+        "operator.read",
+      ]);
+      boundaryWs.close();
+      expect(
+        await revokeDeviceToken({ deviceId: loaded.identity.deviceId, role: "operator" }),
+      ).toMatchObject({ ok: true });
+      boundaryWs = await openTrackedWs(started.port, { origin });
+      expect(
+        await connectReq(boundaryWs, { ...tokenOptions, scopes: ["operator.read"] }),
+      ).toMatchObject({
+        ok: false,
+        error: { details: { code: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH } },
+      });
+      expect((await getPairedDevice(loaded.identity.deviceId))?.tokens?.operator).toMatchObject({
+        token: deviceToken,
+        revokedAtMs: expect.any(Number),
+      });
     } finally {
-      if (provisionTimeout) {
-        clearTimeout(provisionTimeout);
-      }
-      if (pauseTimeout) {
-        clearTimeout(pauseTimeout);
-      }
-      await Promise.all([client?.stopAndWait(), provisionClient?.stopAndWait()]);
+      boundaryWs?.close();
+      await Promise.all(clients.map((client) => client.stopAndWait()));
       await closeServer(started);
     }
   });

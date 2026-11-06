@@ -111,9 +111,12 @@ export async function authorizeGatewayConnectDevice(
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
   const sharedSecretOwner = authMethod === "token" || authMethod === "password";
+  // Device credential exemptions still pass the pairing-grant checks below.
+  const pairedDeviceCredential = authMethod === "device-token" || authMethod === "bootstrap-token";
   if (
     roleConfiguredHumanOperator &&
     !sharedSecretOwner &&
+    !pairedDeviceCredential &&
     !authResult.user?.trim() &&
     state.remoteIngressPrincipal?.operatorRoleActor.kind !== "operator"
   ) {
