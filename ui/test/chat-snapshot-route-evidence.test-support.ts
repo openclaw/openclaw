@@ -1,7 +1,7 @@
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
-import type { ApplicationContext, ApplicationContextRequest } from "../app/context.ts";
-import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
-import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
+import type { ApplicationRuntime } from "../src/app/bootstrap.ts";
+import type { ApplicationContext, ApplicationContextRequest } from "../src/app/context.ts";
+import type { ChatRouteData } from "../src/pages/chat/session-route-data.ts";
+import type { MockGatewayWindow } from "../src/test-helpers/control-ui-e2e-contract.ts";
 
 // Serialized after the mock Gateway in this suite's existing init script. The
 // existing diagnostic console ring survives reloads and enters the private artifact.

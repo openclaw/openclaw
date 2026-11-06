@@ -1,12 +1,12 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { captureSnapshotRouteEvidence } from "../../test/chat-snapshot-route-evidence.test-support.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../app-route-paths.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
-import { captureSnapshotRouteEvidence } from "./chat-snapshot-route-evidence.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";

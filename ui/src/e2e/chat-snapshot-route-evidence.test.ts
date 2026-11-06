@@ -1,11 +1,11 @@
 import { expect, vi } from "vitest";
+import { captureSnapshotRouteEvidence } from "../../test/chat-snapshot-route-evidence.test-support.ts";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { createControlUiMockGatewayInitScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   flushMockTimers,
   mockGatewayTest as it,
 } from "../test-helpers/mock-gateway-page.test-support.ts";
-import { captureSnapshotRouteEvidence } from "./chat-snapshot-route-evidence.test-support.ts";
 
 it("retains admission and reply evidence without replacing results or recording message content", async ({
   gatewayPage,
