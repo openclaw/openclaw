@@ -11,6 +11,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
 import {
   approverOf,
   devicesApprovedBy,
@@ -126,7 +127,9 @@ function DeviceRow(props: {
  * key) can revoke; this browser can't revoke itself. Resolves when closed.
  */
 export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient }): Promise<void> {
-  return withPromiseModalHost<void>(undefined, (modal) => {
+  // Closes when the feature turns off.
+  const lifetime = { signal: openClawIdFeatureSignal(), value: undefined };
+  return withPromiseModalHost<void>(lifetime, (modal) => {
     modal.render(() => {
       const [link, setLink] = createSignal<Link | null>(null);
       const [ownPub, setOwnPub] = createSignal<string | null>(null);

@@ -8,6 +8,7 @@ import {
   announceOwnerDeviceKey,
   ensureOwnerDeviceSigner,
 } from "../../lib/openclaw-id/device-key.ts";
+import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
 import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
 import {
   LINK_STEPS,
@@ -125,7 +126,9 @@ export function showMakeReachableDialog(params: {
   signedIn?: OpenClawIdSignedIn | null;
 }): Promise<boolean> {
   const ceremony = createOpenClawIdCeremony();
-  return withPromiseModalHost<boolean>(undefined, (modal) => {
+  // Closes when the feature turns off; the kit's secrets are dropped however it closes.
+  const lifetime = { signal: openClawIdFeatureSignal(), value: false };
+  return withPromiseModalHost<boolean>(lifetime, (modal) => {
     modal.render(() => {
       const [step, setStep] = createSignal<Step>({ kind: "name" });
       const [saved, setSaved] = createSignal(false);
@@ -530,5 +533,5 @@ export function showMakeReachableDialog(params: {
         </openclaw-modal-dialog>
       );
     });
-  });
+  }).finally(() => ceremony.discard());
 }

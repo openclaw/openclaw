@@ -1,8 +1,16 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
+
+// Dialogs open only while the enabled feature's lifetime runs.
+let endFeature = () => {};
+beforeEach(() => {
+  endFeature = startOpenClawIdFeatureLifetime();
+});
+afterEach(() => endFeature());
 
 const fixture = vi.hoisted(() => ({
   code: undefined as string | undefined,
