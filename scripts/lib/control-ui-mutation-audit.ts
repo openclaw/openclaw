@@ -173,6 +173,7 @@ export function createControlUiMutationAudit() {
     wrap(Date.prototype, method, `Date.${method}`);
   }
   wrap(Number.prototype, "toLocaleString", "Number.toLocaleString");
+  wrap(String.prototype, "localeCompare", "String.localeCompare");
   return {
     start() {
       active = true;
