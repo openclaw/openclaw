@@ -65,6 +65,9 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
         let refresh = screen.buttons["Refresh"]
         XCTAssertTrue(refresh.waitForExistence(timeout: 5))
         XCTAssertTrue(refresh.isHittable)
+        // Capture the control's identity while it still exists; resolving it after
+        // recovery would fail (the banner is gone once the roster is complete).
+        let refreshIdentity = "label=\(refresh.label); identifier=\(refresh.identifier)"
 
         try await self.setPartial(false, fixture: fixture)
         refresh.tap()
@@ -79,7 +82,7 @@ final class CommandSessionsPartialRosterUITests: XCTestCase {
                 fixture: \(fixture.absoluteString)
                 retained rows visible while final page failing: Synthetic session 1 … header "199 sessions"
                 notice: Showing 200 sessions; 205 total. Refresh to load the rest.
-                in-screen Refresh label: \(refresh.label)
+                in-screen Refresh: \(refreshIdentity)
                 header count after recovery: 204 sessions
                 """)
         trace.name = "sessions-partial-roster-trace"
