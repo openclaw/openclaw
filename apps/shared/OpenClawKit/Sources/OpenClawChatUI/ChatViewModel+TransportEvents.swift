@@ -27,14 +27,7 @@ extension OpenClawChatViewModel {
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
             if reconnected {
-                self.refreshSourceContext()
-                self.refreshAgentsIfRequested()
-                let session = self.currentSessionSnapshot()
-                Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-                self.scheduleProgressCardFetch()
-                Task { [weak self] in await self?.refreshQuestions() }
-                Task { [weak self] in await self?.refreshSwarmCapability() }
-                Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
+                self.refreshAfterHealthRecovery()
             } else if !ok {
                 self.sourcePreviewState.invalidate()
                 self.invalidateAgentCatalog()
@@ -80,9 +73,8 @@ extension OpenClawChatViewModel {
             self.syncSessionReactions(refreshMetadata: true)
             self.cancelHistoryInvalidationRefresh()
             self.invalidateModelChoices()
-            self.refreshSourceContext()
+            self.sourcePreviewState.invalidate()
             self.invalidateAgentCatalog(clear: true)
-            self.refreshAgentsIfRequested()
             switch evt {
             case .routeChanged, .reconnected:
                 self.questionAttentionOwnerID = UUID()
@@ -94,29 +86,53 @@ extension OpenClawChatViewModel {
             self.progressCardStoreAvailable = nil
             self.invalidateProgressCardTarget()
             self.modelAvailabilityIsSessionScoped = false
-            let session = self.currentSessionSnapshot()
-            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
             self.invalidateComposerCapabilities()
-            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             self.errorText = nil
             self.swarmEnabled = false
             self.resetSwarmProgress()
-            Task { [weak self] in await self?.refreshSwarmCapability() }
             self.invalidateHistoryAfterTransportEvent(evt)
             self.invalidateRunSnapshots()
             self.clearPendingRuns()
             self.invalidateIncompleteLiveRunUsage()
             self.clearStreamingActivity()
             let context = self.beginHistoryRequest()
-            // Question refresh is best-effort and must not delay transcript
-            // recovery behind a slow gateway round trip.
-            Task { await self.refreshQuestions() }
+            let recoveryID = UUID()
+            self.pendingTransportRecoveryID = recoveryID
             return Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
-                await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
+                await self.finishTransportRecovery(recoveryID, session: context.session)
             }
         }
         return nil
+    }
+
+    /// Transcript recovery gets the first round trip. A newer reconnect replaces
+    /// this pass, so a flapping route does not stack catalog bursts.
+    private func finishTransportRecovery(_ recoveryID: UUID, session: SessionSnapshot) async {
+        guard self.pendingTransportRecoveryID == recoveryID, !self.isTransportDetached else { return }
+        self.pendingTransportRecoveryID = nil
+        async let catalogs: Void = self.refreshCatalogsAfterRecovery(session: session)
+        await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
+        await catalogs
+    }
+
+    private func refreshAfterHealthRecovery() {
+        // A pending reconnect pass already refreshes these after its transcript read.
+        guard self.pendingTransportRecoveryID == nil else { return }
+        let session = self.currentSessionSnapshot()
+        self.scheduleProgressCardFetch()
+        Task { [weak self] in await self?.refreshCatalogsAfterRecovery(session: session) }
+    }
+
+    /// Repopulates catalogs whose stale values the recovery already cleared.
+    private func refreshCatalogsAfterRecovery(session: SessionSnapshot) async {
+        self.refreshSourceContext()
+        self.refreshAgentsIfRequested()
+        async let models: Void = self.fetchModels(sessionSnapshot: session)
+        async let questions: Void = self.refreshQuestions()
+        async let swarm: Void = self.refreshSwarmCapability()
+        async let composer: Void = self.loadComposerCapabilities(force: true)
+        _ = await (models, questions, swarm, composer)
     }
 
     func applySessionChangeProjection(

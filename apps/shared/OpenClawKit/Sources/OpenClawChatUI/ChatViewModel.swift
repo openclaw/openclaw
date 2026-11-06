@@ -314,6 +314,9 @@ public final class OpenClawChatViewModel {
     nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     @ObservationIgnored
     var historyInvalidationRefresh: (requestID: UInt64, task: Task<Void, Never>)?
+    /// Set while a reconnect waits on transcript recovery before its catalog refreshes.
+    @ObservationIgnored
+    var pendingTransportRecoveryID: UUID?
     var runOwnershipGeneration: UInt64 = 0
     var latestAppliedRunSnapshotRequestID: UInt64 = 0
     var isApplyingRunSnapshot = false
