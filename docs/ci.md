@@ -296,6 +296,8 @@ Both Android release destinations restore the shared Gradle user-home cache
 read-only, reusing dependency downloads, compiled scripts, transforms and wrapper
 distributions from main CI. A cache miss or transfer failure keeps the cold build
 path. Release jobs do not save the archive or enable Gradle task-output caching.
+Toolchain setup runs before mobile dependency installation so cache-key hashing
+does not traverse the installed dependency tree.
 The shared toolchain action's `gradle-cache-mode` override leaves Android SDK
 caching off for these jobs; other callers inherit their existing `cache-mode`.
 
