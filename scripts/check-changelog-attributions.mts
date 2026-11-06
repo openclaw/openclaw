@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-// Rejects changelog thanks entries that credit bots or internal handles.
+// Rejects changelog thanks entries that credit automation or organization handles.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
-const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw", "steipete"]);
+const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw"]);
 const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = new Set([
   "clawsweeper",
   "openclaw-clawsweeper",
@@ -16,13 +16,9 @@ const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 type ThanksOptions = { strictBotHandle?: boolean; docsMirror?: boolean };
 
-export function isForbiddenChangelogThanksHandle(handle: string, options: ThanksOptions = {}) {
+export function isForbiddenChangelogThanksHandle(handle: string, _options: ThanksOptions = {}) {
   const normalized = handle.toLowerCase();
-  // Approved docs mirrors retain every verified human, including the maintainer.
-  // Initial notes, frozen accounting, and PR-author queries keep their existing policy.
-  if (options.docsMirror && normalized === "steipete") {
-    return false;
-  }
+  // Keep options source-compatible; all formats permit verified human credit.
   if (normalized === "" || normalized === "null") {
     // Empty/null input is not a GitHub handle, but the shell query path may pass it through.
     return true;
@@ -93,11 +89,7 @@ export async function main(argv = process.argv.slice(2)) {
   for (const file of paths) {
     const content = fs.readFileSync(file, "utf8");
     const relativePath = path.relative(process.cwd(), file);
-    const docsMirror =
-      /^CHANGELOG\/[^/]+\.md$/u.test(relativePath) &&
-      isReleaseChangelogPath(relativePath) &&
-      changelogFormat(content) === "docs-mirror";
-    for (const violation of findForbiddenChangelogThanks(content, { docsMirror })) {
+    for (const violation of findForbiddenChangelogThanks(content)) {
       if (!failed) {
         console.error("Forbidden changelog thanks attribution:");
       }
@@ -107,7 +99,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (failed) {
     console.error(
-      "Use verified human GitHub credits; retain the initial-note policy in frozen records.",
+      "Use verified human GitHub credits, including human maintainers; never thank bots.",
     );
     process.exitCode = 1;
   }
