@@ -428,17 +428,34 @@ Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin
 migrations.
 
-OpenClaw 2026.10.10 can report `spawnSync node ETIMEDOUT` while probing SQLite
-headers in a large state directory. Candidate safety checks do not replace the
+OpenClaw 2026.10.10 and 2026.11.1 can report `spawnSync node ETIMEDOUT` while
+probing SQLite headers in a large state directory, because they check every path
+in one child with a 10-second deadline. Candidate safety checks do not replace the
 installed updater's backup implementation: its original-state capture and update
 backup discovery still use the installed code, including its retained runtime.
 Selecting a candidate with the batched probe does not repair that running updater.
-Use the manual procedure above for the first hop. If the old backup command also
-times out, stop the Gateway and other state writers and take a verified filesystem
-or volume snapshot covering the state, config, credentials, and configured agent
-and workspace directories before replacing the package. Do not copy only the main
-file of a live SQLite database or edit installed distribution files to bypass the
-probe.
+
+The timeout is usually a cold file cache. Read each file once, then run the update
+again straight away, adding any workspace directories outside the state directory:
+
+```bash
+find "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}" -type f -exec head -c 16 {} + > /dev/null
+openclaw update
+```
+
+This needs no file changes, but it only helps when the cached probe fits inside
+10 seconds, which depends on the path count and the host. If the update still
+times out, use the manual procedure above for the first hop. Its backup step can
+use `openclaw backup create --no-include-workspace --verify`, which keeps database
+coverage and skips workspace files; preserve your workspaces separately. If that
+also times out, stop the Gateway and other state writers and take a verified
+filesystem or volume snapshot covering the state, config, credentials, and
+configured agent and workspace directories before replacing the package. Do not
+copy only the main file of a live SQLite database or edit installed distribution
+files to bypass the probe.
+
+The batched probe first shipped in 2026.11.5-beta.1. A release without it, including
+2026.11.1, can hit this timeout again on its own next update.
 
 On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
 their fixed 30-second baseline package-fingerprint budget before replacing any

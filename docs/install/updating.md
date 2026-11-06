@@ -62,9 +62,11 @@ the older updater's already-captured environment. No schema or config migration
 is required.
 
 SQLite header-probe timeouts report the discovery path count and link to the
-manual package-manager hop. Probe batching, backup refusal, and rollback safety
-are unchanged. This diagnostic requires the updater performing discovery to
-contain the fix; a candidate cannot change an older installed updater's probe.
+manual package-manager hop. A probe batch that misses its 10-second deadline now
+splits and retries, so slow or cold storage gets an answer; a path that cannot
+answer alone still refuses the backup. Backup refusal and rollback safety are
+unchanged. These changes require the updater performing discovery to contain the
+fix; a candidate cannot change an older installed updater's probe.
 
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
