@@ -31,6 +31,7 @@ export type MemoryChunkWrite = {
 };
 type ChunkDatabase = {
   memory_index_chunks: {
+    chunk_rowid?: number;
     id: string;
     path: string;
     source: MemorySource;
@@ -54,6 +55,16 @@ type ChunkDatabase = {
     session_kind: MemoryEntryProvenance["sessionKind"];
     observed_at: number;
     supersedes_key: string | null;
+  };
+  memory_index_chunks_cjk_fts: {
+    rowid: number;
+    text: string;
+    id: string;
+    path: string;
+    source: string;
+    model: string;
+    start_line: number;
+    end_line: number;
   };
 };
 
@@ -193,33 +204,43 @@ function syncMemoryCjkBigramRows(
   if (!cjkFtsEnabled) {
     return;
   }
-  const rowidStatement = database.prepare(
-    `SELECT chunk_rowid FROM ${MEMORY_INDEX_CHUNKS_TABLE} WHERE id = ?`,
-  );
-  const deleteStatement = database.prepare(
-    `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`,
-  );
-  const insertStatement = database.prepare(
-    `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} ("rowid", text, id, path, source, model, start_line, end_line)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
+  const db = getNodeSqliteKysely<ChunkDatabase>(database);
+  const ids = rows.map((row) => row.id);
+  const rowidRecords = executeSqliteQuerySync(
+    database,
+    db.selectFrom("memory_index_chunks").select(["id", "chunk_rowid"]).where("id", "in", ids),
+  ).rows;
+  const rowidMap = new Map<string, number>();
+  for (const record of rowidRecords) {
+    if (typeof record.chunk_rowid === "number") {
+      rowidMap.set(record.id, record.chunk_rowid);
+    }
+  }
+  const rowids: number[] = [];
+  const entries: ChunkDatabase["memory_index_chunks_cjk_fts"][] = [];
   for (const row of rows) {
-    const rowidRow = rowidStatement.get(row.id);
-    // SAFETY: SQLite returns row records conforming to the SELECT projection.
-    const chunk = rowidRow as { chunk_rowid?: number } | undefined;
-    if (typeof chunk?.chunk_rowid !== "number") {
+    const chunkRowid = rowidMap.get(row.id);
+    if (typeof chunkRowid !== "number") {
       continue;
     }
-    deleteStatement.run(chunk.chunk_rowid);
-    insertStatement.run(
-      chunk.chunk_rowid,
-      encodeHanBigrams(row.chunk.text ?? ""),
-      row.id,
-      row.context.path,
-      row.context.source,
-      row.context.model,
-      row.chunk.startLine,
-      row.chunk.endLine,
-    );
+    rowids.push(chunkRowid);
+    entries.push({
+      rowid: chunkRowid,
+      text: encodeHanBigrams(row.chunk.text ?? ""),
+      id: row.id,
+      path: row.context.path,
+      source: row.context.source,
+      model: row.context.model,
+      start_line: row.chunk.startLine,
+      end_line: row.chunk.endLine,
+    });
   }
+  if (rowids.length === 0) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("memory_index_chunks_cjk_fts").where("rowid", "in", rowids),
+  );
+  executeSqliteQuerySync(database, db.insertInto("memory_index_chunks_cjk_fts").values(entries));
 }

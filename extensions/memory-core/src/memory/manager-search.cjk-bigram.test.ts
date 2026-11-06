@@ -223,6 +223,25 @@ describe("memory keyword search CJK bigram companion index", () => {
     }
   });
 
+  it.skipIf(!hasTrigram)("recovers mixed Han and short terms under matchAny", async () => {
+    await withSearch(
+      [
+        { id: "han-only", text: "系統設定說明" },
+        { id: "ascii-only", text: "general AI overview" },
+        { id: "both", text: "系統設定與 AI 工具" },
+        { id: "neither", text: "completely unrelated note" },
+      ],
+      async (search) => {
+        const hits = await search("設定 AI", { matchAny: true });
+        const ids = hits.map((hit) => hit.id).sort();
+        expect(ids).toEqual(["ascii-only", "both", "han-only"]);
+        const hanHit = hits.find((h) => h.id === "han-only");
+        expect(hanHit?.textScore).toBeGreaterThan(0);
+      },
+      { cjkBigram: true },
+    );
+  });
+
   it.skipIf(!hasTrigram)("drops the companion index when the option is off", async () => {
     await withSearch(
       [{ id: "han", text: "記憶體設定" }],

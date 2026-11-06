@@ -289,6 +289,17 @@ export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enable
   dropMemoryPathFtsTriggers(db);
   db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE}`);
 
+  let cjkExists = false;
+  try {
+    db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_CJK_FTS_TABLE} LIMIT 0`).run();
+    cjkExists = true;
+  } catch {
+    cjkExists = false;
+  }
+  if (cjkExists) {
+    db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
+  }
+
   if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
     dropMemoryChunkFtsTriggers(db);
     db.exec(`DROP TABLE IF EXISTS ${ftsTable}`);

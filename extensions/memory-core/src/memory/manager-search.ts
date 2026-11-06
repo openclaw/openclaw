@@ -5,6 +5,7 @@ import {
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { buildCompanionSearchSql } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -363,26 +364,30 @@ export async function searchKeyword(params: {
       registerSubstringSqlFunction(params.db, terms);
     }
     const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter, "c");
+    const mixedOr = params.matchAny && terms.length > 0;
     try {
-      const rows = params.db
-        .prepare(
-          `WITH hits AS (\n` +
-            `  SELECT "rowid" AS chunk_rowid, rank FROM ${cjkTable}\n` +
-            `   WHERE ${cjkTable} MATCH ? AND ${cjkTable}.rank MATCH 'bm25()'\n` +
-            `)\n` +
-            `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text,\n` +
-            `       hits.rank AS rank\n` +
-            `  FROM hits JOIN memory_index_chunks c ON c.chunk_rowid = hits.chunk_rowid\n` +
-            ` WHERE 1=1${filter}${sourceFilter.sql}\n` +
-            ` ORDER BY hits.rank ASC\n` +
-            ` LIMIT ?`,
-        )
-        // SAFETY: SQLite returns row records matching the requested SELECT columns.
-        .all(effectivePlan.cjkBigramQuery, ...terms, ...sourceFilter.params, params.limit) as Array<
-        MemorySearchRow & { rank: number }
-      >;
-      return rows.map((row) => {
-        const textScore = bm25RankToScore(row.rank);
+      const sql = buildCompanionSearchSql({
+        cjkTable,
+        filter,
+        sourceFilterSql: sourceFilter.sql,
+        mixedOr,
+      });
+      const queryParams = mixedOr
+        ? [
+            effectivePlan.cjkBigramQuery,
+            ...sourceFilter.params,
+            params.limit,
+            ...terms,
+            ...sourceFilter.params,
+            params.limit,
+            params.limit,
+          ]
+        : [effectivePlan.cjkBigramQuery, ...terms, ...sourceFilter.params, params.limit];
+      const rows = params.db.prepare(sql).all(...queryParams);
+      // SAFETY: SQLite returns row records matching the requested SELECT columns.
+      const typedRows = rows as Array<MemorySearchRow & { rank: number | null }>;
+      return typedRows.map((row) => {
+        const textScore = typeof row.rank === "number" ? bm25RankToScore(row.rank) : 0;
         const score = params.boostFallbackRanking
           ? scoreFallbackKeywordResult({
               queryMatchers: uniqueStrings(normalizeSearchTokens(params.query)).map((token) => ({

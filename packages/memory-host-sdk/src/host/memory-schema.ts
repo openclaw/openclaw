@@ -461,12 +461,6 @@ export function ensureMemoryIndexSchema(params: {
           if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
             backfillMemoryPathFtsRows(params.db);
           }
-          // The companion Han-bigram index is populated separately from the canonical chunks, so the
-          // admitted fast path still has to keep it present and aligned.
-          ensureMemoryCjkBigramFtsSchema({
-            db: params.db,
-            enabled: params.cjkBigramFts === true,
-          });
         };
         if (params.db.isTransaction) {
           reconcile();

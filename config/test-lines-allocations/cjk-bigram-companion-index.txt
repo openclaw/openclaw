@@ -1,2 +1,2 @@
 # Behavioral unit and regression tests for Han bigram companion FTS index.
-238
+257

@@ -82,3 +82,47 @@ export function buildHanBigramMatchQuery(
   }
   return phrases.length > 0 ? phrases.join(matchAny ? " OR " : " AND ") : null;
 }
+
+/** Construct SQL for companion index queries with optional OR recovery. */
+export function buildCompanionSearchSql(params: {
+  cjkTable: string;
+  filter: string;
+  sourceFilterSql: string;
+  mixedOr: boolean;
+}): string {
+  if (params.mixedOr) {
+    return (
+      `WITH hits AS (\n` +
+      `  SELECT "rowid" AS chunk_rowid, rank FROM ${params.cjkTable}\n` +
+      `   WHERE ${params.cjkTable} MATCH ? AND ${params.cjkTable}.rank MATCH 'bm25()'\n` +
+      `), matches AS (\n` +
+      `  SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text, hits.rank AS rank\n` +
+      `    FROM hits JOIN memory_index_chunks c ON c.chunk_rowid = hits.chunk_rowid\n` +
+      `   WHERE 1=1${params.sourceFilterSql}\n` +
+      `   ORDER BY hits.rank ASC\n` +
+      `   LIMIT ?\n` +
+      `), substrings AS (\n` +
+      `  SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text, NULL AS rank\n` +
+      `    FROM memory_index_chunks c\n` +
+      `   WHERE 1=1${params.filter}${params.sourceFilterSql}\n` +
+      `     AND c.id NOT IN (SELECT id FROM matches)\n` +
+      `   LIMIT max(0, ? - (SELECT count(*) FROM matches))\n` +
+      `)\n` +
+      `SELECT * FROM matches UNION ALL SELECT * FROM substrings\n` +
+      `ORDER BY rank ASC NULLS LAST\n` +
+      `LIMIT ?`
+    );
+  }
+  return (
+    `WITH hits AS (\n` +
+    `  SELECT "rowid" AS chunk_rowid, rank FROM ${params.cjkTable}\n` +
+    `   WHERE ${params.cjkTable} MATCH ? AND ${params.cjkTable}.rank MATCH 'bm25()'\n` +
+    `)\n` +
+    `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text,\n` +
+    `       hits.rank AS rank\n` +
+    `  FROM hits JOIN memory_index_chunks c ON c.chunk_rowid = hits.chunk_rowid\n` +
+    ` WHERE 1=1${params.filter}${params.sourceFilterSql}\n` +
+    ` ORDER BY hits.rank ASC\n` +
+    ` LIMIT ?`
+  );
+}

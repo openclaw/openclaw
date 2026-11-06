@@ -36,6 +36,7 @@ export {
   MEMORY_INDEX_VECTOR_TABLE,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 export {
+  buildCompanionSearchSql,
   buildHanBigramMatchQuery,
   buildHanBigramPhrase,
   encodeHanBigrams,
