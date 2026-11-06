@@ -48,7 +48,7 @@ import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { isExplicitSteerCommandTurn } from "./explicit-steer-routing.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
 import { createReplyTurnAdmissionWaiter } from "./reply-turn-admission-wait.js";
