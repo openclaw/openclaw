@@ -57,6 +57,48 @@ export async function prepareChat(page: Page) {
   await frames(page);
 }
 
+/** Traverse with native desktop input; Firefox caps each wheel event to one page. */
+export async function scrollTranscriptToTop(page: Page) {
+  const selector = `${activePane} .chat-thread`;
+  const thread = page.locator(selector);
+  let wheelEvents = 0;
+  if (page.viewportSize()!.width < 768) {
+    // Playwright's mobile WebKit driver has no wheel input. Keep the same
+    // scrollport jump for every mobile engine; this is not wheel latency.
+    await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+  } else {
+    await thread.hover();
+    const { top, height } = await thread.evaluate((element) => ({
+      top: element.scrollTop,
+      height: element.clientHeight,
+    }));
+    const distance = Math.floor(height * 0.75);
+    // Allow partial native progress without an unbounded gesture loop.
+    const limit = Math.ceil(top / distance) * 2 + 2;
+    for (; wheelEvents < limit; wheelEvents++) {
+      const previous = await thread.evaluate((element) => element.scrollTop);
+      if (previous <= 0) {
+        break;
+      }
+      await page.mouse.wheel(0, -distance);
+      await page.waitForFunction(
+        ({ selector, previous }) => document.querySelector(selector)!.scrollTop < previous,
+        { selector, previous },
+      );
+    }
+    if ((await thread.evaluate((element) => element.scrollTop)) > 0) {
+      throw new Error(`Transcript did not reach the top after ${wheelEvents} wheel events`);
+    }
+  }
+  await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
+  await page.waitForFunction(
+    (selector) => document.querySelector(selector)?.scrollTop === 0,
+    selector,
+  );
+  await frames(page);
+  return { wheelEvents };
+}
+
 export async function openInteractionPanel(
   page: Page,
   panel: "Dashboard" | "Browser" = "Dashboard",
