@@ -352,7 +352,9 @@ it("shares release device libraries only between trusted main release destinatio
   const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
   const save = job.steps.find((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"));
   expect(restore.with.key).toMatch(/^watch-rtc-release-v1-/);
-  expect(restore.with["restore-keys"]).toBeUndefined();
+  expect(restore.with["restore-keys"]).toBe(
+    "watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-\n",
+  );
   expect(save.with.path).toBe(restore.with.path);
   expect(save.with.key).toBe("${{ steps.watch-rtc-cache.outputs.cache-primary-key }}");
   for (const operation of ["release", "testflight"]) {

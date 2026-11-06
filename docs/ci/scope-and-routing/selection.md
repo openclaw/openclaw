@@ -21,6 +21,13 @@ the release-only proofs described in the scheduled-workflow guide.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 
+The Node Runtime Conformance workflow selects TypeScript and Rust proofs from
+exact PR revisions using the same input lists as scheduled proof reuse.
+TypeScript-only tooling changes omit Rust; Rust configuration changes omit
+TypeScript. Shared protocol versions, fixtures, and crate changes retain both.
+Deleted, unknown, malformed, or capped diff inputs retain both proofs. Manual
+runs and existing scheduled proof policies remain unchanged.
+
 ### PR vs hourly vs release
 
 Ordinary `pull_request` runs, including contributions from forks, use the
@@ -99,6 +106,16 @@ protocol/localization checks retain their existing PR owners. SwiftLint and
 SwiftFormat run inside the moved Apple jobs and move with them; no new jobs are
 introduced. Standalone native Periphery workflows and iOS screenshot jobs retain
 their existing selection.
+
+For ordinary current-checkout PRs, known Python skill changes select that skill's
+complete Ruff and pytest suite. Shared, missing, unknown or mixed inputs retain
+all skill suites. Scheduled and release runs retain full coverage.
+
+Android phone source changes can skip Wear unit tests. Wear test/debug-only
+changes can skip phone unit tests. Both phone lint variants remain selected,
+including when third-party lint moves from the omitted Wear row to its phone
+row. Wear production strings feed phone generation, so those changes, shared
+modules, build inputs, missing files and full validation retain all unit rows.
 
 ### Published-driver update cell
 

@@ -39,7 +39,7 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
         PATH: `${fixtureDir}${path.delimiter}${process.env.PATH}`,
         CI: "true",
         GITHUB_ACTIONS: github ? "true" : undefined,
-        OPENCLAW_RELEASE_CONTEXT_REF: release ? "release/2026.11.4" : undefined,
+        OPENCLAW_RELEASE_CONTEXT_REF: release ? "release/2026.11.4" : "main",
         GITHUB_STEP_SUMMARY: summary,
         SWIFTLINT_TEST_REPORT: typeof report === "string" ? report : JSON.stringify(report),
         SWIFTLINT_TEST_EXIT: String(exit),

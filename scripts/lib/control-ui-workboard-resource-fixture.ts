@@ -26,7 +26,7 @@ function resourceSessionKey(index: number) {
   return `agent:main:workboard-resource-${index}`;
 }
 
-function workboardResourceResponses(count: number, revision: number) {
+export function workboardResourceResponses(count: number, revision: number) {
   const board = {
     id: boardId,
     name: "Resource cards",

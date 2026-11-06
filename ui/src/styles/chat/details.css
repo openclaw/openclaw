@@ -846,3 +846,10 @@ button.chat-details__process:is(:hover, :focus-visible) {
   height: 15px;
   color: var(--muted);
 }
+
+/* Loading hints stay subordinate to the conversation, in both Details hosts. */
+.chat-details .skeleton::after,
+.chat-mobile-host__details .skeleton::after {
+  opacity: 0.25;
+  animation-duration: calc(var(--skeleton-duration) * 1.8);
+}

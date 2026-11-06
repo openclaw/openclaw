@@ -53,6 +53,21 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor prepares plugin setup sources asynchronously before resolving
+legacy session migrations. Configured external channels can then finish
+post-plugin Doctor without an unprepared-source refusal blocking later state
+repairs. Existing plugin selection, activation, and source checks still apply.
+The candidate must contain this fix; published updaters need no new marker or
+schema change.
+
+Plugin updates preserve authored environment references when a replacement
+plugin moves their settings, including single-file includes. The candidate
+plugin-update command must contain this repair; the installed updater needs no
+new marker or schema migration. Existing config and plugin-index records remain
+readable. Previously flattened literals are preserved, not guessed back into
+references. Config publication, backup, rollback, and deferred data-migration
+guidance keep their existing owners.
+
 Candidate Gateway rehearsal can prepare strictly valid config in its complete
 private update namespace even when a newer release wrote the config. It preserves
 the source writer stamp for installed-updater capture checks; the target's normal
@@ -258,6 +273,13 @@ its matching binary for rollback rather than lowering version markers.
 
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
+
+The pre-migration database backup for PostgreSQL families needs exclusive state
+ownership, and it runs after activation replaces the install. When ownership is
+unavailable after the service stop, for example because a Gateway the updater does
+not manage is still serving, the update now refuses before activation, leaving
+the install unchanged and the Gateway running. Stop the Gateway through its service
+owner, then rerun the update. The installed updater must contain this repair.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
 all other generation checks remain in force. Update status reads history and
 recovery outcomes through the configured database engine.
@@ -331,6 +353,13 @@ preparation still run in full. Other pending work or incomplete discovery select
 the full Doctor flow; older candidates and standalone `openclaw update repair`
 continue using the full pass.
 
+When that second pass widens, its diagnostics name the first config eligibility
+check or retained contribution that required the full flow. These names contain
+no config values. Gateway verification timing ends at readiness; separate timing
+steps cover post-ready maintenance, plugin commit, and recovery-artifact cleanup.
+The candidate supplies Doctor diagnostics, while the installed updater must
+contain the timing changes.
+
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
 to detect durable changes. Empty WAL files created by readers count as absent.
@@ -361,6 +390,27 @@ receipts, raw non-OpenClaw writes during the update window can be absorbed for
 those databases. Changes to untouched captured databases still block automatic
 restoration. Both the installed updater and candidate Doctor must contain this
 repair; a fixed candidate cannot repair an older updater's missing attribution.
+
+When only model retirement remains after plugin convergence, Doctor can use its
+existing narrow contribution pass. Settling a plugin migration, including a
+successful state migration, permits that pass when config inputs and the
+validated config are unchanged. Actual config or validated-setting changes,
+plugin changes, unresolved migrations, and new findings still require the full
+pass. An explicit `openclaw doctor` continues to run the full pass. This correction
+must be in the candidate Doctor; the installed updater must already support
+retirement-only requests. Older updaters keep their existing full-pass selection.
+
+Standing advice about a custom Codex executable or enabled Computer Use remains
+visible in Doctor output and update warnings without preventing that narrow pass.
+Invalid inline command arguments, unfinished repairs, and access-policy warnings
+still require the full pass. This distinction must be in the candidate Doctor;
+it does not require another updater change.
+
+When a retirement-only request needs the full pass, the candidate Doctor writes a
+fixed `Retirement-only Doctor widened:` reason to stderr. Updated updaters retain
+that reason in the step diagnostics and compacted update history. The candidate
+and installed updater must both contain this diagnostic fix to retain it there;
+older updaters still run the same repairs.
 
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
 the candidate contains the legacy database-generation adapter. Under maintenance
@@ -912,6 +962,18 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Git updates also check persisted Gateway ownership before replacing checkout or
+runtime files. When native service discovery misses a live or unverifiable owner,
+the update continues with a warning in the terminal, JSON result, and update
+history. The warning names the PID and installation root when known: the Gateway
+keeps running the previous runtime and may fail to load lazily loaded chunks until
+restarted. A Gateway that detects replacement of its runtime may stop itself and
+require relaunch. Restart it through its actual service manager, or press Ctrl+C
+in its original terminal and rerun its Gateway command. Positively identified
+disjoint installations stay silent. Existing managed-service and database-capture
+refusals still apply. The installed update driver must contain this warning behavior; a
+newer candidate cannot change an older driver's publication behavior.
+
 On Linux, unmask a managed systemd unit before updating. A masked unit
 (`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive
 unit with no start path causes preflight to refuse before replacing files or
@@ -1315,6 +1377,14 @@ The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
 mistaking a progress marker for the failure reason.
+While waiting for canary HTTP readiness, the updater observes live update
+authority about once per second. Cancellation, process exit, and startup deadlines
+remain checked at every poll. Authority is checked again before accepting each
+ready endpoint or recording a startup warning. Revocation may therefore take
+about one second to stop an idle wait, without authorizing an intervening effect.
+The updater running the canary must contain this change; a newer candidate does
+not change an older installed updater's polling.
+
 The internal progress-capable launch repeats the existing `--update-canary`
 boolean marker; legacy launches contain it once. This is an internal
 updater-to-candidate contract, with no operator configuration setting.
@@ -1440,9 +1510,13 @@ installation records, and matching settings until candidate activation is verifi
 If activation fails, rollback restores that cohort before restarting the previous
 Gateway. Backups precede plugin maintenance. After an interrupted update,
 `openclaw update repair` resumes the recorded plugin settlement under current
-ownership. It preserves later independent changes; conflicting records, settings,
-or artifacts leave recovery unfinished instead of overwriting those changes or
-reporting the old Gateway ready. The updater performing the operation must contain
+ownership. It preserves later independent changes. When a plugin's install
+record, data/settings upgrade obligation, package files, source snapshot, or a
+config file the update wrote changed after the update, rollback keeps that later
+change, restores everything that still matches, and completes. It records the
+kept items in an update warning that repair prints and `openclaw doctor` shows.
+Recovery still stops for a config file whose path was replaced, for config that
+fails validation or secret resolution, and for a corrupt recovery journal. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
 When recovery stays pending, the update prints the first failure below the
 unfinished-recovery refusal and names `openclaw update repair` when it can settle
