@@ -331,7 +331,12 @@ struct AgentWorkspaceFilePreview: View {
                 timeoutSeconds: 20)
             self.file = try JSONDecoder().decode(AgentsWorkspaceGetResult.self, from: data).file
         } catch {
-            self.errorText = "This file cannot be previewed. It may be binary or too large."
+            switch (error as? GatewayResponseError)?.details["type"]?.value as? String {
+            case "workspace_file_too_large", "workspace_file_unsupported":
+                self.errorText = "This file cannot be previewed. It may be binary or too large."
+            default:
+                self.errorText = "Could not read this file. Return to Files and reopen it when available."
+            }
         }
     }
 
