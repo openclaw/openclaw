@@ -125,6 +125,21 @@ export function buildControlUiCspHeader(opts?: {
   ].join("; ");
 }
 
+/** The PDF creator is a fixed, no-network worker, not an application document. */
+export function buildPdfPreviewWorkerCspHeader(remote?: RemoteControlUiIngressContext): string {
+  return [
+    "default-src 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors " +
+      (remote ? [remote.publicOrigin, ...remote.frameAncestors].join(" ") : "'self'"),
+    "script-src 'none'",
+    "connect-src 'none'",
+    "worker-src 'none'",
+    "form-action 'none'",
+  ].join("; ");
+}
+
 export function applyControlUiSecurityHeaders(
   res: ServerResponse,
   remote?: RemoteControlUiIngressContext,

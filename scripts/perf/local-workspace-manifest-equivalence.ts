@@ -18,8 +18,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { LocalWorkspaceManifestScan } from "../../src/gateway/worker-environments/local-workspace-manifest-scan.js";
 import type { LocalWorkspaceStore } from "../../src/gateway/worker-environments/local-workspace-store.js";
+import type { LocalWorkspaceManifestScan } from "../../src/gateway/worker-environments/local-workspace-store.types.js";
 
 const [mode, scratchArgument, label] = process.argv.slice(2);
 assert.ok(["prepare", "run", "compare"].includes(mode ?? "") && scratchArgument);

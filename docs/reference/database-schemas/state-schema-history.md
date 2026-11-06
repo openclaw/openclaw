@@ -57,10 +57,126 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
 | 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
 | 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
+| 36      | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged                                                                                                                                                                                             | Unreleased          |
+| 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
+| 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
+| 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 39
+
+Schema 39 implements the retained-lifecycle storage step of the
+[accepted retained-resource design](https://github.com/openclaw/openclaw/issues/188796).
+It adds nullable `worker_environments.retention_json` through the existing
+environment writer, not a second lease owner or sidecar store. This shared-state
+version is independent of agent schema 39.
+
+The field stores an immutable acquisition policy (original owner binding and
+compute-window duration), one unfinished pause/resume operation (operation ID,
+action, and expected provider claim revision), and the latest provider observation.
+The policy is durable before allocation. An exact intent replay preserves it;
+changing or adding policy to an existing environment is refused. Existing leases
+migrate to `NULL` and keep their original unretained behavior.
+
+A new operation requires the current environment owner, an exact stored resource
+receipt and lease, the observed claim revision, and no destroy request or competing
+operation. Exact unfinished operations can replay after restart. Observations clear
+an operation only when their operation ID, action, and expected revision all match,
+the phase is `observed`, and the state is `suspended` for pause or `running` for
+resume. Transport errors, unavailable observations, and unrelated or pending outcomes
+retain the unfinished operation. Recording an expired compute window does not delete
+a disk or settle teardown; confirmed provider deletion remains necessary.
+
+SQLite and PostgreSQL add one nullable text column without a row rewrite, backfill,
+new index, or scan in the DDL itself. The verified table-scoped backup and integrity
+check cover `worker_environments` plus schema publication metadata; unrelated
+repository and pending-result authority bytes remain unchanged. Backup cost scales
+with retained environment history. The largest deployment's row count is not known
+from the implementation checkout and must be recorded with deployment qualification.
+
+The column and schema/content markers publish atomically. Package metadata and the
+native shared-state reader ceiling advance to 39; older builds refuse the newer
+schema rather than ignoring pending lifecycle intent. Downgrade restores the verified
+pre-upgrade backup with its matching binary. No schema-38 migration is rewritten.
+
+### State schema 38
+
+Schema 38 implements the durable authority prerequisite of the
+[accepted disk-authoritative workspace design](https://github.com/openclaw/openclaw/issues/188796).
+It adds nullable `session_repository_workspaces.disk_authority_json` and
+`worker_workspace_pending_results.repository_disk_authority_json` fields.
+The repository owner binds an initialized repository to one exact environment
+and its immutable provider resource receipt. The pending-result owner records
+that authority when it accepts result custody; recovery never infers it from a
+later environment. Binding refuses an active turn or an unsettled mirror result.
+
+Existing repositories and pending results retain `NULL` and their mirrored
+semantics. Disk-bound recovery holds missing or mismatched resources without
+restoring a Gateway checkpoint, replacing the disk, or replaying input. Stored
+file fallback, new publication from an old mirror, and Gateway materialization
+are refused for a disk binding. Previously pinned publication snapshots remain
+usable. There is no user-selectable disk mode in this prerequisite; retained
+lifecycle, explicit export/I/O, and activation are separate implementation steps.
+
+SQLite startup and Doctor add columns only to existing tables; absent first-use
+repository storage remains absent. PostgreSQL supplies the same consecutive
+migration and exact predecessor backup descriptors. No repository or pending
+result payload is rewritten; STRICT validation may scan affected tables. Backup
+scope includes both changed tables and the existing schema/content metadata.
+A refused publication rolls back the DDL and version markers together.
+Older binaries refuse schema 38; rollback restores the verified pre-migration
+backup with its matching binary, not lowered version markers. This step does
+not change the agent schema or delete any provider resource.
+
+### State schema 37
+
+Schema 37 adds nullable `worker_environments.resource_receipt_json`, implementing
+the [accepted retained-resource design](https://github.com/openclaw/openclaw/issues/188796).
+The existing environment writer records a bounded version-1 receipt containing
+the original lease ID and provider-defined string identity fields. It compares
+the original provision operation and any existing lease in its transaction.
+The first receipt is immutable; recording the same receipt, regardless of
+identity-key order, leaves the row unchanged. The existing transaction and
+commit admission retain live caller authority and publish acknowledged facts.
+
+Allocation can record its receipt before node enrollment or readiness. State
+transitions preserve it, including failed teardown that clears the active lease.
+The receipt is removed only when the existing environment-retention owner prunes
+the entire row; there is no separate timer, manager, or sidecar. Corrupt receipts
+refuse inventory admission rather than becoming legacy absence.
+
+SQLite startup and Doctor add the column without inventing identity for existing
+environments: legacy rows retain `NULL`. The nullable addition requires no
+payload rewrite; SQLite STRICT validation and the existing integrity checks can
+still scan the table. The declared backup scope is `worker_environments`, plus
+schema and content-version metadata supplied by the backup owner. PostgreSQL
+adds the equivalent nullable text column through its consecutive migration owner;
+the generated schema remains derived from canonical SQLite DDL.
+
+A refused migration rolls back the column and version publication together.
+Older binaries cannot enforce exact resource matching and must refuse schema 37.
+Rollback restores the verified pre-upgrade backup and matching binary, after
+reconciling provider resources created since that backup. Never lower schema
+markers to bypass the downgrade fence. The agent schema is unchanged.
+
+### State schema 36
+
+Schema 36 migrates the five physical `claw_*` install tables to `template_*`,
+renames their feature-specific columns and record schema identifiers, and maps
+the structured `claw-introduced` origin and `claw` provenance values to their
+Template equivalents. It does not rewrite package identities, paths, content
+digests, JSON payloads, or unrelated strings. Databases with no installed Labs
+content still require this migration because the predecessor tables exist there.
+Optional `agent_provenance` storage remains absent when it was never installed.
+
+SQLite startup and Doctor use the existing schema migration transaction and
+backup owners. PostgreSQL uses its consecutive schema migration owner and
+verifies the predecessor and successor catalogs. A refused publication rolls
+back the cutover. Older binaries refuse schema 36; rollback restores the verified
+pre-migration backup with its matching binary.
 
 ### State schema 34
 
@@ -452,6 +568,8 @@ No agent schema changes are involved.
 Startup and Doctor add the nullable columns without assigning authority to legacy
 rows; unused profile tables remain absent until first use. The current schema
 and the profile owner's first-use initialization share the table and index definitions.
+Upgrades also add nullable `canonical_login TEXT` when a legacy identity table
+predates that profile field, preserving its rows without inferring a login.
 Both published schema markers normally advance to 19. During the existing
 [older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters),
 content can be upgraded while older published markers remain. References cannot

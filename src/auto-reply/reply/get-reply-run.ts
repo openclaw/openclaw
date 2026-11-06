@@ -1,9 +1,17 @@
-import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
+  runOutsidePreparedModelRuntimePluginGenerationScope,
+  scopePreparedModelRuntimeLease,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
@@ -56,8 +64,8 @@ async function runPreparedReplyWithOwner(
 
     const { acquireAgentRunPreparedModelRuntime } =
       await import("../../agents/prepared-model-runtime.js");
-    await using lease = scopePreparedModelRuntimeLease(
-      await acquireAgentRunPreparedModelRuntime(
+    const acquireRuntime = (pluginGeneration?: PreparedModelRuntimePluginGeneration) =>
+      acquireAgentRunPreparedModelRuntime(
         {
           config: dispatchRuntime.config,
           agentId: dispatchRuntime.agentId,
@@ -65,6 +73,7 @@ async function runPreparedReplyWithOwner(
           allowGatewaySubagentBinding: true,
           // Inventory is agent-owned; context.workspaceDir remains the execution boundary.
           workspaceDir: dispatchRuntime.workspaceDir,
+          preserveWorkspaceDirOnRefresh: false,
           runtimePluginSelections: [
             {
               provider: params.provider,
@@ -75,11 +84,23 @@ async function runPreparedReplyWithOwner(
         },
         {
           catalogMode: "static",
-          pluginGeneration: dispatchRuntime.pluginGeneration,
+          pluginGeneration,
           abortSignal: params.opts?.abortSignal,
         },
-      ),
-    );
+      );
+    let preparedRuntime: Awaited<ReturnType<typeof acquireRuntime>>;
+    try {
+      preparedRuntime = await acquireRuntime(dispatchRuntime.pluginGeneration);
+    } catch (error) {
+      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+        throw error;
+      }
+      // Dispatch captured a selection, not execution. Re-admit before any model/tool work starts.
+      preparedRuntime = await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+        runOutsidePluginRuntimeGenerationScope(() => acquireRuntime()),
+      );
+    }
+    await using lease = scopePreparedModelRuntimeLease(preparedRuntime);
     return await lease.run(() =>
       withPluginRuntimeGenerationScope(lease.snapshot, () =>
         executePreparedReplyContext(context, readAdmissionConfig),

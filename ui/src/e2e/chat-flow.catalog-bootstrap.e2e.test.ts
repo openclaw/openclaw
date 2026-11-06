@@ -12,7 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
@@ -34,6 +34,7 @@ const suite = createControlUiE2eSuite({
   resources: {
     retainedState: () => state?.root,
     async run(signal) {
+      const cronBindingsLoaded = createDeferred();
       state = await createOpenClawTestState({
         label: "chat-catalog-mutation",
         env: {
@@ -70,6 +71,14 @@ const suite = createControlUiE2eSuite({
         configPath: state.configPath,
         token,
         scopes: ["operator.admin"],
+        onEvent: (event) => {
+          if (
+            event.event === "sessions.changed" &&
+            asOptionalRecord(event.payload)?.reason === "cron-bindings-loaded"
+          ) {
+            cronBindingsLoaded.resolve();
+          }
+        },
         cfg: {
           gateway: {
             mode: "local",
@@ -104,8 +113,8 @@ const suite = createControlUiE2eSuite({
         },
       });
       realGateway = await gatewayStartup;
-      // Startup cron hydration publishes a separate sessions.changed invalidation.
-      await realGateway.server.startupSettled;
+      // Post-ready cron hydration invalidates catalogs separately from sidecar startup.
+      await withinTest(cronBindingsLoaded.promise, signal);
       signal.throwIfAborted();
     },
     async close() {
@@ -343,6 +352,16 @@ suite.define(() => {
         catalogReloadStarted = true;
         recordCatalogFacts();
         await page.reload();
+        // Saved controls can appear before reload finishes its authoritative startup read.
+        await expect
+          .poll(() =>
+            page
+              .locator('openclaw-chat-pane[aria-hidden="false"]')
+              .evaluate(
+                (pane) => (pane as HTMLElement & { transcriptReady: boolean }).transcriptReady,
+              ),
+          )
+          .toBe(true);
         await trigger.click();
         try {
           await expect.poll(() => account.textContent()).toContain("Account B");
@@ -387,6 +406,15 @@ suite.define(() => {
         await expect.poll(() => selectedRow.isVisible()).toBe(true);
         expect(await selectedRow.isEnabled()).toBe(true);
         expect(await account.textContent()).not.toContain("Account A");
+        await expect
+          .poll(() =>
+            page
+              .locator(
+                'openclaw-chat-pane[aria-hidden="false"] [data-composer-catalog-state="stale"]',
+              )
+              .count(),
+          )
+          .toBe(0);
         const readsBeforeReopen = catalogRequests.size;
         await trigger.click();
         await trigger.click();

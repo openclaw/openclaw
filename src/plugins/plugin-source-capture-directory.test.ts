@@ -16,6 +16,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
@@ -149,16 +150,114 @@ function expectArtifactBytes(artifact: ReturnType<typeof capturePluginGeneration
   expectBytes(artifact.resolve(path.join(source, "index.cjs")));
 }
 
-function runChild(script: string, args: string[] = [], exitCode = 0) {
+function runChild(
+  script: string,
+  args: string[] = [],
+  exitCode = 0,
+  execArgv: string[] = [],
+  execPath = process.execPath,
+) {
+  const childRuntimeArgs = resolveRuntimeWorkerArgv(artifactUrl, execPath).slice(0, -1);
   const result = spawnSync(
-    process.execPath,
-    [...runtimeArgs, "--input-type=module", "-e", script, ...args],
+    execPath,
+    [...execArgv, ...childRuntimeArgs, "--input-type=module", "-e", script, ...args],
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(exitCode);
   return result;
 }
+
+// Forced WeakRef collection needs V8; JSC may retain dead objects through conservative stack roots.
+it("does not retain the caller that first imports source capture storage", () => {
+  runChild(
+    `
+    import assert from "node:assert/strict";
+    import { AsyncLocalStorage } from "node:async_hooks";
+    import { setImmediate } from "node:timers/promises";
+    await import(${moduleSpecifier("scheduler")});
+    const caller = new AsyncLocalStorage();
+    async function load() {
+      const payload = { text: "synthetic caller context" };
+      const reference = new WeakRef(payload);
+      await caller.run(payload, () => import(${moduleSpecifier("captureDirectory")}));
+      return reference;
+    }
+    const reference = await load();
+    function unowned() { return new WeakRef({ unowned: true }); }
+    const control = unowned();
+    try {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        globalThis.gc();
+      }
+      assert.equal(control.deref(), undefined, "Unowned control must collect");
+      assert.equal(reference.deref(), undefined, "Source capture import retained its caller");
+    } finally {
+      caller.disable();
+    }
+  `,
+    [],
+    0,
+    ["--expose-gc"],
+    resolveTestNodeExecPath(),
+  );
+});
+
+it("releases failed native loads only when their source capture is disposed", () => {
+  runChild(
+    `
+    import assert from "node:assert/strict";
+    import fs from "node:fs";
+    import path from "node:path";
+    import { setImmediate } from "node:timers/promises";
+    import { createPluginSourceCapture } from ${moduleSpecifier("metadataCapture")};
+    import { tryNativeRequireJavaScriptModule as load } from ${moduleSpecifier("nativeRequire")};
+    const captures = [createPluginSourceCapture(), createPluginSourceCapture()];
+    function fail(capture) {
+      const entry = path.join(capture.directory, "failed.cjs");
+      fs.writeFileSync(entry, 'throw Object.assign(new Error("fixture failure"), { payload: {} });');
+      try {
+        load(entry);
+        assert.fail("Expected the native load to throw");
+      } catch (error) {
+        assert.equal(error.message, "fixture failure");
+        return [new WeakRef(error), new WeakRef(error.payload)];
+      }
+    }
+    async function collect() {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        globalThis.gc();
+      }
+    }
+    const references = captures.map(fail);
+    try {
+      await collect();
+      for (const reference of references.flat()) assert.notEqual(reference.deref(), undefined);
+      captures[0].dispose();
+      await collect();
+      for (const reference of references[0]) {
+        assert.equal(reference.deref(), undefined, "Disposed capture retained its failed load");
+      }
+      for (const reference of references[1]) {
+        assert.notEqual(reference.deref(), undefined, "Live capture lost its original failure");
+      }
+      await captures[1].disposeAsync();
+      await collect();
+      for (const reference of references[1]) {
+        assert.equal(reference.deref(), undefined, "Async disposal retained its failed load");
+      }
+    } finally {
+      for (const capture of captures) await capture.disposeAsync();
+    }
+  `,
+    [],
+    0,
+    ["--expose-gc"],
+    resolveTestNodeExecPath(),
+  );
+});
 
 function capturePaths(boundaryRoot: string, capturedFile: string, worker = false) {
   const captureRoot = worker ? path.dirname(boundaryRoot) : boundaryRoot;

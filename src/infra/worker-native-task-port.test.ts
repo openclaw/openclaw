@@ -151,7 +151,7 @@ it("discards buffered data when its native owner fails before startup without in
 });
 
 it("reports task-port loss without stopping native work or inventing its exit receipt", async () => {
-  const { worker, peer, sent } = fixture();
+  const { worker, peer, sent, handles } = fixture();
   worker.receive({ type: "created", id: 1, threadId: 103 });
   const failed = once(worker, "error");
   peer.close();
@@ -162,8 +162,17 @@ it("reports task-port loss without stopping native work or inventing its exit re
   expect(sent.some((message) => message.type === "stop")).toBe(false);
   const stopping = worker.stop();
   expect(stopping.read().status).toBe("pending");
-  worker.receive({ type: "execution-exit", id: 1, code: 0 });
+  const events: string[] = [];
+  worker.on("execution-exit", () => {
+    events.push("execution-exit");
+    expect(worker.executionStopped).toBe(true);
+    expect(worker.threadId).toBe(103);
+    expect(handles.has(1)).toBe(true);
+    expect(stopping.read().status).toBe("pending");
+  });
+  worker.on("exit", () => events.push("exit"));
   worker.receive({ type: "stopped", id: 1, code: 0 });
+  expect(events).toEqual(["execution-exit", "exit"]);
   expect(stopping.read()).toEqual({ status: "fulfilled", value: undefined });
 });
 

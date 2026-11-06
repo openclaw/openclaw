@@ -80,17 +80,22 @@ function replayAdmitted(
   ]);
   const cached = replaySnapshots.entries.get(key);
   // Custom-entry rewrites rotate generation; appends preserve earlier IDs and bytes.
-  if (
+  const prefix =
     cached?.generation === generation &&
-    cached.ids.length === entries.length &&
-    entries.every((entry, index) => isRecord(entry) && entry.id === cached.ids[index])
-  ) {
+    cached.ids.length <= entries.length &&
+    cached.ids.every((id, index) => {
+      const entry = entries[index];
+      return isRecord(entry) && entry.id === id;
+    })
+      ? cached
+      : undefined;
+  if (prefix && prefix.ids.length === entries.length) {
     replaySnapshots.entries.delete(key);
-    replaySnapshots.entries.set(key, cached);
-    return cached.projection;
+    replaySnapshots.entries.set(key, prefix);
+    return prefix.projection;
   }
   discardReplaySnapshot(key);
-  const projection = replay(entries);
+  const projection = replay(entries, prefix?.projection, prefix?.ids.length);
   // Bound metadata as well as JSON. Large histories keep the uncached replay path.
   if (entries.length > 4096 || projection.size > 1024) {
     return projection;
@@ -194,7 +199,9 @@ function encode(value: unknown, networkContent: boolean): StoredValue {
   const json = stringifyCodeModeJsonSafe(value);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes > MAX_VALUE_BYTES) {
-    throw new RangeError("Code Mode store value exceeds 256 KiB of serialized JSON.");
+    throw new RangeError(
+      `Code Mode store value exceeds 256 KiB of serialized JSON (${bytes} bytes). Store unchanged; catch RangeError and save a summary or smaller value. Use results.save(value) for larger data needed only in this reply.`,
+    );
   }
   return { json, bytes, networkContent };
 }
@@ -214,16 +221,21 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   }
   if (bytes > MAX_TOTAL_BYTES) {
     throw new RangeError(
-      "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
+      "Code Mode store exceeds 1 MiB of serialized JSON. Store unchanged; catch RangeError and delete unneeded keys or save a summary before retrying the write.",
     );
   }
   return next;
 }
 
-function replay(entries: readonly unknown[]): Projection {
-  const projection: Projection = new Map();
+function replay(entries: readonly unknown[], initial?: Projection, start = 0): Projection {
+  // Earlier runs may still hold the admitted projection. Extend a private copy.
+  const projection: Projection = new Map(initial);
   let bytes = 0;
-  for (const entry of entries) {
+  for (const value of projection.values()) {
+    bytes += value.bytes;
+  }
+  for (let index = start; index < entries.length; index++) {
+    const entry = entries[index];
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
       continue;
     }

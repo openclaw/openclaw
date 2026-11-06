@@ -41,15 +41,19 @@ vi.mock("./runtime-worker-url.js", () => ({ resolveRuntimeWorkerThreadExecArgv: 
 
 type Pool = ReturnType<typeof createOwnedWorkerTaskPool<string, string>>;
 type PoolOptions = Parameters<typeof createOwnedWorkerTaskPool<string, string>>[0];
+type OwnerOptions = Parameters<typeof createOwnedWorkerTaskPool>[1];
 const pools: Pool[] = [];
 
-function createPool(options: Partial<PoolOptions> = {}) {
-  const pool = createOwnedWorkerTaskPool<string, string>({
-    workerUrl: new URL("file:///fixture/owned-worker.js"),
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    ...options,
-  });
+function createPool(options: Partial<PoolOptions> = {}, owner?: OwnerOptions) {
+  const pool = createOwnedWorkerTaskPool<string, string>(
+    {
+      workerUrl: new URL("file:///fixture/owned-worker.js"),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+      ...options,
+    },
+    owner,
+  );
   pools.push(pool);
   return pool;
 }
@@ -112,6 +116,43 @@ beforeEach(() => workers.splice(0));
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
   vi.useRealTimers();
+});
+
+it("keeps the newest idle worker warm without renewing expired surplus workers", async () => {
+  vi.useFakeTimers();
+  const pool = createPool({ maxWorkers: 2, idleTimeoutMs: 60_000 }, { retainOneIdleWorker: true });
+  expect(workers).toHaveLength(0);
+  const first = pool.run("first", {});
+  const later = pool.run("later", {});
+  const previous = workerFor("first");
+  const newest = workerFor("later");
+  reply(previous, "first");
+  reply(newest, "later");
+  await Promise.all([first, later]);
+  const active = pool.run("recent", {});
+  void active.catch(() => undefined);
+  expect(workerFor("recent")).toBe(newest);
+  await vi.advanceTimersByTimeAsync(61_000);
+  expect(previous.terminate).not.toHaveBeenCalled();
+  reply(newest, "recent");
+  await active;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(previous.terminate).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(newest.terminate).not.toHaveBeenCalled();
+  for (const retirement of ["rotate", "close"] as const) {
+    const task = pool.run(retirement, {});
+    const worker = workerFor(retirement);
+    if (retirement === "rotate") {
+      expect(worker).toBe(newest);
+    }
+    reply(worker, retirement);
+    await task;
+    await pool[retirement]();
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(pool.getSnapshot().workers).toBe(0);
+    expect(workers).toHaveLength(retirement === "rotate" ? 2 : 3);
+  }
 });
 
 it("retires burst workers without extending the first worker's idle lifetime", async () => {

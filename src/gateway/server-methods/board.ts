@@ -21,13 +21,14 @@ import {
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { appendBoardEventNotice } from "../../boards/board-notices.js";
 import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js";
-import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
+import {
+  boardWidgetDataQueryParams,
+  GITHUB_ACTIONS_GRANT_PREFIX,
+} from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
@@ -75,7 +76,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       const { params: boardParams, respond, context, client } = invocation;
       const ingress = client?.remoteControlUiIngress;
       const authority = captureBoardRequestAuthority(invocation);
-      const boardSession = resolveBoardSession(boardParams, context, respond);
+      const boardSession = resolveBoardSession(boardParams, context, respond, "read");
       if (!boardSession) {
         return;
       }
@@ -339,7 +340,8 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             | undefined;
           if (
             content.kind === "html" &&
-            declared?.tools?.some((tool) => tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX))
+            (declared?.tools?.some((tool) => tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)) ||
+              (declared?.queries?.length ?? 0) > 0)
           ) {
             const { prepareBoardGitHubIdentity } = await import("../github-actions-read.js");
             identity = await prepareBoardGitHubIdentity(context, {
@@ -615,6 +617,39 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       validateBoardDataReadParams,
       async (invocation) => {
         const { params: boardParams, respond } = invocation;
+        if ("queryName" in boardParams) {
+          const query = await withAuthorizedBoardWidgetView(
+            store,
+            boardParams.ticket,
+            ({ document }) => {
+              const definition = document.declared?.queries?.find(
+                (item) => item.name === boardParams.queryName,
+              );
+              if (!definition) {
+                throw new BoardValidationError(
+                  "invalid_operation",
+                  `board widget query is not declared: ${boardParams.queryName}`,
+                );
+              }
+              return definition;
+            },
+            { gatewayContext: invocation.context },
+          );
+          const authority = captureBoardCapabilityAuthority(
+            store,
+            boardParams.ticket,
+            invocation,
+            query,
+          );
+          await readBoardDataBinding(
+            query.bindingId,
+            boardWidgetDataQueryParams(query),
+            invocation,
+            authority,
+            respond,
+          );
+          return;
+        }
         const bindingParams = boardParams.params ?? {};
         assertBoardCapabilityParamsSize(bindingParams, "data binding");
         const authority = captureBoardCapabilityAuthority(

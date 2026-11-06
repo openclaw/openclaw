@@ -133,7 +133,9 @@ suite.define(() => {
         await page.locator("[data-models-connect]").click();
         const dialog = page.locator(".model-provider-login");
         await dialog.locator('[data-models-login-provider="openai"]').waitFor();
-        expect((await dialog.locator(".model-setup-wizard__body > p").textContent())?.trim()).toBe(
+        expect(
+          (await dialog.locator(".oc-dialog__description p").first().textContent())?.trim(),
+        ).toBe(
           "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
         );
         if (recordVisuals) {
@@ -262,7 +264,7 @@ suite.define(() => {
           await captureProviderProof(`provider-settings-${origin}.png`, card);
           await page.locator("[data-models-connect]").click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
+          await dialog.getByRole("heading", { name: "Add an account", exact: true }).waitFor();
           await dialog.locator('[data-models-login-provider="openai"]').waitFor();
           expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         },
@@ -318,9 +320,12 @@ suite.define(() => {
         await page.locator('[data-models-login-provider="example"]').click();
         expect(
           (
-            await page.locator(".model-provider-login .model-setup-wizard__body > p").textContent()
+            await page
+              .locator(".model-provider-login .oc-dialog__description p")
+              .first()
+              .textContent()
           )?.trim(),
-        ).toBe("Save credentials for this agent. Choose the active model separately.");
+        ).toBe("Add an account for this agent. Choose the model separately.");
         await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
@@ -515,7 +520,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("wizard.next", { done: true, status: "done" });
         await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-        await dialog.getByText("xAI OAuth is connected", { exact: true }).waitFor();
+        await dialog.getByText("xAI OAuth is ready", { exact: true }).waitFor();
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         const restoredProvider = await expandProvider(page, "xai");
@@ -528,10 +533,7 @@ suite.define(() => {
     );
   });
 
-  it.each([
-    { value: "keep", label: "Keep current restrictions", native: false },
-    { value: "all", label: "Show all Example models", native: true },
-  ])("keeps the default after $value model access (native: $native)", async (modelAccess) => {
+  it("keeps the default after the native permission step", async () => {
     await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
       const now = Date.now();
       const config = { agents: { defaults: { model: "example/existing" } } };
@@ -547,7 +549,7 @@ suite.define(() => {
               label: "Example device sign-in",
               kind: "device-code",
               featured: true,
-              requiresSetup: modelAccess.native,
+              requiresSetup: true,
             },
           ],
         },
@@ -585,7 +587,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
       const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       await expect.poll(() => modelPickerValue(primary)).toBe("example/existing");
-      await captureProviderProof(`login-models-before-${modelAccess.value}.png`, primary);
+      await captureProviderProof("login-models-before-native.png", primary);
       // A working default hides the setup prompt; Provider access owns Connect provider.
       await page.locator("[data-models-connect]").click();
       expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
@@ -593,10 +595,7 @@ suite.define(() => {
       const signIn = page.getByRole("button", { name: "Example device sign-in", exact: true });
       await signIn.waitFor();
       expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-      await captureProviderProof(
-        `login-before-choice-${modelAccess.value}-${modelAccess.native}.png`,
-        signIn,
-      );
+      await captureProviderProof("login-before-choice-native.png", signIn);
       await signIn.click();
       const login = await gateway.waitForRequest("models.authLogin");
       const loginParams = login.params;
@@ -613,10 +612,7 @@ suite.define(() => {
           .getByRole("link", { name: "Reopen browser tab", exact: true })
           .getAttribute("href"),
       ).toBe("https://example.invalid/device");
-      await captureProviderProof(
-        `login-device-code-${modelAccess.value}.png`,
-        dialog.getByText("TEST-1234"),
-      );
+      await captureProviderProof("login-device-code-native.png", dialog.getByText("TEST-1234"));
       const authReads = (await gateway.getRequests("models.authStatus")).length;
       await gateway.setMethodResponse("models.authStatus", {
         ts: now,
@@ -641,49 +637,29 @@ suite.define(() => {
         done: false,
         status: "running",
         step: {
-          id: "model-access",
+          id: "native-permissions",
           type: "select",
-          message: modelAccess.native
-            ? "Use Example Code’s native permissions?"
-            : "Credentials saved. Your current model restrictions may hide Example models.",
-          initialValue: modelAccess.native ? "all" : "keep",
-          options: modelAccess.native
-            ? [{ value: "all", label: "Continue" }]
-            : [
-                { value: "all", label: "Show all Example models" },
-                { value: "keep", label: "Keep current restrictions" },
-              ],
+          message: "Use Example Code’s native permissions?",
+          initialValue: "all",
+          options: [{ value: "all", label: "Continue" }],
         },
       });
       await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-      if (modelAccess.native) {
-        await dialog.getByText("Use Example Code’s native permissions?", { exact: true }).waitFor();
-      }
-      const keep = dialog.getByRole("button", {
-        name: modelAccess.native ? "Continue" : "Keep current restrictions",
-        exact: true,
-      });
-      await keep.waitFor();
-      expect(await keep.isEnabled()).toBe(true);
+      await dialog.getByText("Use Example Code’s native permissions?", { exact: true }).waitFor();
+      const confirm = dialog.getByRole("button", { name: "Continue", exact: true });
+      await confirm.waitFor();
+      expect(await confirm.isEnabled()).toBe(true);
       expect((await gateway.getRequests("wizard.next")).at(-1)?.params).toEqual({
         sessionId: loginParams.sessionId,
         answer: { stepId: "device" },
       });
-      await captureProviderProof(
-        `login-model-access-${modelAccess.value}.png`,
-        dialog.locator("dialog"),
-      );
+      await captureProviderProof("login-native-permissions.png", dialog.locator("dialog"));
       await gateway.setMethodResponse("wizard.next", {
         done: true,
         status: "done",
-        ...(modelAccess.native ? { modelActivation: { modelRef: "example/native" } } : {}),
+        modelActivation: { modelRef: "example/native" },
       });
-      await dialog
-        .getByRole("button", {
-          name: modelAccess.native ? "Continue" : modelAccess.label,
-          exact: true,
-        })
-        .click();
+      await confirm.click();
       await expect
         .poll(async () => {
           const requests = await gateway.getRequests("wizard.next");
@@ -691,18 +667,13 @@ suite.define(() => {
         })
         .toEqual({
           sessionId: loginParams.sessionId,
-          answer: { stepId: "model-access", value: modelAccess.value },
+          answer: { stepId: "native-permissions", value: "all" },
         });
       const saved = page.getByRole("status").filter({
-        hasText: modelAccess.native
-          ? "Provider enabled. The active model has not changed."
-          : "Provider credentials saved.",
+        hasText: "Provider enabled. The active model has not changed.",
       });
       await saved.waitFor();
-      await captureProviderProof(
-        `login-after-saved-${modelAccess.value}.png`,
-        dialog.locator("dialog"),
-      );
+      await captureProviderProof("login-after-saved-native.png", dialog.locator("dialog"));
       await dialog.getByRole("button", { name: "Close", exact: true }).click();
       const example = await expandProvider(page, "example");
       await example.getByText("signed-in@example.invalid", { exact: true }).waitFor();
@@ -843,7 +814,7 @@ suite.define(() => {
         expect(await profiles.first().textContent()).toContain("Codex CLI");
         expect(await profiles.last().textContent()).toContain("alex@example.invalid");
         expect(await profiles.last().textContent()).toContain("Access token expires in 1h");
-        expect(await profiles.last().textContent()).toContain("Credentials configured");
+        expect(await profiles.last().textContent()).toContain("Account added");
         expect(await profiles.last().textContent()).toContain(
           "Access-token expiry alone does not mean you need to sign in again.",
         );

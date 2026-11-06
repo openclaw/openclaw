@@ -8,6 +8,7 @@ import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -41,6 +42,8 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillsSyncQueue = new KeyedAsyncQueue();
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
+// Windows chmod controls only the read-only attribute.
+const GENERATED_IGNORE_MODE_MASK = process.platform === "win32" ? 0o200 : 0o7777;
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
@@ -146,7 +149,6 @@ async function copySkillTree(
     return;
   }
   const stat = await fsp.lstat(source);
-  assertCurrent?.();
   const relativePath = path.relative(target.rootDir, destination);
   let destinationStat: fs.Stats | undefined;
   if (reconcile) {
@@ -157,7 +159,6 @@ async function copySkillTree(
         throw error;
       }
     }
-    assertCurrent?.();
   }
   if (
     stat.isFile() &&
@@ -170,7 +171,6 @@ async function copySkillTree(
       sha256File(source, { maxBytes: stat.size }),
       sha256File(destination, { maxBytes: destinationStat.size }),
     ]);
-    assertCurrent?.();
     if (sourceContent.digest === destinationContent.digest) {
       return;
     }
@@ -181,18 +181,16 @@ async function copySkillTree(
   }
   if (stat.isDirectory()) {
     if (!destinationStat) {
+      assertCurrent?.();
       await fsp.mkdir(destination, { mode: stat.mode | 0o700 });
     }
-    assertCurrent?.();
     await ensureWritableSkillDirectories(target, relativePath, assertCurrent, stat.mode);
     const children = await fsp.readdir(source);
-    assertCurrent?.();
     if (destinationStat) {
       const expected = new Set(
         children.filter((name) => shouldSyncSkillPath(path.join(source, name))),
       );
       const existing = await fsp.readdir(destination);
-      assertCurrent?.();
       for (const name of existing) {
         if (!expected.has(name)) {
           await removeSyncedSkillPath(target, path.join(relativePath, name), assertCurrent);
@@ -210,7 +208,6 @@ async function copySkillTree(
     }
   } else if (stat.isSymbolicLink()) {
     const link = await fsp.readlink(source);
-    assertCurrent?.();
     const targetStat =
       process.platform === "win32" ? await fsp.stat(source).catch(() => undefined) : undefined;
     assertCurrent?.();
@@ -220,13 +217,13 @@ async function copySkillTree(
       targetStat?.isDirectory() ? "dir" : "file",
     );
   } else {
-    await target.copyIn(`.${path.sep}${path.relative(target.rootDir, destination)}`, source, {
+    // The pinned root revalidates custody after its awaits, at each mutation.
+    await target.copyIn(`.${path.sep}${relativePath}`, source, {
       preserveSourceMode: true,
       sourceHardlinks: "allow",
       durable: false,
     });
   }
-  assertCurrent?.();
 }
 
 export async function syncWorkspaceSkills(params: {
@@ -252,7 +249,11 @@ export async function syncWorkspaceSkills(params: {
     return [];
   }
 
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.layout.skills_sync.queue_wait",
+  );
   const synced = await skillsSyncQueue.enqueue(`syncSkills:${targetDir}`, async () => {
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.identity");
     assertCurrent?.();
     const targetSkillsDir = path.join(targetDir, "skills");
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
@@ -276,24 +277,35 @@ export async function syncWorkspaceSkills(params: {
         skillsSnapshot?.librarySelections,
       ]),
     );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.directory");
     await ensureSyncedSkillsDirectory(targetSkillsDir, assertCurrent);
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.root");
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
-    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.gitignore");
+    const ignore = await target
+      .read(".gitignore", { maxBytes: 2, symlinks: "reject" })
+      .catch(() => undefined);
+    if (
+      ignore?.buffer.toString() !== "*\n" ||
+      (ignore.stat.mode & GENERATED_IGNORE_MODE_MASK) !== (0o644 & GENERATED_IGNORE_MODE_MASK)
+    ) {
+      await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    }
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_read");
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
-    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
-    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.reuse");
     const expectedManifestKey =
-      skillsSnapshot?.version === skillsVersion
+      skillsSnapshot?.version === getSkillsSnapshotVersion(sourceWorkspace)
         ? resolveSyncedSkillsManifestKey({
             entryKeys: skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
             skillRootsFingerprint,
-            skillsVersion,
+            skillsVersion: skillsSnapshot.version,
           })
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
@@ -302,7 +314,7 @@ export async function syncWorkspaceSkills(params: {
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
       cachedUsage?.manifestKey === manifestKey &&
-      cachedUsage.sourceVersion === sourceVersion
+      cachedUsage.sourceVersion === getSkillsResourceVersion(sourceWorkspace)
     ) {
       return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
     }
@@ -318,14 +330,18 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.discovery");
     const entries = await prepareWorkspaceSkills(sourceWorkspace, {
       ...loadOptions,
       executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
       executionWorkspaceFileHost,
     });
     assertCurrent?.();
+    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
+    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
+      phases.mark("attempt.setup.sandbox.layout.skills_sync.library_selection");
       const selectedEntries = await prepareSkillLibrarySelection(
         skillsSnapshot.librarySelections,
         {},
@@ -335,6 +351,7 @@ export async function syncWorkspaceSkills(params: {
       entries.push(...selectedEntries.filter((entry) => selectedNames.has(entry.skill.name)));
     }
 
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.plan");
     const usedDirNames = new Set<string>();
     const plans: Array<{
       destinationPath?: string;
@@ -376,6 +393,7 @@ export async function syncWorkspaceSkills(params: {
     }
 
     assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_remove");
     await target.remove(SYNCED_SKILLS_MANIFEST_NAME, { force: true });
     assertCurrent?.();
     const previousUsage =
@@ -396,18 +414,18 @@ export async function syncWorkspaceSkills(params: {
           : [];
       }),
     );
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.target_scan");
+    const children = new Set(await fsp.readdir(targetSkillsDir));
+    assertCurrent?.();
+    // A restart loses usage records, not copied bytes. Reconcile existing trees
+    // against current content before reuse, independently of the process version.
     const incrementalDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
-        return destination &&
-          previousUsage?.destinations.get(plan.identity) === destination &&
-          !plan.pin
-          ? [destination]
-          : [];
+        return destination && children.has(destination) && !plan.pin ? [destination] : [];
       }),
     );
-    const children = await fsp.readdir(targetSkillsDir);
-    assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.layout.skills_sync.remove_stale");
     for (const child of children) {
       if (
         child !== ".gitignore" &&
@@ -428,13 +446,16 @@ export async function syncWorkspaceSkills(params: {
       if (!preservedDestinations.has(path.basename(destinationPath))) {
         try {
           if (pin) {
+            phases.mark("attempt.setup.sandbox.layout.skills_sync.library_read");
             const libraryFiles = await readSelectedSkillLibraryFiles(pin);
             assertCurrent?.();
             for (const file of libraryFiles) {
               const filePath = path.join(destinationPath, file.path);
               assertCurrent?.();
+              phases.mark("attempt.setup.sandbox.layout.skills_sync.library_directory");
               await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
               assertCurrent?.();
+              phases.mark("attempt.setup.sandbox.layout.skills_sync.library_copy");
               await target.create(
                 `.${path.sep}${path.relative(targetSkillsDir, filePath)}`,
                 Buffer.from(file.content, file.encoding === "base64" ? "base64" : "utf8"),
@@ -443,6 +464,7 @@ export async function syncWorkspaceSkills(params: {
             }
           } else {
             const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
+            phases.mark("attempt.setup.sandbox.layout.skills_sync.copy_tree");
             await copySkillTree(
               syncSourceDir,
               destinationPath,
@@ -455,6 +477,9 @@ export async function syncWorkspaceSkills(params: {
           assertCurrent?.();
           if (entry.skill.source === "openclaw-library") {
             throw error;
+          }
+          if (incrementalDestinations.has(path.basename(destinationPath))) {
+            await removeSyncedSkillPath(target, path.basename(destinationPath), assertCurrent);
           }
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -480,6 +505,7 @@ export async function syncWorkspaceSkills(params: {
         skillsVersion,
       };
       assertCurrent?.();
+      phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_write");
       await target.writeJson(SYNCED_SKILLS_MANIFEST_NAME, nextManifest, {
         trailingNewline: true,
         durable: false,

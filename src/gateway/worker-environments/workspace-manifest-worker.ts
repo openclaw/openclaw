@@ -11,19 +11,8 @@ import type {
   WorkspaceManifestValueInputs,
   WorkspaceStageInput,
 } from "./workspace-manifest-computation.js";
-import type {
-  WorkerWorkspaceManifest,
-  WorkerWorkspaceManifestEntry,
-} from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { joinStagedWorkspaceManifestRead } from "./workspace-result-git.js";
-import {
-  resolveStagedWorkspaceReadEntry,
-  stagedWorkspaceEntryBytes,
-  STAGED_WORKSPACE_READ_MAX_BYTES,
-  STAGED_WORKSPACE_READ_MAX_ENTRIES,
-  type StagedWorkerWorkspaceInventory,
-  type StagedWorkerWorkspaceReadEntry,
-} from "./workspace-result-inventory.js";
 
 type WorkspaceCaptureArguments = Parameters<typeof readActualWorkspaceManifestImpl>[0];
 
@@ -328,6 +317,7 @@ export async function overlayWorkspaceManifest(
 }
 
 export async function parseWorkspaceManifestPair(input: {
+  buildCacheInputs?: string[];
   baseRaw: string;
   baseRef: string;
   currentRaw: string;
@@ -339,6 +329,7 @@ export async function parseWorkspaceManifestPair(input: {
     input: {
       baseRef: input.baseRef,
       currentRef: input.currentRef,
+      buildCacheInputs: input.buildCacheInputs,
       baseRaw: encoder.encode(input.baseRaw),
       currentRaw: encoder.encode(input.currentRaw),
     },
@@ -357,43 +348,6 @@ export async function loadStagedWorkspaceManifest(
   return hasGitWorkerContext()
     ? await read()
     : await joinStagedWorkspaceManifestRead(input, signal, read);
-}
-
-export async function* readStagedWorkspaceManifestEntries(input: {
-  root: string;
-  entries: readonly WorkerWorkspaceManifestEntry[];
-  objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
-}) {
-  let nextEntry = 0;
-  while (nextEntry < input.entries.length) {
-    const entries: StagedWorkerWorkspaceReadEntry[] = [];
-    let bytes = 0;
-    while (nextEntry < input.entries.length) {
-      const entry = input.entries[nextEntry]!;
-      const entryBytes = stagedWorkspaceEntryBytes(entry);
-      if (
-        entries.length > 0 &&
-        (entries.length === STAGED_WORKSPACE_READ_MAX_ENTRIES ||
-          bytes + entryBytes > STAGED_WORKSPACE_READ_MAX_BYTES)
-      ) {
-        break;
-      }
-      entries.push(resolveStagedWorkspaceReadEntry(input.objectsByPath, entry));
-      bytes += entryBytes;
-      nextEntry++;
-    }
-    const contents = await computeWorkspaceManifest({
-      type: "workspace.manifest.entries",
-      input: { root: input.root, entries },
-    });
-    let offset = 0;
-    for (const { entry } of entries) {
-      const content =
-        entry.type === "file" ? contents.subarray(offset, offset + entry.size) : undefined;
-      offset += entry.type === "file" ? entry.size : 0;
-      yield { entry, content };
-    }
-  }
 }
 
 export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<string>) {
@@ -419,6 +373,7 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
             currentManifestRef: input.currentManifestRef,
             baseManifestRaw: encoder.encode(input.baseManifestRaw),
             currentManifestRaw: encoder.encode(input.currentManifestRaw),
+            existingObjects: input.existingObjects,
           }),
     },
   });

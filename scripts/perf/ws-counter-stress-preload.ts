@@ -33,26 +33,34 @@ if (isMainThread) {
       frameBytes = {};
       loop = monitorEventLoopDelay({ resolution: 10 });
       loop.enable();
-      process.send?.({ channel: "ws-counter-stress", action: "start" });
+      process.channel?.ref();
+      process.send?.({ channel: "ws-counter-stress", action: "start" }, () =>
+        process.channel?.unref(),
+      );
     } else if (message.action === "stop" && loop) {
       loop.disable();
-      process.send?.({
-        channel: "ws-counter-stress",
-        action: "stop",
-        events,
-        frames,
-        bytes,
-        wireBytes,
-        frameBytes,
-        loop: {
-          count: loop.count,
-          p95Ms: loop.percentile(95) / 1e6,
-          p99Ms: loop.percentile(99) / 1e6,
-          maxMs: loop.max / 1e6,
+      process.channel?.ref();
+      process.send?.(
+        {
+          channel: "ws-counter-stress",
+          action: "stop",
+          events,
+          frames,
+          bytes,
+          wireBytes,
+          frameBytes,
+          loop: {
+            count: loop.count,
+            p95Ms: loop.percentile(95) / 1e6,
+            p99Ms: loop.percentile(99) / 1e6,
+            maxMs: loop.max / 1e6,
+          },
         },
-      });
+        () => process.channel?.unref(),
+      );
       loop = undefined;
     }
   });
+  process.channel?.unref();
   process.once("disconnect", stop);
 }

@@ -494,6 +494,7 @@ describe("transcript projection", () => {
     const read = vi.fn(() => 700);
     props.widgetLayout = {
       read,
+      readRows: () => undefined,
       write: vi.fn(),
       writeRows: vi.fn(),
       invalidateRow: vi.fn(),
@@ -539,7 +540,7 @@ describe("transcript projection", () => {
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const project = () => {
       projectSession(props, transcript);
-      return state.transcriptRenderContext.turnVideoMessages
+      return state.transcriptRenderContext.threadMediaMessages
         ?.values()
         .next()
         .value?.map(({ message }) => message);

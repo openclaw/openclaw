@@ -21,6 +21,8 @@
     }
   },
   "contracts": {
+    "embeddingProviders": ["clawrouter"],
+    "webSearchProviders": ["clawrouter"],
     "mediaUnderstandingProviders": ["clawrouter"],
     "imageGenerationProviders": ["clawrouter"],
     "speechProviders": ["clawrouter"],
@@ -83,6 +85,10 @@
       "clawrouter": {
         "baseUrl": "https://clawrouter.openclaw.ai/v1",
         "api": "openai-responses",
+        "defaultUtilityModels": {
+          "anthropic": "anthropic/claude-haiku-5-5",
+          "openai": "openai/gpt-6-luna"
+        },
         "models": [
           {
             "id": "openai/gpt-6-luna",

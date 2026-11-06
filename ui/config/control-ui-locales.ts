@@ -112,7 +112,7 @@ function parseResolvedLocaleModuleId(id: string): { locale: string; namespace?: 
     : null;
 }
 
-export function controlUiLocaleModulesPlugin(): Plugin {
+export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin {
   let sourceAliases: Alias[] = [];
   // Both modules must share one materialization. Replacing the cache object
   // fences resolved and rejected work from an invalidated build generation.
@@ -176,11 +176,13 @@ export function controlUiLocaleModulesPlugin(): Plugin {
           }
           for (const watchFile of sourceCatalogResult.watchFiles) {
             this.addWatchFile(watchFile);
+            buildInputs?.add(watchFile);
           }
           // Vite turns watched files into imports during dev transforms. A source-only
           // locale has no memory file yet, so importing that path would fail.
           if (existsSync(memoryPath)) {
             this.addWatchFile(memoryPath);
+            buildInputs?.add(memoryPath);
           }
           let partitionLoad = activeCache.partitionLoads.get(request.locale);
           if (!partitionLoad) {

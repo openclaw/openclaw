@@ -10,7 +10,7 @@ import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-databa
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
 import { publishAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
-import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease-inspection.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
@@ -46,7 +46,7 @@ import {
 import { certifySessionCanonicalValidationPending } from "./session-canonical-validation-readiness.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 import * as sessionTargets from "./targets.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
@@ -130,7 +130,7 @@ it.each(["cold", "preexisting"] as const)(
     if (lifetime === "preexisting") {
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
     } else {
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toThrow();
+      await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).resolves.toBeUndefined();
     }
   },
 );
@@ -163,7 +163,7 @@ it("reads the cold certified startup contract and session inventory once each", 
     statements.restore();
   }
   expectMainKey(options);
-  expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toThrow();
+  await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).resolves.toBeUndefined();
 });
 
 it("does not create a missing configured agent database during startup maintenance", async () => {

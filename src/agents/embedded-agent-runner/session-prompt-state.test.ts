@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { createComputerTool } from "../tools/computer-tool.js";
 import {
   clearEmbeddedSessionPromptStates,
   beginSessionSystemPrompt,
@@ -192,6 +193,32 @@ describe("system prompt series", () => {
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
+
+  it.each(["compaction", "reset"] as const)(
+    "restarts on a new %s, but not when its payload enters or leaves a bounded window",
+    (kind) => {
+      const state = fixture.state;
+      const projectBoundary = (entries: SessionEntry[], historyBoundaryCount: number) => {
+        const result = prepareSessionSystemPrompt({
+          state,
+          routeKey,
+          entries,
+          historyBoundaryCount,
+          systemPrompt: entries.length ? changed : base,
+        });
+        result.commit();
+        return result;
+      };
+      const first = projectBoundary([], 1);
+      expect(projectBoundary([historyEntry(kind, "old")], 1).systemPrompt).toBe(first.systemPrompt);
+      const compacted = projectBoundary([historyEntry(kind, "new")], 2);
+      expect(compacted.restart).toBe(true);
+      expect(compacted.systemPrompt).toBe(changed);
+      expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
+      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => [] });
+      expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
+    },
+  );
 
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
     project("First.\n## File\nOne.\n## File\nTwo.");
@@ -424,9 +451,47 @@ describe("session tool surface", () => {
     await fixture.persist(entries);
   }
 
+  it.each([false, true])(
+    "pins initial computer capabilities across turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const first = createComputerTool({
+        pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+      });
+      const initial = JSON.stringify(definitions(surface([first])));
+      expect(initial).toBe(JSON.stringify(definitions([first])));
+      await persist(entries);
+      if (restored) {
+        fixture.reload();
+      }
+      const current = createComputerTool({
+        pairedNodeComputerUse: {
+          actions: ["launch_app"],
+          gateway: { configured: false, available: false },
+        },
+      });
+      expect(JSON.stringify(definitions([current]))).not.toBe(initial);
+      const next = surface([current], entries);
+      expect(JSON.stringify(definitions(next))).toBe(initial);
+      expect(next[0]!.execute).toBe(current.execute);
+      const unavailable = surface([], entries);
+      expect(JSON.stringify(definitions(unavailable))).toBe(initial);
+      expect((await unavailable[0]!.execute("unavailable", {})).details).toMatchObject({
+        gated: true,
+      });
+      expect(definitions(surface([current], entries, routeKey, "new-provider-config"))).toEqual(
+        definitions([current]),
+      );
+    },
+  );
+
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];
-    surface([tool("read"), tool("exec")]);
+    const parameters = publishRuntimeToolInputSchema({
+      type: "object",
+      properties: { path: { type: "string", description: "Path to read 🦞\ud800" } },
+    }).schema;
+    surface([tool("read", "Read a file", parameters), tool("exec")]);
     const write = (customType: string, data: unknown) => {
       const entry = {
         ...entryMetadata,
@@ -438,6 +503,8 @@ describe("session tool surface", () => {
       const expected = JSON.stringify(entry);
       const canonical = canonicalizeSessionEntry(entry);
       expect(JSON.stringify(canonical)).toBe(expected);
+      const saved = canonical.data as { tools: { name: string; parameters: unknown }[] };
+      expect(saved.tools.find((pin) => pin.name === "read")?.parameters).toBe(parameters);
       entries.push(canonical);
     };
     fixture.prepare("Base.", entries).commit();
@@ -574,20 +641,17 @@ describe("session tool surface", () => {
       if (restored) {
         fixture.reload();
       }
-      const stringify = vi.spyOn(normalization, "stableStringify");
-      try {
-        const unchanged = surface([tool("read", "New guidance", reordered)], entries);
-        expect(unchanged[0]?.description).toBe("Pinned description");
-        expect(fixture.state.pendingToolSurface).toBeUndefined();
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
-        stringify.mockClear();
-        const replacement = surface([tool("read", "Changed schema", changed)], entries);
-        expect(replacement[0]?.description).toBe("Changed schema");
-        expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
-      } finally {
-        stringify.mockRestore();
-      }
+      using stringify = vi.spyOn(normalization, "stableStringify");
+      const unchanged = surface([tool("read", "New guidance", reordered)], entries);
+      expect(unchanged[0]?.description).toBe("Pinned description");
+      expect(fixture.state.pendingToolSurface).toBeUndefined();
+      surface([tool("read", "New guidance", reordered)], entries);
+      expect(stringify).toHaveBeenCalledTimes(restored ? 3 : 2);
+      stringify.mockClear();
+      const replacement = surface([tool("read", "Changed schema", changed)], entries);
+      expect(replacement[0]?.description).toBe("Changed schema");
+      expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
+      expect(stringify).toHaveBeenCalledTimes(restored ? 2 : 1);
     },
   );
 });

@@ -56,6 +56,18 @@ export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): Repl
 
 const EMPTY_REPLY_CONFIG: OpenClawConfig = {};
 
+export function resolveCompletionInputReplyExpectation(
+  sourceTool: string,
+  params: { expectsCompletionMessage: boolean; requireVisibleReply?: boolean },
+): ReplyExpectation {
+  // Available child findings do not create a reply obligation for their parent.
+  const isSubagentCompletion =
+    sourceTool === "subagent_announce" || sourceTool === "subagent_settle";
+  return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
+    ? "required"
+    : "optional";
+}
+
 export function resolveCommandReplyExpectation(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -73,8 +85,8 @@ export function resolveCommandReplyExpectation(params: {
     provenance?.kind === "inter_session" &&
     (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
   ) {
-    // Completion processing consumes child findings; it does not owe another answer.
-    return "optional";
+    // Completion processing is optional unless the caller assigns a reply obligation.
+    return params.opts.replyExpectation ?? "optional";
   }
   const inputExpectation = params.opts.replyExpectation;
   if (inputExpectation === "optional" || inputExpectation === "result-required") {

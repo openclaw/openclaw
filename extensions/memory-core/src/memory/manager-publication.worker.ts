@@ -6,6 +6,8 @@ import type {
 import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
+  readRepairedMemoryIndexSchema,
+  publishRepairedMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
@@ -36,6 +38,7 @@ import {
   tableExists,
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
@@ -268,7 +271,7 @@ function createPublicationBackend(
     }
   };
   const write = <T>(
-    run: () => T,
+    run: SynchronousSqliteCallback<T>,
     scopes = [MEMORY_INDEX_WRITE_SCOPE],
   ): MemoryPublicationResult<T> =>
     transact((hooks) =>
@@ -282,7 +285,9 @@ function createPublicationBackend(
         { withCommit: hooks.withCommit },
       ),
     );
-  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+  const writeSingleStatement = <T>(
+    statement: SynchronousSqliteCallback<T>,
+  ): MemoryPublicationResult<T> => {
     let committed = false;
     try {
       admit("transaction");
@@ -406,15 +411,29 @@ function createPublicationBackend(
         return readMemoryIndex(db, command).value;
       }
       if (command.type === "schema.admit") {
+        // Request-owned managers reopen this worker for every search. Retain repair
+        // proof on the existing database admission, invalidated by index/import writes.
+        // The existing writer reservation still owns serialization; a receipt is not a lock.
+        admit("transaction");
+        const schema = { ...command.input, db };
+        const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
+        const repaired = readRepairedMemoryIndexSchema(schema, writeToken);
         // Storage/STRICT migration must disable foreign keys before BEGIN.
-        db.exec("PRAGMA foreign_keys = OFF");
+        if (!repaired) {
+          db.exec("PRAGMA foreign_keys = OFF");
+        }
         try {
-          const result = write(() => {
-            stageOpenClawAgentDatabaseSchemaExtension(db);
-            return ensureMemoryIndexSchema({ ...command.input, db });
-          });
-          if (result.ok) {
+          const result = repaired
+            ? { ok: true as const, value: repaired, writeToken }
+            : write(() => {
+                stageOpenClawAgentDatabaseSchemaExtension(db);
+                return ensureMemoryIndexSchema(schema);
+              });
+          if (result.ok && !repaired) {
             admitSqliteSchema(db);
+            if (!schema.ftsEnabled || result.value.ftsAvailable) {
+              publishRepairedMemoryIndexSchema(schema, result.writeToken);
+            }
           }
           const published = withFacts(result, true);
           return published.ok && "kind" in input
@@ -432,7 +451,7 @@ function createPublicationBackend(
               }
             : published;
         } finally {
-          if (db.isOpen) {
+          if (!repaired && db.isOpen) {
             db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
           }
         }

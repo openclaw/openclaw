@@ -168,7 +168,8 @@ it.each([false, true])(
   },
 );
 
-it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
+it("retains settled native work from an overloaded attempt through a later plugin refresh", async () => {
+  useOpenAIPlatformAuthFixture();
   const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
   const originalMessage = userMessage(originalPrompt);
   const settledMessages = settledWrite();
@@ -205,7 +206,12 @@ it("retains settled work from an overloaded attempt through a later plugin refre
     expect(params.continuation).toBeUndefined();
     return makeAttemptResult({ assistantTexts: ["Receipt AMBER-731 verified."] });
   });
-  const result = await run({ prompt: originalPrompt });
+  const result = await run({
+    prompt: originalPrompt,
+    agentHarnessId: "codex",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+  });
   expect(result.meta.error).toBeUndefined();
   expect(attempt).toHaveBeenCalledTimes(3);
 });

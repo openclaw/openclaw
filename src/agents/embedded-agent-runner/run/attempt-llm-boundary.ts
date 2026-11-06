@@ -204,7 +204,10 @@ export function normalizeMessagesForCurrentPromptBoundary(
   params: CurrentPromptBoundaryInput & { messages: AgentMessage[] },
 ): AgentMessage[] {
   const { message, options } = buildCurrentPromptBoundaryInput(params);
-  return normalizeMessagesForLlmBoundary([...params.messages, message], options).slice(0, -1);
+  const normalized = normalizeMessagesForLlmBoundary([...params.messages, message], options);
+  // Boundary projection owns this array; discard the synthetic tail without copying history.
+  normalized.pop();
+  return normalized;
 }
 
 export function normalizeCurrentPromptTextForLlmBoundary(

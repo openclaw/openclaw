@@ -46,7 +46,7 @@ export type ModelAuthStatusProvider = {
   };
   usage?: Pick<
     ProviderUsageSnapshot,
-    "windows" | "summary" | "plan" | "billing" | "accountEmail"
+    "windows" | "summary" | "plan" | "billing" | "accountEmail" | "authProfileId"
   > & {
     /** Normalized provider id the usage payload was fetched under. */
     providerId: ProviderUsageSnapshot["provider"];

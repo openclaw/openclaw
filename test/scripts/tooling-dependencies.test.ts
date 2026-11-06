@@ -38,7 +38,7 @@ function expectRun(
   return result;
 }
 
-function createWorkspaceFixture(root: string) {
+function createWorkspaceFixture(root: string, mode: "import" | "require" = "import") {
   const fixture = createToolingDependencyFixture(root);
   const workspace = "packages/fixture-workspace";
   const source = join(fixture.checkout, workspace);
@@ -59,7 +59,7 @@ function createWorkspaceFixture(root: string) {
   const entry = join(source, "src/index.mjs");
   writeFileSync(
     entry,
-    `import value, { privateValue } from "fixture-pkg";
+    `${mode === "import" ? 'import value, { privateValue } from "fixture-pkg";' : 'import { createRequire } from "node:module";\nconst { default: value, privateValue } = createRequire(import.meta.url)("fixture-pkg");'}
 import local from "@fixture/workspace/local";
 export { value, privateValue, local };
 `,
@@ -179,11 +179,15 @@ it.each([
   expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
 });
 
-it.each(["local only", "different root pin", "missing subpath exports"])(
-  "resolves workspace-owned dependencies with %s and preserves checkout source",
-  (scenario) => {
+it.each(
+  ["local only", "different root pin", "missing subpath exports"].flatMap((scenario) =>
+    (["import", "require"] as const).map((mode) => ({ scenario, mode })),
+  ),
+)(
+  "resolves workspace-owned dependencies with $scenario via $mode and preserves checkout source",
+  ({ scenario, mode }) => {
     const root = tempDirs.make("openclaw-tooling-package-");
-    const fixture = createWorkspaceFixture(root);
+    const fixture = createWorkspaceFixture(root, mode);
     if (scenario === "local only") {
       const manifestPath = join(fixture.checkout, "package.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -206,54 +210,82 @@ ${source}`,
   },
 );
 
-it.each([
-  "version",
-  "range pin",
-  "undeclared",
-  "subpath exports",
-  "package escape",
-  "entry escape",
-  "context escape",
-  "foreign workspace source",
-])("rejects workspace dependency %s before package execution", (scenario) => {
-  const root = tempDirs.make("openclaw-tooling-package-rejection-");
-  const fixture = createWorkspaceFixture(root);
-  const marker = 'console.log("INVALID PACKAGE EXECUTED");';
-  writeFileSync(
-    join(fixture.installed, "index.mjs"),
-    `${marker} export default "workspace"; export const privateValue = "private";`,
+it.each(
+  [
+    "version",
+    "range pin",
+    "undeclared",
+    "subpath exports",
+    "package escape",
+    "entry escape",
+    "context escape",
+    "foreign workspace source",
+  ].flatMap((scenario) => (["import", "require"] as const).map((mode) => ({ scenario, mode }))),
+)(
+  "rejects workspace dependency $scenario via $mode before package execution",
+  ({ scenario, mode }) => {
+    const root = tempDirs.make("openclaw-tooling-package-rejection-");
+    const fixture = createWorkspaceFixture(root, mode);
+    const marker = 'console.log("INVALID PACKAGE EXECUTED");';
+    writeFileSync(
+      join(fixture.installed, "index.mjs"),
+      `${marker} export default "workspace"; export const privateValue = "private";`,
+    );
+    let expected = "Tooling package escapes its installed dependency owner";
+    if (scenario === "version") {
+      const manifestPath = join(fixture.installed, "package.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.version = "0.0.0-stale";
+      writeJson(manifestPath, manifest);
+      expected = "requires 2.0.0";
+    } else if (scenario === "range pin" || scenario === "undeclared") {
+      writeJson(join(fixture.source, "package.json"), {
+        ...fixture.manifest,
+        dependencies: scenario === "undeclared" ? {} : { "fixture-pkg": "^2.0.0" },
+      });
+      expected =
+        scenario === "undeclared" && mode === "require"
+          ? "MODULE_NOT_FOUND"
+          : `requires ${scenario === "undeclared" ? "undeclared" : "^2.0.0"}`;
+    } else if (scenario === "subpath exports") {
+      rewrite(fixture.entry, (source) => source.replace('"fixture-pkg"', '"fixture-pkg/private"'));
+      expected = "ERR_PACKAGE_PATH_NOT_EXPORTED";
+    } else if (scenario === "entry escape") {
+      const external = join(fixture.donor, "src/foreign.mjs");
+      moveAndLink(join(fixture.installed, "index.mjs"), external, "file");
+    } else if (scenario === "foreign workspace source") {
+      const foreign = join(root, "foreign-source");
+      mkdirSync(foreign);
+      writeJson(join(foreign, "package.json"), { type: "module", exports: "./index.mjs" });
+      writeFileSync(join(foreign, "index.mjs"), marker);
+      mkdirSync(join(root, "node_modules"));
+      symlinkSync(foreign, join(root, "node_modules/fixture-pkg"), directoryLink);
+    } else {
+      const target = scenario === "package escape" ? fixture.installed : fixture.donor;
+      const external = join(root, "foreign-owner");
+      moveAndLink(target, external);
+    }
+    const result = expectRun(fixture, 1, "");
+    expect(result.stderr).toContain(expected);
+  },
+);
+
+it("uses require export conditions from the qualified donor", () => {
+  const root = tempDirs.make("openclaw-tooling-require-conditions-");
+  const fixture = createToolingDependencyFixture(root);
+  const installed = fixture.writePackage("fixture-pkg", staleSource);
+  writeFileSync(join(installed, "require.cjs"), 'module.exports = "require-condition";');
+  rewrite(join(installed, "package.json"), (source) =>
+    JSON.stringify({
+      ...JSON.parse(source),
+      exports: { ".": { import: "./index.mjs", require: "./require.cjs" } },
+    }),
   );
-  let expected = "Tooling package escapes its installed dependency owner";
-  if (scenario === "version") {
-    const manifestPath = join(fixture.installed, "package.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.version = "0.0.0-stale";
-    writeJson(manifestPath, manifest);
-    expected = "requires 2.0.0";
-  } else if (scenario === "range pin" || scenario === "undeclared") {
-    writeJson(join(fixture.source, "package.json"), {
-      ...fixture.manifest,
-      dependencies: scenario === "undeclared" ? {} : { "fixture-pkg": "^2.0.0" },
-    });
-    expected = `requires ${scenario === "undeclared" ? "undeclared" : "^2.0.0"}`;
-  } else if (scenario === "subpath exports") {
-    rewrite(fixture.entry, (source) => source.replace('"fixture-pkg"', '"fixture-pkg/private"'));
-    expected = "ERR_PACKAGE_PATH_NOT_EXPORTED";
-  } else if (scenario === "entry escape") {
-    const external = join(fixture.donor, "src/foreign.mjs");
-    moveAndLink(join(fixture.installed, "index.mjs"), external, "file");
-  } else if (scenario === "foreign workspace source") {
-    const foreign = join(root, "foreign-source");
-    mkdirSync(foreign);
-    writeJson(join(foreign, "package.json"), { type: "module", exports: "./index.mjs" });
-    writeFileSync(join(foreign, "index.mjs"), marker);
-    mkdirSync(join(root, "node_modules"));
-    symlinkSync(foreign, join(root, "node_modules/fixture-pkg"), directoryLink);
-  } else {
-    const target = scenario === "package escape" ? fixture.installed : fixture.donor;
-    const external = join(root, "foreign-owner");
-    moveAndLink(target, external);
-  }
-  const result = expectRun(fixture, 1, "");
-  expect(result.stderr).toContain(expected);
+  writeFileSync(
+    join(fixture.checkout, "scripts/crabbox-wrapper.mts"),
+    `import { createRequire } from "node:module";
+console.log(createRequire(import.meta.url)("fixture-pkg"));
+`,
+  );
+  expectRun(fixture, 0, "require-condition\n");
 });

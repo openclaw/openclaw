@@ -9,6 +9,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import {
   startFixtureServer,
   stopFixtureServer,
@@ -26,31 +27,22 @@ const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-function colorChannelToLinear(channel: number): number {
-  const value = channel / 255;
-  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-}
-
-function colorLuminance(color: string): number {
-  const match = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/);
-  if (!match) {
-    throw new Error(`unsupported computed color: ${color}`);
+function colorContrast(foreground: RenderedColor, background: RenderedColor): number {
+  if (foreground.alpha !== 1) {
+    throw new Error(`transparent foreground requires compositing: ${JSON.stringify(foreground)}`);
   }
-  if (match[4] !== undefined && Number(match[4]) !== 1) {
-    throw new Error(`transparent computed color requires compositing: ${color}`);
-  }
-  const channels = match.slice(1, 4).map(Number);
-  return (
-    0.2126 * colorChannelToLinear(channels[0]!) +
-    0.7152 * colorChannelToLinear(channels[1]!) +
-    0.0722 * colorChannelToLinear(channels[2]!)
-  );
-}
-
-function colorContrast(foreground: string, background: string): number {
-  const lighter = Math.max(colorLuminance(foreground), colorLuminance(background));
-  const darker = Math.min(colorLuminance(foreground), colorLuminance(background));
-  return (lighter + 0.05) / (darker + 0.05);
+  const luminance = (color: RenderedColor, backdrop = 0) => {
+    const linear = (channel: number) => {
+      const value = (channel * color.alpha + backdrop * (1 - color.alpha)) / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * linear(color.red) + 0.7152 * linear(color.green) + 0.0722 * linear(color.blue);
+  };
+  const front = luminance(foreground);
+  // Black and white bound every RGB backdrop behind the translucent menu. The
+  // closest background luminance gives the minimum contrast across that range.
+  const back = Math.min(Math.max(front, luminance(background)), luminance(background, 255));
+  return (Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05);
 }
 
 async function openWidgetMenu(page: Page): Promise<void> {
@@ -363,7 +355,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           inFlightRun: { runId: "mock-plan-run" },
         },
       ]);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     });
 
     it("serves preview session agent:main:tax-research through both chat entry points", async () => {
@@ -465,7 +457,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it("keeps profile and presence HTTP inside the standalone mock", async () => {
+  it("keeps cold chat startup, sending, profile and presence inside the standalone mock", async () => {
     const artifacts = createControlUiE2eArtifactDir("standalone-network-isolation");
     const { context, page, origin, escaped, requests } = await isolatedPage(fixtureServer.url, {
       serviceWorkers: "block",
@@ -478,10 +470,48 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         // The fixture viewer is Riley; this shared checkout belongs to Peter.
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
-        await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+        await page.getByRole("button", { name: "Type a message first." }).waitFor();
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }
+        expect(await page.locator(".community-invite-card").count()).toBe(0);
+        expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
+        const paneState = await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+          .evaluate(async (pane) => {
+            const chatPane = pane as HTMLElement & {
+              transcriptReady: boolean;
+              updateComplete: Promise<unknown>;
+            };
+            await chatPane.updateComplete;
+            const constructor = customElements.get("openclaw-chat-pane");
+            return {
+              connected: chatPane.isConnected,
+              transcriptReady: chatPane.transcriptReady,
+              registered: constructor !== undefined,
+              upgraded: constructor !== undefined && chatPane instanceof constructor,
+            };
+          });
+        expect(paneState).toEqual({
+          connected: true,
+          transcriptReady: true,
+          registered: true,
+          upgraded: true,
+        });
+        expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
+
+        const prompt = "generic mock send probe";
+        const composer = page.locator(
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        );
+        await composer.fill(prompt);
+        await page.getByRole("button", { name: "Send message" }).click();
+
+        await page
+          .locator(".chat-thread-inner")
+          .getByText(`Mock reply: ${prompt}`, { exact: true })
+          .waitFor();
+        expect(await composer.inputValue()).toBe("");
         await page.goto(`${origin}/profile`, { waitUntil: "domcontentloaded" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
@@ -729,8 +759,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             iconSvg: true,
           });
         }
-        const colors = await readMenuColors(page);
-        expect(colorContrast(colors.foreground, colors.background)).toBeGreaterThanOrEqual(4.5);
+        const colors = await page.evaluate(resolveRenderedColors, await readMenuColors(page));
+        expect(colorContrast(colors.foreground!, colors.background!)).toBeGreaterThanOrEqual(4.5);
 
         const widgetBackgrounds = await page
           .locator('[data-test-id="board-widget"]')
@@ -800,57 +830,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           .getByText("Cannot read properties of undefined (reading 'toReversed')", { exact: false })
           .count(),
       ).toBe(0);
-    }),
-  );
-
-  it(
-    "starts with aligned build identity and renders a deterministic reply after generic chat.send",
-    withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
-        waitUntil: "domcontentloaded",
-      });
-      await selectAllSidebarSessions(page);
-      await page.getByText("OpenClaw work checkout", { exact: true }).click();
-
-      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
-      const paneState = await page
-        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
-        .evaluate(async (pane) => {
-          const chatPane = pane as HTMLElement & {
-            transcriptReady: boolean;
-            updateComplete: Promise<unknown>;
-          };
-          await chatPane.updateComplete;
-          const constructor = customElements.get("openclaw-chat-pane");
-          return {
-            connected: chatPane.isConnected,
-            transcriptReady: chatPane.transcriptReady,
-            registered: constructor !== undefined,
-            upgraded: constructor !== undefined && chatPane instanceof constructor,
-          };
-        });
-      expect(paneState).toEqual({
-        connected: true,
-        transcriptReady: true,
-        registered: true,
-        upgraded: true,
-      });
-      expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-
-      const prompt = "generic mock send probe";
-      const composer = page.locator(
-        ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
-      );
-      await composer.fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      await page
-        .locator(".chat-thread-inner")
-        .getByText(`Mock reply: ${prompt}`, { exact: true })
-        .waitFor();
-      expect(await composer.inputValue()).toBe("");
     }),
   );
 });

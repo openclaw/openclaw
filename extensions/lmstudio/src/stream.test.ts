@@ -104,23 +104,6 @@ function wrap(
   } as never);
 }
 
-function payloadStream(payload: Record<string, unknown>): StreamFn {
-  return vi.fn((model, _context, options) => {
-    const stream = createAssistantMessageEventStream();
-    queueMicrotask(() => {
-      options?.onPayload?.(payload, model);
-      stream.push({ type: "done", reason: "stop", message: {} as never });
-      stream.end();
-    });
-    return stream;
-  });
-}
-
-const BINARY_REASONING_COMPAT = {
-  supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-  reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
-};
-
 function infer(
   wrapped: StreamFn,
   model: Record<string, unknown>,
@@ -354,63 +337,5 @@ describe("lmstudio stream wrapper", () => {
       "minimum",
       "pattern",
     ]);
-  });
-
-  it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
-    const rawToolText = '[search]\n{"query":"codename"}\n[END_TOOL_REQUEST]';
-    const wrapped = wrap(
-      eventStream([
-        { type: "start", partial: assistantMessage([]) },
-        {
-          type: "text_start",
-          contentIndex: 0,
-          partial: assistantMessage([{ type: "text", text: "" }]),
-        },
-        { type: "text_delta", contentIndex: 0, delta: rawToolText },
-        { type: "text_end", contentIndex: 0, content: rawToolText },
-        {
-          type: "done",
-          reason: "stop",
-          message: assistantMessage([{ type: "text", text: rawToolText }]),
-        },
-      ]),
-    );
-    const events = await collectEvents(
-      infer(wrapped, {}, undefined, {
-        tools: [
-          { name: "search", description: "Search", parameters: { type: "object", properties: {} } },
-        ],
-      }),
-    );
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-      "done",
-    ]);
-    expect(events.at(-1)).toMatchObject({
-      reason: "toolUse",
-      message: { stopReason: "toolUse" },
-    });
-    expect(events.at(-1)?.message).toEqual(
-      expect.objectContaining({
-        content: [
-          expect.objectContaining({
-            type: "toolCall",
-            name: "search",
-            arguments: { query: "codename" },
-            id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
-          }),
-        ],
-      }),
-    );
-  });
-
-  it("rewrites reasoning_effort to the disabled effort when thinking is off", async () => {
-    const payload = { model: "qwen3-8b-instruct", reasoning_effort: "high" };
-    const wrapped = wrap(payloadStream(payload), { thinkingLevel: "off" });
-    expectDone(await collectEvents(infer(wrapped, { compat: BINARY_REASONING_COMPAT })));
-    expect(payload.reasoning_effort).toBe("none");
   });
 });

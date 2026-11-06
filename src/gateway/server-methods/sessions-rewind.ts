@@ -9,16 +9,13 @@ import {
   type SessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import type {
-  SessionBranchSwitchMutationResult,
-  SessionMessageCutMutationResult,
-} from "../../config/sessions/session-accessor.js";
 import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
-  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
@@ -53,6 +50,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
+import { LocalWorkspaceConflictError } from "../worker-environments/local-workspace-conflict-error.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
@@ -67,6 +65,8 @@ import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entr
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
 import {
+  createLocalMessageCutGuards,
+  EXTERNAL_CONVERSATION_ERROR,
   prepareUpstreamForkCurrentGuard,
   resolveUpstreamForkHarness,
 } from "./sessions-fork-runtime-guard.js";
@@ -75,13 +75,6 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
-type MessageCutMutationResult =
-  | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult
-  | { status: "conflict" };
-
-const EXTERNAL_CONVERSATION_ERROR =
-  "Session history changes are unavailable because this session is owned by an external agent harness.";
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": defineValidatedGatewayHandler(
@@ -502,18 +495,15 @@ async function mutatePreparedSessionAtMessage({
         sessionStoreKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      const upstreamChanged = new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          action === "fork" ? "Session changed; retry fork." : EXTERNAL_CONVERSATION_ERROR,
-        ),
-      );
-      const assertLocalUpstreamCurrent = () => {
-        if (preparedUpstream.current()) {
-          throw upstreamChanged;
-        }
-      };
+      const localGuards = createLocalMessageCutGuards({
+        action,
+        context,
+        hasUpstream: () => preparedUpstream.current(),
+      });
       try {
+        if (action === "fork" && current.entry.visibility === "draft") {
+          localGuards.assertForkVisibilityAllowed("draft");
+        }
         if (action === "fork" && current.entry.repositoryWorkspaceId) {
           const repositories = getSessionRepositoryWorkspaceStore();
           const repositorySource = captureOpenClawStateWorkerContext({ path: repositories.path });
@@ -535,7 +525,7 @@ async function mutatePreparedSessionAtMessage({
           };
           const assertRepositoryCurrent = () => {
             assertRepositoryOwnerCurrent();
-            assertLocalUpstreamCurrent();
+            localGuards.assertUpstreamCurrent();
             const sourceEntry = repositoryEntries?.readSource();
             if (
               sourceEntry?.sessionId !== initialSessionId ||
@@ -547,6 +537,7 @@ async function mutatePreparedSessionAtMessage({
           };
           assertRepositoryCurrent();
           const forked = await forkSessionRepositoryWorkspace({
+            branchPrefix: cfg.repositoryBranchPrefix,
             sourceWorkspaceId: current.entry.repositoryWorkspaceId,
             agentId: current.agentId,
             sessionKey: targetKey,
@@ -574,13 +565,14 @@ async function mutatePreparedSessionAtMessage({
           memory ? undefined : expectedState,
           {
             sourceRepositoryWorkspaceId: forkRepository?.sourceWorkspaceId,
-            assertUpstreamCurrent: assertLocalUpstreamCurrent,
+            assertUpstreamCurrent: localGuards.assertUpstreamCurrent,
+            assertForkVisibilityAllowed: localGuards.assertForkVisibilityAllowed,
           },
         );
         repositoryForkCommitted = result.status === "created";
       } catch (error) {
-        if (error === upstreamChanged) {
-          respond(false, undefined, upstreamChanged.error);
+        if (error === localGuards.upstreamChanged) {
+          respond(false, undefined, localGuards.upstreamChanged.error);
           return;
         }
         if (error instanceof SessionMutationAuthorizationChangedError) {
@@ -588,6 +580,10 @@ async function mutatePreparedSessionAtMessage({
         }
         if (error instanceof ModelSelectionLockedError) {
           reject(error.message);
+          return;
+        }
+        if (error instanceof LocalWorkspaceConflictError) {
+          reject(error.message, ErrorCodes.UNAVAILABLE);
           return;
         }
         reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);

@@ -11,6 +11,8 @@ import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import type { PickerOption } from "./select-picker-types.ts";
 
+const ROW_ESTIMATE = 32;
+
 export type PickerWindowRow<Option> = {
   option: Option;
   index: number;
@@ -32,6 +34,11 @@ export default function PickerWindow<Option extends PickerOption>(props: {
   ) => JSX.Element;
 }) {
   let current: readonly Option[] = [];
+  // Absolute rows cannot take CSS margins, so the virtualizer spaces them from the menu token.
+  const rowGap =
+    Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--menu-item-gap"),
+    ) || 0;
   const [window, setWindow] = createSignal<{
     source: readonly Option[];
     rows: PickerWindowRow<Option>[];
@@ -51,7 +58,8 @@ export default function PickerWindow<Option extends PickerOption>(props: {
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
     getScrollElement: props.viewport,
-    estimateSize: () => 32,
+    estimateSize: () => ROW_ESTIMATE,
+    gap: rowGap,
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,
@@ -59,6 +67,13 @@ export default function PickerWindow<Option extends PickerOption>(props: {
     useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
+  const [registeredActive, setRegisteredActive] = createSignal<HTMLDivElement>();
+  const measureRow = (element: HTMLDivElement | null) => {
+    virtualizer.measureElement(element);
+    if (element && element === props.target()) {
+      setRegisteredActive(element);
+    }
+  };
   onSettled(() => {
     const { _didMount: mount } = virtualizer;
     return mount();
@@ -91,24 +106,34 @@ export default function PickerWindow<Option extends PickerOption>(props: {
   );
   // The first spacer supplies a measurable viewport before the library has a range.
   const height = () =>
-    window().source === props.options ? window().height : props.options.length * 32;
+    window().source === props.options
+      ? window().height
+      : Math.max(0, props.options.length * (ROW_ESTIMATE + rowGap) - rowGap);
   const rows = () => (window().source === props.options ? window().rows : []);
-  const activeMounted = createMemo(() => rows().some((row) => row.option.value === props.active));
+  const activeTarget = createMemo(() => {
+    const registered = registeredActive();
+    const active = props.active;
+    return props.target() ?? (registered?.dataset.value === active ? registered : undefined);
+  });
+  // Row registration admits reveal after DOM commit without waiting for a WebKit frame.
   createScrollPosition(
-    () => ({
-      reveal: activeMounted()
-        ? {
-            identity: [props.options, props.active],
-            target: () => (props.pointerHighlight() ? undefined : props.target()),
-          }
-        : undefined,
-    }),
-    { region: props.viewport, revealTiming: "animation-frame" },
+    () => {
+      const staticTarget = activeTarget();
+      return {
+        reveal: staticTarget
+          ? {
+              identity: [props.options, props.active, staticTarget],
+              target: () => (props.pointerHighlight() ? undefined : staticTarget),
+            }
+          : undefined,
+      };
+    },
+    { region: props.viewport },
   );
   return (
     <div class="picker-select__window" style={{ height: `${height()}px` }}>
       <For each={rows()} keyed={(row) => row.option.value}>
-        {(row) => props.renderRow(row, virtualizer.measureElement)}
+        {(row) => props.renderRow(row, measureRow)}
       </For>
     </div>
   );

@@ -452,7 +452,8 @@ describe("buildGatewayInstallPlan", () => {
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     const originalArgv = process.argv;
-    const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
+    // Outside the temp dir: temp folders are disposable and stay off the service PATH.
+    const openclawBinPath = path.resolve("/home/test/.npm-global/bin/openclaw");
     process.argv = ["node", openclawBinPath, "gateway", "install"];
     try {
       await buildNodePlan({
@@ -1030,6 +1031,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       existingEnvironment: {
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
         OPENCLAW_CONFIG_READONLY: "1",
+        OPENCLAW_CONFIG_READONLY_NOTICE: "Edit the deployment.",
         OPENCLAW_GATEWAY_PORT: "18789",
         OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         CUSTOM_TOOL_HOME: "/custom-tool",
@@ -1037,6 +1039,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     });
     expect(plan.environment.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
     expect(plan.environment.OPENCLAW_CONFIG_READONLY).toBe("1");
+    expect(plan.environment.OPENCLAW_CONFIG_READONLY_NOTICE).toBe("Edit the deployment.");
     expect(plan.environment.OPENCLAW_GATEWAY_PORT).toBe("3000");
     expect(plan.environment.OPENCLAW_GATEWAY_RESTART_TRACE).toBeUndefined();
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/custom-tool");

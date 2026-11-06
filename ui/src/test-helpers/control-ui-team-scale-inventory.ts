@@ -1,3 +1,4 @@
+import type { SessionCatalog } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { sortCronJobs } from "../../../src/cron/service/list-page-sort.ts";
 import type {
   CronCompactJob,
@@ -28,6 +29,18 @@ export const TEAM_SCALE_COUNTS = {
   presenceEvents: 12,
 } as const;
 
+export function createTeamScaleCounts(options: {
+  transcriptMessages?: number;
+  largeSnapshot?: boolean;
+}) {
+  return {
+    ...TEAM_SCALE_COUNTS,
+    transcriptMessages:
+      options.transcriptMessages ??
+      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
+  };
+}
+
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 
 export function createTeamScaleSessionInventory({
@@ -35,10 +48,14 @@ export function createTeamScaleSessionInventory({
   people,
   counts,
   offRosterSession = false,
+  directSelectedSession = false,
+  archivedSession = false,
   sidebarPersistentChildren = false,
 }: {
   now: number;
   offRosterSession?: boolean;
+  directSelectedSession?: boolean;
+  archivedSession?: boolean;
   sidebarPersistentChildren?: boolean;
   people: ControlUiMockPresenceUser[];
   counts: Record<
@@ -48,7 +65,8 @@ export function createTeamScaleSessionInventory({
     | "pinned"
     | "childSessions"
     | "cronSessions"
-    | "systemSessions",
+    | "systemSessions"
+    | "catalogSessionsPerHost",
     number
   >;
 }) {
@@ -62,7 +80,7 @@ export function createTeamScaleSessionInventory({
       key:
         index === 0
           ? "agent:main:main"
-          : `agent:main:${pinned ? "dashboard" : "chat"}:${uuidPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          : `agent:main:${pinned && !(directSelectedSession && index === counts.sessions - counts.pinned) ? "dashboard" : "chat"}:${uuidPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       ...(index === 0 ? { isMain: true } : {}),
       sessionId: `team-session-${index + 1}`,
       childOwnerSessionKeys: [],
@@ -100,6 +118,11 @@ export function createTeamScaleSessionInventory({
   });
   prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   const pinnedRows = sessions.slice(-counts.pinned);
+  Object.assign(pinnedRows[0]!, {
+    sharingRole: "admin",
+    visibility: "shared",
+    ...(archivedSession ? { archived: true, parentSessionKey: pinnedRows[1]!.key } : {}),
+  });
   const selectedSessionKey = pinnedRows[0]!.key;
   if (offRosterSession) {
     pinnedRows[0]!.pinned = false;
@@ -174,7 +197,29 @@ export function createTeamScaleSessionInventory({
         .map((session) => session.key);
     }
   }
+  const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
+    id,
+    label: id === "codex" ? "Codex" : "Claude Code",
+    capabilities: { continueSession: true, archive: true },
+    hosts: Array.from({ length: 3 }, (_host, hostIndex) => ({
+      hostId: `node:fixture-${catalogIndex * 3 + hostIndex + 1}`,
+      label: `Fixture workstation ${catalogIndex * 3 + hostIndex + 1}`,
+      kind: "node",
+      connected: true,
+      sessions: Array.from({ length: counts.catalogSessionsPerHost }, (_session, index) => ({
+        threadId: `fixture-thread-${catalogIndex}-${hostIndex}-${index}`,
+        name: `Synthetic code review ${hostIndex + 1}.${index + 1}`,
+        cwd: `/workspace/project-${(index % 5) + 1}`,
+        updatedAt: now - index * 1_000,
+        status: "stored",
+        archived: false,
+        canContinue: true,
+        canArchive: true,
+      })),
+    })),
+  }));
   return {
+    catalogs,
     sessions,
     pinnedRows,
     pinnedKeys,

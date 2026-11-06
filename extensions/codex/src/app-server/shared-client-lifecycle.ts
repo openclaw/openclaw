@@ -81,7 +81,10 @@ export function rekeySharedClientEntry(
   return true;
 }
 
-export function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerClientEntry): boolean {
+function closeSharedClientEntryIfUnclaimed(
+  entry: SharedCodexAppServerClientEntry,
+  options?: Parameters<CodexAppServerClient["close"]>[0],
+): boolean {
   if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
     return false;
   }
@@ -91,8 +94,21 @@ export function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerCli
   }
   state.clients.delete(entry.key);
   cancelSharedClientIdleRetirement(entry);
-  entry.client?.close();
+  entry.client?.close(options);
   return Boolean(entry.client);
+}
+
+export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
+  client: CodexAppServerClient | undefined,
+  options?: Parameters<CodexAppServerClient["close"]>[0],
+): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {
+  const entry = getCurrentSharedClientEntry(client);
+  return {
+    found: entry !== undefined,
+    closed: entry ? closeSharedClientEntryIfUnclaimed(entry, options) : false,
+    activeLeases: entry?.activeLeases ?? 0,
+    pendingAcquires: entry?.pendingAcquires ?? 0,
+  };
 }
 
 export type CodexAppServerStartupLifetime = {
@@ -145,6 +161,14 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     startMetadata: new WeakMap(),
   }),
 );
+
+export function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
+  const state = getSharedCodexAppServerClientState();
+  state.isolatedClients.add(client);
+  client.addTransportExitHandler((exitedClient) => {
+    state.isolatedClients.delete(exitedClient);
+  });
+}
 
 export function hasActiveSharedCodexAppServerWork(): boolean {
   const state = getSharedCodexAppServerClientState();

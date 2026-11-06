@@ -5,11 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 /** Keep the alias-aware native builder outside Vite's configuration bundle. */
-export async function prepareControlUiSettings(repoRoot: string): Promise<void> {
+export async function prepareControlUiSettings(
+  repoRoot: string,
+  scripts = path.resolve(import.meta.dirname, ".."),
+): Promise<void> {
   if (!fs.existsSync(path.join(repoRoot, "extensions"))) {
     return;
   }
-  const scripts = path.resolve(import.meta.dirname, "..");
   // Bypass Vite's module runner: its HTTP import URLs cannot launch native children,
   // and bundled copies would lose the launcher's live ownership context.
   const {

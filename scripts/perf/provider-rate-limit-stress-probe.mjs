@@ -87,4 +87,5 @@ if (isMainThread) {
       persist();
     }
   });
+  process.channel?.unref();
 }

@@ -15,7 +15,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
-import { emitModelTransportDebug, emitModelTransportError } from "./model-transport-debug.js";
+import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
@@ -38,10 +38,8 @@ import {
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
-  logResponsesFailedNoDetails,
-  ResponsesStreamFailure,
+  observeResponsesTransportFailure,
   safeDebugValue,
-  summarizeOpenAITransportError,
   summarizeResponsesPayload,
 } from "./openai-responses-debug.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
@@ -103,6 +101,7 @@ import {
 } from "./provider-transport-turn-state.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
+  awaitProviderLifecycleCallback,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -231,7 +230,10 @@ function createResponsesTransportExecutor(config: {
         const prepareRequest = async (request: ReturnType<typeof config.buildRequest>) => {
           let params = request;
           const preserveUsers = v2Compaction?.preserveUsers(request.input ?? []);
-          const nextParams = await options?.onPayload?.(params, model);
+          const nextParams = await awaitProviderLifecycleCallback(
+            options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
+            options?.signal,
+          );
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
           }
@@ -359,7 +361,8 @@ function createResponsesTransportExecutor(config: {
         );
         emitModelTransportDebug(
           log,
-          `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
+          () =>
+            `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
             `requestIdHash=${redactIdentifier(options?.requestId, { len: 64 })} ` +
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
@@ -412,7 +415,8 @@ function createResponsesTransportExecutor(config: {
                 onReady: () => {
                   emitModelTransportDebug(
                     log,
-                    `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
+                    () =>
+                      `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
                       `transport=sse elapsedMs=${Date.now() - requestStartedAt}`,
                   );
                   startStream();
@@ -430,7 +434,8 @@ function createResponsesTransportExecutor(config: {
         const logWebSocketFallback = (reason: string) =>
           emitModelTransportDebug(
             log,
-            `[responses] websocket_fallback provider=${model.provider} api=${model.api} ` +
+            () =>
+              `[responses] websocket_fallback provider=${model.provider} api=${model.api} ` +
               `model=${model.id} reason=${reason}`,
           );
         const closeWebSocketForFallback = (reason: string) => {
@@ -479,7 +484,8 @@ function createResponsesTransportExecutor(config: {
             transport = "websocket";
             emitModelTransportDebug(
               log,
-              `[responses] websocket_selected provider=${model.provider} api=${model.api} model=${model.id} ` +
+              () =>
+                `[responses] websocket_selected provider=${model.provider} api=${model.api} model=${model.id} ` +
                 `mode=${websocketMode} reused=${websocket.reusedConnection} ` +
                 `continuation=${websocket.continuationStatus === "continued"} continuationStatus=${websocket.continuationStatus} ` +
                 `sessionIdHash=${redactIdentifier(options?.sessionId)} ` +
@@ -606,7 +612,8 @@ function createResponsesTransportExecutor(config: {
         }
         emitModelTransportDebug(
           log,
-          `[responses] completed provider=${model.provider} api=${model.api} model=${model.id} ` +
+          () =>
+            `[responses] completed provider=${model.provider} api=${model.api} model=${model.id} ` +
             `transport=${transport} elapsedMs=${Date.now() - requestStartedAt}`,
         );
         finalizeTransportStream({ stream, output, signal: options?.signal });
@@ -622,21 +629,19 @@ function createResponsesTransportExecutor(config: {
           failTransportStream({ stream, output, signal: options?.signal, error });
           return;
         }
-        if (error instanceof ResponsesStreamFailure && error.observation) {
-          logResponsesFailedNoDetails(error.observation);
-        }
-        const incompleteReason = output.diagnostics?.find(
-          ({ type }) => type === "openai_responses_terminal",
-        )?.details?.incompleteReason;
-        emitModelTransportError(
-          log,
-          "responses",
-          `provider=${model.provider} api=${model.api} model=${model.id} ` +
-            summarizeOpenAITransportError(error, requestSignal) +
-            (typeof incompleteReason === "string" ? ` incompleteReason=${incompleteReason}` : ""),
-          options?.signal,
-        );
-        failTransportStream({ stream, output, signal: options?.signal, error });
+        failTransportStream({
+          stream,
+          output,
+          signal: options?.signal,
+          error,
+          diagnostic: observeResponsesTransportFailure({
+            error,
+            model,
+            output,
+            signal: options?.signal,
+            requestSignal,
+          }),
+        });
       } finally {
         continuationClaim?.release();
         firstEventAbort?.dispose();

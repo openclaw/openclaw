@@ -86,6 +86,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let sourceReplyDelivered = false;
+  const sourceReplyListeners = new Set<() => void>();
   // A recorded yield ends the turn's work before settlement records it as the result.
   const ended = () => state.result !== null || state.phase === "yielded";
   const settledResult = (): ReplyOperationResult =>
@@ -295,6 +296,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     isCurrent: () => installed && !ownerSettled,
     readPhase: () =>
       ownerSettled ? "settled" : ended() ? "terminal" : state.abortFrozen ? "finishing" : "active",
+    readBackend: () => getAttachedBackend(operation),
     requestStop: (effect) => expireOwner(effect, false),
     expireCleanup: (effect) => expireOwner(effect, true),
     onWarning: (decision) =>
@@ -467,7 +469,14 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       sourceReplyDelivered = false;
     },
     markSourceReplyDelivered() {
-      sourceReplyDelivered = true;
+      if (!sourceReplyDelivered) {
+        sourceReplyDelivered = true;
+        sourceReplyListeners.forEach((listener) => listener());
+      }
+    },
+    onSourceReplyDelivered(listener) {
+      sourceReplyListeners.add(listener);
+      return () => sourceReplyListeners.delete(listener);
     },
     bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
     bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,

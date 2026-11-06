@@ -45,11 +45,14 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           operatorScopes: ["operator.sessions.read"],
-          featureMethods: [...defaultControlUiFeatureMethods, ...operatorMethods],
+          featureMethods: [...defaultControlUiFeatureMethods, "board.get", ...operatorMethods],
           historyMessages: [
             { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
           ],
-          methodResponses: Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+          methodResponses: {
+            ...Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+            "board.get": { sessionKey, revision: 0, tabs: [], widgets: [] },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("Shared discussion", { exact: true }).waitFor();
@@ -60,15 +63,17 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
+        expect(requests.filter((request) => request.method === "board.get")).toEqual([
+          expect.objectContaining({ params: { agentId: "main", sessionKey } }),
+        ]);
         expect(requests.some((request) => request.method === "sessions.messages.subscribe")).toBe(
           true,
         );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
-          .getByText(
-            "You don't have permission to view scheduled tasks. Ask the person who manages OpenClaw for access.",
-            { exact: true },
-          )
+          .getByText("Couldn’t view scheduled tasks. Ask an admin to grant read access.", {
+            exact: true,
+          })
           .waitFor();
         expect(await gateway.getRequests("cron.list")).toHaveLength(0);
 
@@ -291,7 +296,7 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe("");
         }
         const footer = page.locator(".sidebar-footer-bar");
-        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
+        const connectionStatus = page.locator(".sidebar-shell__connection .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
         await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
         expect(await connectionStatus.getByRole("button").count()).toBe(0);
@@ -366,7 +371,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
-        await connectionStatus.getByText("Connected", { exact: true }).waitFor();
+        await connectionStatus.waitFor({ state: "detached" });
         await expect
           .poll(() => identityStatus.getAttribute("data-connection-status"))
           .toBe("connected");

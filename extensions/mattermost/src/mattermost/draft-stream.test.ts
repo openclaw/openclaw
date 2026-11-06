@@ -327,6 +327,28 @@ describe("createMattermostDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("mattermost stream preview failed: patch failed");
     expect(requestMock.mock.calls.map(([path]) => path)).toEqual(["/posts", "/posts/post-1/patch"]);
   });
+
+  it("waits a throttle window after a slow preview send before the next edit", async () => {
+    vi.useFakeTimers();
+    const releaseCreate = createDeferred<void>();
+    const { calls, stream } = createDraftStreamFixture({
+      beforeRequest: (path) => (path === "/posts" ? releaseCreate.promise : Promise.resolve()),
+    });
+    try {
+      stream.update("Working");
+      await vi.advanceTimersByTimeAsync(0);
+      stream.update("Working on it");
+      await vi.advanceTimersByTimeAsync(2500);
+      releaseCreate.resolve();
+      await vi.advanceTimersByTimeAsync(1199);
+      expect(calls.map(({ path }) => path)).toEqual(["/posts"]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls.map(({ path }) => path)).toEqual(["/posts", "/posts/post-1/patch"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("Mattermost preview final placement", () => {

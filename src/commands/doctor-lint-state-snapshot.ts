@@ -6,7 +6,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { applyProcessEnvKeys } from "../infra/process-env.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,
@@ -91,12 +91,15 @@ async function prepareReadOnlyPluginStateSnapshot(
   const installRoots = resolvePluginInstallRoots(sourceEnv);
   let cleanup: () => Promise<boolean>;
   let privateRoot: string;
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
+  let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
   try {
     if (fs.existsSync(sourceDatabasePath)) {
       prepared =
         (await forkActiveOpenClawStateDatabaseReadSnapshot({ env: sourceEnv })) ??
-        prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+        (await prepareSqliteReadOnlyLocation(sourceDatabasePath, {
+          preserveSourceArtifacts: true,
+          shared: false,
+        }));
       privateRoot = path.dirname(prepared.location);
       cleanup = prepared.cleanupAsync;
     } else {

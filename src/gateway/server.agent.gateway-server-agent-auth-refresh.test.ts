@@ -122,7 +122,7 @@ function expectRuntime(
   runId: string,
   runtime: Awaited<ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime>>,
 ) {
-  expect(agentCommandCallsFor(runId)[0]?.[4]).toMatchObject({
+  expect(agentCommandCallsFor(runId)[0]?.[3]).toMatchObject({
     config: runtime?.config,
     pluginGeneration: runtime?.pluginGeneration,
   });

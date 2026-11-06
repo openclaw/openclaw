@@ -18,10 +18,8 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import {
-  withSessionActorStorage,
-  type SessionActorStorageBinding,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -161,7 +159,7 @@ async function deleteGatewaySessionInScope(
                       "agentHarnessId",
                     ] as const
                   ).every((field) => isDeepStrictEqual(before?.[field], after?.[field])) &&
-                  (p.archivedOnly !== true || after?.archivedAt !== undefined),
+                  (p.archivedOnly !== true || !after || after.archivedAt !== undefined),
               });
             },
             assertActive: () => {
@@ -220,7 +218,7 @@ async function deleteGatewaySessionInScope(
       }
       // archivedOnly is the write-scope archive-then-delete contract, rechecked
       // under the fence so a racing unarchive cannot authorize active deletion.
-      if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+      if (p.archivedOnly === true && entry && entry.archivedAt === undefined) {
         return errorShape(
           ErrorCodes.INVALID_REQUEST,
           `Session ${key} is not archived. Archive it first, then delete it.`,

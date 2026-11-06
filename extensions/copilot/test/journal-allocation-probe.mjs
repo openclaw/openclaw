@@ -19,7 +19,7 @@ JSON.parse = function (text, reviver) {
   }
   return value;
 };
-channel.addEventListener("message", async ({ data }) => {
+async function handleMessage(data) {
   if (data.command === "discover") {
     channel.postMessage({ threadId, kind: "ready" });
   } else if (data.command === "start") {
@@ -43,4 +43,8 @@ channel.addEventListener("message", async ({ data }) => {
       historyDecodes,
     });
   }
+}
+
+channel.addEventListener("message", ({ data }) => {
+  void handleMessage(data);
 });

@@ -27,6 +27,11 @@ The sandbox command requires Docker and an already-built sandbox image. Both
 commands launch and stop their own loopback Gateway and mock provider. They never
 connect to a running operator Gateway. Each output directory must be new.
 
+Fixtures default to the current clock. For a comparison, capture one fresh
+epoch-millisecond timestamp and pass it to both arms with `--now <epoch-ms>`.
+An old clock can expire the seeded 24-hour collector cohort before measurement,
+causing cleanup traffic and changing the workload. Normal maintenance stays enabled.
+
 Fresh turns use the Control UI's `sessions.create({message, worktree: true})`
 flow: the Gateway dispatches the initial `chat.send` internally. Its response is
 the session creation and initial-turn ACK; the harness does not send the message
@@ -70,3 +75,19 @@ Git origin to exercise base refresh; `--unchanged-origin` keeps it fixed. Use
 are descriptive; use matched A/A controls before attributing adverse changes to
 a candidate. Whole-Gateway CPU/allocation/GC stress remains owned by
 `scripts/perf/team-shape-stress.ts`.
+
+Sandbox detail spans split workspace selection into owner lookup, projection
+acquisition, reconciliation, and release. Nested quiesce/resume spans identify
+registry reads, engine checks, inspection, pause/unpause, and receipt writes.
+Backend spans separate lifecycle-lock wait, runtime discovery, mount preparation,
+container inspection/start, and publication. Prune spans distinguish orphan
+recovery, registry reads, and runtime removal; skill delivery distinguishes queue
+wait, manifest reads, discovery, and copying. These use the same request observer
+as the enclosing setup phases and remain inclusive, overlapping measurements.
+
+For local owner-level diagnosis without Docker, use
+`scripts/perf/sandbox-setup-waits-measure.ts` (usage in its header). It prepares
+synthetic agents and managed Git worktrees, stubs the Docker process with configurable
+latency, and records setup wall time, subprocess counts, worker requests, and
+sub-spans. Source-loaded worker startup and tiny fixture repositories differ from
+a built Gateway; use its results to locate waits, not to claim production latency.

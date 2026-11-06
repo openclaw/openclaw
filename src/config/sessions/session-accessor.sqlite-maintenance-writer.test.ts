@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -14,6 +18,12 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { preparePersonalSessionPins } from "../../state/user-preferences-session-pins.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { mergeCanonicalUserProfiles } from "../../state/user-profile-writes.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -31,9 +41,11 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { SESSION_ENTRY_MAINTENANCE_INTERVAL_MS } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   prepareSessionMaintenancePreservation,
@@ -563,3 +575,123 @@ it.each(["bulk lifecycle cleanup", "revoked commit"])(
     expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
   },
 );
+
+it("keeps personally pinned dashboard children through worker cleanup until the final reference is removed", async () => {
+  const fixture = createPlannerStore(0, undefined, "");
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.resolve(fixture.storePath, "../../../.."),
+  };
+  const options = { env };
+  const alice = ensureProfileForEmail("alice@example.test", options).id;
+  const bob = ensureProfileForEmail("bob@example.test", options).id;
+  const charlie = ensureProfileForEmail("charlie@example.test", options).id;
+  const now = freezeTime();
+  const child = "dashboard:child";
+  fixture.set(child, { updatedAt: now - 40 * day, parentSessionKey: fixture.key("parent") });
+  fixture.set("global", { updatedAt: now - 40 * day, pinnedAt: now });
+  fixture.set("unprotected", { updatedAt: now - 40 * day });
+  const setPins = async (profile: string, pins: string[] | null) => {
+    expect(
+      await setCanonicalUserPreferences(
+        profile,
+        { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: pins },
+        options,
+      ),
+    ).toMatchObject({ ok: true });
+  };
+  await setPins(alice, [`session:${fixture.key(child)}`]);
+  await setPins(bob, [`session-rail:${fixture.key(child)}`]);
+  expect(
+    await setCanonicalUserPreferences(
+      charlie,
+      {
+        [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: [
+          { id: "focus", label: "Focus", sessionKeys: [fixture.key(child)] },
+        ],
+      },
+      options,
+    ),
+  ).toMatchObject({ ok: true });
+  const maintain = () =>
+    applySessionEntryLifecycleMutation({
+      storePath: fixture.storePath,
+      env,
+      maintenanceOverride: resolveMaintenanceConfigFromInput(),
+    });
+  expect(await maintain()).toMatchObject({ archived: 1 });
+  expectArchived(fixture.load("unprotected"), "age-retention");
+  expectUnarchived(fixture.load(child));
+  await setPins(alice, []);
+  vi.mocked(Date.now).mockReturnValue(now + SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 0 });
+  expectUnarchived(fixture.load(child));
+  expect(await mergeCanonicalUserProfiles(alice, bob, options)).toMatchObject({
+    profile: { id: bob },
+  });
+  vi.mocked(Date.now).mockReturnValue(now + 2 * SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 0 });
+  expectUnarchived(fixture.load(child));
+  await setPins(bob, null);
+  vi.mocked(Date.now).mockReturnValue(now + 3 * SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 0 });
+  expectUnarchived(fixture.load(child));
+  expect(
+    await setCanonicalUserPreferences(
+      charlie,
+      { [UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY]: null },
+      options,
+    ),
+  ).toMatchObject({ ok: true });
+  vi.mocked(Date.now).mockReturnValue(now + 4 * SESSION_ENTRY_MAINTENANCE_INTERVAL_MS);
+  expect(await maintain()).toMatchObject({ archived: 1 });
+  expectArchived(fixture.load(child), "stale-dashboard");
+  expectUnarchived(fixture.load("global"));
+});
+
+it("refuses a prepared maintenance snapshot when a pin write starts before commit admission", async () => {
+  const fixture = createPlannerStore();
+  const env = { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() };
+  const profile = ensureProfileForEmail("late-pin@example.test", { env }).id;
+  const preservation = await prepareSessionMaintenancePreservation(fixture.storePath, { env });
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockResolvedValueOnce(undefined);
+  const writer = setCanonicalUserPreferences(
+    profile,
+    { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: [`session:${fixture.key("keep")}`] },
+    { env },
+  );
+  try {
+    expect(() => preservation.capture()).toThrow(SqliteSessionMutationConflictError);
+  } finally {
+    preservation.dispose();
+    await writer;
+  }
+});
+
+it("waits for a pending preference write before preparing cleanup", async () => {
+  const options = { env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() } };
+  const profile = ensureProfileForEmail("pending@example.test", options).id;
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+    async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return execute(...args);
+    },
+  );
+  const writer = setCanonicalUserPreferences(
+    profile,
+    { [UI_RAIL_SHORTCUTS_PREFERENCE_KEY]: ["session:agent:main:pending"] },
+    options,
+  );
+  await entered.promise;
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const preparing = preparePersonalSessionPins(options);
+  expect(read).not.toHaveBeenCalled();
+  release.resolve();
+  await writer;
+  const pins = await preparing;
+  expect(pins.sessionKeys).toEqual(["agent:main:pending"]);
+});

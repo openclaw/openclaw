@@ -32,6 +32,8 @@ import {
 } from "../lib/sessions/navigation.ts";
 import {
   buildAgentMainSessionKey,
+  createUiSessionRowMatcher,
+  isUiGlobalSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
   isPinnableUiSessionRow,
@@ -154,23 +156,25 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
-  const defaultAgentId = resolveUiDefaultAgentId({
+  const sessionDefaults = {
     agentsList: context?.agents.state.agentsList,
     hello: context?.gateway.snapshot.hello,
-  });
+    assistantAgentId:
+      context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
+  };
+  const defaultAgentId = resolveUiDefaultAgentId(sessionDefaults);
   const navigation = resolveSessionNavigation({
+    ...sessionDefaults,
     result: input.sessionsResult,
     activeSession: input.activeSession,
     resultAgentId: input.sessionsAgentId,
     sessionKey: input.routeSessionKey,
-    assistantAgentId:
-      context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
-    hello: context?.gateway.snapshot.hello,
     showCron: input.showCron,
     showSystem: input.showSystem,
     archivedFilter: input.statusFilter,
     compareSessions: input.compareSessions,
   });
+  const matchesSession = createUiSessionRowMatcher(sessionDefaults, navigation.currentSessionKey);
   const toSidebarSession = (row: SessionRow, isChild = false): SidebarRecentSession => {
     const active = row.key === navigation.activeRowKey;
     const visuallyActive =
@@ -184,7 +188,14 @@ export function buildSidebarSessionNavigationState(input: {
       context?.sessions.isPreparedWorkSession(row.key) === true;
     const pullRequest = context?.sessions.pullRequestSummary(row.key);
     const outboxAttentionCount = input.outboxAttentionCountForSessionKey(row.key);
-    const hasComposerDraft = row.incognito !== true && input.hasSessionDraft(row.key);
+    const hasComposerDraft =
+      row.incognito !== true &&
+      input.hasSessionDraft(row.key) &&
+      (!input.highlightCurrentSession ||
+        !matchesSession(
+          row.key,
+          row.agentId ?? (isUiGlobalSessionKey(row.key) ? input.sessionsAgentId : undefined),
+        ));
     const agentStatusNote = input.resolveAgentStatusNote(row);
     const loadingChildren = input.loadingChildSessionKeys.has(row.key);
     return input.rowProjection.read(
@@ -229,7 +240,6 @@ export function buildSidebarSessionNavigationState(input: {
           expandedParticipants: row.expandedParticipants,
           participantCount: row.participantCount,
           archivedBy: row.archivedBy,
-          // Parent attention attributes subagent failures with the worker's own label.
           label: resolveSessionDisplayName(row.key, row),
           userLabel: row.label,
           renameValue: resolveSessionRenameValue(row),
@@ -240,6 +250,7 @@ export function buildSidebarSessionNavigationState(input: {
           hasActiveRun: row.archived !== true && isSessionRunStateActive(row),
           isRunVisuallyActive,
           gatewayHasActiveRun: row.hasActiveRun,
+          backgroundProcessCount: row.backgroundProcessCount,
           hasActiveSubagentRun: row.hasActiveSubagentRun,
           activeRunIds: row.archived === true ? undefined : row.activeRunIds,
           modelSelectionLocked: row.modelSelectionLocked === true,
@@ -303,6 +314,7 @@ export function buildSidebarSessionNavigationState(input: {
           spawnedBy: row.spawnedBy,
           forkSource: row.forkSource,
           status: row.status,
+          lastRunError: row.lastRunError,
           createdAt: row.createdAt,
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,
@@ -318,7 +330,6 @@ export function buildSidebarSessionNavigationState(input: {
           loadingChildren,
           containsActiveDescendant: false,
           runningChildCount: 0,
-          failedChildCount: 0,
         };
       },
     );

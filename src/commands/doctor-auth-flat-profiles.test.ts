@@ -284,11 +284,11 @@ function expectNoMigratedArchive(sourcePath: string): void {
 
 afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
     await state.cleanup();
   }
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
@@ -497,7 +497,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       writeLegacyProfiles(state, { "openai:default": localCredential }, "unconfigured"),
       writeLegacyProfiles(state, {}, "empty"),
     ]);
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir: state.stateDir,
       env: state.env,
       doctorOnlyStateMigrations: true,
@@ -1206,7 +1206,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileOverride: "openai-codex:default",
     });
 
-    const detected = detectSharedAuthStoreMigration({
+    const detected = await detectSharedAuthStoreMigration({
       stateDir: state.stateDir,
       doctorOnlyStateMigrations: true,
     });

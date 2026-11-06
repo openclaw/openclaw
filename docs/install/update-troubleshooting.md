@@ -114,6 +114,11 @@ it: `expired`, `replaced`, or `missing`. Expiry diagnostics include the recorded
 deadline, time since expiry, and age of the last heartbeat. A delayed native renewal
 timer also reports its measured lateness; a large delay can indicate event-loop
 starvation, but does not establish its cause. Replacement owners are redacted.
+Heartbeat renewal and verification failures also distinguish `storage-failed`
+from `admission-failed`. The heartbeat publishes its first observed cause before
+marking itself lost, so Doctor can retain that cause even when synchronous
+migration work delays worker message callbacks. This candidate-side diagnostic
+repair does not establish why an earlier update lost its lease.
 These diagnostics do not change lease duration or ownership checks. If state cannot
 be inspected safely, the original generic lease-loss error is preserved.
 
@@ -153,7 +158,14 @@ native output are excluded.
 
 ## Node and global install permissions
 
-If package recovery reports `nlink=2` (or another value above 1), let updater
+An updater containing the completed-journal repair automatically archives a
+multiply linked receipt from a completed, verified package update and reports a
+warning before continuing. Recovery evidence is preserved, not deleted. Runtime
+retention copies owner-private files so their link count and recovery fingerprint
+stay unchanged. In-flight recovery still requires a single-link journal; the
+completion receipt cannot authorize publication or rollback.
+
+If an older updater or in-flight package recovery reports `nlink=2` (or another value above 1), let updater
 workers finish, then run `openclaw doctor --fix` from the affected installation.
 Doctor can reclaim an abandoned updater runtime, including one retained in an
 npm prefix's `lib/` directory, and release its extra journal link. Then retry
@@ -301,16 +313,27 @@ updater is affected.
 
 ## Extended-stable 2026.9.33 to development builds
 
-When updating an installed **2026.9.33** directly to current development builds,
-activation can fail with `SQLite migration source changed after update capture`.
-The older updater and the candidate use different database fingerprint formats.
-This error alone does not establish that another process changed the database.
-The failed update preserves current databases and recovery snapshots, but may
-leave the Gateway stopped with the candidate package installed.
+Direct updates from **2026.9.33** and **2026.9.34** are supported when the target
+contains the fingerprint repair in [#184547](https://github.com/openclaw/openclaw/pull/184547)
+and artifact-preserving Doctor inspection, starting with the first release
+containing both changes. The installed updater does
+not need the repair. Candidate Doctor verifies the older physical database
+fingerprints, attributes migrations using committed content, and returns receipts
+in the older updater's format. Changed data, intervening commits, replaced files,
+and tampered backups still refuse automatic restoration.
 
-Before switching to development, create a
+Older targets can fail activation with
+`SQLite migration source changed after update capture` because the updater and
+candidate use different fingerprint formats. This error alone does not establish
+that another process changed the database. The failed update preserves current
+databases and recovery snapshots, but may leave the Gateway stopped with the
+candidate package installed.
+
+Before updating, create a
 [verified backup](/install/updating#before-updating-create-a-verified-backup),
-then update through **2026.10.5**:
+then stop other OpenClaw processes using the same state. For a target containing
+the repair, update directly. If the target predates the repair, use the verified
+intermediate path through **2026.10.5**:
 
 ```bash
 openclaw update --channel stable --tag 2026.10.5

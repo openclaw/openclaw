@@ -139,6 +139,37 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it("preserves attempt then system fragment bytes without changing either source", async () => {
+    const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
+    const systemFragments = [{ kind: "conversation-data" as const, text: "System context" }];
+    Object.freeze(attemptFragments);
+    Object.freeze(systemFragments);
+    const fixture = createInput({
+      attempt: createAttempt({
+        currentInboundContext: undefined,
+        runtimeContextFragments: attemptFragments,
+      }),
+    });
+
+    const result = await prepareContext({
+      ...fixture.input,
+      isRawModelRun: true,
+      systemPromptRuntimeContextFragments: systemFragments,
+    });
+
+    expect(result.runtimeContextFragments).toEqual([
+      { kind: "runtime-instruction", text: "Turn instruction" },
+      { kind: "conversation-data", text: "System context" },
+    ]);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(
+      "Turn instruction\n\nSystem context",
+    );
+    expect(result.systemPromptForHook).toBe("Base system prompt");
+    expect(result.promptForModel).toBe("Visible request");
+    expect(attemptFragments).toEqual([{ kind: "runtime-instruction", text: "Turn instruction" }]);
+    expect(systemFragments).toEqual([{ kind: "conversation-data", text: "System context" }]);
+  });
+
   it.each(
     [3, 4].flatMap((sessionVersion) =>
       ["dispatched", "pending", "internal", "raw"].map((state) => ({ sessionVersion, state })),

@@ -21,11 +21,13 @@ import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
 import {
   buildLoginProviders,
+  findLoginCompletionModel,
   resolveLoginSelection,
   resolveReconnectChoice,
   type LoginChoice,
 } from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
+import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -87,19 +89,12 @@ export function createModelProviderLogin(options: {
   const runner = wizard.runner;
   const completionCatalog = new ModelCatalogReader(notify, {
     onResult: (catalog) => {
-      const available = (model: ModelCatalogEntry) =>
-        canonicalModelAuthProviderId(model.provider) === authProviderId &&
-        model.available === true &&
-        model.manualSelectionAllowed !== false;
       const selected = completionModel;
       completionModel = selected
         ? (catalog.models.find(
             (model) => model.provider === selected.provider && model.id === selected.id,
           ) ?? selected)
-        : (catalog.models.find((model) => available(model) && model.recommended === true) ??
-          catalog.models.find(
-            (model) => available(model) && `${model.provider}/${model.id}` === verifiedModelRef,
-          ));
+        : findLoginCompletionModel(catalog.models, authProviderId, verifiedModelRef);
       notify();
     },
   });
@@ -374,30 +369,31 @@ export function createModelProviderLogin(options: {
       ? loginProviders(picker.providers, authStatus, picker.allowSetup)
       : [];
     const provider = groups.find((group) => group.id === providerSelection());
-    const accounts =
-      provider && authStatus
+    const accountsFor = (group: (typeof groups)[number]) =>
+      authStatus
         ? buildModelProviderCards({
             authStatus,
             models: null,
             providerUsage: null,
           }).filter((card) =>
-            provider.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
+            group.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
           )
         : [];
+    const accounts = provider ? accountsFor(provider) : [];
     const docsUrl =
       provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
       "https://docs.openclaw.ai/concepts/model-providers";
     const missing = selection().missing;
     const recovery =
       missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
-    const search = query().trim().toLocaleLowerCase();
+    const search = query().trim().toLocaleLowerCase().normalize("NFC");
     const matches = groups.filter((group) =>
       [
         group.id,
         group.label,
         ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
         ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
-      ].some((text) => text.toLocaleLowerCase().includes(search)),
+      ].some((text) => text.toLocaleLowerCase().normalize("NFC").includes(search)),
     );
 
     return {
@@ -421,11 +417,22 @@ export function createModelProviderLogin(options: {
             ? t("modelProviders.login.nativeDescription")
             : t("modelProviders.login.description"),
       onClose: () => reset(),
-      onQuery: (value: string) => {
-        setQuery(value);
-      },
+      onQuery: setQuery,
       onProvider: (providerId: string) => {
         if (!canSelect()) {
+          return;
+        }
+        const selected = groups.find((group) => group.id === providerId);
+        // Only a key and nothing saved: the method step would be one button, so go to the form.
+        if (
+          selected?.apiKeyProvider &&
+          !selected.choices.length &&
+          !authStatus?.unavailable &&
+          !hasProviderAccounts(accountsFor(selected))
+        ) {
+          const apiKeyProvider = selected.apiKeyProvider;
+          reset();
+          options.onApiKey?.(apiKeyProvider);
           return;
         }
         setProvider(providerId);
@@ -489,14 +496,7 @@ export function createModelProviderLogin(options: {
     const known = catalog.models.find((model) => model.provider === provider && model.id === id);
     verifiedModelRef = modelRef;
     const recommended =
-      !catalog.retired &&
-      catalog.models.find(
-        (model) =>
-          canonicalModelAuthProviderId(model.provider) === authProviderId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false &&
-          model.recommended === true,
-      );
+      !catalog.retired && findLoginCompletionModel(catalog.models, authProviderId);
     const name = completion.modelActivation?.modelName ?? known?.name;
     completionModel = recommended
       ? { provider: recommended.provider, id: recommended.id, name: recommended.name }

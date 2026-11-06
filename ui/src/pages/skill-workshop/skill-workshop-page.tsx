@@ -24,10 +24,20 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
-import { canRunWorkshopMutation, resolveWorkshopAccess } from "./access.ts";
+import {
+  canRunWorkshopMutation,
+  isSkillWorkshopInstalled,
+  resolveWorkshopAccess,
+} from "./access.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
-import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
+import {
+  arePluginsDisabled,
+  resolveWorkshopMode,
+  setWorkshopMode,
+  type SkillWorkshopMode,
+} from "./mode.ts";
+import { WorkshopPluginAvailabilityOwner } from "./plugin-availability.ts";
 import type { WorkshopViewerResult } from "./view-shared.tsx";
 import {
   archivedWorkshopSkills,
@@ -72,11 +82,13 @@ class SkillWorkshopPageState {
   private filter: WorkshopFilter = "active";
   private sort: WorkshopSort = "uses";
   private tab: WorkshopTab = "instructions";
+  private readonly plugin: WorkshopPluginAvailabilityOwner;
 
   constructor(
     private readonly context: ApplicationContext,
     private readonly changed: () => void,
   ) {
+    this.plugin = new WorkshopPluginAvailabilityOwner(changed);
     onSettled(() => {
       const sync = () => {
         this.syncScope();
@@ -91,6 +103,7 @@ class SkillWorkshopPageState {
       sync();
       return () => {
         stops.forEach((stop) => stop());
+        this.plugin.dispose();
         this.scope?.abort.abort();
         this.scope?.retire();
         this.scope = null;
@@ -101,7 +114,15 @@ class SkillWorkshopPageState {
   private syncScope() {
     const context = this.context;
     const snapshot = context.gateway.snapshot;
-    const client = snapshot.phase === "connected" ? snapshot.client : null;
+    const connected = snapshot.phase === "connected" ? snapshot.client : null;
+    const installed = isSkillWorkshopInstalled(snapshot);
+    // Without the plugin there is nothing to load; a catalog that gains it reloads here.
+    this.plugin.sync(installed ? null : connected);
+    if (!installed && connected) {
+      // The off panel needs `plugins.enabled` to know whether turning Workshop on can work.
+      void context.runtimeConfig.ensureLoaded();
+    }
+    const client = installed ? connected : null;
     const agentId = client ? resolveWorkshopAgentId(context) : null;
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
@@ -134,12 +155,13 @@ class SkillWorkshopPageState {
     }
   }
 
-  private load(): Promise<void> {
+  private load(retry = false): Promise<void> {
     const scope = this.scope;
     if (!scope) {
       return Promise.resolve();
     }
-    void this.context.runtimeConfig.ensureLoaded();
+    // Retry is the user's explicit reread; ensure waits out a recent failed read.
+    void (retry ? this.context.runtimeConfig.refresh() : this.context.runtimeConfig.ensureLoaded());
     const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
       if (this.scope !== scope) {
         return null;
@@ -466,6 +488,10 @@ class SkillWorkshopPageState {
       context,
       agentId: this.scope?.agentId ?? null,
       access: resolveWorkshopAccess(context.gateway.snapshot),
+      plugin: this.plugin.state,
+      onEnablePlugin: () => void this.plugin.enable(),
+      onRetryPlugin: this.plugin.retry,
+      pluginsDisabled: arePluginsDisabled(context.runtimeConfig),
       snapshot: this.snapshot,
       error: context.runtimeConfig.state.configSnapshot
         ? null
@@ -484,7 +510,7 @@ class SkillWorkshopPageState {
       }),
       learningBusy: this.learningBusy,
       learningError: this.learningError,
-      onRetry: () => void this.load(),
+      onRetry: () => void this.load(true),
       onSelectSkill: this.selectSkill,
       onSelectDraft: this.selectDraft,
       onOpen: (target: WorkshopViewerTarget) => void this.open(target),

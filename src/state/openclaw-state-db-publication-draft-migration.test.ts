@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { digestGitHubPublicationRequest } from "../gateway/github-publication-receipt.js";
@@ -9,13 +10,16 @@ import {
   closeOpenClawStateDatabaseAsync as closeDatabase,
   detectOpenClawStateDatabaseSchemaMigrations as detectMigrations,
   openOpenClawStateDatabase as openDatabase,
+  repairOpenClawStateDatabaseSchema as repairSchema,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
+import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
 const tables = [
@@ -37,16 +41,17 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
-function legacyDatabase(absent: boolean, refuse = false) {
+function legacyDatabase(absent: boolean, refuse = false, sourceVersion = 27) {
   const env = { OPENCLAW_STATE_DIR: directories.make("publication-draft-migration-") };
   const pathname = resolveOpenClawStateSqlitePath(env);
   mkdirSync(path.dirname(pathname), { recursive: true });
   using db = new DatabaseSync(pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL.replaceAll("\n  draft INTEGER,", ""));
+  restorePreTemplateStateIdentifiersForTest(db);
   addPreCutoverClientCredentialTablesForTest(db);
-  db.exec(`PRAGMA user_version = 27;
+  db.exec(`PRAGMA user_version = ${sourceVersion};
     INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-      VALUES ('primary', 'global', 27, 1, 1);`);
+      VALUES ('primary', 'global', ${sourceVersion}, 1, 1);`);
   const digest = digestGitHubPublicationRequest({
     sessionId: "session",
     idempotencyKey: "accepted",
@@ -84,15 +89,14 @@ it.each([false, true])(
       using witness = new DatabaseSync(pathname);
       const database = await assertSqliteMigrationScopePreserved(
         witness,
-        [
-          "schema_meta",
-          "config_machine_state",
-          ...tables,
-          "device_identities",
-          "device_auth_tokens",
-          "gateway_origin_device_tokens",
-          "exec_approvals_config",
-        ],
+        expectDefined(
+          resolveSchemaMigrationBackupTables({
+            kind: "state",
+            foundVersion: 27,
+            supportedVersion: version,
+          }),
+          "Every executed publication migration step must declare its bounded scope",
+        ),
         () => openDatabase(options),
       );
       expect(publication(database.db)).toEqual({ ...before, draft: null });
@@ -119,3 +123,35 @@ it("rolls back the draft columns with a refused schema publication", async () =>
     expect(hasDraft(db, table)).toBe(false);
   }
 });
+
+it.each([false, true])(
+  "finishes draft repair after version publication (absent=%s)",
+  async (absent) => {
+    const { options, pathname, before } = legacyDatabase(absent, false, 28);
+    await withStateMigrationBackupForTest(options, () => {
+      expect(repairSchema({ ...options, versionMigrationOnly: true }).warnings).toEqual([]);
+    });
+    using witness = new DatabaseSync(pathname);
+    expect(witness.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
+    expect(publication(witness)).toEqual(before);
+    expect(detectMigrations(options)).toContainEqual({
+      kind: "github-publication-draft-v28",
+      path: pathname,
+    });
+    await withStateMigrationBackupForTest(options, async () => {
+      const repaired = await assertSqliteMigrationScopePreserved(
+        witness,
+        ["schema_meta", "config_machine_state", ...tables],
+        () => repairSchema(options),
+      );
+      expect(repaired.warnings).toEqual([]);
+      expect(publication(witness)).toEqual({ ...before, draft: null });
+      for (const table of tables.slice(1)) {
+        expect(hasDraft(witness, table)).toBe(!absent);
+      }
+      expect(detectMigrations(options)).toEqual([]);
+      expect(repairSchema(options).warnings).toEqual([]);
+      expect(publication(openDatabase(options).db)).toEqual({ ...before, draft: null });
+    });
+  },
+);

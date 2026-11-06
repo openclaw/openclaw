@@ -8,6 +8,10 @@ import {
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -32,8 +36,8 @@ export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE
 }
 
 export const UI_NAVIGATION_PREFERENCE_KEYS = {
-  sidebarEntries: "ui.railShortcuts",
-  personalSessionGroups: "ui.personalSessionGroups",
+  sidebarEntries: UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  personalSessionGroups: UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
 } as const;
 
 export function isNavigationPref(key: string): key is keyof typeof UI_NAVIGATION_PREFERENCE_KEYS {

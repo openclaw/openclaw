@@ -8,6 +8,7 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -93,6 +94,7 @@ async function resolveApprovalSessionAudience(
       ? memory.readCurrent()
       : await readSessionEntryReadOnlyInWorker({
           ...target,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId }),
           clone: false,
           hydrateSkillPromptRefs: false,
         });

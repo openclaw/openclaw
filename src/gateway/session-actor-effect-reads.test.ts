@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -11,12 +12,14 @@ import { runWithSessionActorStorage } from "../config/sessions/session-actor-sto
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import * as checkoutDiff from "../sessions/session-diff.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
-import { loadSessionDiff } from "./server-methods/sessions-diff.js";
-import { withSessionFileRoot } from "./server-methods/sessions-files.js";
+import { withSessionFileRoot } from "./server-methods/session-files-root.js";
+import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
+import type { RespondFn } from "./server-methods/types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -121,7 +124,7 @@ it("revokes a retained PR publication source when its session actor closes", asy
   expect(() => assertCurrent()).toThrow();
 });
 
-it("revokes a host diff when runtime configuration removes its read-only sandbox mount", async () => {
+it("returns a retryable diff response when runtime configuration removes its sandbox mount", async () => {
   const { binding } = await fixture();
   const cfg: OpenClawConfig = {
     agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
@@ -133,7 +136,27 @@ it("revokes a host diff when runtime configuration removes its read-only sandbox
     });
     return { sessionKey, files: [], additions: 0, deletions: 0 };
   });
-  await expect(
-    runWithSessionActorStorage(binding, () => loadSessionDiff({ sessionKey })),
-  ).rejects.toThrow("Session workspace changed during file access");
+  const respond = vi.fn<RespondFn>();
+  await runWithSessionActorStorage(binding, () =>
+    sessionsDiffHandlers["sessions.diff"]!({
+      req: { type: "req", id: "diff", method: "sessions.diff", params: { sessionKey } },
+      params: { sessionKey },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      // SAFETY: This memory-only read uses only runtime configuration and request diagnostics.
+      context: { getRuntimeConfig, logGateway: createSubsystemLogger("test/memory-diff") } as never,
+    }),
+  );
+  expect(respond.mock.calls).toEqual([
+    [
+      false,
+      undefined,
+      {
+        code: "UNAVAILABLE",
+        message: "Session workspace changed during file access. Retry the diff.",
+        retryable: true,
+      },
+    ],
+  ]);
 });

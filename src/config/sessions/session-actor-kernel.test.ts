@@ -107,6 +107,30 @@ function kernelFixture() {
 const withKernel = (run: (fixture: ReturnType<typeof kernelFixture>) => void | Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => await run(kernelFixture()));
 
+it("rejects a discarded actor thenable, rolls back, and releases the actor scope", () =>
+  withKernel((f) => {
+    const state = f.hydrate();
+    const then = vi.fn();
+    expect(() =>
+      f.write(() => {
+        withSessionActorTransactionState(f.database, forkSessionActorStoredState(state), () => {
+          expect(f.append("rejected", { role: "user", content: "rejected" })?.appended).toBe(true);
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise rejection of a discarded thenable.
+          return { then };
+        });
+      }),
+    ).toThrow("SQLite write scopes cannot await work");
+    expect(f.events()).toEqual([]);
+    expect(then).not.toHaveBeenCalled();
+    f.inState(f.hydrate(), () => {
+      expect(f.append("accepted", { role: "user", content: "accepted" })?.appended).toBe(true);
+    });
+    expect(f.events()).toMatchObject([
+      { type: "session", id: f.scope.sessionId },
+      { type: "message", id: "accepted", message: { role: "user", content: "accepted" } },
+    ]);
+  }));
+
 const header = (id: string) => ({
   type: "session",
   id,
@@ -740,12 +764,24 @@ it("bounds committed actor growth across the window limit without retaining roll
 
     const committed = forkSessionActorStoredState(resident);
     write(() => append(committed));
+    const { navigation, identities, active } = committed.transcript;
     residency.remember(committed);
+    // Appending already detached these collections from the rollback preimage.
+    expect(committed.transcript.navigation).toBe(navigation);
+    expect(committed.transcript.identities).toBe(identities);
+    expect(committed.transcript.active).toBe(active);
     expect(committed.transcript.complete).toBe(false);
     expect(committed.transcript.navigation).toHaveLength(512);
-    expect(committed.transcript.identities.size).toBeLessThanOrEqual(512);
-    expect(committed.transcript.active.size).toBeLessThanOrEqual(512);
+    expect(committed.transcript.navigation.at(0)?.seq).toBe(2);
+    expect(committed.transcript.navigation.at(-1)?.seq).toBe(513);
+    expect(committed.transcript.identities.size).toBe(512);
+    expect(committed.transcript.active.size).toBe(512);
     expect(committed.transcript.identities.has("message-0")).toBe(false);
+    expect(resident.transcript.navigation).toHaveLength(512);
+    expect(resident.transcript.navigation.at(0)?.seq).toBe(0);
+    expect(resident.transcript.identities.has("message-0")).toBe(true);
+    expect(resident.transcript.identities.has("next-one")).toBe(false);
+    expect(resident.transcript.active.size).toBe(511);
     inState(committed, () => {
       expect(f.append("must-not-append", originalMessage)).toMatchObject({
         appended: false,

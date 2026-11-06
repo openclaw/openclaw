@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionSuggestionsListResult } from "../../../../packages/gateway-protocol/src/schema/sessions-suggestions.js";
 /* @vitest-environment jsdom */
@@ -16,6 +17,7 @@ import { mockDocumentVisibility as trackVisibility } from "../../test-helpers/mo
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
 import {
@@ -181,6 +183,139 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it.each([true, false])(
+    "reactivation retries failed live admission only when retryable (%s)",
+    async (retryable) => {
+      vi.useFakeTimers();
+      let recovered = false;
+      const recoveredMessages = [{ role: "assistant", content: "Recovered shared history" }];
+      const h = reconnectPane(
+        { messages: recoveredMessages, sessionId: "foreground-retry" },
+        {
+          "sessions.messages.subscribe": (params: { key: string }) => {
+            if (!recovered) {
+              if (!retryable) {
+                throw new Error("Live observation denied");
+              }
+              throw new GatewayProtocolRequestTimeoutError({
+                method: "sessions.messages.subscribe",
+                timeoutMs: 30_000,
+                requestSent: true,
+              });
+            }
+            return { key: params.key };
+          },
+        },
+      );
+      h.pane.presented = false;
+      const admitted = syncSelectedSessionMessageSubscription(h.state);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await admitted).toBe(false);
+      expect(chatHistoryRequests(h.state).historyLoad).toMatchObject({
+        phase: "failed",
+        retryable,
+      });
+      const before = requestCalls(h.request, "sessions.messages.subscribe").length;
+      recovered = true;
+      h.pane.presented = true;
+      h.pane.prepareRender();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(
+        before + Number(retryable),
+      );
+      expect(requestCalls(h.request, "chat.send")).toHaveLength(0);
+      if (retryable) {
+        expect(await chatHistoryRequests(h.state).subscriptionReady).toBe(true);
+        expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
+        expect(chatHistoryRequests(h.state).subscriptionError).toBeUndefined();
+        expect(h.state.chatMessages).toEqual(recoveredMessages);
+        expect(chatHistoryRequests(h.state).historyLoad.phase).toBe("committed");
+      }
+    },
+  );
+
+  it.each(["foreground", "retry"] as const)(
+    "retries a failed approval upgrade via %s",
+    async (entry) => {
+      const h = openingPane(true);
+      h.dispatchConnect();
+      await h.requested;
+      h.subscription.resolve({
+        key: h.state.sessionKey,
+        initialHistory: { ok: true, payload: h.history },
+      });
+      h.pane.applyGatewaySnapshot(h.connected);
+      await h.approvalRequested;
+      h.approval.reject(
+        new GatewayProtocolRequestTimeoutError({
+          method: "sessions.messages.subscribe",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      );
+      await waitForSolid(() =>
+        expect(chatHistoryRequests(h.state).historyLoad).toMatchObject({
+          phase: "failed",
+          retryable: true,
+        }),
+      );
+      expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
+      const original = h.request.getMockImplementation()!;
+      h.request.mockImplementation((...args) =>
+        args[0] === "sessions.messages.subscribe"
+          ? Promise.resolve({
+              key: h.state.sessionKey,
+              approvalReplay: {
+                sessionKey: h.state.sessionKey,
+                approvals: [],
+                updatedAtMs: 1,
+                truncated: false,
+              },
+            })
+          : original(...args),
+      );
+      const before = requestCalls(h.request, "sessions.messages.subscribe").length;
+      if (entry === "foreground") {
+        h.pane.presented = false;
+        h.pane.prepareRender();
+        h.pane.presented = true;
+        h.pane.prepareRender();
+      } else {
+        h.pane.render().layout!.primary.chat.onRefresh();
+      }
+      await waitForSolid(() =>
+        expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(before + 1),
+      );
+      expect(await chatHistoryRequests(h.state).subscriptionReady).toBe(true);
+      expect(h.state.chatSessionApprovalReplay).toMatchObject({
+        sessionKey: h.state.sessionKey,
+        complete: true,
+      });
+    },
+  );
+
+  it("does not reuse a live observer from a retired connection", async () => {
+    let available = true;
+    const h = reconnectPane(
+      { messages: [], sessionId: "reconnected" },
+      {
+        "sessions.messages.subscribe": (params: { key: string }) => {
+          if (!available) {
+            throw new Error("New connection admission failed");
+          }
+          return { key: params.key };
+        },
+      },
+    );
+    await expect(syncSelectedSessionMessageSubscription(h.state)).resolves.toBe(true);
+    available = false;
+    disconnect(h.pane);
+    expect(h.state.chatSessionMessageSubscription).toBeNull();
+    h.pane.applyGatewaySnapshot(h.pane.context.gateway.snapshot);
+    await expect(syncSelectedSessionMessageSubscription(h.state)).resolves.toBe(false);
+    expect(h.state.chatSessionMessageSubscription).toBeNull();
+  });
+
   it("uses a snapshot hydrated during connect preparation for the pipelined delta", async () => {
     const h = openingPane();
     const snapshot = {
@@ -197,28 +332,16 @@ describe("chat pane connection lifecycle", () => {
         },
       },
     };
-    chatHistoryRequests(h.state).initialSnapshotHydration = {
-      sessionKey: h.state.sessionKey,
-      connected: false,
-      promise: Promise.resolve(),
-      readReadyHistory: () => ({
-        deltaCursor: snapshot.deltaCursor,
-        historyState: snapshot.historyState,
-      }),
-      adoptReadySnapshot: async () => {
-        applyChatCacheSnapshot(h.state, snapshot);
-        cacheChatSessionSnapshot(
-          h.state.chatMessagesBySession,
-          h.state,
-          { sessionKey: h.state.sessionKey },
-          snapshot,
-        );
-      },
-    };
-    expect(h.state.chatMessages).toEqual([]);
+    applyChatCacheSnapshot(h.state, snapshot);
+    cacheChatSessionSnapshot(
+      h.state.chatMessagesBySession,
+      h.state,
+      { sessionKey: h.state.sessionKey },
+      snapshot,
+    );
     h.dispatchConnect();
     await h.requested;
-    expect(h.state.chatMessages).toEqual([]);
+    expect(h.state.chatMessages).toEqual(snapshot.messages);
     expect(requestCalls(h.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
       initialHistory: { cursor: "warm-cursor", knownState: { commands: "commands-1" } },
     });
@@ -458,19 +581,15 @@ describe("chat pane connection lifecycle", () => {
       state.loadAssistantIdentity = vi.fn(async () => undefined);
       pane.connectedClient = null;
       const snapshot = pane.context.gateway.snapshot;
+      const presence = ["owner", "alice"].map((id) => ({ ts: 0, user: { id } }));
       const connected = {
         ...snapshot,
-        hello: {
-          ...snapshot.hello!,
-          snapshot: {
-            presence: [
-              { ts: 0, user: { id: "owner" } },
-              { ts: 0, user: { id: "alice" } },
-            ],
-          },
-        },
+        hello: { ...snapshot.hello!, snapshot: { presence } },
       };
-
+      pane.context = {
+        ...pane.context,
+        gateway: { ...pane.context.gateway, readPresence: () => presence },
+      };
       pane.applyGatewaySnapshot(connected);
       pane.applySessionsState(sessions.state);
       listed.resolve({ suggestions: [], role: "owner" });
@@ -842,6 +961,7 @@ describe("chat pane connection lifecycle", () => {
     });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("chat.abort", {
+        userInitiated: true,
         sessionKey: "agent:main",
         runId: "run-main",
       }),

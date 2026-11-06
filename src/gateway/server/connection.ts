@@ -60,10 +60,13 @@ export type GatewayConnectionOptions = Pick<
   | "connectionWork"
   // Read per connection so reloads cannot leave a stale auth snapshot.
   | "getResolvedAuth"
+  | "gatewayExposure"
   | "getRequiredSharedGatewaySessionGeneration"
   | "rateLimiter"
   | "browserRateLimiter"
   | "nodeReapprovalCoordinator"
+  | "isConnectPending"
+  | "startupMethodsReady"
   | "isStartupPending"
   | "isPendingWorkerNodeSetup"
   | "admitsNodeSetupCompletion"

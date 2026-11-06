@@ -92,7 +92,7 @@ enter normal rotation, resolve through an explicit profile pin, or be copied to
 another agent. Only the owning setup operation can test the selected credential.
 After one successful tool-free turn, setup asks whether to activate it. Declining
 or failing the test keeps the saved credential inactive and preserves the current
-connection. Model Setup offers the same saved sign-in for a fresh test without
+connection. Models offers the same saved sign-in for a fresh test without
 another login. If applying a replacement fails, recovery restores its inactive
 state before rebuilding the previous connection. Gateway activation waits for
 config application; a required restart keeps the replacement inactive until setup
@@ -104,7 +104,7 @@ remove saved inactive replacements or restore the state from before setup.
 
 Noninteractive setup saves replacement credentials and prints a
 `openclaw models auth activate <profileId> --agent <id>` command to test and activate
-the saved sign-in. Model Setup offers the same operation. Interactive setup defaults
+the saved sign-in. Models offers the same operation. Interactive setup defaults
 to activation after a successful test. Reusing an existing credential
 and first-run noninteractive setup retain their existing behavior.
 
@@ -284,6 +284,11 @@ its marker and inherits the shared credential only after verifying that the
 shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
+
+Concurrent requests serialize first-use authorization capture when their local
+or shared credential stores overlap. Each request retains its own live authority;
+closing one does not close another. Credential replacement, revocation, pending
+writes, and uncertain settlement still refuse stale authorization.
 
 Catalog discovery fences and settles historical peers through the same
 request-owned native writer as the refreshing credential. Each peer update

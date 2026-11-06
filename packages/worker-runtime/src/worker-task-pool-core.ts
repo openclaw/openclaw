@@ -112,8 +112,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private closedError?: Error;
   private nextTaskId = 0;
   private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
-  private readonly expireTasks = () =>
-    expireWorkerTasks(this.queue, this.slots, (task) => this.timeout(task));
+  private readonly expireTasks = () => expireWorkerTasks(this.queue, this.slots, this.timeout);
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -135,6 +134,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
+      retainOneIdleWorker: ownerOptions.retainOneIdleWorker,
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
       onRotationComplete: () => {
@@ -339,7 +339,8 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.computeCapacity?.remove(this.resumeCompute);
     }
     while (!this.closedError && this.retirement.dispatchAllowed && this.queue.length) {
-      let slot = [...this.slots].find(
+      let slot = this.retirement.preferredIdle;
+      slot ??= [...this.slots].find(
         (entry) =>
           !entry.task &&
           !entry.retiring &&

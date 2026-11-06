@@ -2,20 +2,20 @@
 import { realpathSync } from "node:fs";
 import { isDirectRunUrl } from "./direct-run.mjs";
 
+export function parseTimeoutMs(value) {
+  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
+  if (!match) {
+    throw new Error(`unsupported timeout value: ${value}`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "s";
+  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
+  return Math.max(1, Math.ceil(amount * multiplier));
+}
+
 export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
   const docker = kind === "docker";
   const label = docker ? "Docker" : "OpenClaw E2E";
-
-  const parseTimeoutMs = (value) => {
-    const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
-    if (!match) {
-      throw new Error(`unsupported timeout value: ${value}`);
-    }
-    const amount = Number(match[1]);
-    const unit = match[2] ?? "s";
-    const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-    return Math.max(1, Math.ceil(amount * multiplier));
-  };
 
   if (!command) {
     console.error("missing command for Node watchdog");
@@ -31,8 +31,12 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
     process.exit(1);
   }
 
+  // The scheduler's retained CID requires the launcher to share its group;
+  // otherwise a killed wrapper could publish before this child writes the CID.
+  const detached =
+    process.platform !== "win32" && !(docker && process.env.DOCKER_E2E_CONTAINER_CIDFILE);
   const child = spawn(command, args, {
-    detached: process.platform !== "win32",
+    detached,
     stdio: "inherit",
   });
   let timedOut = false;
@@ -53,7 +57,7 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
     if (!child.pid) {
       return;
     }
-    const killTarget = process.platform === "win32" ? child.pid : -child.pid;
+    const killTarget = detached ? -child.pid : child.pid;
     try {
       process.kill(killTarget, signal);
     } catch {

@@ -6,6 +6,8 @@ import type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
 } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { readQueuedDeliveryEntriesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   buildReplyPayloads,
   createReplyToModeFilterForChannel,
@@ -14,7 +16,7 @@ import {
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { makeAgentAssistantMessage, makeAgentUserMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramDispatchHttpFixture,
   installTelegramDispatchHook,
@@ -153,6 +155,70 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       ]);
       expect(sentTexts()).toEqual([recoveredAnswer]);
       expect(http.texts()).toEqual([recoveredAnswer]);
+    }
+  });
+
+  it("replays the saved final through durable custody after its own HTTP deadline", async () => {
+    const { manager, dispatch } = await transcriptCase("deadline-transcript-final");
+    const firstArrived = createDeferred<void>();
+    const firstRelease = createDeferred<void>();
+    void firstRelease.promise.catch(() => undefined);
+    const retryArrived = createDeferred<void>();
+    const retryRelease = createDeferred<void>();
+    const isFinal = (call: { method: string; fields: Record<string, unknown> }) =>
+      call.method === "sendMessage" && call.fields.text === recoveredAnswer;
+    http.holdNextCall = {
+      predicate: isFinal,
+      arrived: firstArrived,
+      release: firstRelease,
+    };
+    let modelRuns = 0;
+    const delivering = dispatch(async () => {
+      modelRuns += 1;
+      manager.appendMessage(assistant(recoveredAnswer));
+      manager.flushPendingPersistence();
+    });
+    const settledTooSoon = delivering.then(() => {
+      throw new Error("final caller settled before saved-final recovery");
+    });
+    // Observe this branch immediately even when the first transport deadline fails.
+    void settledTooSoon.catch(() => undefined);
+    try {
+      await Promise.race([firstArrived.promise, settledTooSoon]);
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toMatchObject([
+        { retryAmbiguousFinalText: true, attemptCount: 1 },
+      ]);
+      http.holdNextCall = {
+        predicate: isFinal,
+        arrived: retryArrived,
+        release: retryRelease,
+      };
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.race([retryArrived.promise, settledTooSoon]);
+      // The abandoned request must terminate without a later fixture acceptance.
+      firstRelease.reject(new Error("discard the expired response"));
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toMatchObject([
+        {
+          retryAmbiguousFinalText: true,
+          ambiguousTransportError: true,
+          attemptCount: 2,
+          maxRetries: 2,
+        },
+      ]);
+      expect(modelRuns).toBe(1);
+      expect(http.callsFor("sendMessage").map((call) => call.fields.text)).toEqual([
+        recoveredAnswer,
+        recoveredAnswer,
+      ]);
+      retryRelease.resolve();
+      await delivering;
+      expect(readQueuedDeliveryEntriesForTest(http.state.stateDir)).toEqual([]);
+      expect(sentTexts()).toEqual([recoveredAnswer]);
+      expect(http.texts()).toEqual([recoveredAnswer]);
+    } finally {
+      firstRelease.reject(new Error("discard the expired response"));
+      retryRelease.resolve();
+      await delivering.catch(() => undefined);
     }
   });
 

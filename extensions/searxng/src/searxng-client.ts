@@ -2,17 +2,16 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
   resolveSearchCount,
-  resolveSiteName,
   resolveTimeoutSeconds,
   withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
-  wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
@@ -24,21 +23,12 @@ import {
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  asOptionalObjectRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
-type SearxngResult = {
-  url: string;
-  title: string;
-  content?: string;
-  img_src?: string;
-};
 
 function normalizeBaseUrl(value: unknown): string | undefined {
   return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
@@ -160,15 +150,12 @@ export async function runSearxngSearch(params: {
   const startedAt = Date.now();
   const query = params.query;
   const signal = params.signal;
-  const fetchSearxngResults = async (
-    searchCategories: string | undefined,
-  ): Promise<SearxngResult[]> => {
-    const url = new URL(baseUrl);
+  const fetchSearxngResults = async (searchCategories: string | undefined) => {
+    let url = new URL(baseUrl);
     const basePathname = url.pathname.replace(/\/+$/u, "");
     url.pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
     url.search = "";
-    url.searchParams.set("q", query);
-    url.searchParams.set("format", "json");
+    url = new URL(nativeWebSearchCodecs["searxng.search"].request(url.href, query, count).url);
     if (searchCategories) {
       url.searchParams.set("categories", searchCategories);
     }
@@ -213,29 +200,7 @@ export async function runSearxngSearch(params: {
           throw new Error("SearXNG returned invalid JSON.");
         }
 
-        const rawResults = asOptionalObjectRecord(parsed)?.results;
-        const results: SearxngResult[] = [];
-
-        for (const rawResult of Array.isArray(rawResults) ? rawResults : []) {
-          const candidate = asOptionalObjectRecord(rawResult);
-          const result =
-            typeof candidate?.url !== "string" || typeof candidate.title !== "string"
-              ? null
-              : {
-                  url: candidate.url,
-                  title: candidate.title,
-                  content: typeof candidate.content === "string" ? candidate.content : undefined,
-                  img_src: typeof candidate.img_src === "string" ? candidate.img_src : undefined,
-                };
-          if (result) {
-            results.push(result);
-          }
-          if (results.length >= count) {
-            break;
-          }
-        }
-
-        return results;
+        return nativeWebSearchCodecs["searxng.search"].results(parsed, count);
       },
     );
   };
@@ -258,13 +223,7 @@ export async function runSearxngSearch(params: {
     count: results.length,
     tookMs: Date.now() - startedAt,
     externalContent: externalContentStamp("searxng"),
-    results: results.map((result) => ({
-      title: wrapWebContent(result.title, "web_search"),
-      url: result.url,
-      snippet: result.content ? wrapWebContent(result.content, "web_search") : "",
-      siteName: resolveSiteName(result.url) || undefined,
-      img_src: result.img_src || undefined,
-    })),
+    results,
   } satisfies Record<string, unknown>;
 
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
