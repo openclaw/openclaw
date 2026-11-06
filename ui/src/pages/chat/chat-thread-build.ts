@@ -34,12 +34,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
-import {
-  hasHandoffToolCall,
-  pendingSessionsYield,
-  projectSessionsYieldItems,
-} from "./chat-sessions-yield.ts";
+import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
@@ -49,8 +44,8 @@ import {
   collectCanvasTurns,
   reconcileLiveCanvasPreviews,
 } from "./chat-thread-canvas.ts";
+import { groupChatDisplayItems, prepareChatStreamOnset } from "./chat-thread-display.ts";
 import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
-import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   placeChatInputs,
   type ChatInputOrderState,
@@ -85,7 +80,6 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
@@ -357,22 +351,11 @@ export function buildChatItems(
 
     items.push(...projectChatSystemNotice(item, normalized));
   }
-  const groupDisplayItems = (hidden?: ReadonlySet<string>) => {
-    const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
-      projectSessionsYieldItems(source, props.showToolCalls, complete);
-    // Keep real user boundaries even when search hides their rows.
-    items = projectRunFailureStreaks(items);
-    const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-    return groupMessages(
-      projectYields(coalesceToolActivityMessages(items, hidden), complete),
-      { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson, facts },
-      props.showReasoning ? props.reasoning : undefined,
-      props.showReasoning,
-    );
-  };
+  let streamOnset: Extract<ChatItem, { kind: "stream" }> | undefined;
   // History probes must not adopt inputs, resolve timing, or retire live progress.
   if (mode === "history") {
-    return groupDisplayItems(hiddenHistoryKeys.size > 0 ? hiddenHistoryKeys : undefined);
+    const hidden = hiddenHistoryKeys.size > 0 ? hiddenHistoryKeys : undefined;
+    return groupChatDisplayItems(props, items, hidden, facts);
   }
   const currentRunId =
     props.runId ??
@@ -493,12 +476,18 @@ export function buildChatItems(
   }
   // Empty user rows may have disappeared since canvas placement. Preserve the
   // earlier current-turn fallback, but resolve exact bounds over rendered rows.
-  const projectionRunBounds = createRunTurnLookup(executionItems());
+  let projectionRunBounds: ReturnType<typeof createRunTurnLookup> | undefined;
   const resolveProjectionBounds = (
     runId: unknown,
     afterUserSendId?: string,
   ): TurnInsertionBounds | undefined =>
-    boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId, afterUserSendId));
+    boundToPendingInputs(
+      resolveRunBounds(
+        (projectionRunBounds ??= createRunTurnLookup(executionItems())),
+        runId,
+        afterUserSendId,
+      ),
+    );
   if (!searchFiltering) {
     const recordedPermissions = new Set(
       props.guardianNotices?.some((notice) => notice.permissionMissing)
@@ -695,10 +684,13 @@ export function buildChatItems(
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
-  const activeTurnBounds = boundToPendingInputs(
-    (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
-      (activeInputKey ? { afterKey: activeInputKey } : null),
-  );
+  const activeTurnBounds =
+    activeReasoning || visibleText.length > 0 || showWorkingIndicator || props.subagentWait
+      ? boundToPendingInputs(
+          (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
+            (activeInputKey ? { afterKey: activeInputKey } : null),
+        )
+      : undefined;
   if (
     activeReasoning ||
     (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
@@ -723,13 +715,17 @@ export function buildChatItems(
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    appendActiveRunItem(items, activeTurnBounds, {
+    const indicator: Extract<ChatItem, { kind: "reading-indicator" }> = {
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(workingRunId),
-    });
+    };
+    if (facts && !activeReasoning && !searchFiltering) {
+      streamOnset = prepareChatStreamOnset(props, items, indicator, hasEmptyLiveStream);
+    }
+    appendActiveRunItem(items, activeTurnBounds, indicator);
   } else if (props.subagentWait && !initialHistoryLoad) {
     // The handoff ended the parent's run, not its work. Carrying that run's
     // identity keeps the claw in the same frame instead of opening another row.
@@ -749,5 +745,5 @@ export function buildChatItems(
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
   items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
-  return groupDisplayItems(hidden);
+  return groupChatDisplayItems(props, items, hidden, facts, streamOnset);
 }
