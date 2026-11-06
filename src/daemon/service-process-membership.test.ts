@@ -185,13 +185,7 @@ describe("launchd process membership when launchctl omits the resource coalition
     native.spawn.mockImplementation((command: string, args: string[]) =>
       command === "ps"
         ? { status: 0, stdout: groupRows(901) }
-        : {
-            status: 0,
-            stdout:
-              args[1] === `pid/${process.pid}`
-                ? omitted(process.pid)
-                : omitted(gatewayPid),
-          },
+        : { status: 0, stdout: omitted(Number(args[1]!.slice(4))) },
     );
     native.coalition.mockImplementation((pid: number) => {
       const value = pid === process.pid ? caller : gateway;
