@@ -12,9 +12,14 @@ import {
 export function createTokenBindingPublisher(params: {
   authority: () => Promise<OpenClawIdAuthority>;
   log: { warn: (message: string) => void };
+  /** A read that finishes after the Gateway stopped publishes nothing. */
+  closed: () => boolean;
 }) {
   // Publishes the binding owner over the claw record's bindings.
   const publish = (owner: OpenClawIdAuthority) => {
+    if (params.closed()) {
+      return;
+    }
     setDeviceTokenBindingOwner({
       lookup: (deviceId, role) => owner.tokenBinding(deviceId, role),
       record: (deviceId, role, peerKey) => owner.bindToken(deviceId, role, peerKey),
@@ -33,6 +38,9 @@ export function createTokenBindingPublisher(params: {
         publish(owner);
       }
     } catch (error) {
+      if (params.closed()) {
+        return;
+      }
       setDeviceTokenBindingOwner("unreadable");
       params.log.warn(
         `openclaw-id: security: could not read device-token bindings; refusing device tokens until the Gateway restarts or OpenClaw ID turns on: ${String(error)}`,

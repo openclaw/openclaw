@@ -289,7 +289,7 @@ describe("admitScheduledOccurrence", () => {
     const runSessionKey = PARENT_KEY;
     expect(occurrence.mint({ ...RUN, runSessionKey }).result).toMatchObject({
       status: "ready",
-      facts: { authority: { owner: false, basis: "none" } },
+      facts: { authority: { owner: false, basis: "operator-source" } },
     });
     expect(
       occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }).result,
