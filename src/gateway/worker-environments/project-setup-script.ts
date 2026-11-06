@@ -120,8 +120,6 @@ const env = { PATH: process.env.PATH, HOME: machineHome, LANG: "C.UTF-8", GIT_CO
     [JSON.stringify("core.fsmonitor"), JSON.stringify("false")],
   ],
 )}, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
-// Phase state belongs to this worker invocation, not repository-provided environment.
-env.OPENCLAW_INTERNAL_WORKSPACE_MANIFEST_READ_ONLY = inspectOnly ? "1" : "0";
 const ownedDirectory = (parent, name, create = false) => {
   const target = path.join(parent, name);
   if (create && !fs.existsSync(target)) fs.mkdirSync(target, { mode: 0o700 });
@@ -144,7 +142,7 @@ const git = (root, args) => {
   return result.stdout.trim();
 };
 const manifest = (root, baseCommit = input.baseCommit, priorRefs = [], manifestHome = machineHome) => {
-  const result = spawnSync(process.execPath, ["-e", manifestScript, root, baseCommit, "eligible", ...priorRefs.map((ref) => ref.slice(7))], { env: { ...env, HOME: manifestHome }, encoding: "utf8", timeout: 600000, maxBuffer: 262144 });
+  const result = spawnSync(process.execPath, ["-e", manifestScript, root, baseCommit, inspectOnly ? "eligible-read-only" : "eligible", ...priorRefs.map((ref) => ref.slice(7))], { env: { ...env, HOME: manifestHome }, encoding: "utf8", timeout: 600000, maxBuffer: 262144 });
   if (result.status !== 0 || !/^sha256:[a-f0-9]{64}$/.test(result.stdout.trim())) throw new Error("Prepared project manifest verification failed: " + (result.stderr?.trim() || result.error?.message || result.status));
   return result.stdout.trim();
 };

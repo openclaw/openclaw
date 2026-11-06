@@ -80,10 +80,12 @@ const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};
 const root = fs.realpathSync(process.argv[1]);
 ${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
 const requestedBaseCommit = process.argv[2] || null;
-const verifyOnly = process.env.OPENCLAW_INTERNAL_WORKSPACE_MANIFEST_READ_ONLY === "1";
-const eligibleOnly = process.argv[3] === "eligible";
-const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
-const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
+const requestedMode = process.argv[3] || "";
+const verifyOnly = requestedMode.endsWith("-read-only");
+const mode = verifyOnly ? requestedMode.slice(0, -10) : requestedMode;
+const eligibleOnly = mode === "eligible";
+const requestedManifestDigest = mode === "resolve" ? process.argv[4] : null;
+const publishedManifestDigest = mode === "publish" ? process.argv[4] : null;
 const memoMode = process.argv.at(-1) === "memo-v1";
 const priorManifestDigests = [
   ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),

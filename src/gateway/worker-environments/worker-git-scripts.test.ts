@@ -169,7 +169,6 @@ it("runs opaque-source project setup with worker-local Git isolation", async () 
         PATH: "worker-tools",
         HOME: home,
         LANG: "C.UTF-8",
-        OPENCLAW_INTERNAL_WORKSPACE_MANIFEST_READ_ONLY: "0",
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: "worker-null-device",
         ...maintenance,

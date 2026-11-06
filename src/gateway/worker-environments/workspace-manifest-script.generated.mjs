@@ -241,9 +241,12 @@ export async function runWorkspaceManifestProgram(
     return owned;
   }
   const requestedBaseCommit = process.argv[2] || null;
-  const eligibleOnly = process.argv[3] === "eligible";
-  const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
-  const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
+  const requestedMode = process.argv[3] || "";
+  const verifyOnly = requestedMode.endsWith("-read-only");
+  const mode = verifyOnly ? requestedMode.slice(0, -10) : requestedMode;
+  const eligibleOnly = mode === "eligible";
+  const requestedManifestDigest = mode === "resolve" ? process.argv[4] : null;
+  const publishedManifestDigest = mode === "publish" ? process.argv[4] : null;
   const memoMode = process.argv.at(-1) === "memo-v1";
   const priorManifestDigests = [
     ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
@@ -712,19 +715,20 @@ export async function runWorkspaceManifestProgram(
         fail("unsafe worker manifest directory");
       }
     } catch (error) {
-      if (error && error.code === "ENOENT") {
+      if (error && error.code === "ENOENT" && !verifyOnly) {
         fs.mkdirSync(directory, { mode: 0o700 });
       } else {
         throw error;
       }
     }
-    fs.chmodSync(directory, 0o700);
+    if (!verifyOnly) fs.chmodSync(directory, 0o700);
   }
-  function publishManifest(manifestRoot, manifest) {
+  function publishManifest(manifestRoot, manifest, persist = true) {
     if (Buffer.byteLength(manifest) > MAX_WORKSPACE_MANIFEST_BYTES) {
       fail("worker workspace manifest exceeds its serialized byte limit");
     }
     const digest = crypto.createHash("sha256").update(manifest).digest("hex");
+    if (!persist) return digest;
     const manifestPath = path.join(manifestRoot, digest + ".json");
     const temporaryPath =
       manifestPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
@@ -840,6 +844,7 @@ export async function runWorkspaceManifestProgram(
     }
   }
   async function main() {
+    if (verifyOnly && !eligibleOnly) fail("read-only verification requires eligible inventory");
     assertManifestCurrent();
     const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
     const manifestRoot = path.join(workerRoot, "manifests");
@@ -873,22 +878,24 @@ export async function runWorkspaceManifestProgram(
     preserveWindowsFileModes(entries, manifestRoot);
     const manifest = serializeManifest(requestedBaseCommit, entries);
     assertManifestCurrent();
-    const digest = publishManifest(manifestRoot, manifest);
+    const digest = publishManifest(manifestRoot, manifest, !verifyOnly);
     // Keep the full bounded inventory locally; transport memos retain their smaller cap.
     // Record recent hashes too, but the existing ctime safety window still gates reuse.
-    const memoPath = path.join(manifestRoot, digest + ".memo");
-    const temporaryMemo =
-      memoPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
-    try {
-      const saved = JSON.stringify([...capturedHashMemo]);
-      if (Buffer.byteLength(saved) <= MAX_WORKSPACE_MANIFEST_BYTES) {
-        fs.writeFileSync(temporaryMemo, saved, { flag: "wx", mode: 0o600 });
-        fs.renameSync(temporaryMemo, memoPath);
+    if (!verifyOnly) {
+      const memoPath = path.join(manifestRoot, digest + ".memo");
+      const temporaryMemo =
+        memoPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+      try {
+        const saved = JSON.stringify([...capturedHashMemo]);
+        if (Buffer.byteLength(saved) <= MAX_WORKSPACE_MANIFEST_BYTES) {
+          fs.writeFileSync(temporaryMemo, saved, { flag: "wx", mode: 0o600 });
+          fs.renameSync(temporaryMemo, memoPath);
+        }
+      } catch {
+        console.warn("Workspace hash memo could not be saved; future verification will rehash");
+      } finally {
+        fs.rmSync(temporaryMemo, { force: true });
       }
-    } catch {
-      console.warn("Workspace hash memo could not be saved; future verification will rehash");
-    } finally {
-      fs.rmSync(temporaryMemo, { force: true });
     }
     const manifestRef = "sha256:" + digest;
     if (memoMode) {

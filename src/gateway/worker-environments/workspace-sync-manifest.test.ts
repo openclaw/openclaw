@@ -545,10 +545,9 @@ it("verifies changed eligible content without publishing or compacting cached ar
     ),
   );
   await fs.writeFile(path.join(f.workspace, "input.txt"), "changed content B\n");
-  const verify = workspaceScriptRunner(REMOTE_WORKSPACE_MANIFEST_JS, f.workspace, {
-    ...f.env,
-    OPENCLAW_INTERNAL_WORKSPACE_MANIFEST_READ_ONLY: "1",
-  });
+  const runVerify = workspaceScriptRunner(REMOTE_WORKSPACE_MANIFEST_JS, f.workspace, f.env);
+  const verify = (args: string[]) =>
+    runVerify([args[0]!, `${args[1]}-read-only`, ...args.slice(2)]);
   const verified = await verify([baseCommit, "eligible", initial.digest]);
   for (const mode of ["publish", "resolve"]) {
     expect((await verify([baseCommit, mode, initial.digest])).code).not.toBe(0);
