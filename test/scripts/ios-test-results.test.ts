@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { requireExactTestResults } from "../../scripts/lib/ios-test-results.mjs";
+import {
+  findUnmatchedSelectors,
+  requireExactTestResults,
+} from "../../scripts/lib/ios-test-results.mjs";
 
 const SCREENSHOT_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testReleaseControlScreenshot",
@@ -110,4 +113,64 @@ describe("exact XCTest results", () => {
       expect(() => requireExactTestResults(tree, [QUALIFICATION_TEST])).toThrow();
     },
   );
+});
+
+describe("unmatched xcodebuild selectors", () => {
+  const url = (id: string) => `test://com.apple.xcode/OpenClaw/${encodeURI(id)}`;
+  const tree = {
+    testNodes: [
+      {
+        nodeType: "Test Plan",
+        children: [
+          {
+            nodeType: "Unit test bundle",
+            name: "OpenClawTests",
+            children: [
+              {
+                nodeType: "Test Suite",
+                name: "iOS managed media artifact loader",
+                nodeIdentifierURL: url("OpenClawTests/IOSMediaArtifactLoaderTests"),
+                children: [
+                  {
+                    nodeType: "Test Case",
+                    nodeIdentifierURL: url(
+                      "OpenClawTests/IOSMediaArtifactLoaderTests/`loads ticketed image`(route:)",
+                    ),
+                  },
+                ],
+              },
+              {
+                nodeType: "Test Suite",
+                name: "TalkCleanupTests",
+                nodeIdentifierURL: url("OpenClawTests/TalkCleanupTests"),
+                children: [
+                  {
+                    nodeType: "Test Case",
+                    nodeIdentifierURL: url("OpenClawTests/TalkCleanupTests/testLogicalClose()"),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("reports only selectors that matched no target, suite or test", () => {
+    expect(
+      findUnmatchedSelectors(tree, [
+        "OpenClawTests",
+        "OpenClawTests/IOSMediaArtifactLoaderTests",
+        "OpenClawTests/TalkCleanupTests/testLogicalClose",
+        "OpenClawTests/TalkCleanup",
+        "OpenClawTests/NoSuchSuiteTests",
+        "OpenClawLogicTests",
+      ]),
+    ).toEqual([
+      "OpenClawTests/TalkCleanup",
+      "OpenClawTests/NoSuchSuiteTests",
+      "OpenClawLogicTests",
+    ]);
+  });
 });
