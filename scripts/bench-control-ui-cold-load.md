@@ -960,6 +960,32 @@ composer input, and excludes reload and report serialization. These are sampled
 allocation estimates, not retained heap sizes or exact array counts. Collect
 timings in separate runs without allocation sampling.
 
+The cross-engine harness also accepts `--allocations --engines chromium` for any
+of its existing scenarios. It writes a source-mapped `*.heapprofile` and
+`observations.json` includes estimated bytes ranked by allocating function, file,
+and owner. `functions` counts each sample at its leaf once;
+`sourceFunctions`, file, and owner tables attribute native leaves to their nearest
+source-bearing caller without double-counting. Missing stack nodes retain an
+explicit unattributed byte count. Automation and unmapped
+frames remain visible. This samples the main isolate, not other renderer threads
+or native allocations, and includes objects collected by both kinds of GC.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport desktop --allocations \
+  --steps chat-typing,streaming-645-deltas,session-switch,settings-sections,sidebar-toggle,model-picker-search,transcript-scroll-top \
+  --output .artifacts/allocations
+```
+
+`chat-typing` enters 26 characters, `streaming-645-deltas` delivers 645 deltas
+while periodically typing, `session-switch` and `sidebar-toggle` each make a
+round trip, and `settings-sections` visits three warm routes. Normalize allocated
+bytes by those action counts; streaming bytes per delta include concurrent
+typing and fixture delivery. Run `--native-audit` separately at 1× and 6× to
+investigate GC: allocation sampling changes allocation/GC behavior and cannot
+establish a timing improvement. These synthetic flows measure renderer work,
+not live Gateway/provider latency.
+
 For concurrent paired comparisons, use separate processes and bundle directories
 with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
 distinct `--port` / `--sandbox-port` values. The start barrier supports either
