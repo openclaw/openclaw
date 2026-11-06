@@ -341,15 +341,12 @@ describe("web monitor inbox metadata cache", () => {
       baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
     });
 
-    expect(sock.ev.listenerCount("groups.upsert")).toBe(1);
-    expect(sock.ev.listenerCount("groups.update")).toBe(1);
-    expect(sock.ev.listenerCount("group-participants.update")).toBe(1);
+    const events = ["groups.upsert", "groups.update", "group-participants.update"];
+    expect(events.map((event) => sock.ev.listenerCount(event))).toEqual([1, 1, 1]);
 
     await listener.close();
 
-    expect(sock.ev.listenerCount("groups.upsert")).toBe(0);
-    expect(sock.ev.listenerCount("groups.update")).toBe(0);
-    expect(sock.ev.listenerCount("group-participants.update")).toBe(0);
+    expect(events.map((event) => sock.ev.listenerCount(event))).toEqual([0, 0, 0]);
   });
 
   it("group metadata cache bounds reconnect entries", async () => {
