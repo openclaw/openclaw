@@ -10,7 +10,7 @@ import {
   type RpcSourceRef,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
-import { captureExecRequestCancellation } from "../../bash-process-control.js";
+import { hasExecRequestCancellationWork } from "../../bash-process-control.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
 import { retireRequesterFollowupAuthority } from "../requester-cron-authority.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
@@ -164,12 +164,12 @@ export function captureSubagentRetainedWork() {
       Boolean(entry.requesterSettleWake) ||
       captureSubagentEmbeddedExecution(entry) !== undefined ||
       hasRetainedControllerExecution(entry) ||
-      captureExecRequestCancellation({
+      hasExecRequestCancellationWork({
         runId: entry.runId,
         sessionKey: entry.childSessionKey,
         sessionId: entry.childSessionIdentity?.sessionId,
         agentId: entry.childAgentId,
-      }).owners.length > 0 ||
+      }) ||
       (children.get(entry.childSessionKey) ?? []).some((child) => hasRetainedWork(child, visited))
     );
   };

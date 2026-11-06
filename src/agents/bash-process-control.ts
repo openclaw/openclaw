@@ -124,8 +124,7 @@ export async function drainAgentExecProcesses(
   }
 }
 
-/** Select before awaited cancellation work; a later human turn cannot enter this plan. */
-export function captureExecRequestCancellation(
+function selectExecRequestCancellation(
   target: ExecRequestIdentity,
   accept: (identity: ExecRequestIdentity) => boolean = () => true,
 ) {
@@ -140,6 +139,20 @@ export function captureExecRequestCancellation(
     ),
   ].filter((owner) => execRequestMatches(owner, target) && accept(owner.identity));
   const owners = new Set([...activeExecRequestOwners(target, accept), ...residualOwners]);
+  return { queued, initialSessions, owners };
+}
+
+/** Classify retained work without capturing a cancellation cleanup witness. */
+export function hasExecRequestCancellationWork(target: ExecRequestIdentity): boolean {
+  return selectExecRequestCancellation(target).owners.size > 0;
+}
+
+/** Select before awaited cancellation work; a later human turn cannot enter this plan. */
+export function captureExecRequestCancellation(
+  target: ExecRequestIdentity,
+  accept: (identity: ExecRequestIdentity) => boolean = () => true,
+) {
+  const { queued, initialSessions, owners } = selectExecRequestCancellation(target, accept);
   const matching = (session: ProcessSession) =>
     readExecRequestOwners(session)?.some((owner) => owners.has(owner)) === true;
   const capturedSessions = initialSessions.filter(matching);

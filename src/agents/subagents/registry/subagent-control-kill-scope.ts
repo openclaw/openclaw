@@ -69,6 +69,7 @@ export type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
   exactRunSelection?: boolean;
+  skipInertSessionPreparation?: boolean;
   assertCurrent?: () => void;
   prepareRead?: () => Promise<void> | undefined;
   ownsRoot?: (entry: SubagentRunRecord) => boolean;
@@ -103,6 +104,7 @@ export async function withSubagentKillScope<T>(
   const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const retirements: Array<ReturnType<typeof subagentRuns.captureRetirement>> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
+  const prepareSessions = new Map<KillTree, () => Promise<void>>();
   const hold = (tree: KillTree) => {
     if (!tree.dispatchHold) {
       tree.dispatchHold = holdQueuedSwarmRun(tree.entry.schedulerSlotId ?? tree.entry.runId);
@@ -262,34 +264,33 @@ export async function withSubagentKillScope<T>(
       hold(tree);
       // Publish each captured hold before another candidate's authority read can throw.
       trees.push(tree);
-      pending.push({
-        tree,
-        prepare: async () => {
-          try {
-            const selectedRun = tree.entry;
-            session = await prepareSubagentKillSession(
-              params.cfg,
-              selectedRun.childSessionKey,
-              () => assertSubagentRegistryWriteSourceCurrent(stateContext),
-              selectedRun.execution.transcriptTarget,
-              selectedRun.childAgentId,
-              selectedRun.childSessionIdentity,
-              selectedRun,
-            );
-            releaseSessions.push(session.release);
-            if (!tree.canTraverse(false)) {
-              return;
-            }
-            tree.session = session;
-          } catch (error) {
-            if (hasSqliteWorkerOutcomeUnknown(error)) {
-              throw error;
-            }
-            errors.add(formatErrorMessage(error));
-            tree.discoveryFailed = true;
+      const prepare = async () => {
+        try {
+          const selectedRun = tree.entry;
+          session = await prepareSubagentKillSession(
+            params.cfg,
+            selectedRun.childSessionKey,
+            () => assertSubagentRegistryWriteSourceCurrent(stateContext),
+            selectedRun.execution.transcriptTarget,
+            selectedRun.childAgentId,
+            selectedRun.childSessionIdentity,
+            selectedRun,
+          );
+          releaseSessions.push(session.release);
+          if (!tree.canTraverse(false)) {
+            return;
           }
-        },
-      });
+          tree.session = session;
+        } catch (error) {
+          if (hasSqliteWorkerOutcomeUnknown(error)) {
+            throw error;
+          }
+          errors.add(formatErrorMessage(error));
+          tree.discoveryFailed = true;
+        }
+      };
+      prepareSessions.set(tree, prepare);
+      pending.push({ tree, prepare });
     }
   };
   const captureResidentDescendants = (pending: PendingKillTree[]) => {
@@ -327,15 +328,34 @@ export async function withSubagentKillScope<T>(
     if (preparation) {
       await preparation;
     }
+    const hasRetainedWork = params.skipInertSessionPreparation
+      ? captureSubagentRetainedWork()
+      : undefined;
     for (const item of pending) {
-      await item.prepare();
+      if (!hasRetainedWork || hasRetainedWork(item.tree.entry)) {
+        await item.prepare();
+      }
     }
   };
-  const refreshTree = async (tree: KillTree) => {
+  const refreshTree = async (
+    tree: KillTree,
+    hasRetainedWork: ReturnType<typeof captureSubagentRetainedWork>,
+  ) => {
     if (tree.discoveryFailed) {
       return;
     }
     try {
+      if (!tree.session && params.skipInertSessionPreparation) {
+        // Keep inert roots resident without touching removed session storage. A
+        // later descendant makes its anchor eligible for normal fenced preparation.
+        if (!hasRetainedWork(tree.entry)) {
+          return;
+        }
+        await prepareSessions.get(tree)?.();
+        if (tree.discoveryFailed) {
+          return;
+        }
+      }
       for (let pending = tree.prepareRead(); pending; pending = tree.prepareRead()) {
         await pending;
       }
@@ -353,7 +373,7 @@ export async function withSubagentKillScope<T>(
           // A retired caller cannot discover new work. Already accepted outcomes remain
           // observable; every unfinished captured descendant still checks its caller.
           for (const child of tree.children) {
-            await refreshTree(child);
+            await refreshTree(child, hasRetainedWork);
           }
           return;
         }
@@ -399,7 +419,7 @@ export async function withSubagentKillScope<T>(
         );
       }
       for (const child of tree.children) {
-        await refreshTree(child);
+        await refreshTree(child, hasRetainedWork);
       }
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
@@ -444,11 +464,14 @@ export async function withSubagentKillScope<T>(
               if (rootObservationFailure) {
                 throw rootObservationFailure.error;
               }
+              const hasRetainedWork = captureSubagentRetainedWork();
               for (const pending of publishedRoots.splice(0)) {
-                await pending.prepare();
+                if (!params.skipInertSessionPreparation || hasRetainedWork(pending.tree.entry)) {
+                  await pending.prepare();
+                }
               }
               for (const tree of trees) {
-                await refreshTree(tree);
+                await refreshTree(tree, hasRetainedWork);
               }
               current.resolve(selectedCount);
             } catch (error) {
