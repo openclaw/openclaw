@@ -35,6 +35,15 @@ Consumers must include the Rust dependency system frameworks at final link time
 (Security, SystemConfiguration, Network, and CoreWLAN on macOS); verify the actual
 app linker inputs for the target. No signing or app archive is performed here.
 
+OpenClawKit's native transport is opt-in. Default builds do not resolve this package,
+and if a node binding is requested they fail closed with "native transport not packaged".
+Build the XCFramework first, then set `OPENCLAW_IROH_NATIVE=1` for every Swift build or
+test command that consumes it. An opted-in build with no artifact fails SwiftPM
+resolution; there is no automatic fallback. The generated Swift and header must come
+from the same source revision as the native library. The Apple integration workflow
+owns the SwiftPM package and adapter tests. Whether native becomes the default is a
+separate maintainer decision.
+
 CI builds all slices and typechecks the generated Swift wrapper on the host. An
 Intel slice is **not** Intel runtime proof; iOS/simulator libraries are **not**
 device lifecycle or app tests. Run consumer Swift integration tests, app linking,
