@@ -81,7 +81,7 @@ struct ChatProTab: View {
             // Protect the chat owner during a handoff, but keep the toolbar outside this
             // scope. Automatic reconnects keep the handoff pending while they retry an
             // unreachable gateway, and the toolbar is the way to reach Gateway settings.
-                // Copy/Clear act only on retained local text and must remain reachable during handoff.
+            // Copy/Clear act only on retained local text and must remain reachable during handoff.
                 .disabled(self.isGatewayTransitionPending && self.viewModel?.hasUnsecuredLiveSendRecovery != true)
                 // The shared canvas supplies color for the native blur. Automatic
                 // edge effects harden to black when the host inserts an opaque fill.

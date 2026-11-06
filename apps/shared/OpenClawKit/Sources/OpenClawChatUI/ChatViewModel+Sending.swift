@@ -778,7 +778,8 @@ extension OpenClawChatViewModel {
         if deliveryIsAmbiguous {
             self.restoreDraftAfterLiveSendFailure(
                 attempt,
-                warning: String(localized: "Message delivery could not be confirmed. Check the conversation before retrying."))
+                warning: String(
+                    localized: "Message delivery could not be confirmed. Check the conversation before retrying."))
         } else {
             await self.recoverUnsentLiveSend(attempt, expectedSessionSettings: preparedDelivery?.settings)
         }
