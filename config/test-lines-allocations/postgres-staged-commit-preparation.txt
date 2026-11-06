@@ -1,2 +1,2 @@
-64
-# Real PostgreSQL staged commit/refusal regressions across direct and nested transactions.
+357
+# PostgreSQL commit preparation and unknown-outcome authority lifecycle regressions.
