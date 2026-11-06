@@ -262,9 +262,9 @@ suite.define(() => {
               });
               try {
                 body.dispatchEvent(new Event("scroll"));
-                await new Promise<void>((resolve) =>
-                  requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-                );
+                await new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                });
                 return reads;
               } finally {
                 for (const key of ["getBoundingClientRect", "offsetWidth", "clientWidth"]) {

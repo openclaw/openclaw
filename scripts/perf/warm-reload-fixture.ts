@@ -8,6 +8,7 @@ import { SESSION_TOTAL_TOKENS_VERSION } from "../../src/config/sessions/types.js
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
+import { teamShapeRootSessionCount } from "./team-shape-sessions.ts";
 import type { startWarmReloadAdmission } from "./warm-reload-admission.ts";
 import { seedWarmReloadPlugins } from "./warm-reload-plugins.ts";
 
@@ -606,6 +607,15 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       const inventory = Object.entries(
         entries.readSessionEntryStore(agentDb.openOpenClawAgentDatabase(database)),
       );
+      if (options.detailsSubagentActivity) {
+        // The base fixture already retains its first ordinary child under this target.
+        const key = `agent:${agentId}:team-shape-session-${teamShapeRootSessionCount(sessions)}`;
+        const child = inventory.find(([sessionKey]) => sessionKey === key)?.[1];
+        if (!child?.label || child.parentSessionKey !== targets[0]!.key) {
+          throw new Error("Missing retained ordinary child in the warm-reload fixture");
+        }
+        ordinaryChildren.push({ key, id: child.sessionId, label: child.label });
+      }
       pinKeys = inventory.slice(2, 4).map(([key]) => key);
       const retainedParents = new Map<string, string[]>();
       for (const [key, entry] of inventory) {
