@@ -890,6 +890,18 @@ puts JSON.generate(rows)
     }
   });
 
+  it("keeps cross-file screenshot fixture members accessible", () => {
+    const root = readFileSync(snapshotUITestPath, "utf8");
+    const chat = readFileSync(snapshotUITestPath.replace(".swift", "+Chat.swift"), "utf8");
+    const helpers = readFileSync(snapshotUITestPath.replace(".swift", "+Helpers.swift"), "utf8");
+    expect(root).toMatch(/^ {4}struct ScreenshotTarget \{/m);
+    expect(root).toMatch(/^ {4}static let chatScreenshotTarget = /m);
+    expect(root).toMatch(/^ {4}static let appReadinessAccessibilityIdentifier = /m);
+    expect(helpers).toContain("for target: ScreenshotTarget,");
+    expect(helpers).toContain("[Self.appReadinessAccessibilityIdentifier]");
+    expect(chat).toContain("for: Self.chatScreenshotTarget,");
+  });
+
   it("captures each release screen from an independent direct launch", () => {
     const snapshotUITest = [
       snapshotUITestPath,

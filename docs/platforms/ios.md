@@ -76,7 +76,6 @@ Access authorization that cannot open the embedded Dashboard. They use the same
 native preferences, consent, and iOS permission prompts as the Dashboard; local
 access does not grant Gateway scopes or expose Gateway credentials.
 
-
 Access comes from the current connection's accepted scopes, including when
 authenticated ingress does not issue a reusable Gateway token.
 The toolbar's **Gateway** button opens the native connection screen, including

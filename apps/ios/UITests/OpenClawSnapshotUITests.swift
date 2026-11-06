@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class OpenClawSnapshotUITests: XCTestCase {
-    private struct ScreenshotTarget {
+    struct ScreenshotTarget {
         let initialTab: String
         let initialDestination: String
         let name: String
@@ -14,7 +14,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         initialTab: "control",
         initialDestination: "overview",
         name: "01-control-connected")
-    private static let chatScreenshotTarget = ScreenshotTarget(
+    static let chatScreenshotTarget = ScreenshotTarget(
         initialTab: "chat",
         initialDestination: "chat",
         name: "02-chat-connected")
@@ -30,7 +30,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         initialTab: "settings",
         initialDestination: "settings",
         name: "settings-fallback")
-    private static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
+    static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
 
     var app: XCUIApplication?
 
@@ -39,17 +39,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-
     override func tearDownWithError() throws {
         self.terminateCurrentApp()
         try super.tearDownWithError()
     }
 
-
     func testReleaseControlScreenshot() {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }
-
 
     func testTaskListProgressTagRendersAsBar() throws {
         self.launchApp(
@@ -68,7 +65,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(rawTag.count, 0, "Task list still displays a raw progress tag")
         XCTAssertEqual(card.label, "Plan, Now: reading the sample diff.")
     }
-
 
     func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
         self.launchApp(
@@ -124,7 +120,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(copies.count, 1, "The saved reply must remain after stopping the run")
     }
 
-
     func testReleaseChatScreenshot() {
         self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
             let input = self.chatMessageInput(in: app)
@@ -158,7 +153,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
-
     func testExternalRunShowsStatusAndToolsBeforeReplyText() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -175,7 +169,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(tool.waitForExistence(timeout: 15), "EXTERNAL_RUN_TOOL_MISSING")
         self.attachScreenshot(named: "external-run-before-reply-tool")
     }
-
 
     func testStartupStatusShowsWaitingForResponse() throws {
         self.launchApp(
@@ -199,7 +192,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(waiting.waitForNonExistence(timeout: 5))
     }
 
-
     func testFinishedTurnShowsWaitingHelperAndOpensItsSession() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -219,7 +211,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "subagent-wait-child")
     }
 
-
     func testAssistantRepliesNameTheSpeakerWhenTheAvatarIsHidden() throws {
         self.launchApp(for: Self.chatScreenshotTarget)
         let app = try XCTUnwrap(self.app)
@@ -236,11 +227,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(named.label, avatar.exists ? "" : "Molty")
     }
 
-
     func testReleaseAgentScreenshot() {
         self.captureReleaseScreenshot(Self.agentScreenshotTarget)
     }
-
 
     func testReleaseSettingsScreenshot() {
         self.captureReleaseScreenshot(Self.settingsScreenshotTarget) { app in
@@ -268,7 +257,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(resetOnboarding.isHittable)
     }
 
-
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
         self.launchApp(for: Self.settingsFallbackTarget)
         let app = try XCTUnwrap(self.app)
@@ -293,7 +281,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "watch-message-delivery")
     }
 
-
     func testAgentsNavigateToSettingsThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
         self.launchApp(for: Self.agentScreenshotTarget)
@@ -304,7 +291,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.app?.descendants(matching: .any)["SettingsHub.Fallback"]
                 .waitForExistence(timeout: 8) == true)
     }
-
 
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
@@ -327,7 +313,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(disclosure.exists)
     }
 
-
     func testSidebarOverviewNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         self.launchApp(for: ScreenshotTarget(
@@ -343,16 +328,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
-
     func testLiveGatewayApprovalNotificationsFromOverview() async throws {
         try await self.verifyApprovalNotificationsNavigation(fromOverview: true)
     }
 
-
     func testLiveGatewayApprovalNotificationsFromSettings() async throws {
         try await self.verifyApprovalNotificationsNavigation(fromOverview: false)
     }
-
 
     func testTabletSidebarRootsRenderWithPersistentSidebar() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Tablet split navigation only")
@@ -376,7 +358,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5))
         }
     }
-
 
     func testSidebarAgentSelectorShowsAllAgentsAndKeepsFooterVisible() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
@@ -423,7 +404,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
     }
 
-
     func testSidebarSlowEdgeDragOpensFromEveryRootDestination() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         let destinations = [
@@ -458,7 +438,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
         XCTAssertEqual(testedDestinations, destinations)
     }
-
 
     func testSidebarEdgeDragPreservesPushedScreenBackGesture() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
@@ -498,7 +477,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Licenses"].exists)
     }
 
-
     func testGatewaySettingsOpenedFromChatUsesRootSidebarNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
 
@@ -524,7 +502,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.buttons["RootTabs.Sidebar.Show"].exists == true)
         self.attachScreenshot(named: "gateway-to-settings-via-sidebar")
     }
-
 
     func testChatComposerStartsCompactAndGrowsWithDraft() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone composer proof only")
@@ -623,7 +600,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
     }
 
-
     func testChatComposerBlankDraftAreaFocusesInput() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat", initialDestination: "chat", name: "blank-draft-focus"))
@@ -643,7 +619,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Blank area focus")
         self.attachScreenshot(named: "blank-draft-after-focus")
     }
-
 
     func testChatModelMenuAccessibility() throws {
         self.launchApp(for: ScreenshotTarget(
@@ -674,7 +649,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         original.tap()
         self.waitForValue("gpt-5.6-sol", of: model)
     }
-
 }
 
 extension OpenClawSnapshotUITests {
@@ -701,7 +675,6 @@ extension OpenClawSnapshotUITests {
         unavailable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertEqual(app.buttons["chat-composer-inline-model"].value as? String, originalValue)
     }
-
 
     func testUnavailableModelIsDisabledInChatActions() throws {
         self.launchApp(
@@ -731,7 +704,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-actions-model-unavailable")
     }
 
-
     func testSelectedAuthFailedModelDisablesOnlineSend() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -752,7 +724,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
     }
 
-
     func testModelSignInMovesToModelMenuWhileSelectedModelCanSend() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -767,7 +738,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-composer-model-menu-sign-in")
         self.assertModelSignInSheetOpens(in: app)
     }
-
 
     func testModelSignInRemainsReachableDuringActiveResponse() throws {
         self.launchApp(
@@ -790,7 +760,6 @@ extension OpenClawSnapshotUITests {
         app.buttons["Stop response"].tap()
     }
 
-
     func testModelSignInRemainsReachableWithoutModelChoices() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -803,7 +772,6 @@ extension OpenClawSnapshotUITests {
         self.assertModelSignInSheetOpens(in: app)
     }
 
-
     func testModelSignInRemainsReachableWithoutModelMutationPermission() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -812,7 +780,6 @@ extension OpenClawSnapshotUITests {
         self.openSignInMenuWithModelChangesDisabled(in: app)
         self.assertModelSignInSheetOpens(in: app)
     }
-
 
     func openSignInMenuWithModelChangesDisabled(in app: XCUIApplication) {
         let modelMenu = app.buttons["chat-composer-inline-model"]
@@ -824,7 +791,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(choice.isEnabled, "Opening sign-in must not enable restricted model changes")
     }
 
-
     func assertModelSignInSheetOpens(in app: XCUIApplication) {
         let signIn = app.buttons["chat-model-sign-in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 3))
@@ -835,7 +801,6 @@ extension OpenClawSnapshotUITests {
         ].waitForExistence(timeout: 5))
         app.buttons["Close"].tap()
     }
-
 
     func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {
         for (target, disclosure) in [
@@ -875,7 +840,6 @@ extension OpenClawSnapshotUITests {
             self.attachScreenshot(named: "chat-model-selection-target-\(target)")
         }
     }
-
 
     func testChatActionsModelRowsScreenshot() throws {
         self.launchApp(
@@ -1036,7 +1000,6 @@ extension OpenClawSnapshotUITests {
         create.tap()
         XCTAssertTrue(app.staticTexts["New Thread Options"].waitForNonExistence(timeout: 5))
     }
-
 
     func testLocalDeviceSettingsWorkWithoutDashboard() throws {
         self.launchApp(for: Self.settingsFallbackTarget, appearance: "dark", screenshotMode: false)

@@ -3,7 +3,6 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
-
     func verifyApprovalNotificationsNavigation(fromOverview: Bool) async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_APPROVAL_FIXTURE_URL"] != nil,
@@ -68,16 +67,13 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "\(origin)-approvals-after-back")
     }
 
-
     func agentIdentity(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(identifier: "chat-agent-identity").firstMatch
     }
 
-
     func readinessMarker(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
     }
-
 
     func destinationAnchor(in app: XCUIApplication, destination: String) -> XCUIElement {
         switch destination {
@@ -89,7 +85,6 @@ extension OpenClawSnapshotUITests {
         default: self.readinessMarker(in: app)
         }
     }
-
 
     func launchApp(
         for target: ScreenshotTarget,
@@ -119,7 +114,6 @@ extension OpenClawSnapshotUITests {
         }
     }
 
-
     func configuredApp(
         for target: ScreenshotTarget,
         appearance: String?,
@@ -147,7 +141,6 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
-
     func captureReleaseScreenshot(
         _ target: ScreenshotTarget,
         beforeCapture: ((XCUIApplication) -> Void)? = nil)
@@ -163,7 +156,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: target.name)
     }
 
-
     func waitForReleaseScreenshotTarget(_ target: ScreenshotTarget) {
         guard let app = self.app else {
             XCTFail("OpenClaw is not running for screenshot target \(target.name)")
@@ -174,7 +166,6 @@ extension OpenClawSnapshotUITests {
             anchor.waitForExistence(timeout: 8),
             "Screenshot target \(target.name) did not render its readiness anchor")
     }
-
 
     func terminateCurrentApp(
         file: StaticString = #filePath,
@@ -190,7 +181,6 @@ extension OpenClawSnapshotUITests {
         self.app = nil
     }
 
-
     func waitForValue(
         _ value: String,
         of element: XCUIElement,
@@ -198,7 +188,6 @@ extension OpenClawSnapshotUITests {
     {
         XCTAssertTrue(self.element(element, hasValue: value, timeout: timeout))
     }
-
 
     func assertMinimumTouchTarget(
         _ element: XCUIElement,
@@ -212,7 +201,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertGreaterThanOrEqual(element.frame.width + tolerance, minimum, file: file, line: line)
         XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
     }
-
 
     func assertNoHorizontalOverlap(
         _ elements: [XCUIElement],
@@ -230,7 +218,6 @@ extension OpenClawSnapshotUITests {
         }
     }
 
-
     func element(_ element: XCUIElement, hasValue value: String, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", value),
@@ -238,11 +225,9 @@ extension OpenClawSnapshotUITests {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-
     func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval = 5) {
         XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: timeout))
     }
-
 
     func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {
         let expectation = XCTNSPredicateExpectation(
@@ -250,7 +235,6 @@ extension OpenClawSnapshotUITests {
             object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
     }
-
 
     func tapSidebarReveal(
         in app: XCUIApplication,
@@ -276,7 +260,6 @@ extension OpenClawSnapshotUITests {
         coordinate.tap()
     }
 
-
     func openSidebarWithSlowEdgeDrag(
         file: StaticString = #filePath,
         line: UInt = #line) throws
@@ -292,7 +275,6 @@ extension OpenClawSnapshotUITests {
 
         self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Hide"])
     }
-
 
     func closeSidebarWithSlowDrag(
         file: StaticString = #filePath,
@@ -310,7 +292,6 @@ extension OpenClawSnapshotUITests {
 
         self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Show"])
     }
-
 
     func selectSidebarDestination(
         _ title: String,
@@ -336,7 +317,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
     }
 
-
     func startNewChatFromSidebar(
         file: StaticString = #filePath,
         line: UInt = #line) throws
@@ -358,7 +338,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
     }
 
-
     func launchPairedLiveGatewayApp(
         initialTab: String,
         initialDestination: String) throws -> XCUIApplication
@@ -370,7 +349,6 @@ extension OpenClawSnapshotUITests {
         app.buttons["Go to Chat"].tap()
         return app
     }
-
 
     func launchPairedLiveGatewayApp(
         initialTab: String,
@@ -390,7 +368,6 @@ extension OpenClawSnapshotUITests {
         app.buttons["Go to Chat"].tap()
         return app
     }
-
 
     func startPairedLiveGatewayApp(
         initialTab: String,
@@ -436,7 +413,6 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
-
     func relaunchConnectedLiveGatewayApp(
         initialTab: String,
         initialDestination: String) -> XCUIApplication
@@ -455,14 +431,12 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
-
     func chatTranscript(in app: XCUIApplication) throws -> XCUIElement {
         let candidates = app.scrollViews.matching(identifier: "chat-transcript").allElementsBoundByIndex
         return try XCTUnwrap(
             candidates.count == 1 ? candidates.first : nil,
             "Expected one chat transcript")
     }
-
 
     func sendLiveGatewayMessage(
         _ text: String,
@@ -497,7 +471,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
     }
 
-
     func dismissChatKeyboardThroughTranscript(in app: XCUIApplication) throws {
         // Typing can move historical replies off-screen; tap visible text without activating an action.
         let transcript = try self.chatTranscript(in: app)
@@ -520,7 +493,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
     }
 
-
     func openChatGatewaySettings(
         file: StaticString = #filePath,
         line: UInt = #line) throws
@@ -539,7 +511,6 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 3), file: file, line: line)
         gatewaySettings.tap()
     }
-
 
     func assertElementHasRenderedContent(
         _ element: XCUIElement,
@@ -620,7 +591,6 @@ extension OpenClawSnapshotUITests {
             line: line)
     }
 
-
     func assertChatCanvasIsNotSolidBlack(
         file: StaticString = #filePath,
         line: UInt = #line)
@@ -674,7 +644,6 @@ extension OpenClawSnapshotUITests {
             line: line)
     }
 
-
     func sendFixtureChatMessage(_ text: String) {
         guard let app else {
             XCTFail("Fixture app is unavailable")
@@ -697,7 +666,6 @@ extension OpenClawSnapshotUITests {
                 .firstMatch.waitForExistence(timeout: 5))
     }
 
-
     func attachScreenshot(named name: String) {
         guard let app else { return }
         let screenshot = UIDevice.current.userInterfaceIdiom == .pad
@@ -709,11 +677,9 @@ extension OpenClawSnapshotUITests {
         add(attachment)
     }
 
-
     func chatMessageInput(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["chat-message-input"]
     }
-
 
     /// A burst of synthetic key events can drop a keystroke under simulator load, so one
     /// delete-per-character `typeText` does not reliably empty a field. Re-send against
@@ -804,7 +770,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-composer-compact")
     }
 
-
     func verifyModelSelection(in app: XCUIApplication, actions: XCUIElement, popover: XCUIElement) {
         let expandedProviderDrawer = app.buttons["chat-model-provider-drawer-openai"]
         XCTAssertTrue(expandedProviderDrawer.waitForExistence(timeout: 5))
@@ -845,7 +810,6 @@ extension OpenClawSnapshotUITests {
             reselectedDefaultModel.images["chat-menu-selection-checkmark"].frame.minX,
             reselectedDefaultModel.frame.midX)
     }
-
 
     /// A fresh simulator can show this system alert before the scene becomes active.
     /// Screenshot fixtures do not exercise notification authorization; leave the
