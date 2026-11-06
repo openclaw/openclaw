@@ -23,6 +23,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.abort",
   "chat.history",
   "chat.send",
+  "chat.steerNow",
   "chat.metadata",
   "chat.startup",
   "config.apply",

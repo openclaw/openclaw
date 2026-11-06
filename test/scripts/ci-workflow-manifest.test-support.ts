@@ -578,6 +578,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-context.mjs",
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
+      "ci-skills-python-plan.mjs",
       "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);

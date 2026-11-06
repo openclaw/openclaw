@@ -771,3 +771,31 @@ it("insertComposerDictation spaces inserted and replaced selections", () => {
     caret: 11,
   });
 });
+
+it.each([false, true])(
+  "waits for a prepared session before recording (cancel: %s)",
+  async (cancel) => {
+    const pending = createDeferred<string>();
+    const prepareSession = vi.fn(() => pending.promise);
+    const { controller } = createHarness({ prepareSession, dictationAvailable: false });
+    expect(controller.startDirect()).toBe(true);
+    expect(prepareSession).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
+    if (cancel) {
+      controller.cancel();
+    }
+    pending.resolve("agent:main:prepared-draft");
+    await vi.dynamicImportSettled();
+    if (cancel) {
+      expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
+      expect(controller.active).toBe(false);
+    } else {
+      expect(request).toHaveBeenCalledWith(
+        "talk.session.create",
+        expect.objectContaining({
+          sessionKey: "agent:main:prepared-draft",
+        }),
+      );
+    }
+  },
+);

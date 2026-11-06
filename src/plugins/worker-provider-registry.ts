@@ -22,6 +22,7 @@ export function validateWorkerProviderContract(
     "prepareProvision",
     "listMachineOptions",
     "runSetupCommand",
+    "refreshPreparedProject",
     "resumeNode",
     "setRetainedState",
   ] as const) {
