@@ -44,17 +44,25 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
   options: ChannelIngressAdmissionOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
+  // Admissions run one at a time, so this orders every row this monitor appends.
+  let lastReceivedAt = -Infinity;
   return async (rawEvents: readonly TRaw[], admitOptions: ChannelIngressAdmissionContext) => {
     const prepared: Array<{
       raw: TRaw;
       facts: ChannelIngressMonitorFacts;
+      receivedAt: number;
       payload: TStoredPayload;
       index: number;
       assertCurrent?: () => void;
     }> = [];
     const results: ChannelIngressMonitorAdmissionResult<Awaited<ReturnType<Queue["enqueue"]>>>[] =
       [];
-    const { receivedAt } = admitOptions;
+    // Pending rows drain by (receivedAt, eventId), so events that share an arrival time
+    // sort by id. A later admission never ties an earlier one, and the time steps when a
+    // lane's next event would sort ahead of its previous one (group lanes mix senders'
+    // ids), so each lane drains in arrival order.
+    let arrivalAt = Math.max(admitOptions.receivedAt, lastReceivedAt + 1);
+    const lastIdByLane = new Map<string, string>();
     for (const raw of rawEvents) {
       try {
         const facts = admitOptions.facts ?? (await options.inspect(raw));
@@ -62,9 +70,14 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
           results.push({ kind: "ignored" });
           continue;
         }
+        const lastId = lastIdByLane.get(facts.laneKey);
+        if (lastId !== undefined && facts.eventId < lastId) {
+          arrivalAt += 1;
+        }
+        lastIdByLane.set(facts.laneKey, facts.eventId);
         const transformed = await options.prepareAdmission?.(raw, {
           facts,
-          receivedAt,
+          receivedAt: arrivalAt,
           signal: options.signal,
         });
         const preparedRaw = transformed ? transformed.raw : raw;
@@ -79,7 +92,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
             throw new Error("Channel ingress transform changed event identity or lane");
           }
         }
-        const body = options.payload.serialize(preparedRaw, { facts, receivedAt });
+        const body = options.payload.serialize(preparedRaw, { facts, receivedAt: arrivalAt });
         const payload =
           options.payload.storage === "raw-event"
             ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload) // SAFETY: raw-event codecs use this envelope.
@@ -87,6 +100,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         prepared.push({
           raw: preparedRaw,
           facts,
+          receivedAt: arrivalAt,
           payload,
           index: results.length,
           assertCurrent: transformed?.assertCurrent,
@@ -97,6 +111,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         throw error;
       }
     }
+    lastReceivedAt = arrivalAt;
     if (prepared.length === 0) {
       return results;
     }
@@ -115,7 +130,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         !hasPolicy && prepared.length === 1 && enqueueAndClaim ? options.getIdleDrain() : undefined;
       const ownerId = idleDrain?.idleOwnerId();
       if (idleDrain && ownerId && enqueueAndClaim) {
-        const { facts, payload } = prepared[0]!;
+        const { facts, payload, receivedAt } = prepared[0]!;
         let admitted: Awaited<ReturnType<typeof enqueueAndClaim>>;
         try {
           admitted = await appendIngressWithRetry(
@@ -164,7 +179,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         queueResults = await appendIngressWithRetry(
           () =>
             enqueueAuthorized(
-              prepared.map(({ facts, payload }) => ({
+              prepared.map(({ facts, payload, receivedAt }) => ({
                 id: facts.eventId,
                 payload,
                 receivedAt,
@@ -178,7 +193,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
         queueResults = await appendIngressWithRetry(
           () =>
             enqueueBatch(
-              prepared.map(({ facts, payload }) => ({
+              prepared.map(({ facts, payload, receivedAt }) => ({
                 id: facts.eventId,
                 payload,
                 receivedAt,
@@ -194,7 +209,10 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
       }
       throw error;
     }
-    for (const [index, { raw, facts, payload, index: resultIndex }] of prepared.entries()) {
+    for (const [
+      index,
+      { raw, facts, payload, receivedAt, index: resultIndex },
+    ] of prepared.entries()) {
       try {
         // Shipped plugin-supplied queues may implement only individual admission.
         const enqueue = () => {

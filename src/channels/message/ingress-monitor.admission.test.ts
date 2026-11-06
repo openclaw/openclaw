@@ -106,6 +106,29 @@ describe("channel ingress monitor admission", () => {
     },
   );
 
+  it("keeps each lane in arrival order when event ids do not sort that way", async () => {
+    const queue = createQueue();
+    const monitor = createMonitor(queue, {});
+    try {
+      // Group lanes mix senders, so a lane's arrival order need not be its id order.
+      await monitor.admitBatch(
+        [{ id: "sender-b:1" }, { id: "other", lane: "lane:b" }, { id: "sender-a:2" }],
+        {
+          receivedAt: 1_000,
+        },
+      );
+      await monitor.admit({ id: "sender-a:0" }, { receivedAt: 1_000 });
+      const pending = await queue.listPending({ limit: "all" });
+      expect(pending.filter((row) => row.laneKey === "lane:a").map((row) => row.id)).toEqual([
+        "sender-b:1",
+        "sender-a:2",
+        "sender-a:0",
+      ]);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
   it.each(["outcome-unknown", "retryable"] as const)(
     "settles %s append failure after a failed prune without duplicate acknowledgment",
     async (kind) => {
