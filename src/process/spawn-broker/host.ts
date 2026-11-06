@@ -26,11 +26,11 @@ import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup
 import {
   createBrokerCommands,
   createBrokerCommandRequest,
+  receiveBrokerCommandResponse,
   type BrokerCommandRequest as Request,
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
-import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restoreStdinPipe } from "./pipe.js";
+import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import {
   childCapacityError,
   type BrokerAdmission,
@@ -242,6 +242,7 @@ export class SpawnBrokerHost {
     );
     const { child, result, output } = request;
     const fail = (error: Error) => {
+      request.resultSettled = true;
       result?.reject(error);
       output?.reject(error);
       child.settleFileOutput();
@@ -275,7 +276,9 @@ export class SpawnBrokerHost {
     });
     void this.transmit(message).catch((error: unknown) => {
       this.pendingSpawns.delete(message.id);
-      if (request.output) {
+      if (error instanceof BrokerIpcAdmissionError) {
+        child.markNotStarted();
+      } else if (request.output) {
         // Delivery may have opened the destination. Transport retirement joins its writer.
         if (this.process?.connected) {
           this.process.disconnect();
@@ -421,16 +424,19 @@ export class SpawnBrokerHost {
           const pid = request.pid;
           if (this.closing) {
             let cleanup: ReturnType<typeof terminateLostBrokerChild> | undefined;
-            this.retainCleanup({
-              force: () => cleanup?.force(),
-              settled: brokerExited.promise.then(async () => {
-                if (child.exitCode === 0 && child.signalCode === null) {
-                  return;
-                }
-                cleanup = terminateLostBrokerChild(pid, request.detached);
-                await cleanup.settled;
-              }),
-            }, id);
+            this.retainCleanup(
+              {
+                force: () => cleanup?.force(),
+                settled: brokerExited.promise.then(async () => {
+                  if (child.exitCode === 0 && child.signalCode === null) {
+                    return;
+                  }
+                  cleanup = terminateLostBrokerChild(pid, request.detached);
+                  await cleanup.settled;
+                }),
+              },
+              id,
+            );
           } else {
             this.retainCleanup(terminateLostBrokerChild(pid, request.detached), id);
           }
@@ -635,70 +641,16 @@ export class SpawnBrokerHost {
           this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached), message.id);
           this.retire(message.id, request);
         }
-      } else if (message.type === "pipe") {
+      } else {
         try {
-          if (message.closed && message.fd === 0) {
-            const stdin = new Socket();
-            request.child.attachPipe(message.fd, stdin);
-            stdin.destroy();
-          } else if (handle instanceof Socket) {
-            if (message.fd === 0) {
-              restoreStdinPipe(handle);
-            } else {
-              holdPipe(handle);
-            }
-            request.child.attachPipe(message.fd, handle);
-          } else {
-            throw new SpawnBrokerError("Spawn broker pipe transfer failed");
-          }
+          const acknowledgement = receiveBrokerCommandResponse(request, message, handle, (value) =>
+            this.transmit(value),
+          );
+          void acknowledgement?.catch(fail);
         } catch (error) {
-          if (handle instanceof Socket) {
-            handle.destroy();
-          }
           fail(toErrorObject(error, "Spawn broker pipe setup failed"));
           return;
         }
-        // The receipt follows Node's internal handle ACK on this same IPC channel.
-        void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
-      } else if (message.type === "pipe-prefix") {
-        const pipe = request.child.stdio[message.fd];
-        if (pipe instanceof Socket && message.bytes.length > 0) {
-          pipe.unshift(message.bytes);
-        }
-      } else if (message.type === "file-output") {
-        if ("error" in message) {
-          request.output?.reject(Object.assign(new Error(message.error.message), message.error));
-        } else {
-          request.output?.resolve(message.bytes);
-        }
-        request.resultSettled = true;
-        request.child.settleFileOutput();
-        this.retire(message.id, request);
-      } else if (message.type === "execa-result") {
-        // Started commands publish their owned PID first on this ordered channel.
-        // A failed result without that admission is the worker's no-process outcome.
-        if (request.pid === undefined && message.result.failed) {
-          request.child.markNotStarted();
-        }
-        request.result?.resolve(message.result);
-        request.resultSettled = true;
-        this.retire(message.id, request);
-      } else {
-        if (message.type === "closed") {
-          request.nativeClosed = true;
-        } else if (message.type === "error" && message.notStarted) {
-          request.child.markNotStarted();
-        }
-        if (message.type === "error" && message.resultUnavailable && request.output) {
-          request.output.reject(Object.assign(new Error(message.error.message), message.error));
-          request.resultSettled = true;
-          request.child.settleFileOutput();
-        }
-        if (message.type === "error" && message.resultUnavailable && request.result) {
-          request.result.reject(Object.assign(new Error(message.error.message), message.error));
-          request.resultSettled = true;
-        }
-        request.child.receive(message);
         this.retire(message.id, request);
       }
     });

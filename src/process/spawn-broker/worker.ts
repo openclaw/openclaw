@@ -16,7 +16,7 @@ import {
   terminateLostBrokerChild,
   type BrokerChildGroupIdentity,
 } from "./cleanup.js";
-import { serializeExecaError } from "./execa-protocol.js";
+import { createBrokerExecaAdmissionFailure } from "./execa-protocol.js";
 import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
 import { prepareProcessOutputFile } from "./file-output.js";
 import { createBrokerReceiver } from "./ipc.js";
@@ -260,30 +260,15 @@ async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>):
 async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
-  const admissionClass = message.admission ?? "command";
-  const capacityError = childCapacityError(childAdmissions.values(), admissionClass);
-  if (stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS || capacityError) {
-    const error = new SpawnBrokerError(capacityError ?? "Spawn broker startup capacity exceeded");
+  const refusal = childCapacityError(childAdmissions.values(), message.admission ?? "command");
+  if (stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS || refusal) {
+    const error = new SpawnBrokerError(refusal ?? "Spawn broker startup capacity exceeded");
     // The ordered failed-admission result proves no native work was started.
     // No command metadata exists because this guard precedes spawn preparation.
     await report({
       type: "execa-result",
       id: message.id,
-      result: {
-        failed: true,
-        code: error.code,
-        timedOut: false,
-        isCanceled: false,
-        isGracefullyCanceled: false,
-        isMaxBuffer: false,
-        isTerminated: false,
-        isForcefullyTerminated: false,
-        command: "",
-        escapedCommand: "",
-        cwd: process.cwd(),
-        durationMs: 0,
-        error: serializeExecaError(error),
-      },
+      result: createBrokerExecaAdmissionFailure(error),
     });
     await report({
       type: "error",
@@ -294,7 +279,7 @@ async function launch(
     return;
   }
   const pending: { canceled?: boolean; signal?: NodeJS.Signals | number } = {};
-  childAdmissions.set(message.id, admissionClass);
+  childAdmissions.set(message.id, message.admission ?? "command");
   starting.set(message.id, pending);
   let spawnedChild: ChildProcess | undefined;
   let spawnedClose: Promise<void> | undefined;

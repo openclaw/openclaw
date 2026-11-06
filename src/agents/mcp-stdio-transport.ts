@@ -119,20 +119,22 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
       if (this.startupAbort.signal.aborted) {
         throw new Error("MCP stdio transport is closed");
       }
-      const child = await runWithSpawnBrokerAdmission("mcp", () => createOwnedStdioProcess({
-        argv: this.docker
-          ? [this.docker.command, ...this.docker.args]
-          : [this.serverParams.command, ...(this.serverParams.args ?? [])],
-        cwd: this.serverParams.cwd,
-        env: this.docker?.env ?? env,
-        ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
-        // A canceled Docker client can leave an accepted daemon-side create in
-        // flight. Custody must see its CID before host-process cancellation.
-        ...(this.docker
-          ? { assertCurrent: this.docker.assertCurrent }
-          : { abortSignal: this.startupAbort.signal }),
-        stderrDestination: this.stderrStream,
-      }));
+      const child = await runWithSpawnBrokerAdmission("mcp", () =>
+        createOwnedStdioProcess({
+          argv: this.docker
+            ? [this.docker.command, ...this.docker.args]
+            : [this.serverParams.command, ...(this.serverParams.args ?? [])],
+          cwd: this.serverParams.cwd,
+          env: this.docker?.env ?? env,
+          ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
+          // A canceled Docker client can leave an accepted daemon-side create in
+          // flight. Custody must see its CID before host-process cancellation.
+          ...(this.docker
+            ? { assertCurrent: this.docker.assertCurrent }
+            : { abortSignal: this.startupAbort.signal }),
+          stderrDestination: this.stderrStream,
+        }),
+      );
       this.process = child;
       child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {

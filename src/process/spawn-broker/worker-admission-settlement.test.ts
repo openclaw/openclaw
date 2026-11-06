@@ -1,6 +1,7 @@
 import { ChildProcess, type spawn } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { killProcessTree } from "../kill-tree.js";
 import type { startBrokerExeca } from "./execa-worker.js";
 import type { BrokerRequest, BrokerResponse } from "./protocol.js";
@@ -131,8 +132,15 @@ it.each(["spawn", "spawn-execa", "retained-spawn"] as const)(
         expect(children.every((child) => child.exitCode === null)).toBe(true);
         receive({ type: "kill", id: 513, signal: "SIGTERM" });
         expect(killed).toHaveBeenCalledWith(children[511]!.pid, "SIGTERM");
+        const closed = createDeferredCore();
+        boundary.send.mockImplementation(async (message) => {
+          if (message.type === "closed" && message.id === 1) {
+            closed.resolve();
+          }
+        });
         children[0]!.emit("exit", 0, null);
         children[0]!.emit("close", 0, null);
+        await closed.promise;
         await start(515, "mcp");
         expect(boundary.spawn).toHaveBeenCalledTimes(513);
         expect(boundary.send).toHaveBeenCalledWith(
