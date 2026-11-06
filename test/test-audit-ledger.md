@@ -232,10 +232,13 @@ Completed source classifications and durable census counts remain unchanged.
   canary passed both old negatives and failed both repaired negatives; temporary
   calls were removed and the complete candidate passed33/33, retaining all19
   declarations and eventual-close assertions.
-- Batches113–115/118: causal qualification and repairs remain in progress.
-  Existing UI unit diagnostics identified four listeners retained after the
-  annotation publication/Undo case; the ordinary root route does not run that
-  per-case diagnostic. A separate first-case theme-style diagnostic is unchanged.
+- Batch118: register raw pane retirement immediately after acquisition, before
+  runtime startup. The existing UI unit diagnostic observed four retained listeners
+  after the publication/Undo case on the baseline and none after the repair.
+  All11 cases passed before and after, including explicit-disconnect/remount
+  siblings; their duplicate retirement remains safe. The separate first-case
+  theme-style warning persists. No persistent-process leak is claimed.
+- Batches113–115: causal qualification and repairs remain in progress.
 
 Final scoped checks, removal scans, independent review and hosted gates are pending.
 
