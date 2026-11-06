@@ -732,7 +732,7 @@ test.each([undefined, "guarded", "workspace", "full", "read-only"] as const)(
       fixture.respond.mockClear();
       await fixture.send({});
       expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-      expect(fixture.entry()).toMatchObject({ sessionId: original!.sessionId });
-      expect(fixture.entry()?.permissionMode).toBe(mode);
+      expect(fixture.entry()).toStrictEqual({ ...original, updatedAt: expect.any(Number) });
+      expect(fixture.entry()?.updatedAt).toBeGreaterThanOrEqual(original!.updatedAt);
     }),
 );
