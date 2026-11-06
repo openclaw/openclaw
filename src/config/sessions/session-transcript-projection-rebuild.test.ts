@@ -22,10 +22,16 @@ import {
   claimPreparedSessionTranscriptProjectionInTransaction as claimProjection,
   deletePreparedSessionTranscriptProjectionChunkInTransaction as deleteProjectionChunk,
   finalizePreparedSessionTranscriptProjectionInTransaction as finalizeProjection,
-  prepareSessionTranscriptProjection as prepareProjection,
+  prepareProjectionSource,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
 } from "./session-transcript-projection-rebuild.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
+
+function prepareProjection(...args: Parameters<typeof prepareStreamingProjection>) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const projectionDatabases: DatabaseSync[] = [];
 afterEach(() => {
@@ -345,4 +351,38 @@ it.each([
   );
   const result = prepareProjection(db, "target");
   expect(result).toEqual(expect.objectContaining(expected));
+});
+
+it("reads prepared FTS payloads only as the consumer advances", () => {
+  const events = ["first", "second", "third"].map((id, index) => ({
+    seq: index + 1,
+    created_at: index + 10,
+    event_json: JSON.stringify(
+      messageEvent(id, index === 0 ? null : ["first", "second"][index - 1], {
+        role: "user",
+        content: [{ type: "text", text: id.repeat(10_000) }],
+      }),
+    ),
+  }));
+  let pointReads = 0;
+  const plan = prepareProjectionSource({
+    sessionId: "stream",
+    transcriptGeneration: "generation",
+    transcriptUpdatedAt: 1,
+    rows: () => events,
+    row: (seq) => {
+      pointReads += 1;
+      return events.find((event) => event.seq === seq);
+    },
+  });
+  expect(plan).toMatchObject({ activeEventCount: 3, activeMessageCount: 3, sourceIndexedSeq: 3 });
+  const planningReads = pointReads;
+  const iterator = plan!.ftsRows[Symbol.iterator]();
+  expect(pointReads).toBe(planningReads);
+  for (const [index, id] of ["first", "second", "third"].entries()) {
+    expect(iterator.next().value).toMatchObject({ messageId: id, text: id.repeat(10_000) });
+    expect(pointReads).toBe(planningReads + index + 1);
+  }
+  expect(iterator.next().done).toBe(true);
+  expect(pointReads).toBe(planningReads + 3);
 });
