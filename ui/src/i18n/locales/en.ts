@@ -1383,41 +1383,39 @@ const startupEnglish = {
       reloadAction: "Reload page",
       connecting: {
         title: "Connecting to OpenClaw",
-        description: "Your workspace will open as soon as the Gateway responds.",
+        description: "Your workspace opens as soon as the Gateway answers.",
       },
       starting: {
-        title: "OpenClaw is starting",
-        description: "The Gateway is still starting up. Your workspace will open when it’s ready.",
+        title: "OpenClaw is waking up",
+        description: "Your workspace opens when it’s ready.",
       },
       restarting: {
         title: "OpenClaw is restarting",
-        description: "Your workspace will open when the Gateway is back.",
+        description: "Back in a moment. Your drafts are safe.",
       },
       reconnecting: {
-        title: "Still connecting to OpenClaw",
-        description: "The Gateway isn’t responding yet. Trying again automatically.",
+        title: "Still connecting",
+        description: "No answer from the Gateway yet. We’ll keep trying.",
       },
       pausing: {
         title: "OpenClaw is pausing",
-        description: "The Gateway is finishing its current work before it pauses.",
+        description: "Finishing what it was doing first.",
       },
       paused: {
         title: "OpenClaw is paused",
-        description: "Your workspace will open when the Gateway resumes.",
+        description: "Your workspace opens when it resumes.",
       },
       restoring: {
-        title: "Opening your workspace",
-        description: "Connected. Loading your latest conversations.",
+        title: "Welcome back",
+        description: "Loading your conversations.",
       },
       offline: {
-        title: "Couldn’t connect to OpenClaw",
-        description:
-          "Automatic retries have stopped. Make sure the Gateway is running, then try again.",
+        title: "Couldn’t reach the Gateway",
+        description: "Check that it’s running, then try again.",
       },
       reload: {
-        title: "Reload to continue",
-        description:
-          "This page is from a different OpenClaw version than the Gateway. Reload to get the matching version.",
+        title: "OpenClaw was updated",
+        description: "Reload to get the latest version.",
       },
     },
     queued: "{count} queued",

@@ -7,14 +7,14 @@ const reload = async () => true;
 
 const states: Array<[GatewayStatus, string, string | null]> = [
   ["connecting", "Connecting to OpenClaw", null],
-  ["starting", "OpenClaw is starting", null],
+  ["starting", "OpenClaw is waking up", null],
   ["restarting", "OpenClaw is restarting", null],
-  ["reconnecting", "Still connecting to OpenClaw", null],
+  ["reconnecting", "Still connecting", null],
   ["suspending", "OpenClaw is pausing", null],
   ["suspended", "OpenClaw is paused", null],
-  ["restoring", "Opening your workspace", null],
-  ["offline", "Couldn’t connect to OpenClaw", "Try again"],
-  ["reload-required", "Reload to continue", "Reload page"],
+  ["restoring", "Welcome back", null],
+  ["offline", "Couldn’t reach the Gateway", "Try again"],
+  ["reload-required", "OpenClaw was updated", "Reload page"],
 ];
 
 it.each(states)("pairs %s copy with an actionable control", (kind, title, action) => {
@@ -29,7 +29,7 @@ it.each(states)("pairs %s copy with an actionable control", (kind, title, action
   if (action) {
     view.getByRole("button", { name: action }).click();
     expect(action === "Try again" ? onRetry : onReload).toHaveBeenCalledOnce();
-    expect(view.container.textContent).not.toContain("automatically");
+    expect(view.container.textContent).not.toContain("keep trying");
   }
   expect(view.container.textContent).not.toContain("Your workspaceYour workspace");
   view.unmount();
@@ -45,9 +45,9 @@ it("does not offer manual retry when an automatic retry is scheduled", () => {
       onReload={reload}
     />
   ));
-  expect(view.getByRole("heading", { name: "Still connecting to OpenClaw" })).toBeDefined();
+  expect(view.getByRole("heading", { name: "Still connecting" })).toBeDefined();
   expect(view.queryAllByRole("button")).toHaveLength(0);
-  expect(view.container.textContent).toContain("automatically");
+  expect(view.container.textContent).toContain("keep trying");
   view.unmount();
 });
 
@@ -81,7 +81,7 @@ it("distinguishes a cold retry from the first connection attempt", () => {
       onReload={reload}
     />
   ));
-  expect(view.getByRole("heading", { name: "Still connecting to OpenClaw" })).toBeDefined();
+  expect(view.getByRole("heading", { name: "Still connecting" })).toBeDefined();
   expect(view.queryAllByRole("button")).toHaveLength(0);
   view.unmount();
 });

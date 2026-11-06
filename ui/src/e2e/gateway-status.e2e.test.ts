@@ -108,7 +108,7 @@ suite.define(() => {
           details: { reason: "startup-sidecars" },
           retryable: true,
         });
-        await page.getByRole("heading", { name: "OpenClaw is starting", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "OpenClaw is waking up", exact: true }).waitFor();
         expect(await page.locator(".gateway-connection-view button").count()).toBe(0);
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
           await writeFile(
@@ -181,9 +181,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("connect")).length)
         .toBeGreaterThan(0);
       await gateway.setOnline(false);
-      await page
-        .getByRole("heading", { name: "Still connecting to OpenClaw", exact: true })
-        .waitFor();
+      await page.getByRole("heading", { name: "Still connecting", exact: true }).waitFor();
       expect(await page.locator(".gateway-connection-view button").count()).toBe(0);
       if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
         await writeFile(
