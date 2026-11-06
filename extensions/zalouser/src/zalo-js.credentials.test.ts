@@ -651,6 +651,49 @@ describe("zalouser credential persistence", () => {
     expect((await readCredentials(profile)).cookie).toEqual(cookie);
   });
 
+  it.each(["restore", "probe"] as const)(
+    "keeps linkage unknown after a session %s timeout and permits recovery",
+    async (phase) => {
+      const profile = `link-timeout-${phase}`;
+      const cookie = cookieJar("stored");
+      await seedCredentials(profile, storedCredentials(cookie));
+      const entered = createDeferred<void>();
+      const stalled = () => {
+        entered.resolve();
+        return new Promise<never>(() => {});
+      };
+      const api = createMockApi({ cookies: cookie });
+      const login = vi.fn().mockResolvedValue(api);
+      if (phase === "restore") {
+        login.mockImplementationOnce(stalled);
+      } else {
+        api.fetchAccountInfo = stalled;
+      }
+      createZaloMock.mockResolvedValue({ login });
+      const cfg = { channels: { zalouser: { profile } } };
+      const account = zalouserPlugin.config.resolveAccount(cfg, "default");
+      const isLinked = zalouserPlugin.config.isLinked!;
+      vi.useFakeTimers();
+      try {
+        const pending = isLinked(account, cfg);
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(12_000);
+        await expect(pending).resolves.toBe("unknown");
+        expect((await readCredentials(profile)).cookie).toEqual(cookie);
+
+        login.mockResolvedValue(createMockApi({ cookies: cookie }));
+        await expect(isLinked(account, cfg)).resolves.toBe("linked");
+        expect(login).toHaveBeenCalledTimes(2);
+
+        await logoutZaloProfile(profile);
+        await expect(isLinked(account, cfg)).resolves.toBe("not-linked");
+        expect(login).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("does not let a superseded restore overwrite or invalidate a replacement session", async () => {
     const profile = "restore-logout";
     const cookie = cookieJar("stored");
