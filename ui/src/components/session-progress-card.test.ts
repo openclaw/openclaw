@@ -10,7 +10,7 @@ vi.mock("./markdown.ts", async () => {
 });
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { observeTranscript } from "./session-progress-card.test-support.ts";
-import { renderSessionProgressCard } from "./session-progress-card.ts";
+import { progressCardHeadsUp, renderSessionProgressCard } from "./session-progress-card.ts";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
 
 const containers: HTMLDivElement[] = [];
@@ -736,7 +736,7 @@ describe("renderSessionProgressCard", () => {
 
   it.each([
     ["running", "2/3"],
-    ["done", "Completed"],
+    ["done", "2/3"],
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
@@ -757,6 +757,130 @@ describe("renderSessionProgressCard", () => {
     expect(
       container.querySelector(".session-progress-card__summary-count--collapsed")?.textContent,
     ).toBe(expected);
+  });
+
+  it.each(["done", "failed", "killed", "timeout", undefined] as const)(
+    "keeps unfinished steps visible after %s without granting completion",
+    (status) => {
+      const container = createContainer();
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          () => undefined,
+          status,
+          RUN_STARTED_MS,
+          RUN_ENDED_MS,
+          false,
+        ),
+        container,
+      );
+      expect(container.querySelector("details")?.dataset.complete).toBe("false");
+      expect(container.querySelector(".session-progress-card__dismiss")).toBeNull();
+      expect(container.querySelectorAll(".session-progress-card__step--completed")).toHaveLength(1);
+      expect(container.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(
+        "1 of 3 completed",
+      );
+      expect(
+        container.querySelector(".session-progress-card__summary-indicator--complete"),
+      ).toBeNull();
+      expect(container.querySelector(".session-run-spinner")).toBeNull();
+      if (status === "done") {
+        expect(
+          container.querySelector(
+            '.session-progress-card__step[aria-label="Wire the checklist, paused"]',
+          ),
+        ).not.toBeNull();
+        expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+          "Wire the checklist. 1 of 3 completed",
+        );
+      }
+      expect(progressCardHeadsUp(progressCard, status, RUN_STARTED_MS, false)).toEqual({
+        completed: 1,
+        total: 3,
+        step: "Wire the checklist",
+        status: "paused",
+      });
+    },
+  );
+
+  it.each(["board", "composer"] as const)(
+    "does not turn successful-run unfinished steps into checks in %s",
+    (placement) => {
+      const container = createContainer();
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          placement,
+          undefined,
+          "done",
+          RUN_STARTED_MS,
+          RUN_ENDED_MS,
+          true,
+        ),
+        container,
+      );
+      const unfinished = container.querySelector(
+        '.session-progress-card__step[aria-label="Wire the checklist, paused"]',
+      );
+      expect(
+        unfinished?.querySelector(".session-progress-card__step-marker polyline"),
+      ).not.toBeNull();
+      expect(unfinished?.querySelector(".session-progress-card__step-marker path")).toBeNull();
+      expect(container.querySelector(".session-run-spinner")).toBeNull();
+      expect(progressCardHeadsUp(progressCard, "done", RUN_STARTED_MS, true)?.status).toBe(
+        "paused",
+      );
+    },
+  );
+
+  it("preserves pending work and stale-run heads-up semantics", () => {
+    const pending = {
+      ...progressCard,
+      steps: [{ step: "Still required", status: "pending" as const }],
+    };
+    expect(progressCardHeadsUp(pending, "done", RUN_STARTED_MS, false)).toEqual({
+      completed: 0,
+      total: 1,
+      step: "Still required",
+      status: "pending",
+    });
+    expect(
+      progressCardHeadsUp(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "running",
+        RUN_STARTED_MS,
+        true,
+      )?.status,
+    ).toBe("paused");
+  });
+
+  it("grants completion and dismissal only to explicitly completed steps", () => {
+    const container = createContainer();
+    const completed = {
+      ...progressCard,
+      steps: progressCard.steps!.map(({ step }) => ({ step, status: "completed" as const })),
+    };
+    const dismiss = vi.fn();
+    render(
+      renderSessionProgressCard(
+        completed,
+        "composer",
+        dismiss,
+        "done",
+        RUN_STARTED_MS,
+        RUN_ENDED_MS,
+        false,
+      ),
+      container,
+    );
+    expect(container.querySelector("details")?.dataset.complete).toBe("true");
+    expect(
+      container.querySelector(".session-progress-card__summary-indicator--complete"),
+    ).not.toBeNull();
+    container.querySelector<HTMLButtonElement>(".session-progress-card__dismiss")!.click();
+    expect(dismiss).toHaveBeenCalledWith(completed);
+    expect(progressCardHeadsUp(completed, "done", RUN_STARTED_MS, false)).toBeNull();
   });
 
   it("uses a terminal circle-x instead of pausing after the run stops", () => {

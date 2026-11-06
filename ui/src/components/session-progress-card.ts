@@ -115,7 +115,7 @@ const TERMINAL_OUTCOME_LABEL_KEYS: Partial<Record<SessionRunStatus, Parameters<t
 
 const TERMINAL_STEP_STATUS_LABEL_KEYS: Partial<Record<SessionRunStatus, Parameters<typeof t>[0]>> =
   {
-    done: "sessionProgressCard.status.completed",
+    done: "sessionProgressCard.status.paused",
     failed: "sessionProgressCard.status.failed",
     killed: "sessionProgressCard.status.stopped",
     timeout: "sessionProgressCard.status.failed",
@@ -209,9 +209,6 @@ export function progressCardHeadsUp(
   hasActiveRun = true,
 ): ProgressCardHeadsUp | null {
   const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
-  if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && !staleForRun) {
-    return null;
-  }
   const counts = card ? progressCounts(card) : null;
   if (!counts || !card?.steps) {
     return null;
@@ -221,7 +218,12 @@ export function progressCardHeadsUp(
     return null;
   }
   const status =
-    step.status === "in_progress" && (staleForRun || !hasActiveRun) ? "paused" : step.status;
+    step.status === "in_progress" &&
+    (staleForRun ||
+      !hasActiveRun ||
+      Boolean(sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus]))
+      ? "paused"
+      : step.status;
   return { ...counts, status, step: step.step };
 }
 
@@ -230,9 +232,6 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
 }
 
 function progressStepMarker(status: PresentedProgressStepStatus, sessionStatus?: SessionRunStatus) {
-  if (status === "in_progress" && sessionStatus === "done") {
-    return icons.check;
-  }
   if (
     status === "in_progress" &&
     (sessionStatus === "failed" || sessionStatus === "timeout" || sessionStatus === "killed")
@@ -317,7 +316,8 @@ function renderSteps(card: ProgressCard, hasActiveRun: boolean, sessionStatus?: 
           ? TERMINAL_STEP_STATUS_LABEL_KEYS[sessionStatus]
           : undefined;
       const presentedStatus =
-        step.status === "in_progress" && !hasActiveRun && !terminalStatusKey
+        step.status === "in_progress" &&
+        (sessionStatus === "done" || (!hasActiveRun && !terminalStatusKey))
           ? "paused"
           : step.status;
       const statusLabel = t(
@@ -435,9 +435,10 @@ export function renderSessionProgressCard(
         })
       : t("sessionProgressCard.noteLabel");
     const stepLabel = currentStep?.step ?? t("sessionProgressCard.noteLabel");
-    const terminalOutcomeKey = effectiveSessionStatus
-      ? TERMINAL_OUTCOME_LABEL_KEYS[effectiveSessionStatus]
-      : undefined;
+    const terminalOutcomeKey =
+      effectiveSessionStatus && (effectiveSessionStatus !== "done" || complete)
+        ? TERMINAL_OUTCOME_LABEL_KEYS[effectiveSessionStatus]
+        : undefined;
     const summaryLabel = `${stepLabel}. ${terminalOutcomeKey ? t(terminalOutcomeKey) : countLabel}`;
     const shortCount = counts
       ? t("sessionProgressCard.shortCount", {
@@ -446,21 +447,20 @@ export function renderSessionProgressCard(
         })
       : nothing;
     const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcomeKey
+      currentStep?.status === "in_progress" &&
+      ((!hasCurrentRunActivity && !terminalOutcomeKey) || effectiveSessionStatus === "done")
         ? "paused"
         : currentStep?.status;
     const summaryIndicator =
-      effectiveSessionStatus === "done"
-        ? icons.check
-        : effectiveSessionStatus === "failed" ||
-            effectiveSessionStatus === "timeout" ||
-            effectiveSessionStatus === "killed"
-          ? icons.circleX
-          : complete
-            ? icons.check
-            : currentStep?.status === "in_progress"
-              ? progressStepMarker(presentedCurrentStatus ?? "pending")
-              : icons.clock;
+      effectiveSessionStatus === "failed" ||
+      effectiveSessionStatus === "timeout" ||
+      effectiveSessionStatus === "killed"
+        ? icons.circleX
+        : complete
+          ? icons.check
+          : currentStep?.status === "in_progress"
+            ? progressStepMarker(presentedCurrentStatus ?? "pending")
+            : icons.clock;
     return html`<details
       class="session-progress-card session-progress-card--composer"
       data-progress-card-placement="composer"
@@ -474,9 +474,7 @@ export function renderSessionProgressCard(
       <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
         <span
           class="session-progress-card__summary-indicator session-progress-card__current-marker${
-            complete || effectiveSessionStatus === "done"
-              ? " session-progress-card__summary-indicator--complete"
-              : ""
+            complete ? " session-progress-card__summary-indicator--complete" : ""
           }"
           data-status=${presentedCurrentStatus ?? "pending"}
           data-outcome=${effectiveSessionStatus ?? nothing}
