@@ -797,9 +797,21 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
     initScript: documentProbe,
     rowSelector: ".workboard-card",
     expected:
-      "A duplicate native Workboard revision preserves all 1,000 cards without another list read.",
-    prepare: async (page, gateway) => {
-      await workboard.prepare(page, gateway);
+      "A duplicate native Workboard revision preserves the 1,000-card inventory and visible rows without another list read.",
+    prepare: async (page) => {
+      await page.locator(".workboard-page-title", { hasText: "Resource cards" }).waitFor();
+      for (let expected = 100; expected <= 1_000; expected += 100) {
+        // Card bodies are windowed; their stable slots represent the loaded inventory.
+        await page.waitForFunction(
+          (count) => document.querySelectorAll(".workboard-column__slot").length === count,
+          expected,
+        );
+        if (expected < 1_000) {
+          await page.getByRole("button", { name: "Load more cards", exact: true }).click();
+        }
+      }
+      await page.locator(".workboard-card").first().scrollIntoViewIfNeeded();
+      await page.locator(".workboard-page-title > span").hover();
       await settle(page);
       await retainRows(page, ".workboard-card");
     },
@@ -821,6 +833,7 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
       return {
         ...(await rowEvidence(page)),
         unchangedWorkboardRevision: true,
+        loadedCardSlots: await page.locator(".workboard-column__slot").count(),
         cardListRequests: (await gateway.getRequests("workboard.cards.list")).length - before,
       };
     },
@@ -849,10 +862,11 @@ export function createNoopOwnerScenarios(): readonly EngineScenario[] {
       await gateway.resolveDeferred("workboard.cards.list");
       await gateway.waitForRequest("workboard.cards.list", { after: after + 9 });
       await settle(page);
-      assert.equal(await page.locator(".workboard-card").count(), 1_000);
+      assert.equal(await page.locator(".workboard-column__slot").count(), 1_000);
       return {
         ...(await rowEvidence(page)),
         unchangedWorkboardCards: true,
+        loadedCardSlots: await page.locator(".workboard-column__slot").count(),
         cardListRequests: (await gateway.getRequests("workboard.cards.list")).length - after,
       };
     },
