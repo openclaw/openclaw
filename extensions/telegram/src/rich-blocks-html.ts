@@ -136,7 +136,7 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
           kind: "text",
           start: node.start,
           end: node.end,
-          text: nodeText([node], true),
+          text: nodeText([node], { preserveMediaSources: true }),
         };
       } else {
         pending.push({ nodes: node.children, depth: frame.depth + 1 });
@@ -146,16 +146,22 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
   return root;
 }
 
-export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = false): string {
+export function nodeText(
+  nodes: readonly HtmlNode[],
+  {
+    preserveMediaSources = false,
+    decodeEntities = true,
+  }: { preserveMediaSources?: boolean; decodeEntities?: boolean } = {},
+): string {
   const parts: string[] = [];
   const pending = nodes.toReversed();
   while (pending.length > 0) {
     const node = pending.pop()!;
     if (node.kind === "text") {
-      parts.push(decodeTelegramHtmlEntities(node.text));
+      parts.push(decodeEntities ? decodeTelegramHtmlEntities(node.text) : node.text);
     } else {
       if (!node.closed) {
-        parts.push(decodeTelegramHtmlEntities(node.raw));
+        parts.push(decodeEntities ? decodeTelegramHtmlEntities(node.raw) : node.raw);
       }
       if (
         preserveMediaSources &&
@@ -263,7 +269,8 @@ export function htmlNodesToRichText(
       // text, never the markup.
       const match = TELEGRAM_TIME_TAG_ATTRS_PATTERN.exec(node.raw.slice(node.name.length + 1, -1));
       const unixTime = Number(match?.[1]);
-      const text = nodeText(node.children).replace(/\s+/g, " ");
+      // MarkdownIR already decoded entities in the label's text nodes.
+      const text = nodeText(node.children, { decodeEntities: false }).replace(/\s+/g, " ");
       if (!match || unixTime > MAX_TELEGRAM_UNIX_TIME || !text.trim()) {
         return emit(children);
       }

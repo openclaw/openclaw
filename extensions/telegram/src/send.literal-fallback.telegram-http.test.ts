@@ -99,7 +99,7 @@ describe("literal recap fallback over Telegram HTTP", () => {
     fixture.rejections.push("Bad Request: RICH_MESSAGE_TEXT_INVALID");
     await sendMessageTelegram(
       "123",
-      'Call at <tg-time unix="1647531900" format="t">22:45</tg-time>',
+      'Call at <tg-time unix="1647531900" format="t">A &amp;amp; B</tg-time>',
       { cfg, api: fixture.bot.api },
     );
     expect(fixture.requests.map(({ method }) => method)).toEqual([
@@ -112,12 +112,12 @@ describe("literal recap fallback over Telegram HTTP", () => {
           type: "paragraph",
           text: [
             "Call at ",
-            { type: "date_time", text: "22:45", unix_time: 1647531900, date_time_format: "t" },
+            { type: "date_time", text: "A &amp; B", unix_time: 1647531900, date_time_format: "t" },
           ],
         },
       ],
     });
-    expect(fixture.requests[1]?.fields.text).toBe("Call at 22:45");
+    expect(fixture.requests[1]?.fields.text).toBe("Call at A &amp; B");
   });
 
   it("keeps ordinary prose fallback free of literal entities", async () => {

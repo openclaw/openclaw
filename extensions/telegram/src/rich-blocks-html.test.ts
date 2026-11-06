@@ -406,7 +406,7 @@ describe("tg-time inline islands", () => {
 
   it("maps valid tg-time tags to date_time nodes that keep their fallback text", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks(
-      `Due <tg-time unix="${unix}" format="wDT">22:45 tomorrow</tg-time>, **<tg-time unix="${unix}" format="r">soon <i>now</i></tg-time>** or <tg-time unix="${unix}">then</tg-time>.`,
+      `Due <tg-time unix="${unix}" format="wDT">22:45 tomorrow</tg-time>, **<tg-time unix="${unix}" format="r">soon <i>now</i></tg-time>** or <tg-time unix="${unix}">A &amp;amp; B</tg-time>.`,
     );
     expect(blocks).toEqual([
       {
@@ -420,12 +420,12 @@ describe("tg-time inline islands", () => {
             text: { type: "date_time", text: "soon now", unix_time: unix, date_time_format: "r" },
           },
           " or ",
-          { type: "date_time", text: "then", unix_time: unix, date_time_format: "" },
+          { type: "date_time", text: "A &amp; B", unix_time: unix, date_time_format: "" },
           ".",
         ],
       },
     ]);
-    expect(plainText).toBe("Due 22:45 tomorrow, soon now or then.");
+    expect(plainText).toBe("Due 22:45 tomorrow, soon now or A &amp; B.");
   });
 
   it.each([
