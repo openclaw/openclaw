@@ -20,7 +20,6 @@ import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
-import { loadChatDetailsSession } from "./chat-details-desktop-loader.ts";
 import { ChatDetailsLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details.css";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -32,7 +31,7 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
   export: "ChatDetailsProgress",
 });
 
-const ChatDetailsSession = lazy(loadChatDetailsSession, {
+const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
 });
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {

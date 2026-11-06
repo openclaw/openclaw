@@ -141,9 +141,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-details-styles";
     case "node_modules/@tanstack/virtual-core/dist/esm/index.js":
     case "node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js":
-    case "ui/src/pages/chat/components/chat-details-desktop-loader.ts":
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
-      // Chat preloads these pane leaves together without importing the pane renderer.
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":

@@ -161,10 +161,6 @@ async function readProbe(page: Page) {
     const detailsPlacement: unknown = Reflect.get(window, "__detailsPlacementReads");
     return {
       ...data,
-      detailsReadinessMarks: performance
-        .getEntriesByType("mark")
-        .filter((entry) => entry.name.startsWith("l293-details:"))
-        .map((entry) => ({ name: entry.name, atMs: entry.startTime })),
       rig: rig
         ? {
             loaf: rig.loaf,
@@ -522,9 +518,6 @@ async function captureReload(
     for (const module of probe.modules) {
       module.startedAtMs += documentOffsetMs;
       module.arrivedAtMs += documentOffsetMs;
-    }
-    for (const mark of probe.detailsReadinessMarks) {
-      mark.atMs += documentOffsetMs;
     }
     for (const key of [
       "firstAppDomMs",
