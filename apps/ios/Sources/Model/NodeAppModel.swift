@@ -4117,6 +4117,8 @@ extension NodeAppModel {
         else { return }
         guard let route = await self.operatorGateway.currentRoute() else { return }
         let scopes = await self.operatorGateway.currentOperatorScopes(ifCurrentRoute: route)
+        // Control UI pages build their URL when they appear after connect; admit the mount first.
+        await self.refreshControlUiBasePath(stableID: stableID, routeGeneration: routeGeneration)
         guard await self.operatorGateway.currentRoute() == route,
               !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
@@ -4130,8 +4132,6 @@ extension NodeAppModel {
                 self.operatorTalkHydrationGeneration = nil
             }
         }
-        // Control UI pages build their URL when they appear after connect; admit the mount first.
-        await self.refreshControlUiBasePath(stableID: stableID, routeGeneration: routeGeneration)
         self.setOperatorConnected(true, scopes: scopes ?? [])
         await self.refreshDesktopObserveAvailability(
             stableID: stableID,
