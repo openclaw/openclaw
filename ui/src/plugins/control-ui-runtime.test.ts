@@ -151,7 +151,9 @@ it("reactivates plugin views when the first recovery account becomes ready", asy
     onConnection = listener;
     return () => {};
   };
-  initializeWith((host) => host.ui.registerNavigation(navigation()));
+  initializeWith((host) => {
+    host.ui.registerNavigation(navigation());
+  });
   const runtime = runtimeFor(context);
   runtime.start();
   await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));

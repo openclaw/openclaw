@@ -4,7 +4,6 @@ import type {
   GatewayBrowserClientOptions,
   GatewayHelloOk,
 } from "../api/gateway.ts";
-import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import {
   bootRecordOwner,
@@ -91,7 +90,6 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
           : undefined;
     },
     acceptRecoveryScope(gatewayUrl: string, recoveryScope?: string): void {
-      retireStoredGoalOperations(gatewayUrl, recoveryScope);
       retirePluginRecoveryStorage(gatewayUrl, recoveryScope);
     },
     retire(clearCaches: boolean): void {

@@ -10,7 +10,6 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../app/operator-access.ts";
-import { createPluginRecoveryStorage } from "../app/plugin-recovery-storage.ts";
 import {
   PLUGIN_PANEL_TOGGLE_EVENT,
   type PluginPanelToggleDetail,
@@ -24,6 +23,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
+import { createPluginRecoveryStorage } from "./control-ui-recovery-storage.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 export function createControlUiPluginHost(
