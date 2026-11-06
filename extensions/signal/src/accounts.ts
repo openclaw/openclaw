@@ -14,7 +14,6 @@ import {
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
   isSignalManagedNativeConnectionUrlForBind,
-  preferredManagedNativeAllocationPort,
   reserveSignalTransportPorts,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
@@ -188,14 +187,7 @@ function resolveSignalManagedNativePort(params: {
   }
 
   for (const accountId of implicitManagedAccountIds) {
-    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
-    const preferredPort = preferredManagedNativeAllocationPort(
-      accountConfig.transport ?? { kind: "managed-native" },
-    );
-    const port = allocateSignalManagedNativePort({
-      reservedPorts,
-      ...(preferredPort !== undefined ? { preferredPort } : {}),
-    });
+    const port = allocateSignalManagedNativePort({ reservedPorts });
     reservedPorts.add(port);
     if (normalizeAccountId(accountId) === params.accountId) {
       return port;

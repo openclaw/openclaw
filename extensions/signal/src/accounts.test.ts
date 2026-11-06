@@ -61,7 +61,6 @@ it.each<Case>([
   ],
   [root({ httpHost: "[::1]", httpPort: 8181 }), http("http://[::1]:8181", "::1", 8181)],
   [root({ url: baseUrl, httpHost: "127.0.0.2" }), http(baseUrl, "127.0.0.2", 8081)],
-  [root({ url: "http://127.0.0.1:8082" }), http("http://127.0.0.1:8082", "127.0.0.1", 8080)],
   [
     { ...container, ...namedAccount },
     [{ kind: "container", baseUrl: containerUrl }, undefined, true],
@@ -141,13 +140,15 @@ it.each<[Signal, string[], string, string?, boolean?]>([
 
 it("uses configured defaultAccount when accountId is omitted", () => {
   const workUrl = "http://127.0.0.1:9999";
-  const resolved = resolveSignalAccount({
-    cfg: config({
-      defaultAccount: "work",
-      accounts: { work: { name: "Work", account: phone, ...endpoint("external-native", workUrl) } },
-    }),
+  const work = { name: "Work", account: phone, ...endpoint("external-native", workUrl) };
+  const cfg = config({ defaultAccount: "work", accounts: { work } });
+  const resolved = resolveSignalAccount({ cfg });
+  expect(resolved).toMatchObject({
+    accountId: "work",
+    name: "Work",
+    baseUrl: workUrl,
+    configured: true,
+    config: { account: phone },
   });
-  expect(resolved.accountId).toBe("work");
-  expect(resolved.baseUrl).toBe(workUrl);
   expect(resolved.transport).toEqual({ kind: "external-native", baseUrl: workUrl });
 });

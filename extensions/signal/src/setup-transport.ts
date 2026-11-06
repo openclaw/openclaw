@@ -24,10 +24,7 @@ import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
-  independentLocalPortFromManagedNativeConnectionUrl,
   isSignalManagedNativeConnectionUrlForBind,
-  preferredManagedNativeAllocationPort,
-  preferredManagedNativePortFromConnectionUrl,
   reserveSignalTransportPorts,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
@@ -84,6 +81,7 @@ export function prepareSignalManagedNativeTransport(params: {
     assertSignalSocketTransport(socketCandidate);
     return socketCandidate;
   }
+  const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort;
   const prepared: SignalManagedNativeTransport = {
     kind: "managed-native",
     ...existingManaged,
@@ -91,12 +89,6 @@ export function prepareSignalManagedNativeTransport(params: {
     httpHost:
       params.overrides?.httpHost ?? existingManaged?.httpHost ?? DEFAULT_SIGNAL_MANAGED_NATIVE_HOST,
   };
-  const preferredPort =
-    params.overrides?.httpPort ??
-    existingManaged?.httpPort ??
-    preferredManagedNativePortFromConnectionUrl(
-      params.overrides?.url !== undefined ? prepared : (existingManaged ?? prepared),
-    );
   const portsByAccountId = new Map<string, Set<number>>();
   const implicitManagedAccountIds: string[] = [];
   // Resolve the full current allocation before excluding the selected owner. Otherwise an
@@ -124,14 +116,7 @@ export function prepareSignalManagedNativeTransport(params: {
     if (!accountPorts) {
       continue;
     }
-    const accountConfig = resolveSignalAccountConfig(params.cfg, accountId);
-    const implicitPreferredPort = preferredManagedNativeAllocationPort(
-      accountConfig.transport ?? { kind: "managed-native" },
-    );
-    const httpPort = allocateSignalManagedNativePort({
-      reservedPorts: currentReservedPorts,
-      ...(implicitPreferredPort !== undefined ? { preferredPort: implicitPreferredPort } : {}),
-    });
+    const httpPort = allocateSignalManagedNativePort({ reservedPorts: currentReservedPorts });
     currentReservedPorts.add(httpPort);
     accountPorts.add(httpPort);
   }
@@ -146,11 +131,18 @@ export function prepareSignalManagedNativeTransport(params: {
     }
   }
 
-  const independentPreparedPort = independentLocalPortFromManagedNativeConnectionUrl(
-    params.overrides?.url !== undefined ? prepared : (existingManaged ?? prepared),
-  );
-  if (independentPreparedPort !== undefined) {
-    reservedPorts.add(independentPreparedPort);
+  const hasIndependentPreparedConnectionUrl =
+    prepared.url &&
+    (params.overrides?.url !== undefined
+      ? !isSignalManagedNativeConnectionUrlForBind(prepared)
+      : Boolean(
+          existingManaged?.url && !isSignalManagedNativeConnectionUrlForBind(existingManaged),
+        ));
+  if (hasIndependentPreparedConnectionUrl && prepared.url) {
+    const localConnectionPort = resolveLocalSignalTransportPort(prepared.url);
+    if (localConnectionPort !== undefined) {
+      reservedPorts.add(localConnectionPort);
+    }
   }
 
   if (params.overrides?.httpPort !== undefined && reservedPorts.has(params.overrides.httpPort)) {

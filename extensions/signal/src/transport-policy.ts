@@ -42,9 +42,11 @@ export function reserveSignalTransportPorts(
     if (httpPort !== undefined) {
       reservedPorts.add(httpPort);
     }
-    const independentConnectionPort = independentLocalPortFromManagedNativeConnectionUrl(transport);
-    if (independentConnectionPort !== undefined) {
-      reservedPorts.add(independentConnectionPort);
+    if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
+      const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
+      if (localConnectionPort !== undefined) {
+        reservedPorts.add(localConnectionPort);
+      }
     }
     return httpPort === undefined;
   }
@@ -94,57 +96,6 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   } catch {
     return undefined;
   }
-}
-
-/**
- * Prefer a connection URL port only when that URL already addresses the daemon bind.
- * A saved root-path URL on another port is a proxy in front of the default bind, so
- * its port is not copied onto httpPort before the check.
- */
-export function preferredManagedNativePortFromConnectionUrl(
-  transport: SignalTransportConfig,
-): number | undefined {
-  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !transport.url) {
-    return undefined;
-  }
-  if (!isSignalManagedNativeConnectionUrlForBind(transport)) {
-    return undefined;
-  }
-  const localPort = resolveLocalSignalTransportPort(transport.url);
-  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
-    return undefined;
-  }
-  return localPort;
-}
-
-export function preferredManagedNativeAllocationPort(
-  transport: SignalTransportConfig,
-): number | undefined {
-  if (transport.kind !== "managed-native") {
-    return undefined;
-  }
-  if (transport.httpPort !== undefined) {
-    return transport.httpPort;
-  }
-  return preferredManagedNativePortFromConnectionUrl(transport);
-}
-
-export function independentLocalPortFromManagedNativeConnectionUrl(
-  transport: SignalTransportConfig,
-): number | undefined {
-  if (transport.kind !== "managed-native" || !transport.url) {
-    return undefined;
-  }
-  const preferredBindPort = preferredManagedNativePortFromConnectionUrl(transport);
-  const effectiveForBindCheck =
-    preferredBindPort === undefined ? transport : { ...transport, httpPort: preferredBindPort };
-  if (isSignalManagedNativeConnectionUrlForBind(effectiveForBindCheck)) {
-    return undefined;
-  }
-  const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-  return localConnectionPort !== undefined && isValidSignalManagedNativePort(localConnectionPort)
-    ? localConnectionPort
-    : undefined;
 }
 
 export function isSignalManagedNativeConnectionUrlForBind(
@@ -199,11 +150,7 @@ export function assignSignalManagedNativePort(
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  // Rewrite only a URL that already addresses this daemon bind. A proxy URL stays put.
-  const preferredUrlPort = preferredManagedNativePortFromConnectionUrl(transport);
-  const alignmentProbe: SignalManagedNativeTransport =
-    preferredUrlPort === undefined ? transport : { ...transport, httpPort: preferredUrlPort };
-  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(alignmentProbe)) {
+  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(transport)) {
     return { ...transport, httpPort };
   }
   const connectionUrl = new URL(connectionUrlValue);
