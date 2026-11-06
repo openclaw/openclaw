@@ -86,7 +86,7 @@ export function evaluateSessionFreshness(params: {
   sessionStartedAt?: number;
   lastInteractionAt?: number;
   now: number;
-  policy: SessionResetPolicy;
+  policy: Omit<SessionResetPolicy, "tailMessages">;
 }): SessionFreshness {
   // Older releases persisted updatedAt=0 as an explicit pending reset marker.
   // Honor that one-time tombstone even when automatic resets are disabled.

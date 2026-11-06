@@ -291,7 +291,7 @@ describe("resolveSessionResetPolicy", () => {
     return {
       updatedAt: now,
       now,
-      policy: { mode, atHour: 4, idleMinutes, tailMessages: 6 },
+      policy: { mode, atHour: 4, idleMinutes },
       ...timestamps,
     };
   }

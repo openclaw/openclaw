@@ -13,6 +13,11 @@ it("honors a pending legacy reset tombstone under the default policy", () => {
   expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy })).toEqual({
     fresh: false,
   });
+  // Released plugin SDK call shape: freshness never takes the reset tail.
+  const sdkPolicy = { mode: "none", atHour: 4 } as const;
+  expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy: sdkPolicy })).toEqual({
+    fresh: false,
+  });
 });
 
 it.each`
