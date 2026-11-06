@@ -1688,7 +1688,10 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   flex: 1;
   min-width: 0;
   max-width: 100%;
+  max-height: min(16rem, 35dvh);
   margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   color: var(--text);
   font: calc(12px * var(--control-ui-text-scale)) / 1.65 var(--mono);
   white-space: pre-wrap;

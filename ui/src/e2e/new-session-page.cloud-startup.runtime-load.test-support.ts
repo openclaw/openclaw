@@ -155,10 +155,14 @@ async function recoverStartup(
     expect(await gateway.waitForRequest("sessions.create")).toMatchObject({
       params: { incognito: true, message: "" },
     });
-    const warning = "Recovery needs a reload. Unsaved starts will be lost.";
     for (const selectedKey of [privateKey, sessionKey]) {
       await navigateToControlUiSession(page, selectedKey);
-      await expect.poll(() => alert.locator("strong").textContent()).toContain(warning);
+      await expect
+        .poll(() => alert.locator(".app-toast__message").textContent())
+        .toBe("Recovery needs a reload.");
+      await expect
+        .poll(() => alert.locator(".app-toast__description").textContent())
+        .toBe("Unsaved starts will be lost.");
       expect(await button(alert, "Retry").count()).toBe(0);
       expect(await alert.locator("details").count()).toBe(0);
     }

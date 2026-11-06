@@ -94,9 +94,9 @@
   flex-shrink: 0;
 }
 
-.chat-footer
-  .chat-footer__context
-  :is(.session-progress-card__body, .chat-queue__scroll, .agent-chat__goal-detail-objective) {
+.chat-footer .chat-footer__context .session-progress-card__body,
+.chat-footer .chat-footer__context .chat-queue__scroll,
+.chat-footer .chat-footer__context .agent-chat__goal-detail-objective {
   overscroll-behavior: auto;
 }
 
