@@ -20,7 +20,7 @@ export type EngineScenario = Omit<InteractionScenario, "run"> & {
   viewports?: readonly ("desktop" | "mobile")[];
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
-  /** Standalone approval/question documents have no shell roster or route preload manifest. */
+  /** Standalone documents have no app preferences, shell roster or route preload manifest. */
   standaloneDocument?: boolean;
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
   initScript?: string;
@@ -235,6 +235,7 @@ export function createEngineBootScenarios(
   return [
     ...(["paste", "typing"] as const).map((input): EngineScenario => ({
       id: `native-input-${input}`,
+      standaloneDocument: true,
       route: `/__native-input-${input}`,
       explicitOnly: true,
       diagnostic: "Native search-input automation without application code, not a latency floor.",
@@ -269,6 +270,7 @@ export function createEngineBootScenarios(
     })),
     {
       id: "blank-frame-cadence",
+      standaloneDocument: true,
       route: "/__frame-cadence-control",
       explicitOnly: true,
       diagnostic: "Blank-document frame cadence, not application latency.",

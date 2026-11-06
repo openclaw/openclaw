@@ -10,6 +10,12 @@ import {
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { TranslationMap } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import {
+  DEFAULT_LOCALE,
+  LOCALE_MATCH_RULES,
+  RTL_LOCALES,
+  SUPPORTED_LOCALES,
+} from "../../src/shared/control-ui-locale.ts";
 
 const localeModulePrefix = "virtual:openclaw-control-ui-locale/";
 const localeConfigHintsModulePrefix = "virtual:openclaw-control-ui-locale-config-hints/";
@@ -127,6 +133,23 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
   return {
     name: "control-ui-locale-modules",
     enforce: "pre",
+    transformIndexHtml() {
+      // Direction cannot wait for the translated catalog: the critical frame paints first.
+      const policy = JSON.stringify({
+        supported: SUPPORTED_LOCALES,
+        rules: LOCALE_MATCH_RULES,
+        rtl: RTL_LOCALES,
+        fallback: DEFAULT_LOCALE,
+      }).replaceAll("<", "\\u003c");
+      return [
+        {
+          tag: "script",
+          attrs: { "data-cfasync": "false" },
+          injectTo: "head-prepend",
+          children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr"})();`,
+        },
+      ];
+    },
     configResolved(config) {
       sourceAliases = config.resolve.alias;
     },
