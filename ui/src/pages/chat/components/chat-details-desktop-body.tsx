@@ -9,7 +9,7 @@ import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import "../../../styles/chat/details-desktop-body.css";
 
-export type ChatDetailsHandoff = {
+type ChatDetailsHandoff = {
   onLoading: (loading: boolean) => void;
   onReady: () => void;
 };
@@ -49,7 +49,7 @@ export function ChatDetailsDesktopContent(props: {
 }
 
 /** One scroll owner around Session and Progress; mounted only by the desktop host. */
-export function ChatDetailsDesktopBody(props: {
+function ChatDetailsDesktopBody(props: {
   presented: boolean;
   children: (handoff: ChatDetailsHandoff) => JSX.Element;
   onScrollPortRef?: (element: HTMLDivElement) => void;

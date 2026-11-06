@@ -1,2 +1,3 @@
-125
+185
 # First-pane/dock, held Environment, closed-destination loading and independent paint witnesses.
+# Public Details fixtures replace private handoff seams; cancellation shares the cold e2e case.

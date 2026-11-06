@@ -132,20 +132,49 @@ suite.define(() => {
         // Sample content handoff after the surface's independent entrance motion.
         await expect.poll(() => details.evaluate((panel) => panel.getAnimations().length)).toBe(0);
         const before = (await details.boundingBox())!;
-        const firstContentFrame = await details.evaluateHandle((panel) => ({
-          frame: new Promise<number>((resolve) => {
-            const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
-            const observer = new MutationObserver(() => {
-              if (!pending.isConnected) {
-                observer.disconnect();
-                requestAnimationFrame(() => resolve(panel.getBoundingClientRect().height));
-              }
-            });
-            observer.observe(panel, { childList: true, subtree: true });
-          }),
-        }));
+        const pauseHandoff = cpuRate === 1 && reducedMotion === "no-preference";
+        const firstContentFrame = await details.evaluateHandle((panel, pause) => {
+          const handoff: { animation?: Animation; body?: HTMLElement } = {};
+          return {
+            handoff,
+            frame: new Promise<number>((resolve) => {
+              const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
+              const observer = new MutationObserver(() => {
+                if (!pending.isConnected) {
+                  observer.disconnect();
+                  requestAnimationFrame(() => {
+                    if (pause) {
+                      handoff.body =
+                        panel.querySelector<HTMLElement>(".chat-details-desktop-body") ?? undefined;
+                      handoff.animation = handoff.body?.getAnimations()[0];
+                      handoff.animation?.pause();
+                    }
+                    resolve(panel.getBoundingClientRect().height);
+                  });
+                }
+              });
+              observer.observe(panel, { childList: true, subtree: true });
+            }),
+          };
+        }, pauseHandoff);
         module.release();
         const firstHeight = await firstContentFrame.evaluate((probe) => probe.frame);
+        if (pauseHandoff) {
+          expect(
+            await firstContentFrame.evaluate((probe) => probe.handoff.animation?.playState),
+          ).toBe("paused");
+          await closeChatDetails(page);
+          expect(
+            await firstContentFrame.evaluate((probe) => probe.handoff.animation?.playState),
+          ).toBe("idle");
+          expect(
+            await firstContentFrame.evaluate((probe) => ({
+              animations: probe.handoff.body?.getAnimations().length,
+              height: probe.handoff.body?.style.height,
+            })),
+          ).toEqual({ animations: 0, height: "" });
+          await openChatDetails(page);
+        }
         await firstContentFrame.dispose();
         await details.locator(".chat-environment__branch").waitFor();
         await expect
