@@ -47,6 +47,7 @@ import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
+import { expectInlineImageOpened } from "./chat-view-media.test-support.ts";
 import {
   authStatus,
   googleAuthProviders,
@@ -4328,14 +4329,9 @@ describe("chat transcript rendering cache", () => {
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(widgetUrl);
       expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
       requireElement(container, ".markdown-inline-image-button", "image control").dispatchEvent(
-        new MouseEvent("click", { bubbles: true }),
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
       );
-      await waitForFast(() =>
-        expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(
-          { src: imageSource, title: "Synthetic preview" },
-          7,
-        ),
-      );
+      await expectInlineImageOpened(onOpenImage, imageSource, 7);
       expect(onRequestOpenImage).toHaveBeenCalledOnce();
       requireElement(container, "a.markdown-file-link", "workspace file link").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),
