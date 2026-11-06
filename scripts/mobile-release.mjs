@@ -393,24 +393,26 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
   let completed = false;
   try {
     bridgeLocalTools(root, source, platform);
-    run(
-      process.execPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "scripts/mobile-release-notes.ts",
-        "generate",
-        "--platform",
-        platform,
-        "--plan",
-        planPath,
-        "--output",
-        notesPath,
-      ],
-      source,
-      { stdio: "inherit" },
-    );
-    retainSummary(notesPath);
+    if (platform !== "ios" || stageExisting) {
+      run(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/mobile-release-notes.ts",
+          "generate",
+          "--platform",
+          platform,
+          "--plan",
+          planPath,
+          "--output",
+          notesPath,
+        ],
+        source,
+        { stdio: "inherit" },
+      );
+      retainSummary(notesPath);
+    }
     clean(source);
     if (git(source, "rev-parse", "HEAD") !== sourceSha) {
       throw new Error("Release preparation changed source identity.");
@@ -422,7 +424,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
       );
     }
     console.log(
-      `Prepared ${platform} release from main source ${sourceSha}. Saved plan and notes: ${recovery}`,
+      `Prepared ${platform} release from main source ${sourceSha}. Recovery directory: ${recovery}`,
     );
     if (stageExisting) {
       uploadedRef(root, platform, plan, planPath);
@@ -440,6 +442,9 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
         env: releaseEnvironment(platform, recovery, sourceSha),
       },
     );
+    if (platform === "ios" && !stageExisting) {
+      retainSummary(notesPath);
+    }
     const playRef = uploadedRef(root, platform, plan, planPath);
     console.log(`Verified uploaded release: ${playRef}`);
     if (firebase) {

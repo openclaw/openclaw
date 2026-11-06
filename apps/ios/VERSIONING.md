@@ -308,6 +308,14 @@ Missing or mismatched artifacts fail before upload; the store path never falls
 back to a changelog. A changed public baseline during preparation stops the
 attempt before its first store write.
 
+For a new upload, notes generation runs alongside archive and export on the same
+runner, after any Store screenshot capture. Both tasks use the frozen source and
+release plan. Upload and metadata staging require a successful archive and
+validated notes. If the build fails, the lane waits for the notes process to
+finish within its existing generation budget before collecting artifacts and
+returning the failure. Distributing an existing build and staging recovery do
+not start an archive.
+
 Generation first shortlists up to ten changed files from a compact inventory and
 commit subjects. Focused endpoint diffs support the notes; current source and
 build configuration check feature availability. Localization catalogs contribute
