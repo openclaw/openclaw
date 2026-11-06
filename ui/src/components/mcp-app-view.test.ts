@@ -372,6 +372,30 @@ describe("mcp-app-view localization", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="status"]')).toBeNull();
   });
+  it("leaves expired board bridge operations to the board recovery owner", async () => {
+    const { bridge, request, view } = await mountBridge(
+      "board-expired-operation",
+      true,
+      true,
+      {},
+      {
+        surface: "board",
+      },
+    );
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    request.mockRejectedValueOnce(
+      Object.assign(new Error("MCP App view expired"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      }),
+    );
+    await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
+      "expired",
+    );
+    expect(expired).toHaveBeenCalledOnce();
+    expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+    expect(view.querySelector('[role="status"]')).toBeNull();
+  });
   it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "mcp.app.launch") {

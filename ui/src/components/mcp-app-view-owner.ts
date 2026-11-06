@@ -313,7 +313,8 @@ export function createMcpAppView(
         host.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
         );
-        if (method !== "mcp.app.view" && activeResources && !activeResources.disposed) {
+        const restoreInline = host.surface === "conversation" && method !== "mcp.app.view";
+        if (restoreInline && activeResources && !activeResources.disposed) {
           // Keep the rendered content, not its expired bridge authority. Recovery
           // asks the Gateway for a fresh authorized payload; never replay the RPC.
           readableFrame = activeResources.iframe;
