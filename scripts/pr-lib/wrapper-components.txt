@@ -884,6 +884,7 @@ src/config/zod-schema.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
+src/cron/expression.ts
 src/cron/run-diagnostics-normalize.ts
 src/cron/run-history-detail.ts
 src/cron/scratch-contract.ts

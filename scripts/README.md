@@ -331,6 +331,12 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Idle scenarios default to a 30-second Node-side measurement window. Use
+`--idle-duration-ms` for a bounded diagnostic or rotated comparison; the manifest
+records the chosen duration. `--idle-warmup-ms` independently controls settlement
+before measurement. Normalize costs using the measured interval when comparing
+window lengths.
+
 Giant completed runs are opt-in: `--steps completed-direct-run-2000-open,completed-direct-run-2000-scroll,completed-single-run-2000-expand,completed-single-run-2000-scroll`.
 Replace `2000` with `400` for the scaling control. These reuse the cold-load
 long-session fixture and desktop 61-frame scroll trajectory in both engines. Open checks

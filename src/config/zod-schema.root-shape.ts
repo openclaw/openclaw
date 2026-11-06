@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isValidCronExpression } from "../cron/expression.js";
 import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
@@ -122,6 +123,11 @@ export const OpenClawSchemaShape = {
       auto: z
         .strictObject({
           enabled: z.boolean().optional(),
+          schedule: z
+            .string()
+            .trim()
+            .refine((value) => isValidCronExpression(value), "Invalid cron expression")
+            .optional(),
         })
         .optional(),
     })

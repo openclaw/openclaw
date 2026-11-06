@@ -21,6 +21,9 @@
 }
 
 .oc-overlay.chat-picker-overlay {
+  /* The shared closed-popover rule still hides this; only the menu's own list scrolls. */
+  display: flex;
+  flex-direction: column;
   /* Fit above the composer before flipping into the space below its controls. */
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
   position-try-fallbacks:
@@ -1289,6 +1292,7 @@
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
 
+  .agent-chat__input .chat-controls__permission-menu,
   .agent-chat__input .chat-controls__inline-select > .chat-picker-overlay {
     position-area: top span-all;
     justify-self: center;
@@ -2195,11 +2199,14 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-menu {
+  box-shadow: none;
+  min-height: 0;
   width: min(340px, calc(100vw - 24px));
   max-height: min(400px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
 /* The outer surface owns elevation so scrolling never clips the shadow to a square. */
+.chat-controls__model-picker > .chat-picker-overlay,
 .chat-controls__effort-picker > .chat-picker-overlay {
   border-radius: var(--menu-radius);
   corner-shape: superellipse(1.5);
@@ -2219,6 +2226,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 8px;
   align-items: start;
+  /* Keep the content-sized menu against its trigger above the composer. */
+  align-self: end;
   width: min(440px, calc(100vw - 24px));
   padding: var(--chat-permission-panel-padding);
   overflow: hidden;
