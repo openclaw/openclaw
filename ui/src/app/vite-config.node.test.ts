@@ -718,17 +718,17 @@ it("defers page and config-hint translations until their namespace loads", async
   expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
   expect(catalog.configHints).toBeUndefined();
   const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
-  const healthText = flattenTranslations(en).get("common.health");
-  if (typeof healthText !== "string") {
-    throw new Error("Expected English health source");
+  const loadingText = flattenTranslations(en).get("common.loading");
+  if (typeof loadingText !== "string") {
+    throw new Error("Expected English loading source");
   }
-  const healthEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
+  const loadingEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
     (entry) =>
-      (entry.segment_id === "common.health" || entry.segment_ids?.includes("common.health")) &&
-      entry.text_hash === hashControlUiTranslationText(healthText),
+      (entry.segment_id === "common.loading" || entry.segment_ids?.includes("common.loading")) &&
+      entry.text_hash === hashControlUiTranslationText(loadingText),
   );
-  expect(healthEntry).toBeDefined();
-  expect(flattenTranslations(catalog).get("common.health")).toBe(healthEntry?.translated);
+  expect(loadingEntry).toBeDefined();
+  expect(flattenTranslations(catalog).get("common.loading")).toBe(loadingEntry?.translated);
   await loadNamespace("activity");
   expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();

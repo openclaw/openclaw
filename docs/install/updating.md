@@ -53,6 +53,11 @@ backup.
 
 ## Update implementation contract
 
+Git-source and immutable updates probe support before passing `--no-lazy-fetch`.
+Older Git runs the same inspection commands without that option; partial clones
+may fetch promised objects. This fix must be present in the installed updater;
+a downloaded candidate cannot repair an older updater's preflight.
+
 Interactive failed-update triage preserves the invoking operator's `PATH`, home,
 and authentication environment before candidate admission enters the managed
 Gateway environment. Repair agents still receive the latest target installation's
