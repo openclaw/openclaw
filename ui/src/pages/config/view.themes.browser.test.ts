@@ -96,10 +96,11 @@ it("offers plugin and personal themes with names in focus and hover hints", asyn
     throw new Error("Expected the Manuscript theme card");
   }
   expect(manuscript.getAttribute("aria-pressed")).toBe("false");
+  const { page } = await import("vitest/browser");
+  await page.mouse.move(0, 0);
   manuscript.focus();
 
-  const { page } = await import("vitest/browser");
-  const focusTooltip = page.getByRole("tooltip").last();
+  const focusTooltip = page.getByRole("tooltip").filter({ hasText: "Manuscript — Ink on paper" });
   await expect.element(focusTooltip).toBeVisible();
   expect(focusTooltip.element().textContent).toContain("Manuscript — Ink on paper");
   expect(manuscript.getAttribute("aria-pressed")).toBe("false");
@@ -117,7 +118,9 @@ it("offers plugin and personal themes with names in focus and hover hints", asyn
 
   manuscript.blur();
   await page.elementLocator(importedTheme).hover();
-  const hoverTooltip = page.getByRole("tooltip").last();
+  const hoverTooltip = page
+    .getByRole("tooltip")
+    .filter({ hasText: `${importedName} — ${importedDescription}` });
   await expect.element(hoverTooltip).toBeVisible();
   expect(hoverTooltip.element().textContent).toContain(`${importedName} — ${importedDescription}`);
   expect(importedTheme.getAttribute("aria-pressed")).toBe("false");
