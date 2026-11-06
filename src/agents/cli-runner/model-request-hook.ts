@@ -53,6 +53,7 @@ function readCliModelRequestPayload(value: unknown): CliModelRequestPayload {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw invalid();
   }
+  // SAFETY: the guard above proved value is a non-null, non-array object; every field is read as unknown and validated below.
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => !PAYLOAD_KEYS.has(key))) {
     throw invalid();
