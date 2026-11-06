@@ -1,3 +1,7 @@
+import { createServer, request as httpRequest } from "node:http";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 // Install shared transport mocks before publication owners enter the module cache.
 // oxfmt-ignore
 import {
@@ -846,6 +850,134 @@ describe("shared GitHub publication requester authority", () => {
       });
       expect(writes).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["lost-pr-response"]);
+    },
+  );
+});
+
+describe("local production-owner proof", () => {
+  installGitHubPublicationTestHarness({
+    creatorEmail: email,
+    sandbox: "required",
+    realWorktree: true,
+  });
+  it.each(["allowed", "revoked", "reassigned"] as const)(
+    "qualifies credential-before-network authority with real owners: %s",
+    async (scenario) => {
+      const f = await createRequesterPolicyFixture();
+      const identity = { ...f.session, agentId: "main" };
+      const placements = createWorkerSessionPlacementStore({ database: f.database });
+      const events: string[] = [];
+      const synthetic = "local-synthetic-no-provider-authority";
+      const server = createServer((req, res) => {
+        events.push("network");
+        expect(req.headers.authorization).toBe("Bearer " + synthetic);
+        res.end("ok");
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback address");
+      }
+      f.config.gateway!.repositoryIntegration = "publication-local-sink";
+      setRuntimeConfigSnapshot(f.config);
+      const builder = createTestPluginRegistry({ config: f.config });
+      const record = createPluginRecord({
+        id: "publication-local-sink",
+        name: "publication-local-sink",
+        source: "local-proof",
+        origin: "workspace",
+        enabled: true,
+        configSchema: false,
+      });
+      record.contracts = { repositoryIntegrations: ["repository"] };
+      builder.registry.plugins.push(record);
+      builder.createApi(record, { config: f.config }).registerRepositoryIntegration({
+        version: 1,
+        preparedCapacity: "repository",
+        resolveConnectionIdentity: () => undefined,
+        async withIdentity(context, run) {
+          context.assertCurrent();
+          context.readCurrentProfile();
+          events.push("integration-admitted");
+          return await run({
+            env: context.env,
+            assertCurrent: context.assertCurrent,
+            readNativeCredential: async () => {
+              context.assertCurrent();
+              events.push("credential");
+              return synthetic;
+            },
+          });
+        },
+      });
+      setActivePluginRegistry(builder.registry);
+      try {
+        if (scenario === "revoked") {
+          await f.revoke();
+        }
+        if (scenario === "reassigned") {
+          await placements.startDispatch({ ...identity, agentId: "other-agent" });
+        }
+        const run = placements.withRepositoryWorkspaceReservation(
+          identity,
+          async (assertPlacementCurrent) => {
+            events.push("placement-admitted");
+            const read = f.guest.prepareDispatchCredential!({
+              sessionId: identity.sessionId,
+              requestDigest: "local-proof",
+              assertCurrent: assertPlacementCurrent,
+            });
+            expect(read).toBeTypeOf("function");
+            const credential = await read!({});
+            await new Promise<void>((resolve, reject) => {
+              const req = httpRequest(
+                {
+                  host: "127.0.0.1",
+                  port: address.port,
+                  headers: { authorization: "Bearer " + credential },
+                },
+                (res) => {
+                  res.resume();
+                  res.on("end", resolve);
+                },
+              );
+              req.setTimeout(5000, () => req.destroy(new Error("Loopback sink timed out")));
+              req.on("error", reject);
+              req.end();
+            });
+          },
+        );
+        if (scenario === "allowed") {
+          await run;
+          expect(events).toEqual([
+            "placement-admitted",
+            "integration-admitted",
+            "credential",
+            "network",
+          ]);
+        } else {
+          if (scenario === "reassigned") {
+            await expect(run).rejects.toThrow("workspace placement identity changed");
+          } else {
+            await expect(run).rejects.toBeInstanceOf(GitHubPublicationRequesterUnavailableError);
+          }
+          expect(events).not.toContain("credential");
+          expect(events).not.toContain("network");
+          expect(events).not.toContain("integration-admitted");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
     },
   );
 });
