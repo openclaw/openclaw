@@ -8,6 +8,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/deep-research-recovery.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/plugins/deep-research-startup.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 

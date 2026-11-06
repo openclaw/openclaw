@@ -2,25 +2,10 @@
   "id": "deep-research",
   "name": "Deep Research",
   "description": "Bounded research with source-backed findings and explicit gaps.",
-  "categories": [
-    "agent-orchestration"
-  ],
-  "activation": {
-    "onStartup": true
-  },
-  "contracts": {
-    "tools": [
-      "deep_research"
-    ]
-  },
-  "toolMetadata": {
-    "deep_research": {
-      "optional": true
-    }
-  },
-  "configSchema": {
-    "type": "object",
-    "properties": {},
-    "additionalProperties": false
-  }
+  "categories": ["agent-orchestration"],
+  "enabledByDefault": true,
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["deep_research"] },
+  "toolMetadata": { "deep_research": {} },
+  "configSchema": { "type": "object", "properties": {}, "additionalProperties": false }
 }
