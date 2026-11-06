@@ -945,7 +945,6 @@ describe("runPreparedReply media-only handling", () => {
       const run = requireRunReplyAgentCall().followupRun.run;
       expect(run.thinkLevel).toBe(expected);
       expect(run.thinkLevelOverride).toBe(requested);
-
     },
   );
 
