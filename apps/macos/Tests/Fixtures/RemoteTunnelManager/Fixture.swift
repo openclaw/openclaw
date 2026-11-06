@@ -20,6 +20,8 @@ struct Logger: Sendable {
 
 nonisolated(unsafe) var sandboxPortAvailable = false
 nonisolated(unsafe) var sandboxForwardSucceeds = false
+/// Holds the sandbox forward in startup (an SSH handshake awaiting a security-key touch) until cancelled.
+nonisolated(unsafe) var sandboxForwardSuspends = false
 nonisolated(unsafe) var controlTunnels: [RemotePortTunnel] = []
 nonisolated(unsafe) var sandboxForwards: [RemotePortTunnel] = []
 nonisolated(unsafe) var sandboxForwardAttempts = 0
@@ -57,6 +59,10 @@ final class RemotePortTunnel: @unchecked Sendable {
 
     static func createSandboxForward(configuration _: Configuration, port: UInt16) async throws -> RemotePortTunnel {
         sandboxForwardAttempts += 1
+        if sandboxForwardSuspends {
+            // Like waitForListener: only cancellation ends the wait before its deadline.
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+        }
         // ssh exits 255 when its bind fails ("Address already in use").
         guard sandboxForwardSucceeds else { throw POSIXError(.EADDRINUSE) }
         let forward = RemotePortTunnel(localPort: port)
@@ -93,6 +99,7 @@ enum RemoteTunnelManagerFixture {
     static func main() async {
         await self.failedSandboxForwardNeverTouchesTheGatewayTunnel()
         await self.sandboxForwardRunsBesideTheGatewayTunnel()
+        await self.quitDuringSandboxStartupEndsBothTunnelsPromptly()
         if self.failures > 0 { exit(1) }
         print("PASS: RemoteTunnelManager headless reuse regressions")
     }
@@ -114,6 +121,7 @@ enum RemoteTunnelManagerFixture {
     private static func reset() {
         sandboxPortAvailable = false
         sandboxForwardSucceeds = false
+        sandboxForwardSuspends = false
         controlTunnels = []
         sandboxForwards = []
         sandboxForwardAttempts = 0
@@ -156,5 +164,24 @@ enum RemoteTunnelManagerFixture {
         await manager.stopAll()
         self.expect(sandboxForwards.first?.isRunning == false, "retirement left the widget forward running")
         self.expect(controlTunnels.first?.isRunning == false, "retirement left the Gateway tunnel running")
+    }
+
+    private static func quitDuringSandboxStartupEndsBothTunnelsPromptly() async {
+        self.reset()
+        sandboxPortAvailable = true
+        sandboxForwardSucceeds = true
+        sandboxForwardSuspends = true
+        let manager = RemoteTunnelManager()
+        _ = try? await manager.ensureControlTunnelRoute()
+        await self.settle()
+        self.expect(sandboxForwardAttempts == 1, "widget forward startup did not begin")
+
+        // App termination allows two seconds for cleanup; the suspended handshake must not hold it.
+        let started = Date()
+        await manager.shutdown()
+        let elapsed = Date().timeIntervalSince(started)
+        self.expect(elapsed < 1, "quit waited \(elapsed)s on the unfinished widget forward")
+        self.expect(controlTunnels.first?.isRunning == false, "quit left the Gateway tunnel running")
+        self.expect(sandboxForwards.isEmpty, "cancelled widget forward still opened")
     }
 }

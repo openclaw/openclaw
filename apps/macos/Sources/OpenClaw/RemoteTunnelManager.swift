@@ -330,7 +330,9 @@ actor RemoteTunnelManager {
         self.sandboxForward = nil
         self.sandboxForwardAttempt = nil
         self.tunnelGeneration &+= 1
+        // Unfinished SSH handshakes (a security-key touch, a slow host) can outlast the quit deadline.
         create?.cancel()
+        sandboxAttempt?.cancel()
 
         // Publish cleanup ownership before suspending the actor. Reentrant ensures
         // must join this barrier before reserving the ledger for a replacement.
