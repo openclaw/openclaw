@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { AUTOMATIONS_TOOL_NAME, isAutomationsToolName } from "./automations-tool-name.js";
 
 describe("isAutomationsToolName", () => {
