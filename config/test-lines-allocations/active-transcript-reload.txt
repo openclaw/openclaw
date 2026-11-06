@@ -1,2 +1,2 @@
-259
-# Active warm-reload regressions and native transcript measurement contracts.
+324
+# Active warm-reload and exact-allocation regressions; includes lead-approved 51-line base debt.
