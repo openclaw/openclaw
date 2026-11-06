@@ -7,8 +7,6 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
-  "extensions/deep-research/test/gateway-recovery.integration.test.ts",
-  "extensions/deep-research/test/gateway-routing.integration.test.ts",
   "extensions/google/research-gateway.test.ts",
   "extensions/deep-research/src/jobs.test.ts",
   "extensions/deep-research/src/jobs.cancel.test.ts",

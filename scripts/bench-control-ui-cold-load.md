@@ -1,5 +1,46 @@
 # Team-scale Control UI cold-load benchmark
 
+## Firefox census
+
+The engines harness also accepts `--engines chromium,firefox`. Install the exact
+Firefox revision from the repository's Playwright dependency with
+`pnpm --dir ui exec playwright install firefox`. Use `PLAYWRIGHT_BROWSERS_PATH`
+for an existing approved browser-cache location. Do not substitute system Firefox.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --pages --page-phases visit --viewport both \
+  --output .artifacts/firefox/routes
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium,firefox --viewport both \
+  --steps cold-boot,warm-boot,chat-typing,sidebar-toggle,sidebar-open,sidebar-close,session-switch,model-picker-first-open-search,cron-menu-open,sessions-search,streaming-645-deltas,large-transcript-open,large-transcript-fast-scroll,transcript-scroll-top \
+  --output .artifacts/firefox/interactions
+```
+
+These one-pair runs are screens, not performance evidence. Confirm any failure
+or engine/Chromium ratio above 1.3 with `--pairs 10 --configurations default,control`
+on the affected steps. The identical `control` configuration supplies the A/A
+check; positions and directions rotate. Split compound actions before attributing
+a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
+within the campaign's acceptance band.
+
+Firefox retains the same browser-local application elapsed clock and boot/route
+readiness milestones. These measure neither CPU nor paint. CPU counters, native
+traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
+their options fail explicitly rather than falling back to a different clock.
+The page observer detects Layout Instability and Long Tasks support at runtime
+and records unavailable metrics as `null`, never zero. Mobile Firefox cells use
+the same narrow viewport and touch settings, but omit Playwright's unsupported
+`isMobile` emulation. Hidden-tab scenarios are skipped where native visibility
+cannot be controlled.
+
+Desktop `transcript-scroll-top` uses repeated sub-page native wheel gestures and
+reports `wheelEvents` with its result. Firefox deliberately caps a single wheel
+event to one page, so an arbitrarily large delta is not a portable jump-to-top.
+The measured journey includes the driver gaps between gestures; it is not
+single-wheel latency. Mobile retains the programmatic scrollport jump because
+Playwright's mobile WebKit driver does not support wheel input.
+
 ## Native browser work and composited layers
 
 Use the same production route and interaction scenarios with `--native-audit`
@@ -959,6 +1000,32 @@ The interval covers the whole renderer, including synthetic delivery and native
 composer input, and excludes reload and report serialization. These are sampled
 allocation estimates, not retained heap sizes or exact array counts. Collect
 timings in separate runs without allocation sampling.
+
+The cross-engine harness also accepts `--allocations --engines chromium` for any
+of its existing scenarios. It writes a source-mapped `*.heapprofile` and
+`observations.json` includes estimated bytes ranked by allocating function, file,
+and owner. `functions` counts each sample at its leaf once;
+`sourceFunctions`, file, and owner tables attribute native leaves to their nearest
+source-bearing caller without double-counting. Missing stack nodes retain an
+explicit unattributed byte count. Automation and unmapped
+frames remain visible. This samples the main isolate, not other renderer threads
+or native allocations, and includes objects collected by both kinds of GC.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport desktop --allocations \
+  --steps chat-typing,streaming-645-deltas,session-switch,settings-sections,sidebar-toggle,model-picker-search,transcript-scroll-top \
+  --output .artifacts/allocations
+```
+
+`chat-typing` enters 26 characters, `streaming-645-deltas` delivers 645 deltas
+while periodically typing, `session-switch` and `sidebar-toggle` each make a
+round trip, and `settings-sections` visits three warm routes. Normalize allocated
+bytes by those action counts; streaming bytes per delta include concurrent
+typing and fixture delivery. Run `--native-audit` separately at 1× and 6× to
+investigate GC: allocation sampling changes allocation/GC behavior and cannot
+establish a timing improvement. These synthetic flows measure renderer work,
+not live Gateway/provider latency.
 
 For concurrent paired comparisons, use separate processes and bundle directories
 with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and

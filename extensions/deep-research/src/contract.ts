@@ -8,7 +8,7 @@ type CalculationInput = {
   quote: string;
 };
 
-export type Calculation = {
+type Calculation = {
   operation: "sum" | "difference" | "ratio" | "percent-change";
   inputs: [CalculationInput, CalculationInput];
   value: number;

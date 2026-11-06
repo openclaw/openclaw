@@ -13,7 +13,8 @@
   pointer-events: none;
 }
 
-:is(.new-session-page, .sidebar-region)[data-background-custom] {
+.new-session-page[data-background-custom],
+.sidebar-region[data-background-custom] {
   --muted: color-mix(in srgb, var(--text) 88%, var(--bg-content, var(--bg)));
 }
 

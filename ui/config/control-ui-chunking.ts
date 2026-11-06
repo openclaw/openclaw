@@ -154,6 +154,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
+    case "ui/src/lib/text-diff.ts":
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -190,6 +191,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
     case "ui/src/lib/session-progress-cards.ts":
+    case "ui/src/pages/templates/creator-publication.ts":
+    case "src/agents/core-tool-facts.ts":
+    case "src/agents/tools/automations-tool-name.ts":
       // These shared helpers load together in Chat without retaining its renderers.
       return "deferred-ui-support";
     case "ui/src/styles/panel-loading-skeleton.css":
@@ -227,6 +231,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
     case "ui/src/components/solid/connect-command.tsx":
+    case "ui/src/components/cloud-profile-icon-data.ts":
+    case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
     case "ui/src/components/solid/tabs.tsx":
@@ -449,6 +455,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/sidebar-update-card.tsx":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
+    case "ui/src/components/solid/markdown-html.tsx":
     case "ui/src/components/markdown-parser.ts":
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
@@ -463,6 +470,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":
     case "ui/src/components/markdown-link-boundary.ts":
+    case "ui/src/components/markdown-link-display.ts":
     case "ui/src/components/markdown-raw-content.ts":
     case "ui/src/components/markdown-render-options.ts":
     case "ui/src/components/markdown-sanitizer.ts":

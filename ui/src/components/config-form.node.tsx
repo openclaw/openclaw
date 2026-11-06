@@ -183,7 +183,22 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
       !hasConfigSearchCriteria(params().searchCriteria!) ||
       matchesNodeSearch({ ...params(), criteria: params().searchCriteria! }),
   );
-  const initialDraft = createMemo(() => resolveStructuredDraftInitialValue(params()));
+  const draftInputs = createMemo(
+    () => ({
+      schema: params().schema,
+      value: params().value,
+      isRequired: params().isRequired,
+      structuredDraftOwner: params().structuredDraftOwner,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.schema === next.schema &&
+        Object.is(previous.value, next.value) &&
+        previous.isRequired === next.isRequired &&
+        previous.structuredDraftOwner === next.structuredDraftOwner,
+    },
+  );
+  const initialDraft = createMemo(() => resolveStructuredDraftInitialValue(draftInputs()));
   return (
     <Switch>
       <Match when={unsupported()}>

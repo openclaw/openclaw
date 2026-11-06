@@ -85,6 +85,7 @@ export function createWebSearchTool(options?: {
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
   modelSelection?: WebSearchProviderToolExecutionContext["modelSelection"];
+  assertInvocationCurrent?: () => void;
 }): AnyAgentTool | null {
   if (options?.enabled === false || isWebSearchDisabled(options?.config)) {
     return null;
@@ -130,6 +131,7 @@ export function createWebSearchTool(options?: {
         preferRuntimeProviders,
         args: toolArgs,
         modelSelection: options?.modelSelection,
+        assertCurrent: options?.assertInvocationCurrent,
         signal,
       }).catch((error: unknown) => {
         signal?.throwIfAborted();

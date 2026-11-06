@@ -76,6 +76,61 @@ function createCatalogHarness(lastAcceptedCatalog?: ModelCatalogResult) {
 }
 
 describe("Models page catalog publication", () => {
+  it("shows and refreshes presentation for a configured provider without models", async () => {
+    const { context, request, publishEvent } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    let providerName = "Research Lab";
+    let iconName = "server";
+    const config = {
+      models: {
+        providers: {
+          workstation: {
+            baseUrl: "https://models.example.com/v1",
+            models: [],
+            name: "Raw config is not the catalog presentation",
+          },
+        },
+      },
+    };
+    request.mockImplementation(async (method: string, params?: { view?: string }) => {
+      if (method === "config.get") {
+        return { config, hash: "model-less-provider" };
+      }
+      if (method === "models.list") {
+        expect(params?.view).toBe("configured");
+        return {
+          models: [],
+          providerPresentations: {
+            workstation: {
+              providerName,
+              providerIcon: { source: "builtin", name: iconName },
+            },
+          },
+        };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForProviders(page, config);
+    const row = () => page.querySelector('[data-provider-id="workstation"]');
+    await waitForSolid(() => {
+      expect(row()?.textContent).toContain("Research Lab");
+      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull();
+    });
+    expect(displayedCatalog(page)?.models).toEqual([]);
+    expect(row()?.textContent).not.toContain("Raw config");
+    const initialGeometry = row()?.querySelector(".provider-brand-icon svg")?.innerHTML;
+
+    providerName = "Studio";
+    iconName = "cloud";
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForSolid(() => {
+      expect(row()?.textContent).toContain("Studio");
+      expect(row()?.textContent).not.toContain("Research Lab");
+      expect(row()?.querySelector(".provider-brand-icon svg")?.innerHTML).not.toBe(initialGeometry);
+    });
+  });
+
   it("adopts a ready catalog published while the initial auth read is pending", async () => {
     const { context, request, readPublished, publishEvent, catalogRequest } =
       createCatalogHarness();

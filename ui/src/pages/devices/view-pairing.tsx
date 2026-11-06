@@ -4,6 +4,7 @@ import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
@@ -196,18 +197,16 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <legend>{t("devices.pairing.accessTitle")}</legend>
                 <For each={PAIRING_ACCESS_OPTIONS}>
                   {(option) => (
-                    <label>
-                      <input
-                        type="radio"
-                        name="device-pair-access"
-                        checked={props.lifecycle.access === option[0]}
-                        onChange={() => props.onAccessChange(option[0])}
-                      />
+                    <Radio
+                      name="device-pair-access"
+                      checked={props.lifecycle.access === option[0]}
+                      onChange={() => props.onAccessChange(option[0])}
+                    >
                       <span>
                         <strong>{t(option[1])}</strong>
                         <small>{t(option[2])}</small>
                       </span>
-                    </label>
+                    </Radio>
                   )}
                 </For>
               </fieldset>

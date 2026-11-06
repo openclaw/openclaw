@@ -5,6 +5,7 @@ import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { SwitchIndicator } from "../../components/solid/switch.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -411,7 +412,9 @@ export function PaletteSessionSettingsView(properties: {
                   <Icon name="gitBranch" />
                 </span>
                 <span>{t("newSession.checkoutWorktree")}</span>
-                <span class="palette-session-settings__switch" aria-hidden="true" />
+                <span class="palette-session-settings__switch">
+                  <SwitchIndicator checked={place().worktree} size="sm" />
+                </span>
               </button>
             ) : undefined}
           </>
