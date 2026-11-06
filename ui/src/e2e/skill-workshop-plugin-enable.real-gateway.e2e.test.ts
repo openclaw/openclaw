@@ -110,10 +110,21 @@ function defineSkillWorkshopEnableSuite(params: {
           permissions: ["local-network-access"],
         },
         async ({ page }) => {
-          const sent: Array<{ method?: string }> = [];
-          page.on("websocket", (socket) =>
-            socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString()))),
-          );
+          const sent: Array<{ id: string; method?: string }> = [];
+          const responses = new Set<string>();
+          page.on("websocket", (socket) => {
+            socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString())));
+            socket.on("framereceived", ({ payload }) => {
+              const frame = JSON.parse(payload.toString()) as {
+                type: string;
+                id: string;
+                ok?: boolean;
+              };
+              if (frame.type === "res" && frame.ok) {
+                responses.add(frame.id);
+              }
+            });
+          });
           const workshopRequests = () =>
             sent.filter((frame) => frame.method?.startsWith("skills.workshop."));
           const url = new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main", "chat"));
@@ -147,6 +158,17 @@ function defineSkillWorkshopEnableSuite(params: {
           await expect(
             admin.request("skills.workshop.list", { agentId: "main" }),
           ).resolves.toMatchObject({ agentId: "main", skills: [] });
+
+          // Publication precedes lifecycle cleanup; join the mutation before the next write.
+          await expect
+            .poll(
+              () =>
+                sent
+                  .filter((frame) => frame.method === "plugins.setEnabled")
+                  .every((frame) => responses.has(frame.id)),
+              { timeout: 60_000 },
+            )
+            .toBe(true);
 
           // The choice is durable: a fresh load serves the Workshop directly.
           await page.reload();
