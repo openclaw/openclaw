@@ -62,7 +62,9 @@ async function listClaudeCliModel(
       (params.pluginDisabled
         ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
         : config),
-    preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
+    preparedAuthModes: params.authenticated
+      ? { "claude-cli": { source: "native", mode: "oauth" } }
+      : {},
     catalogComplete: true,
     view: "configured",
     includeDefaultModels: false,
@@ -124,6 +126,21 @@ describe("models.list CLI runtime availability", () => {
       expect(result.models[0]?.unavailableUntil).toBeUndefined();
     },
   );
+
+  it("does not borrow a provider-owned native login for a Claude CLI route", async () => {
+    const result = await listModels({
+      cfg: config,
+      catalog: [],
+      staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
+      preparedAuthModes: { anthropic: { source: "native", mode: "oauth" } },
+      catalogComplete: true,
+      view: "configured",
+      includeDefaultModels: false,
+    });
+    expect(result.models).toEqual([
+      expect.objectContaining({ available: false, unavailableReason: "missing-auth" }),
+    ]);
+  });
 
   it("keeps every Claude CLI model listed as needing login before the full catalog arrives", async () => {
     const pinned = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"];
