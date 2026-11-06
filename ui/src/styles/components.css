@@ -3502,16 +3502,14 @@ select.data-table-pagination__size {
 }
 
 /* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
-:is(
-  .session-row-badge,
-  .session-row-trail,
-  .sidebar-child-session-toggle__count,
-  .sidebar-session-group-count,
-  .sidebar-agent-roster__unread,
-  .sidebar-issues-button__count,
-  .viewer-avatar--overflow,
-  .sidebar-session-tree__show-more
-) {
+.session-row-badge,
+.session-row-trail,
+.sidebar-child-session-toggle__count,
+.sidebar-session-group-count,
+.sidebar-agent-roster__unread,
+.sidebar-issues-button__count,
+.viewer-avatar--overflow,
+.sidebar-session-tree__show-more {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
