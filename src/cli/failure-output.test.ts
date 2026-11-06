@@ -119,8 +119,8 @@ it("keeps nested causes behind the debug gate", () => {
   );
 });
 
-it.each(["gateway", "gateway run", "node run", "plugins enable x", "plugins disable x"])(
-  "prints the redacted command reason without debug: %s",
+it.each(["gateway", "gateway run", "node run"])(
+  "prints the redacted service startup reason without debug: %s",
   (args) => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const lines = failure(
@@ -132,15 +132,15 @@ it.each(["gateway", "gateway run", "node run", "plugins enable x", "plugins disa
     const output = lines.join("\n");
 
     expect(output).toContain("[openclaw] Reason: Gateway startup failed.");
-    expect(output).not.toContain(token);
-    expect(output).not.toContain("private nested diagnostic");
-    expect(lines).not.toContain("[openclaw] Stack:");
+    expect(output).not.toMatch(/sk-abcdefghijklmnopqrstuv|private nested diagnostic|Stack:/u);
   },
 );
 
-it("keeps ordinary command failures terse", () => {
-  expect(failure(new Error("internal detail"), ["gateway", "status"])).toEqual([
+it.each(["Error", "GatewayClientRequestError"])("shows Gateway refusal reasons: %s", (name) => {
+  const error = Object.assign(new Error("internal detail"), { name });
+  expect(failure(error, ["gateway", "status"])).toEqual([
     "[openclaw] The CLI command failed.",
+    ...(name === "GatewayClientRequestError" ? ["[openclaw] Reason: internal detail"] : []),
     "[openclaw] For help, run `openclaw doctor`.",
   ]);
 });

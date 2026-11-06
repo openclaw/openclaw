@@ -239,9 +239,6 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const commandPath = getRootOptionAwareCommandPath(argv, 2);
   const isUpdateCommand = commandPath[0] === "update";
   const isPluginUpdateCommand = commandPath[0] === "plugins" && commandPath[1] === "update";
-  // A refused enable/disable (for example "blocked by allowlist") is the operator's next step.
-  const isPluginPolicyCommand =
-    commandPath[0] === "plugins" && (commandPath[1] === "enable" || commandPath[1] === "disable");
   const isNodeRunCommand = commandPath[0] === "node" && commandPath[1] === "run";
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
@@ -302,7 +299,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       ? !options.error.diagnosticEmitted
       : isUpdateCommand ||
         isPluginUpdateCommand ||
-        isPluginPolicyCommand ||
+        (options.error instanceof Error && options.error.name === "GatewayClientRequestError") ||
         isNodeRunCommand ||
         commandPath[0] === "connect" ||
         isForegroundGatewayRunArgv(argv);
