@@ -60,6 +60,30 @@ it.each([
   },
 );
 
+it.each(["automations", "cron"] as const)(
+  "counts a successful %s add as a committed reminder",
+  (toolName) => {
+    const telemetry = recordTelemetry({
+      toolName,
+      args: { action: "add", job: { name: "Remind me Sunday at 9am" } },
+      result: textToolResult("Scheduled.", { id: "job-1", nextRunAtMs: 1 }),
+    });
+    expect(telemetry.successfulCronAdds).toBe(1);
+  },
+);
+
+it("does not count a failed or non-add scheduler call as a committed reminder", () => {
+  for (const [toolName, args, isError] of [
+    ["automations", { action: "add" }, true],
+    ["automations", { action: "list" }, false],
+    ["cron", { action: "remove" }, false],
+    ["message", { action: "add" }, false],
+  ] as const) {
+    const telemetry = recordTelemetry({ toolName, args, isError });
+    expect(telemetry.successfulCronAdds, `${toolName} ${args.action}`).toBeUndefined();
+  }
+});
+
 it("records messaging tool side effects", () => {
   const target = {
     provider: "telegram",
