@@ -21,7 +21,9 @@ pub extern "system" fn Java_ai_openclaw_iroh_OpenClawIrohAndroid_installNative<'
         if *installed {
             return Ok(());
         }
-        if context.is_null() || !env.is_instance_of(&context, "android/app/Application")? {
+        if context.is_null()
+            || !env.is_instance_of(&context, jni::jni_str!("android/app/Application"))?
+        {
             return Err(Error::WrongObjectType);
         }
         let vm = env.get_java_vm()?;
