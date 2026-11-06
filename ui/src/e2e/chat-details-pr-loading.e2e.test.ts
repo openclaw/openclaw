@@ -134,22 +134,39 @@ suite.define(() => {
         const before = (await details.boundingBox())!;
         const pauseHandoff = cpuRate === 1 && reducedMotion === "no-preference";
         const firstContentFrame = await details.evaluateHandle((panel, pause) => {
-          const handoff: { animation?: Animation; body?: HTMLElement } = {};
+          const handoff: {
+            animation?: Animation;
+            body?: HTMLElement;
+            beforeClose?: AnimationPlayState;
+          } = {};
           return {
             handoff,
-            frame: new Promise<number>((resolve) => {
+            frame: new Promise<number>((resolve, reject) => {
               const pending = panel.querySelector("openclaw-panel-loading-skeleton")!;
               const observer = new MutationObserver(() => {
                 if (!pending.isConnected) {
                   observer.disconnect();
                   requestAnimationFrame(() => {
+                    const height = panel.getBoundingClientRect().height;
                     if (pause) {
                       handoff.body =
                         panel.querySelector<HTMLElement>(".chat-details-desktop-body") ?? undefined;
                       handoff.animation = handoff.body?.getAnimations()[0];
                       handoff.animation?.pause();
+                      handoff.beforeClose = handoff.animation?.playState;
+                      const toggle = [
+                        ...panel.ownerDocument.querySelectorAll<HTMLButtonElement>(
+                          "button.chat-details-toggle",
+                        ),
+                      ].find((button) => button.checkVisibility());
+                      if (!toggle) {
+                        reject(new Error("Missing native Details toggle"));
+                        return;
+                      }
+                      // Close before a later frame can retarget the captured animation.
+                      toggle.click();
                     }
-                    resolve(panel.getBoundingClientRect().height);
+                    resolve(height);
                   });
                 }
               });
@@ -160,10 +177,10 @@ suite.define(() => {
         module.release();
         const firstHeight = await firstContentFrame.evaluate((probe) => probe.frame);
         if (pauseHandoff) {
-          expect(
-            await firstContentFrame.evaluate((probe) => probe.handoff.animation?.playState),
-          ).toBe("paused");
-          await closeChatDetails(page);
+          expect(await firstContentFrame.evaluate((probe) => probe.handoff.beforeClose)).toBe(
+            "paused",
+          );
+          await details.waitFor({ state: "hidden" });
           expect(
             await firstContentFrame.evaluate((probe) => probe.handoff.animation?.playState),
           ).toBe("idle");
