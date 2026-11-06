@@ -21,6 +21,7 @@ images, then [recreate the affected sandboxes](/cli/sandbox#openclaw-sandbox-rec
 The npm package includes the standalone `scripts/sandbox-image-build.sh` builder
 and the default Dockerfile. `openclaw doctor --fix` locates this builder in the
 installed package, so you can run it from any directory with Docker available.
+Doctor skips image checks when sandbox mode is `off` (the default).
 
 The common and browser image builders still require a [source checkout](https://github.com/openclaw/openclaw)
 or the manual build instructions below.
@@ -34,11 +35,26 @@ or the manual build instructions below.
     scripts/sandbox-setup.sh
     ```
 
-    From an npm install (no source checkout needed):
+    From an npm install with Docker sandboxing already enabled (no source checkout needed):
 
     ```bash
     openclaw doctor --fix
     ```
+
+    For a fresh install, first configure the Docker backend and enable sandboxing
+    by setting `agents.defaults.sandbox.mode` to `non-main` or `all`, then run
+    Doctor and accept the image build. See [Sandboxing](/gateway/sandboxing) for
+    mode selection.
+
+    To provision the image before enabling sandboxing, run the packaged builder
+    directly. For a global npm install:
+
+    ```bash
+    bash "$(npm root -g)/openclaw/scripts/sandbox-image-build.sh"
+    ```
+
+    For a local npm install, use that installation's
+    `node_modules/openclaw/scripts/sandbox-image-build.sh` path instead.
 
     The default image does **not** include Node. If a skill needs Node (or other runtimes), either bake a custom image or install via `sandbox.docker.setupCommand` (requires network egress + writable root + root user).
 
