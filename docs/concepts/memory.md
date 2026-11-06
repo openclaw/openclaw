@@ -105,6 +105,12 @@ workspace. They are indexed for `memory_search` and available through
 `memory_get`; they are not merged into the agent's bootstrap `MEMORY.md`. The
 source files are left unchanged.
 
+To search raw session transcripts on disk directly (including OpenClaw, Codex,
+Claude Code, Hermes, Cursor, and 38 other coding assistants) without copying
+them into workspace Markdown, use the external
+[`@vshulcz/openclaw-deja`](https://github.com/vshulcz/deja-vu/tree/main/extensions/openclaw)
+plugin (`openclaw plugins install clawhub:@vshulcz/openclaw-deja`).
+
 The preview marks destination conflicts. Enable **Replace existing imports** to
 replace those files; apply creates a verified pre-import backup and preserves
 item-level copies of overwritten files in the migration report.
