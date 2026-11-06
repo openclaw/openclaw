@@ -22,10 +22,15 @@ const refreshed = (fixture: Fixture) => async () => ({
 
 // A peer run sharing this account claims the refresh and holds its durable pending fence until
 // `release`; `settle` is the refresh result the peer then publishes.
-async function holdPeerRefresh(fixture: Fixture, settle: () => ReturnType<Fixture["refresh"]>) {
+async function holdPeerRefresh(
+  fixture: Fixture,
+  settle: () => ReturnType<Fixture["refresh"]>,
+  release = createDeferredCore(),
+  beforeEnter?: Promise<void>,
+) {
   const entered = createDeferredCore();
-  const release = createDeferredCore();
   fixture.refresh.mockImplementationOnce(async () => {
+    await beforeEnter;
     entered.resolve();
     await release.promise;
     return settle();
@@ -128,35 +133,47 @@ it("resolves again instead of returning the token read before a peer publication
   });
 });
 
-it("bounds a peer publication that begins as lookup completes by the run's auth deadline", async () => {
-  // Date is frozen by the fixture, so every auth step gets the same one-second real budget.
-  const getDeadline = () => ({ kind: "bounded" as const, deadlineAtMs: Date.now() + 1_000 });
-  await withRequestFixture(
-    async (fixture) => {
-      await fixture.controller.initializeAuthProfile();
-      let held: Awaited<ReturnType<typeof holdPeerRefresh>> | undefined;
-      const lookup = modelAuth.getApiKeyForModelCore;
-      vi.spyOn(modelAuth, "getApiKeyForModelCore").mockImplementationOnce(async (params) => {
-        const resolved = await lookup(params);
-        held = await holdPeerRefresh(fixture, refreshed(fixture));
-        return resolved;
-      });
-      const { outcome } = requestAuth(fixture);
-      try {
-        const settledBeforePeer = await Promise.race([
-          outcome,
-          new Promise((resolve) => {
-            setTimeout(() => resolve("still waiting"), 5_000);
-          }),
-        ]);
-        expect(settledBeforePeer).toMatchObject({
-          error: { message: expect.stringMatching(/timed out at the run deadline/) },
+it.each([false, true])(
+  "bounds peer refresh at the run deadline (preparing=%s)",
+  async (preparing) => {
+    // Date is frozen by the fixture, so every auth step gets the same one-second real budget.
+    const getDeadline = () => ({ kind: "bounded" as const, deadlineAtMs: Date.now() + 1_000 });
+    await withRequestFixture(
+      async (fixture) => {
+        await fixture.controller.initializeAuthProfile();
+        let held: Awaited<ReturnType<typeof holdPeerRefresh>> | undefined;
+        const peerAdmission = createDeferredCore();
+        const release = createDeferredCore();
+        const lookup = modelAuth.getApiKeyForModelCore;
+        vi.spyOn(modelAuth, "getApiKeyForModelCore").mockImplementationOnce(async (params) => {
+          const resolved = await lookup(params);
+          held = await holdPeerRefresh(
+            fixture,
+            refreshed(fixture),
+            release,
+            preparing ? peerAdmission.promise : undefined,
+          );
+          return resolved;
         });
-      } finally {
-        held?.release();
-        await held?.peer;
-      }
-    },
-    { getDeadline },
-  );
-});
+        const { outcome } = requestAuth(fixture);
+        try {
+          const settledBeforePeer = await Promise.race([
+            outcome,
+            new Promise((resolve) => {
+              setTimeout(() => resolve("still waiting"), 5_000);
+            }),
+          ]);
+          expect(settledBeforePeer).toMatchObject({
+            error: { message: expect.stringMatching(/timed out at the run deadline/) },
+          });
+        } finally {
+          peerAdmission.resolve();
+          // The auth deadline can settle before holdPeerRefresh returns its cleanup handle.
+          release.resolve();
+          await held?.peer;
+        }
+      },
+      { getDeadline },
+    );
+  },
+);
