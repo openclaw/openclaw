@@ -1,2 +1,4 @@
-# Creation/agents.list scope regressions and existing picker E2E writer coverage.
-44
+# Creation/agents.list scope regressions and existing picker E2E writer coverage,
+# including nonwriter denial, operator.write revocation at final persistence,
+# and preservation of every existing mode for a write-only caller.
+58
