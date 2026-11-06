@@ -611,9 +611,12 @@ openclaw-select-picker {
   width: max-content;
   height: 0;
   overflow: hidden;
-  /* Match the real list's intrinsic scrollbar gutter, including in WebKit. */
-  overflow-y: scroll;
   visibility: hidden;
+
+  /* Mirror the gutter only while the real list overflows, including after filtering. */
+  &:has(~ .picker-select__options:is([data-fade-start], [data-fade-end])) {
+    overflow-y: scroll;
+  }
 }
 
 .picker-select__window {
