@@ -494,17 +494,10 @@ function loadLocalNavigationPreferences(
     return loadUiPreferences(gatewayUrl || undefined);
   }
   try {
-    const navigation = profileNavigation(
+    return profileNavigation(
       readSettingsForGateway(getSafeLocalStorage(), gatewayUrl)?.parsed,
       profileId,
     );
-    return navigation
-      ? {
-          sidebarEntries: navigation.railShortcuts,
-          sidebarAgentOrder: navigation.sidebarAgentOrder,
-          personalSessionGroups: navigation.personalSessionGroups,
-        }
-      : null;
   } catch {
     return null;
   }

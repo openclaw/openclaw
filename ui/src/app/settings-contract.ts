@@ -1,4 +1,5 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
@@ -28,7 +29,7 @@ export function normalizeSidebarAgentOrder(value: unknown): string[] | undefined
     if (typeof candidate !== "string" || !isValidAgentId(candidate)) {
       continue;
     }
-    const id = normalizeAgentId(candidate);
+    const id = normalizeLowercaseStringOrEmpty(candidate);
     if (ids.has(id)) {
       continue;
     }

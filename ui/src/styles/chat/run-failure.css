@@ -244,18 +244,22 @@
   height: 14px;
 }
 
-/* Phone columns spend the spacing first; only then does the title ellipsize. */
+/* Phone columns give the cause its own line; actions wrap below it. */
 @media (max-width: 560px) {
   .chat-run-failure {
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 6px;
   }
 
   .chat-run-failure::before,
   .chat-run-failure::after {
-    min-width: 4px;
+    display: none;
   }
 
   .chat-run-failure__toggle {
+    flex-basis: 100%;
+    justify-content: center;
     gap: 4px;
     padding-inline: 6px 4px;
   }
