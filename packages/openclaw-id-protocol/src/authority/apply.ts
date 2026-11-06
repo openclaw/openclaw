@@ -6,7 +6,7 @@ import {
   verifyInviteRedemption,
   type AssertedIdentity,
 } from "../invites.js";
-import { fingerprint, type IrohEndpointKey } from "../keys.js";
+import { fingerprint, type IrohEndpointKey, type KeyFingerprint } from "../keys.js";
 import {
   MAX_INVITES,
   MAX_MEMBER_PEER_KEYS,
@@ -20,7 +20,12 @@ import {
 } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { verifyOwnerStatement, type Authority, type VerifyOptions } from "../statements/verify.js";
-import { ownerDeviceListedSeq, peerKeyListedSeq, withoutMemberPeerKeys } from "./allowlist.js";
+import {
+  approvalDescendants,
+  ownerDeviceListedSeq,
+  peerKeyListedSeq,
+  withoutMemberPeerKeys,
+} from "./allowlist.js";
 import { withoutSpentInvites } from "./invite-retention.js";
 import { applyRevocation } from "./revocation.js";
 import {
@@ -279,9 +284,54 @@ function addMember(
   );
 }
 
-// The certificate's signer must be R or a current owner device with approve_device, and an
-// owner device may grant only caps it holds (R may grant any); the Gateway records the
-// granted caps and the signer as approved_by. At most MAX_OWNER_DEVICES devices are listed.
+// Whether the certificate was signed by the same key as the change that carries it, so the
+// change's current authority is the authority of the grant.
+function signedByChangeSigner(
+  state: AuthorityState,
+  cert: SignedStatement<"OwnerDeviceCert">,
+  authority: Authority,
+): boolean {
+  if (authority.kind === "root") {
+    return cert.signer === state.anchor.root_pub;
+  }
+  return authority.kind === "owner_device" && cert.signer === authority.device_pub;
+}
+
+// Who a device listed by this change counts as approved by. A new device is approved by the
+// change's signer. A listed device keeps its approver unless R re-anchors it, so a re-add by an
+// owner device can never move a device out from under the device that approved it.
+async function approverFor(
+  existing: OwnerDeviceRecord | undefined,
+  authority: Authority,
+  cert: SignedStatement<"OwnerDeviceCert">,
+): Promise<OwnerApprover> {
+  if (authority.kind === "root") {
+    return "root";
+  }
+  return existing ? existing.approved_by : await fingerprint(cert.signer);
+}
+
+// Whether an owner device may re-add the listed device `fp`: only itself or a device it approved,
+// directly or through devices it approved, so whatever it changes (peer keys included) stays
+// inside its own removal cascade.
+async function mayReAdd(
+  state: AuthorityState,
+  authority: Authority,
+  fp: KeyFingerprint,
+): Promise<boolean> {
+  if (authority.kind === "root") {
+    return true;
+  }
+  if (authority.kind !== "owner_device") {
+    return false;
+  }
+  return approvalDescendants(state, await fingerprint(authority.device_pub)).includes(fp);
+}
+
+// The certificate must be signed by the change's signer: R or a current owner device with
+// approve_device. An owner device may grant only caps it holds (R may grant any), may re-add only
+// devices in its own approval subtree, and only R may raise a listed device's caps. The Gateway records the granted caps and the approver. At most
+// MAX_OWNER_DEVICES devices are listed.
 async function addOwnerDevice(
   state: AuthorityState,
   cert: SignedStatement<"OwnerDeviceCert">,
@@ -296,6 +346,11 @@ async function addOwnerDevice(
   if (!verified.ok) {
     return refuse(state, verified.code, `certificate: ${verified.detail}`);
   }
+  // A certificate signed by anyone else (for example, an old R-signed certificate carried by an
+  // owner device's change) would grant with authority the change's signer does not hold now.
+  if (!signedByChangeSigner(state, cert, authority)) {
+    return refuse(state, "wrong_signer", "certificate must be signed by the change's signer");
+  }
   const window = certificateWindowError(cert.body, context.now);
   if (window) {
     return refuse(state, window.code, `certificate: ${window.detail}`);
@@ -309,11 +364,18 @@ async function addOwnerDevice(
   }
   const fp = await fingerprint(cert.body.device_pub);
   const existing = state.owner_devices[fp];
+  if (existing && !(await mayReAdd(state, authority, fp))) {
+    return refuse(
+      state,
+      "target_mismatch",
+      "an owner device may re-add only itself or a device it approved",
+    );
+  }
   // verifyOwnerStatement already held the grant within the signing device's recorded caps.
   // Re-adding a listed device through an owner device never raises what it already holds.
   if (
     existing &&
-    verified.authority.kind !== "root" &&
+    authority.kind !== "root" &&
     !cert.body.caps.every((cap) => existing.caps.includes(cap))
   ) {
     return refuse(
@@ -335,7 +397,7 @@ async function addOwnerDevice(
   const record: OwnerDeviceRecord = {
     cert,
     caps: [...cert.body.caps],
-    approved_by: verified.authority.kind === "root" ? "root" : await fingerprint(cert.signer),
+    approved_by: await approverFor(existing, authority, cert),
     last_seen: context.now,
     listed_seq: existing ? ownerDeviceListedSeq(existing) : state.seq,
     peer_listed_seq: cert.body.peer_keys.map((key) => peerKeyListedSeq(state, key) ?? state.seq),

@@ -921,8 +921,16 @@ if (runCheckPlan && proposedCheckScope?.types) {
     const { getChangedPathFacts, isTestLineAllocationPath } = await import(
       fromTarget("./scripts/lib/changed-path-facts.mjs")
     );
+    const { resolveCiCheckFamilyScope } = await import(
+      fromTarget("./scripts/lib/ci-check-family-scope.mts")
+    );
+    const budgetCompanions = changedPaths.filter((file) => !isTestLineAllocationPath(file));
+    const budgetOnlyFallback =
+      budgetCompanions.length < changedPaths.length &&
+      resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
     // Shared tests and numeric allocations retain every guard family, including
-    // allocation validation. Compiler/lint owners still discover all consumers.
+    // allocation validation. A budget record does not widen otherwise scoped
+    // source companions; compiler/lint owners still discover all consumers.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
@@ -930,8 +938,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
         !file.includes("\\") &&
         (isTestLineAllocationPath(file) ||
           (["source", "package", "ui", "extension"].includes(facts.surface) &&
-            facts.isTestOnly &&
-            facts.isChangedLaneTest))
+            (budgetOnlyFallback || (facts.isTestOnly && facts.isChangedLaneTest))))
       );
     });
   }

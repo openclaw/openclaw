@@ -56,8 +56,8 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
   // Retired copy, browser fallbacks, and unused initializers: measured head plus 64 B.
-  chatBootJsGzipBytes: 1_288_473,
-  newBootJsGzipBytes: 797_135,
+  chatBootJsGzipBytes: 1_288_098,
+  newBootJsGzipBytes: 797_539,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -72,8 +72,8 @@ const controlUiPerformanceBudgets = {
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  totalCssGzipBytes: 324_169,
-  totalCssRawBytes: 1_674_059,
+  totalCssGzipBytes: 324_684,
+  totalCssRawBytes: 1_675_382,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

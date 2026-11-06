@@ -267,10 +267,6 @@ openclaw-chat-question-panel {
   font-weight: 700;
 }
 
-.chat-question-panel__option[role="radio"] .chat-question-panel__option-marker {
-  border-radius: var(--radius-full);
-}
-
 .chat-question-panel__option--selected .chat-question-panel__option-marker {
   border-color: var(--accent);
 }
