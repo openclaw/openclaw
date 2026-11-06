@@ -13,9 +13,8 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.ts";
 import type { OpenClawConfig } from "../../../src/config/types.ts";
 import { isGatewayProtocolResponseError, type GatewayClient } from "../../../src/gateway/client.ts";
-import { resolveConfigRestartRequirement } from "../../../src/gateway/config-reload-plan.ts";
+import { buildGatewayReloadPlan } from "../../../src/gateway/config-reload-plan.ts";
 import { startGatewayServer } from "../../../src/gateway/server.ts";
-import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -42,6 +41,7 @@ import {
   createProofPolicy,
   createProofSource,
   classifySkillProofFailure,
+  skillProofOperatorClientOptions,
   digest,
   proofBinary,
   proofExecutable,
@@ -227,30 +227,70 @@ async function connect(
   requestedScopes: string[] = scopes,
   continuity?: { hellos: number; closes: number },
 ) {
-  return acquireGatewayTestClient(
-    {
+  const hello: {
+    received: boolean;
+    identityPrepared: boolean;
+    closeCode: number | null;
+    closePhase: string | null;
+    socketOpened: boolean | null;
+    connectRequestSent: boolean | null;
+    reasonCategory: string | null;
+  } = {
+    received: false,
+    identityPrepared: false,
+    closeCode: null,
+    closePhase: null,
+    socketOpened: null,
+    connectRequestSent: null,
+    reasonCategory: null,
+  };
+  try {
+    const options = skillProofOperatorClientOptions(
+      state,
+      name,
       url,
-      clientName: "test",
-      mode: "test",
-      scopes: requestedScopes,
-      onHelloOk: () => {
-        if (continuity) {
-          continuity.hellos += 1;
-        }
+      new URL(suite.server.baseUrl).origin,
+      requestedScopes,
+    );
+    hello.identityPrepared = Boolean(options.deviceIdentity);
+    return await acquireGatewayTestClient(
+      {
+        ...options,
+        onHelloOk: () => {
+          hello.received = true;
+          if (continuity) {
+            continuity.hellos += 1;
+          }
+        },
+        onClose: (code, reason, info) => {
+          hello.closeCode = code;
+          hello.closePhase = info?.phase ?? null;
+          hello.socketOpened = info?.socketOpened ?? null;
+          hello.connectRequestSent = info?.connectRequestSent ?? null;
+          hello.reasonCategory = /pair/iu.test(reason)
+            ? "pairing"
+            : /origin/iu.test(reason)
+              ? "origin"
+              : /auth|token|credential|identity/iu.test(reason)
+                ? "authentication"
+                : /protocol|invalid/iu.test(reason)
+                  ? "protocol"
+                  : "other";
+          if (continuity) {
+            continuity.closes += 1;
+          }
+        },
       },
-      onClose: () => {
-        if (continuity) {
-          continuity.closes += 1;
-        }
+      {
+        timeoutMs: 15000,
+        timeoutMessage: "Owned profile authentication did not complete",
+        closeMessage: "Owned profile connection closed before hello",
       },
-      deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path("clients/" + name + ".json") }),
-    },
-    {
-      timeoutMs: 15000,
-      timeoutMessage: "Owned profile authentication did not complete",
-      closeMessage: "Owned profile connection closed before hello",
-    },
-  );
+    );
+  } catch (error) {
+    console.error("Owned operator HELLO facts: " + JSON.stringify({ actor: name, ...hello }));
+    throw error;
+  }
 }
 const list = (client: GatewayClient) =>
   client.request<SkillsLibraryListResult>("skills.library.list", {});
@@ -739,11 +779,10 @@ suite.define(() => {
                       },
                     };
                     expect(
-                      resolveConfigRestartRequirement({
-                        changedPaths: ["skills.library.import.allowedOrigins"],
+                      buildGatewayReloadPlan(["skills.library.import.allowedOrigins"], {
                         previousConfig: beforeGrant.config,
-                        nextConfig: removedGrant,
-                      }).requiresRestart,
+                        candidateConfig: removedGrant,
+                      }).restartGateway,
                     ).toBe(false);
                     const originalConnection = { ...fixture.writerConnection };
                     expect(originalConnection).toEqual({ hellos: 1, closes: 0 });

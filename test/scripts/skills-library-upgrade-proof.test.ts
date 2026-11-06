@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { cp } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { GatewayClientRequestTimeoutError } from "../../packages/gateway-client/src/client.ts";
 import { isGatewayProtocolResponseError } from "../../src/gateway/client.ts";
+import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.ts";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.ts";
 import {
   writePublicProof,
   classifySkillProofFailure,
+  skillProofOperatorClientOptions,
   type ImportProofReport,
 } from "../../ui/src/e2e/skills-library-import-proof.test-support.ts";
 import {
@@ -182,4 +186,67 @@ it("retains a typed client deadline but never treats it as a server denial", () 
   expect(facts.clientTimeouts).toEqual([
     { method: "skills.library.import", timeoutMs: 60000, requestSent: true },
   ]);
+});
+
+it("uses a named canonical device identity and the owned operator UI contract", async () => {
+  await withOpenClawTestState({ label: "skill-operator-options" }, async (state) => {
+    expect(() => loadOrCreateDeviceIdentity({ path: state.path("clients/writer.json") })).toThrow(
+      "Device identity path must be",
+    );
+    const origin = "http://127.0.0.1:54321";
+    const url = "ws://127.0.0.1:12345";
+    const scopes = ["operator.read", "operator.write"];
+    const options = skillProofOperatorClientOptions(state, "writer", url, origin, scopes);
+    expect({
+      url: options.url,
+      origin: options.origin,
+      clientName: options.clientName,
+      mode: options.mode,
+      role: options.role,
+      sharedStateMode: options.sharedStateMode,
+      scopes: options.scopes,
+    }).toEqual({
+      url,
+      origin,
+      clientName: "openclaw-control-ui",
+      mode: "webchat",
+      role: "operator",
+      sharedStateMode: "read-only",
+      scopes,
+    });
+    const identity = loadOrCreateDeviceIdentity({
+      env: state.env,
+      identityKey: "skills-proof-writer",
+    });
+    expect(options.deviceIdentity?.deviceId).toBe(identity.deviceId);
+    expect(
+      skillProofOperatorClientOptions(state, "writer", url, origin, scopes).deviceIdentity
+        ?.deviceId,
+    ).toBe(identity.deviceId);
+    expect(
+      skillProofOperatorClientOptions(state, "reader", url, origin, scopes).deviceIdentity
+        ?.deviceId,
+    ).not.toBe(identity.deviceId);
+  });
+});
+
+it("keeps the upgrade client identity in the corresponding copied owned state", async () => {
+  const identityKey = "skills-upgrade-proof-client";
+  await withOpenClawTestState({ label: "upgrade-identity-stable" }, async (stable) => {
+    const original = loadOrCreateDeviceIdentity({ env: stable.env, identityKey });
+    await withOpenClawTestState({ label: "upgrade-identity-control" }, async (control) => {
+      expect(loadOrCreateDeviceIdentity({ env: control.env, identityKey }).deviceId).not.toBe(
+        original.deviceId,
+      );
+    });
+    await withOpenClawTestState({ label: "upgrade-identity-candidate" }, async (candidate) => {
+      expect(candidate.env.OPENCLAW_STATE_DIR !== stable.env.OPENCLAW_STATE_DIR).toBe(true);
+      await cp(stable.stateDir, candidate.stateDir, { recursive: true, force: true });
+      const copied = loadOrCreateDeviceIdentity({ env: candidate.env, identityKey });
+      expect(copied.deviceId).toBe(original.deviceId);
+      expect(loadOrCreateDeviceIdentity({ env: candidate.env, identityKey }).deviceId).toBe(
+        copied.deviceId,
+      );
+    });
+  });
 });

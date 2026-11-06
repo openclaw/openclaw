@@ -326,7 +326,10 @@ async function authenticatedClient(instance: OpenClawTestInstance, email: string
         clientName: "test",
         mode: "test",
         scopes: ["operator.admin", "operator.read", "operator.write"],
-        deviceIdentity: loadOrCreateDeviceIdentity({ path: path.join(root, "client-device.json") }),
+        deviceIdentity: loadOrCreateDeviceIdentity({
+          env: instance.env,
+          identityKey: "skills-upgrade-proof-client",
+        }),
       },
       {
         timeoutMs: 15000,

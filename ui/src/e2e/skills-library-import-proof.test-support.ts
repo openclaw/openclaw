@@ -11,9 +11,16 @@ import {
   readErrorName,
 } from "@openclaw/normalization-core/error-coercion";
 import { GatewayClientRequestTimeoutError } from "../../../packages/gateway-client/src/client.ts";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.ts";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/gateway-error-codes.ts";
 import type { OpenClawConfig } from "../../../src/config/types.ts";
 import { validateConfigObjectRaw } from "../../../src/config/validation-core.ts";
+import type { GatewayClientOptions } from "../../../src/gateway/client.ts";
+import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
+import type { OpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import type { createLoopbackTlsFixture } from "../../../test/helpers/loopback-tls.test-support.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 
@@ -244,6 +251,29 @@ export type ImportProofReport = {
     newImportSucceeded: boolean;
   };
 };
+
+// A trusted-proxy operator fixture must use the public browser lane its configured pairing policy admits.
+export function skillProofOperatorClientOptions(
+  state: OpenClawTestState,
+  actor: string,
+  url: string,
+  origin: string,
+  scopes: string[],
+): GatewayClientOptions {
+  return {
+    url,
+    origin,
+    clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    role: "operator",
+    scopes,
+    sharedStateMode: "read-only",
+    deviceIdentity: loadOrCreateDeviceIdentity({
+      env: state.env,
+      identityKey: "skills-proof-" + actor,
+    }),
+  };
+}
 
 export function classifySkillProofFailure(error: unknown) {
   const errors = collectErrorGraphCandidates(error, readErrorCauses).slice(0, 8);
