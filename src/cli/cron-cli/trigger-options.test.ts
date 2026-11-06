@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -369,6 +370,57 @@ function runOptions(operation: "add" | "edit", options: Record<string, string | 
 async function rejectAdd(options: Record<string, string | true>, message: string) {
   await reject([...addArgs, ...flags({ every: "30s", ...options })], message);
 }
+
+it.skipIf(process.platform === "win32").each(["script", "trigger-script", "file"])(
+  "rejects FIFO --%s inputs without a Gateway mutation",
+  async (option) => {
+    const dir = tempDirs.make("cron-fifo-");
+    const fifo = path.join(dir, "input.pipe");
+    execFileSync("mkfifo", [fifo]);
+    const input = option === "trigger-script" ? `${fifo}.link` : fifo;
+    if (input !== fifo) {
+      await fs.symlink(fifo, input);
+    }
+    // A finite writer lets a regressed reader fail the assertion without hanging.
+    const writer = spawn(
+      process.execPath,
+      ["-e", "require('node:fs').writeFileSync(process.argv[1], 'return { fire: false };')", fifo],
+      { stdio: "ignore" },
+    );
+    const closed = new Promise((resolve) => {
+      writer.once("close", resolve);
+    });
+    try {
+      const args =
+        option === "file"
+          ? ["scratch", "job-1", "--file", input]
+          : option === "script"
+            ? [...addArgs, "--every", "1m", "--script", input]
+            : ["edit", "job-1", "--trigger-script", input];
+      await reject(args, "regular file", option === "file" ? ["cron.scratch.get"] : []);
+    } finally {
+      writer.kill("SIGKILL");
+      await closed;
+    }
+  },
+);
+
+it.each([
+  ["Trigger script", readCronTriggerScript, 65_536],
+  ["Script payload", readCronPayloadScript, 65_536],
+  ["Cron scratch", readCronScratchContent, CRON_JOB_SCRATCH_MAX_BYTES],
+] as const)("preserves the %s byte limit for files and stdin", async (label, read, limit) => {
+  const text = "x".repeat(limit);
+  const file = await fixture("bounded.txt", text);
+  await expect(read(file)).resolves.toBe(text);
+  await expect(read("-", { stdin: Readable.from([text]) })).resolves.toBe(text);
+  await fs.appendFile(file, "x");
+  for (const input of [file, "-"]) {
+    await expect(read(input, { stdin: Readable.from([text, "x"]) })).rejects.toThrow(
+      `${label} exceeds ${limit} bytes`,
+    );
+  }
+});
 
 describe("cron trigger CLI options", () => {
   it.each([
