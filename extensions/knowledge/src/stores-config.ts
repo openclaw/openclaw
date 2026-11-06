@@ -23,8 +23,8 @@ export type StoresSection = Static<typeof StoresSection>;
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(
   {
-    operatorRead: Type.Optional(Type.Boolean()),
-    writesEnabled: Type.Optional(Type.Boolean()),
+    operatorRead: Type.Optional(Type.Boolean({ default: true })),
+    writesEnabled: Type.Optional(Type.Boolean({ default: true })),
     stores: Type.Optional(StoresSection),
     pageBudgets: Type.Optional(
       Type.Object(

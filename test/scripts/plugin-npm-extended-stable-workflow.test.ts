@@ -522,6 +522,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
           EVENTS: events,
           RUNNER_TEMP: root,
           TARBALL_PATH: tarball,
+          PREPARED_NPM_ARTIFACT: "",
           PUBLISH_TAG: publishTag,
           PACKAGE_VERSION: "2026.7.33",
           GITHUB_REPOSITORY: "openclaw/openclaw",
