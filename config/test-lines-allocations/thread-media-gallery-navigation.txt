@@ -1,3 +1,4 @@
-# Thirteen net lines remain after consolidating overlapping thread/inline gallery proof.
-# Preserve callback arity, duplicate inline slots, and cross-turn image/video navigation.
-13
+# Forty-six net lines remain after consolidating overlapping thread/inline gallery proof.
+# Preserve source authority, callback arity, duplicate slots, cross-turn image/video browsing,
+# and real activation of remote/oversized recovered Markdown images (33 new regression lines).
+46

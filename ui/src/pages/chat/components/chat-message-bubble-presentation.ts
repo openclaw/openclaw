@@ -31,6 +31,10 @@ import {
   type ImageRenderOptions,
   projectMessageMedia,
 } from "./chat-message-media.ts";
+import {
+  type AssistantMessageDisclosure,
+  resolveMessageMarkdownRender,
+} from "./chat-message-text-preparation.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -84,13 +88,23 @@ function preparedImageSlots(
     preparation.normalizedMessage.content,
   ),
   renderInOrder?: boolean,
-  markdown = preparation.displayMarkdown,
+  rawMarkdown = preparation.displayMarkdown,
   isStreaming = false,
+  disclosure?: AssistantMessageDisclosure,
 ) {
   const asyncQuestions = Boolean(
     opts.asyncQuestions?.submit && readAsyncQuestions(preparation.message),
   );
   const role = normalizeRoleForGrouping(preparation.normalizedMessage.role);
+  const rendered = resolveMessageMarkdownRender(
+    rawMarkdown,
+    { role, assistantMessageDisclosure: disclosure },
+    messageMarkdownRenderOptions(role, preparation, rawMarkdown, {
+      onOpenImage: opts.onOpenImage,
+      isStreaming,
+    }),
+  );
+  const markdown = rendered.source;
   const inOrder =
     renderInOrder ??
     rendersMediaInOrder({
@@ -116,14 +130,7 @@ function preparedImageSlots(
         content: [{ type: "text", text: media.markdown }],
       })
     : markdown;
-  const inline = readMarkdownImageSlots(
-    source,
-    messageMarkdownRenderOptions(role, preparation, source, {
-      onOpenImage: opts.onOpenImage,
-      isStreaming,
-    }),
-    media,
-  );
+  const inline = readMarkdownImageSlots(source, rendered.options, media);
   return {
     slots: inOrder
       ? [...projection.supplementalImages, ...inline.images]
@@ -195,7 +202,7 @@ export type MessageMediaOptions = Pick<
   | "getThreadMediaMessages"
   | "asyncQuestions"
 > &
-  Partial<Pick<GroupedMessageOptions, "isStreaming">>;
+  Partial<Pick<GroupedMessageOptions, "isStreaming" | "assistantMessageDisclosure">>;
 
 /** Shared by transcript bubbles and read-only attachment catalogs. */
 export function createMessageMediaOptions(
@@ -216,6 +223,8 @@ export function createMessageMediaOptions(
       renderInOrder,
       markdown ?? undefined,
       opts.isStreaming,
+      // Recovery belongs to this message, never its lazily projected siblings.
+      opts.assistantMessageDisclosure,
     ));
   const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
   const options: ImageRenderOptions & { openInlineImage: (index: number, src: string) => void } = {
