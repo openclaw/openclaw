@@ -53,6 +53,7 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
 import {
   recallNativeSessionSystemPrompt,
   rememberNativeSessionSystemPrompt,
@@ -165,7 +166,7 @@ export async function executePreparedCliRun(
     params.controlOperation !== undefined
       ? basePrompt
       : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
-  const promptContext =
+  let promptContext: PreparedCliRunContext["promptContext"] =
     privatePrependContext || context.promptContext?.appendContext
       ? {
           ...(privatePrependContext
@@ -186,6 +187,15 @@ export async function executePreparedCliRun(
             : {}),
         }
       : undefined;
+  // Last text a plugin can screen before the CLI owns it; image paths stay host-owned.
+  if (context.beforeModelRequest) {
+    const request = await context.beforeModelRequest(
+      toCliModelRequestPayload(prompt, promptContext),
+    );
+    assertCurrent();
+    prompt = request.prompt;
+    promptContext = readCliPromptContext(request);
+  }
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||

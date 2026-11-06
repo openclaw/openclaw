@@ -132,7 +132,7 @@ contracts above; a modifying hook is not an observation hook.
 | `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                                      |
 | `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment                     |
 | `before_agent_run`              | Gate    | Inspect prompt and session messages before model submission; node turns gate Gateway input before worker-local context assembly |
-| `before_model_request`          | Modify  | Rewrite or withhold the final provider request body of an embedded model call                                                   |
+| `before_model_request`          | Modify  | Rewrite or withhold the final provider request body, or the prompt text handed to a CLI runtime                                 |
 | `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                                                  |
 | `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                                                |
 | `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |

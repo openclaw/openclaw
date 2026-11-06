@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
-const event = { payload: { input: "source" }, provider: "fixture", model: "fixture", messages: [] };
+const event = {
+  runtime: "embedded" as const,
+  payload: { input: "source" },
+  provider: "fixture",
+  model: "fixture",
+  messages: [],
+};
 describe("before_model_request", () => {
   it("awaits replacements in priority order", async () => {
     const runner = createHookRunner(

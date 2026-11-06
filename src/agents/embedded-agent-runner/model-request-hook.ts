@@ -40,6 +40,7 @@ export function createModelRequestTransformer(hookContext: PluginHookAgentContex
     const admitted = readProtectedFields(payload);
     const result = await hooks.runBeforeModelRequest(
       {
+        runtime: "embedded",
         payload,
         provider: model.provider,
         model: model.id,

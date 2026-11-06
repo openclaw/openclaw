@@ -61,7 +61,7 @@ This does not replace `dmPolicy`, allowlists, exec approvals, sandboxing, or `co
 
 ### Screening the final model request
 
-A trusted plugin can register the [`before_model_request`](/plugins/hooks/prompt-and-session#final-model-request-policy) hook to inspect the exact request body the embedded runner is about to send to the provider. That body holds everything assembled for the call: tool results, retrieved context, memory, attachments, and the conversation history. The plugin can return a rewritten payload (for example to strip or neutralize an injected instruction) or throw to withhold the request entirely; a thrown error or timeout fails the call and the original payload is never sent.
+A trusted plugin can register the [`before_model_request`](/plugins/hooks/prompt-and-session#final-model-request-policy) hook to inspect the exact request body the embedded runner is about to send to the provider, or the prompt text OpenClaw is about to hand a CLI-backed runtime such as `claude-cli`. That body holds everything assembled for the call: tool results, retrieved context, memory, attachments, and the conversation history. The plugin can return a rewritten payload (for example to strip or neutralize an injected instruction) or throw to withhold the request entirely; a thrown error or timeout fails the call and the original payload is never sent.
 
 The same hook works as a credential-screening (DLP) layer. API keys, tokens, passwords, or private keys that end up in tool output, a fetched page, or a pasted log can be redacted before they leave the gateway for the model provider.
 
@@ -113,7 +113,7 @@ export default definePluginEntry({
 });
 ```
 
-Pattern matching catches common credential formats, not every secret; keep secrets out of the agent's reachable filesystem and environment as the first layer. The hook covers embedded agent runs only: CLI-backed runtimes, external harnesses such as Codex, and compaction summary calls are not intercepted. See [Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy) for the full contract.
+Pattern matching catches common credential formats, not every secret; keep secrets out of the agent's reachable filesystem and environment as the first layer. The hook covers embedded agent runs and CLI-backed agent turns; on CLI runtimes it sees the turn and steered prompt text (`{ prompt, prependContext?, appendContext? }`), not the tool results the CLI reads inside its own loop. External harnesses such as Codex and compaction summary calls are not intercepted. See [Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy) for the full contract.
 
 ### Bypass flags (keep off in production)
 
