@@ -1,0 +1,3 @@
+# Real admitted Stop -> attempt cleanup -> paired node owner -> successor regression,
+# plus exact-execution close checks that preserve an active successor's ownership.
+505

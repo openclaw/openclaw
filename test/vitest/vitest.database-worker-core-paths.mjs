@@ -524,6 +524,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-tools.before-tool-call.embedded-mode.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.skills-policy.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt.computer-node-cleanup.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.code-mode-continuation.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.configured-mcp-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts",

@@ -4,6 +4,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
@@ -25,7 +26,11 @@ import {
   shouldUseInProcessGatewayTool,
   type GatewayCallOptions,
 } from "./gateway.js";
-import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
+import {
+  bindAgentToolGatewayRequest,
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "./in-process-gateway.js";
 import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
 
 export type ComputerBinding = {
@@ -240,11 +245,50 @@ export async function resolveComputerBinding(params: {
     isEligibleComputerNode,
     COMPUTER_NODE_MESSAGES,
   );
+  const caller = getGatewayToolCallerIdentity();
+  let cleanupRequest: ReturnType<typeof bindAgentToolGatewayRequest> | undefined;
+  if (shouldUseInProcessGatewayTool(params.gatewayOpts) && caller?.operationalRunInstance) {
+    captureGatewayToolCallerAssertion()?.();
+    // Disposal awaits this exact close even after the run is aborted. Bind the
+    // original Gateway without retaining the run or its tool-call work scope.
+    cleanupRequest = runOutsideAsyncWorkScope(() =>
+      runWithGatewayToolCleanupContext(
+        () => bindAgentToolGatewayRequest({ resolveGatewayContext: caller.gatewayContextResolver }),
+        caller.gatewayContextResolver,
+      ),
+    );
+  }
   return {
     host: { host: "node", nodeId: node.nodeId },
     gatewayOpts: params.gatewayOpts,
     capabilities: node.computerUse,
-    invoke: (request) =>
-      invokeAgentNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
+    invoke: async (request) => {
+      if (
+        cleanupRequest &&
+        request.command === COMPUTER_ACT_COMMAND &&
+        request.commandParams.action === "__close_execution"
+      ) {
+        const result = await cleanupRequest<{ payload: unknown }>({
+          method: "node.invoke",
+          params: {
+            nodeId: node.nodeId,
+            command: COMPUTER_ACT_COMMAND,
+            params: {
+              action: "__close_execution",
+              executionId: params.executionId,
+              reason: request.commandParams.reason,
+            },
+            idempotencyKey: `computer.close:${params.executionId}:node:${node.nodeId}`,
+          },
+          timeoutMs: params.gatewayOpts.timeoutMs,
+        });
+        return result.payload;
+      }
+      return await invokeAgentNodeCommand({
+        ...request,
+        nodeId: node.nodeId,
+        gatewayOpts: params.gatewayOpts,
+      });
+    },
   };
 }
