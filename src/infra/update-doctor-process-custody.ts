@@ -10,9 +10,9 @@ import type {
 } from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
+import { sleep } from "../utils/sleep.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
-import { sleep } from "../utils/sleep.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
   createManagedCommandProcessCustody,
@@ -303,7 +303,9 @@ export async function createUpdateDoctorProcessCustody(
         }
         try {
           // Snapshot exact native handles before joining; mutable IPC never selects this namespace.
-          let prepared: ReturnType<NonNullable<typeof nativeCustody>["prepareSettlement"]> | undefined;
+          let prepared:
+            | ReturnType<NonNullable<typeof nativeCustody>["prepareSettlement"]>
+            | undefined;
           for (let attempt = 1; ; attempt++) {
             try {
               prepared = nativeCustody?.prepareSettlement(pid, identities);
