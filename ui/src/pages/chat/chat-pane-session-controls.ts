@@ -16,10 +16,7 @@ import {
 } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
-import {
-  createChatDefaultModelRecovery,
-  type ChatDefaultModelRecovery,
-} from "./chat-default-model-recovery.ts";
+import type { ChatDefaultModelRecoveryReader } from "./chat-default-model-recovery.types.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { getAcceptedChatHistorySession, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
@@ -172,7 +169,7 @@ export function renderChatPaneComposerControls(params: {
     component: typeof ChatPaneModelControl;
   };
   permissionPicker: ChatPermissionPickerProps;
-  defaultModelRecovery?: ChatDefaultModelRecovery;
+  defaultModelRecovery?: ChatDefaultModelRecoveryReader;
 } {
   const {
     state,
@@ -282,10 +279,11 @@ export function renderChatPaneComposerControls(params: {
   return {
     defaultModelRecovery:
       sessionReady && !historyLoading
-        ? createChatDefaultModelRecovery(state, {
-            readAgentDefaultModel: () => agentDefaultModel,
-            canDispatch: () => ownsSelection() && canPatch({ model: null }),
-          })
+        ? (createRecovery) =>
+            createRecovery(state, {
+              readAgentDefaultModel: () => agentDefaultModel,
+              canDispatch: () => ownsSelection() && canPatch({ model: null }),
+            })
         : undefined,
     composerControls: {
       component: ChatPaneModelControl,

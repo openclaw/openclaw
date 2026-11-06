@@ -88,7 +88,7 @@ it.each([undefined, "fixture-profile"])(
         messages: [],
         connected: true,
         runError: pane.chatRunError,
-        defaultModelRecovery: action,
+        defaultModelRecovery: () => create(),
       }),
     );
     await waitForSolid(() =>
@@ -195,7 +195,9 @@ it.each(["lock", "failure"] as const)(
   "rechecks %s after model-switch confirmation",
   async (change) => {
     vi.stubGlobal("localStorage", createStorageMock());
-    onTestFinished(() => vi.unstubAllGlobals());
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const dialogs = createModalDialogTestFixture();
     onTestFinished(() => dialogs.cleanup());
     const { host, pane, row, create } = fixture();
