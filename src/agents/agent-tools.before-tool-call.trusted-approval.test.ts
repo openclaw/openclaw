@@ -7,6 +7,7 @@ import {
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
+import type { PluginTrustedToolPolicyRegistration } from "../plugins/host-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
@@ -126,4 +127,66 @@ describe("trusted approval rewrite isolation", () => {
       }
     },
   );
+
+  function installTrustedPolicy(policy: PluginTrustedToolPolicyRegistration): void {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [{ pluginId: "trusted-policy", source: "test", policy }];
+    setActivePluginRegistry(registry);
+  }
+
+  const stamp = { brayer: { harness: "openclaw", agent: "main", session: "agent:main:main" } };
+
+  it("returns requestMeta from a metadata-only trusted policy decision", async () => {
+    installTrustedPolicy({
+      id: "meta-policy",
+      description: "Metadata policy",
+      evaluate: () => ({ requestMeta: stamp }),
+    });
+    await expect(
+      runBeforeToolCallHook({ toolName: "exec", params: { command: "return 1;" } }),
+    ).resolves.toMatchObject({
+      blocked: false,
+      requestMeta: stamp,
+    });
+  });
+
+  it("keeps trusted-policy requestMeta through an approval grant", async () => {
+    installTrustedPolicy({
+      id: "meta-approval-policy",
+      description: "Metadata approval policy",
+      evaluate: () => ({
+        requireApproval: {
+          pluginId: "trusted-policy",
+          title: "Meta approval",
+          description: "Approve the stamped call",
+        },
+        requestMeta: stamp,
+      }),
+    });
+    const requestEvent = Promise.withResolvers<PluginApprovalRequest>();
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
+      if (event.event === "plugin.approval.requested") {
+        requestEvent.resolve(event.payload);
+      }
+    });
+    setEmbeddedPluginApprovalBroker(broker);
+    try {
+      const pending = runBeforeToolCallHook({
+        toolName: "exec",
+        params: { command: "return 1;" },
+      });
+      const request = await requestEvent.promise;
+      expect(broker.resolve(request.id, "allow-once")).toBe(true);
+      await expect(pending).resolves.toMatchObject({
+        blocked: false,
+        requestMeta: stamp,
+        approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+    } finally {
+      broker.stop();
+      setEmbeddedPluginApprovalBroker(null);
+      setEmbeddedMode(false);
+    }
+  });
 });

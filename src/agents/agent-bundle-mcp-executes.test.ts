@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../infra/embedded-plugin-approval-broker.js";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
+import type { PluginTrustedToolPolicyRegistration } from "../plugins/host-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { fixtureCatalog, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
@@ -49,6 +57,9 @@ beforeEach(() => {
 
 afterEach(() => {
   mockGetGlobalHookRunner.mockReset();
+  setEmbeddedPluginApprovalBroker(null);
+  setEmbeddedMode(false);
+  setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 async function materializedInbox(
@@ -162,6 +173,78 @@ describe("bundle-mcp execute request-meta provenance", () => {
       { _meta: stamp },
     );
     await view.dispose();
+  });
+
+  function installTrustedMetaPolicy(policy: PluginTrustedToolPolicyRegistration): void {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [{ pluginId: "trusted-policy", source: "test", policy }];
+    setActivePluginRegistry(registry);
+  }
+
+  it("forwards trusted-policy requestMeta through invocation and MCP dispatch", async () => {
+    installTrustedMetaPolicy({
+      id: "meta-policy",
+      description: "Metadata policy",
+      evaluate: () => ({ requestMeta: stamp }),
+    });
+    const { callTool, view } = await materializedInbox();
+    const tool = wrapToolWithBeforeToolCallHook(view.tools[0]!, hookCtx);
+
+    await tool.execute("call-trusted-meta", { folder: "team" }, undefined, undefined);
+
+    expect(callTool).toHaveBeenCalledExactlyOnceWith(
+      "user-mail",
+      "inbox",
+      { folder: "team" },
+      { _meta: stamp },
+    );
+    await view.dispose();
+  });
+
+  it("forwards trusted-policy requestMeta across an approval grant through MCP dispatch", async () => {
+    installTrustedMetaPolicy({
+      id: "meta-approval-policy",
+      description: "Metadata approval policy",
+      evaluate: () => ({
+        requireApproval: {
+          pluginId: "trusted-policy",
+          title: "Meta approval",
+          description: "Approve the stamped call",
+        },
+        requestMeta: stamp,
+      }),
+    });
+    const requestEvent = Promise.withResolvers<PluginApprovalRequest>();
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
+      if (event.event === "plugin.approval.requested") {
+        requestEvent.resolve(event.payload);
+      }
+    });
+    setEmbeddedPluginApprovalBroker(broker);
+    try {
+      const { callTool, view } = await materializedInbox();
+      const tool = wrapToolWithBeforeToolCallHook(view.tools[0]!, hookCtx);
+      const pending = tool.execute(
+        "call-trusted-approved",
+        { folder: "team" },
+        undefined,
+        undefined,
+      );
+      const request = await requestEvent.promise;
+      expect(broker.resolve(request.id, "allow-once")).toBe(true);
+      await pending;
+
+      expect(callTool).toHaveBeenCalledExactlyOnceWith(
+        "user-mail",
+        "inbox",
+        { folder: "team" },
+        { _meta: stamp },
+      );
+      await view.dispose();
+    } finally {
+      broker.stop();
+    }
   });
 });
 
