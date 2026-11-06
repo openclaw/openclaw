@@ -212,6 +212,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           "sidebar-recent-session--dragging":
             host().sessionOrganizer.draggingSessionKey === session().key,
           "sidebar-recent-session--naming": session().titlePending,
+          "sidebar-recent-session--menu-open": menuOpen(),
         },
       ]}
       style={{ "--session-color": color() ? `var(--session-color-${color()})` : undefined }}
