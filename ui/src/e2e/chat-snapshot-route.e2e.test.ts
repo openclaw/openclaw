@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ResponseFrame } from "@openclaw/gateway-protocol";
+import type { ResponseFrame, SessionsResolveParams } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
@@ -330,7 +330,7 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.resolve", { ok: false });
         await page.locator(".session-route-not-found").waitFor();
         const [resolution] = await gateway.getRequests("sessions.resolve");
-        const params = resolution!.params as { reference: { key?: string } };
+        const params = resolution!.params as SessionsResolveParams;
         // Exercise the native history seam without changing the route or issuing another RPC.
         await page.evaluate(() => history.replaceState(history.state, "", location.href));
         const texts = events.flatMap(({ source, details }) =>
@@ -369,7 +369,7 @@ suite.define(() => {
             ),
             evidence("rpc.settled", {
               method: "sessions.resolve",
-              key: params.reference.key ?? null,
+              key: params.reference?.key ?? params.key ?? null,
               id: resolution!.id,
               ok: expect.any(Boolean),
             }),
@@ -384,7 +384,7 @@ suite.define(() => {
           ]),
         );
         for (const fact of facts.filter(
-          (fact) => fact.event === "rpc.settled" && fact.ok === false,
+          (entry) => entry.event === "rpc.settled" && entry.ok === false,
         )) {
           expect(fact.reason).toEqual(expect.any(String));
         }
