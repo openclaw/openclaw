@@ -112,5 +112,9 @@ export function resolveNodeGatewayOptions(
     tlsFingerprint,
     cloudflareAccess,
     gatewayCandidates,
+    gatewayTarget:
+      !pair && !hasExplicitEndpoint && config?.gateway?.kind === "openclaw-id"
+        ? config.gateway
+        : undefined,
   };
 }

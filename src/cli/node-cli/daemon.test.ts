@@ -1,5 +1,7 @@
 import path from "node:path";
+import { Command } from "commander";
 import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
 );
@@ -279,6 +281,27 @@ describe("runNodeDaemonInstall", () => {
       );
     }
     expect(installedPlan().env.OPENCLAW_WRAPPER).toBe(selected);
+  });
+
+  it("installed OpenClaw ID service resumes the saved target without localhost flags", async () => {
+    const target = { kind: "openclaw-id" as const };
+    const config = { version: 1 as const, nodeId: "node-test", gateway: target };
+    mocks.loadNodeHostConfig.mockResolvedValue(config);
+    await runNodeDaemonInstall({ force: true });
+    const command = installedCommand();
+    const args = command.slice(command.indexOf("run") + 1);
+    const parser = new Command()
+      .option("--host <host>")
+      .option("--port <port>")
+      .option("--tls")
+      .option("--no-tls")
+      .allowUnknownOption();
+    parser.parse(args, { from: "user" });
+    expect(args).not.toContain("--host");
+    expect(args).not.toContain("--no-tls");
+    expect(resolveNodeGatewayOptions(parser.opts(), config, undefined, {}).gatewayTarget).toBe(
+      target,
+    );
   });
 
   it.each([false, true])("forwards saved TLS and command selection (all=%s)", async (all) => {
