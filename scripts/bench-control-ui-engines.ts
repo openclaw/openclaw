@@ -210,6 +210,7 @@ const needsWorkboard =
     .some(
       (id) =>
         id.startsWith("workboard-") ||
+        id.startsWith("noop-workboard-") ||
         /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
     );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
@@ -680,11 +681,15 @@ try {
               await scenario.setup?.(page);
               if (scenario.navigation !== "measured") {
                 await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
-                await waitForControlUiInitialRoster(page, 30_000);
+                if (!scenario.standaloneDocument) {
+                  await waitForControlUiInitialRoster(page, 30_000);
+                }
               }
               await scenario.prepare(page, gateway);
               if (scenario.navigation !== "measured") {
-                observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
+                if (!scenario.standaloneDocument) {
+                  observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
+                }
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 observation.prepareFrameIntervalMs = await frames(page);
