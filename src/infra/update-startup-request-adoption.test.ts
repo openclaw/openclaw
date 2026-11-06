@@ -1,10 +1,20 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
-import { createUpdateRun } from "./update-run-ledger.js";
+import {
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
+
+let { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
+let { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+let { createUpdateRun } = await import("./update-run-ledger.js");
+
+async function importUpdateFixtureModules() {
+  ({ createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
+  ({ createUpdateRun } = await import("./update-run-ledger.js"));
+}
 
 const checkUpdateStatus = vi.hoisted(() =>
   vi.fn<typeof import("./update-check.js").checkUpdateStatus>(),
@@ -21,6 +31,8 @@ vi.mock("./update-check.js", async (original) => ({
 it.each(["complete", "attached-close", "before-ready-close"])(
   "preserves early discovery through scheduler adoption: %s",
   async (outcome) => {
+    await resetUpdateFixtureModules();
+    await importUpdateFixtureModules();
     const state = await createOpenClawTestState({ label: "update-request-adoption" });
     const startup = await import("./update-startup.js");
     const updateScheduler = await import("./update-startup-scheduler.js");
@@ -30,7 +42,6 @@ it.each(["complete", "attached-close", "before-ready-close"])(
     const { resolveGatewayUpdateAdmission } =
       await import("../gateway/server-methods/update-admission.js");
     const scheduler = createTestGatewayScheduler();
-    startup.resetUpdateAvailableStateForTest(scheduler);
     const ready = createDeferred();
     const started = createDeferred<AbortSignal | undefined>();
     const probe = createDeferred<UpdateCheckResult>();
@@ -61,7 +72,7 @@ it.each(["complete", "attached-close", "before-ready-close"])(
       startup.getUpdateEffectiveChannel(),
       deferred
         ? resolveGatewayUpdateAdmission(createUpdateRun({ trigger: "api" }).runId)
-        : startup.initializeGatewayUpdateStatus(),
+        : lifecycle.initialize(),
     ];
     try {
       const signal = await started.promise;
@@ -112,8 +123,9 @@ it.each(["complete", "attached-close", "before-ready-close"])(
       await Promise.allSettled([...requests, owner?.stop()]);
       factory.mockRestore();
       ready.resolve();
-      startup.resetUpdateAvailableStateForTest(scheduler);
-      closeOpenClawStateDatabaseForTest();
+      await lifecycle.stop();
+      await scheduler.stop();
+      await closeUpdateFixtureDatabases();
       await state.cleanup();
     }
   },
