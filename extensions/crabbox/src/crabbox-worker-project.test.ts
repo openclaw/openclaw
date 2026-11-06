@@ -733,6 +733,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(await f.allocation()).toMatchObject({ phase: "prepared", choice: { kind: "cold" } });
       expect((await warmImage())?.capture).toBeUndefined();
+      await destroyAndWait(f.provider, { leaseId: f.leaseId, profile: PROFILE });
+      expect(f.count("create")).toBe(0);
     },
   );
 

@@ -12,13 +12,26 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 async function fixture() {
+  // Executable-bit inference is not under test; require a declarative setup recipe.
   const f = await createProjectPreparationFixture(
     dirs.make("project-snapshot-"),
-    "printf 'prepared output\n' > prepared-output.txt",
+    undefined,
+    false,
+    {
+      ".devcontainer/devcontainer.json": JSON.stringify({
+        onCreateCommand: "printf 'prepared output\n' > prepared-output.txt",
+      }),
+    },
   );
   const operation = await f.preparedOperation();
   operations.push(operation);
-  const prepared = (await operation.project.prepare(f)).preparedWorkspace!;
+  const result = await operation.project.prepare(f);
+  expect(result.recipePreparation).toMatchObject({ source: "devcontainer" });
+  expect(result.recipePreparation?.failure).toBeUndefined();
+  const prepared = result.preparedWorkspace!;
+  expect(await fs.readFile(path.join(prepared.workspaceDir, "prepared-output.txt"), "utf8")).toBe(
+    "prepared output\n",
+  );
   const root = path.join(f.home, ".openclaw-worker");
   const oldSeed = path.join(root, "git-seeds", "gateway", "e".repeat(64));
   const oldManifest = path.join(root, "manifests", "f".repeat(64) + ".json");
