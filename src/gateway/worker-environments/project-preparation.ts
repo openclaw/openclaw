@@ -132,6 +132,7 @@ export function createWorkerProjectPreparation(params: {
   prepareRepositoryGitPack?: (input: {
     temporaryRoot: string;
     signal: AbortSignal;
+    retainedCommit?: string;
   }) => Promise<string>;
   requireCurrent: () => void;
   signal?: AbortSignal;
@@ -305,7 +306,7 @@ export function createWorkerProjectPreparation(params: {
                 temporaryRoot,
                 signal,
               })
-            : await params.prepareRepositoryGitPack!({ temporaryRoot, signal });
+            : await params.prepareRepositoryGitPack!({ temporaryRoot, signal, retainedCommit });
         requireCurrent();
         const bytes = (await fsp.stat(pack)).size;
         if (bytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
@@ -324,11 +325,8 @@ export function createWorkerProjectPreparation(params: {
             directory,
             bytes,
             sha256,
-            ...(repository
-              ? { repositoryUrl: repository.url }
-              : typeof retainedCommit === "string"
-                ? { retainedCommit }
-                : {}),
+            ...(repository ? { repositoryUrl: repository.url } : {}),
+            ...(retainedCommit ? { retainedCommit } : {}),
           },
         };
       }
@@ -338,6 +336,14 @@ export function createWorkerProjectPreparation(params: {
             ...scriptInput,
             ...transfer,
             verifiedRetained,
+            ...(retainedCommit
+              ? {
+                  retainedSeedKey: workerProjectSeedKey({
+                    key: params.project.key,
+                    baseCommit: retainedCommit,
+                  }),
+                }
+              : {}),
           }),
           signal,
         ),
