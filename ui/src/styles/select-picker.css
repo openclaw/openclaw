@@ -277,7 +277,8 @@ openclaw-select-picker {
 
 .picker-select__options {
   min-height: 0;
-  overflow: auto;
+  /* Keep the same intrinsic gutter before and after filtering. */
+  overflow: auto scroll;
   outline: none;
 }
 
@@ -610,13 +611,9 @@ openclaw-select-picker {
   flex: 0 0 auto;
   width: max-content;
   height: 0;
-  overflow: hidden;
+  /* Match the real list without depending on asynchronous scroll-fade state. */
+  overflow: hidden scroll;
   visibility: hidden;
-
-  /* Mirror the gutter only while the real list overflows, including after filtering. */
-  &:has(~ .picker-select__options:is([data-fade-start], [data-fade-end])) {
-    overflow-y: scroll;
-  }
 }
 
 .picker-select__window {
