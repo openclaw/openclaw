@@ -110,17 +110,14 @@ describe("typed Goal operation persistence", () => {
       updateMode: "none",
       ...options,
     });
-  const admit = (
-    operation: SessionGoalOperation & { action: "start" | "resume" | "restart" } = startOperation(),
-    extra: { shouldAppend?: () => boolean } = {},
-  ) =>
+  const admit = (operation = startOperation(), extra: { shouldAppend?: () => boolean } = {}) =>
     persistTurn({
       runId: "run-1",
       messages: [
         {
           message: {
             role: "user",
-            content: "objective" in operation ? operation.objective : "Continue the goal.",
+            content: operation.objective,
             idempotencyKey: operation.operationId,
           },
           ...extra,
@@ -145,86 +142,6 @@ describe("typed Goal operation persistence", () => {
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
   });
-
-  const prepareRestart = async () => {
-    const started = await admit();
-    const completed = await mutate({
-      ...identity("complete-before-restart"),
-      action: "complete",
-      goalId: started.sessionTurnMutationResult!.result.goalId,
-    });
-    const goal = {
-      ...completed.result.goal!,
-      tokenStart: 9,
-      tokensUsed: 91,
-      tokenBudget: 100,
-      continuationTurns: 5,
-    };
-    await upsertSessionEntryCore(scope(), { ...loadSessionEntry(scope())!, goal });
-    const operation: SessionGoalOperation & { action: "restart" } = {
-      ...identity("restart-1"),
-      action: "restart",
-      goalId: goal.id,
-      expectedGoalUpdatedAt: goal.updatedAt,
-      objective: "A fresh confirmed objective",
-    };
-    return { goal, operation };
-  };
-
-  it("atomically restarts completed goals with fresh accounting, a turn, and a durable receipt", async () => {
-    const { goal, operation } = await prepareRestart();
-    const restarted = (await admit(operation)).sessionTurnMutationResult!;
-    expect(restarted.result).toMatchObject({
-      action: "restart",
-      status: "started",
-      runId: "run-1",
-    });
-    expect(restarted.result.goal).toMatchObject({
-      objective: operation.objective,
-      status: "active",
-      tokensUsed: 0,
-      tokenStart: 100,
-      continuationTurns: 0,
-    });
-    expect(restarted.result.goalId).not.toBe(goal.id);
-    expect(restarted.result.goal).not.toHaveProperty("completedAt");
-    expect(restarted.result.goal).not.toHaveProperty("tokenBudget");
-    expect(loadSessionEntry(scope())?.goal).toEqual(restarted.result.goal);
-    const events = await loadTranscriptEvents(scope());
-    await closeOpenClawAgentDatabasesAsync();
-    const retry = (await admit(operation)).sessionTurnMutationResult!;
-    expect(retry.result).toEqual(restarted.result);
-    expect(retry.replayed).toBe(true);
-    expect(await loadTranscriptEvents(scope())).toEqual(events);
-    await rejectsCode(admit({ ...operation, objective: "Changed retry" }), "operation-conflict");
-    await rejectsCode(admit({ ...operation, ...identity("restart-stale-goal") }), "goal-rebound");
-  });
-
-  it("preserves completed goals and transcript on stale, expired, invalid, and capacity restart failures", async () => {
-    const { goal, operation } = await prepareRestart();
-    const events = await loadTranscriptEvents(scope());
-    await rejectsCode(
-      admit({ ...operation, expectedGoalUpdatedAt: goal.updatedAt - 1 }),
-      "goal-rebound",
-    );
-    await rejectsCode(admit({ ...operation, objective: "  " }), "invalid");
-    await rejectsCode(admit({ ...operation, issuedAtMs: 0 }), "expired");
-    await fillReceipts();
-    await rejectsCode(admit(operation), "capacity");
-    expect(loadSessionEntry(scope())?.goal).toEqual(goal);
-    expect(await loadTranscriptEvents(scope())).toEqual(events);
-  });
-
-  it.each(["active", "paused", "blocked", "usage_limited", "budget_limited"] as const)(
-    "rejects completed-goal restart for %s goals without changing them",
-    async (status) => {
-      const { goal, operation } = await prepareRestart();
-      const current = { ...goal, status };
-      await upsertSessionEntryCore(scope(), { ...loadSessionEntry(scope())!, goal: current });
-      await rejectsCode(admit(operation), "invalid");
-      expect(loadSessionEntry(scope())?.goal).toEqual(current);
-    },
-  );
 
   it("leaves missing stores and optional tables absent, then observes a newly committed receipt", async () => {
     const lookup = goalRequest();
@@ -367,6 +284,126 @@ describe("typed Goal operation persistence", () => {
     expect(await loadTranscriptEvents(scope())).toEqual(events);
     expect(loadSessionEntry(scope())?.lifecycleRevision).toBe("successor");
   });
+
+  const seedCompletedGoal = async () => {
+    const goal = {
+      id: "completed-goal",
+      objective: "Previous objective",
+      status: "complete" as const,
+      createdAt: now - 100,
+      updatedAt: now - 10,
+      completedAt: now - 10,
+      tokenStart: 100,
+      tokenStartFresh: true,
+      tokensUsed: 700,
+      tokenBudget: 800,
+      continuationTurns: 4,
+    };
+    await upsertSessionEntryCore(scope(), {
+      sessionId,
+      updatedAt: now,
+      status: "done",
+      totalTokens: 900,
+      totalTokensFresh: true,
+      goal,
+    });
+    return goal;
+  };
+
+  it("atomically starts a fresh confirmed completion and replays the original turn", async () => {
+    const previous = await seedCompletedGoal();
+    const operation = {
+      ...startOperation(),
+      expectedCompletedGoal: { id: previous.id, updatedAt: previous.updatedAt },
+    };
+    const first = await admit(operation);
+    const fresh = loadSessionEntry(scope())?.goal;
+    expect(fresh).toMatchObject({
+      objective: operation.objective,
+      status: "active",
+      tokenStart: 900,
+      tokenStartFresh: true,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    });
+    expect(fresh?.id).not.toBe(previous.id);
+    expect(fresh?.completedAt).toBeUndefined();
+    expect(fresh?.tokenBudget).toBeUndefined();
+    const events = await loadTranscriptEvents(scope());
+    expect(events.filter((event) => event.type === "message")).toHaveLength(1);
+    expect(await lookupReceipt(operation)).toMatchObject({ goal: fresh, runId: "run-1" });
+    const replay = await admit(operation);
+    expect(replay.sessionTurnMutationResult).toMatchObject({
+      replayed: true,
+      result: first.sessionTurnMutationResult?.result,
+    });
+    expect(loadSessionEntry(scope())?.goal).toEqual(fresh);
+    expect(await loadTranscriptEvents(scope())).toEqual(events);
+    for (const conflict of [
+      { ...operation, objective: "Different objective" },
+      { ...operation, expectedCompletedGoal: { ...operation.expectedCompletedGoal, id: "other" } },
+      {
+        ...operation,
+        expectedCompletedGoal: { ...operation.expectedCompletedGoal, updatedAt: now },
+      },
+      startOperation(),
+    ]) {
+      await rejectsCode(admit(conflict), "operation-conflict");
+    }
+  });
+
+  it.each(["id", "revision", "status", "missing"] as const)(
+    "rejects a stale completed-goal %s without a turn or receipt",
+    async (change) => {
+      const previous = await seedCompletedGoal();
+      const operation = {
+        ...startOperation(),
+        expectedCompletedGoal: { id: previous.id, updatedAt: previous.updatedAt },
+      };
+      const current =
+        change === "missing"
+          ? undefined
+          : {
+              ...previous,
+              ...(change === "id" ? { id: "successor" } : {}),
+              ...(change === "revision" ? { updatedAt: now } : {}),
+              ...(change === "status" ? { status: "paused" as const } : {}),
+            };
+      await upsertSessionEntryCore(scope(), { sessionId, updatedAt: now, goal: current });
+      await rejectsCode(admit(operation), "goal-rebound");
+      expect(loadSessionEntry(scope())?.goal).toEqual(current);
+      expect(await loadTranscriptEvents(scope())).toEqual([]);
+      expect(receipts()).toHaveLength(0);
+    },
+  );
+
+  it("keeps the completed goal when turn admission refuses the confirmed start", async () => {
+    const previous = await seedCompletedGoal();
+    await expect(
+      admit(
+        {
+          ...startOperation(),
+          expectedCompletedGoal: { id: previous.id, updatedAt: previous.updatedAt },
+        },
+        { shouldAppend: () => false },
+      ),
+    ).rejects.toThrow("Goal admission requires a new transcript turn in the same transaction.");
+    expect(loadSessionEntry(scope())?.goal).toEqual(previous);
+    expect(await loadTranscriptEvents(scope())).toEqual([]);
+    expect(receipts()).toHaveLength(0);
+  });
+
+  it.each(["complete", "active", "paused"] as const)(
+    "does not let an ordinary start replace an existing %s goal",
+    async (status) => {
+      const previous = { ...(await seedCompletedGoal()), status };
+      await upsertSessionEntryCore(scope(), { sessionId, updatedAt: now, goal: previous });
+      await expect(admit()).rejects.toThrow(/already exists/i);
+      expect(loadSessionEntry(scope())?.goal).toEqual(previous);
+      expect(await loadTranscriptEvents(scope())).toEqual([]);
+      expect(receipts()).toHaveLength(0);
+    },
+  );
 
   it.each(["not json", JSON.stringify({ status: "started" })])(
     "rejects a corrupt receipt without reapplying the operation (%s)",

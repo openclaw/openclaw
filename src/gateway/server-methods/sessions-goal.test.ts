@@ -309,51 +309,6 @@ it("rejects a plugin caller that does not own the session", () =>
     });
   }));
 
-it("routes confirmed completed-goal restart through normal run admission without clearing first", () =>
-  withGoalState(async () => {
-    const goal = { ...initialGoal(), status: "complete" as const, completedAt: 5, updatedAt: 5 };
-    await seedSession({ goal });
-    await invoke(
-      operation("restart", { objective: "/new literal objective", expectedGoalUpdatedAt: 5 }),
-    );
-    expect(resumeChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          message: "/new literal objective",
-          deliver: false,
-          sessionId,
-        }),
-      }),
-      expect.objectContaining({
-        action: "restart",
-        goalId: goal.id,
-        objective: "/new literal objective",
-        expectedGoalUpdatedAt: 5,
-      }),
-    );
-    expect(readGoal()).toEqual(goal);
-    expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
-  }));
-
-it.each(["busy", "throw"])("preserves completion when restart admission is %s", (failure) =>
-  withGoalState(async () => {
-    const goal = { ...initialGoal(), status: "complete" as const, completedAt: 5, updatedAt: 5 };
-    await seedSession({ goal });
-    resumeChat.mockImplementationOnce(async ({ respond }: GatewayRequestHandlerOptions) => {
-      if (failure === "throw") {
-        throw new Error("admission unavailable");
-      }
-      respond(false, undefined, { code: "INVALID_REQUEST", message: "session busy" });
-    });
-    const response = await invoke(
-      operation("restart", { objective: "New objective", expectedGoalUpdatedAt: 5 }),
-    );
-    expect(response).toHaveBeenCalledWith(false, undefined, expect.anything());
-    expect(readGoal()).toEqual(goal);
-    expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
-  }),
-);
-
 it("does not activate a Goal before continuation admission succeeds", () =>
   withGoalState(async () => {
     await seedSession();

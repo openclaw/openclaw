@@ -218,11 +218,8 @@ export async function executeChatGoalOperation(
       );
       // A newer event or a replacement goal wins over a delayed mutation response.
       if (
-        row?.goal &&
-        (row.goal.id === params.goalId || row.goal.id === result.goalId) &&
-        (!result.goal ||
-          result.goal.id !== row.goal.id ||
-          result.goal.updatedAt >= row.goal.updatedAt)
+        row?.goal?.id === params.goalId &&
+        (!result.goal || result.goal.updatedAt >= row.goal.updatedAt)
       ) {
         if (rowAgentId && sessionId) {
           host.sessions.patchRowLocal(
@@ -233,7 +230,7 @@ export async function executeChatGoalOperation(
         }
         if (result.status === "started" && result.runId) {
           adoptStartedChatRun(host, result.runId, Date.now());
-          operations.recordStartedExecution(result.goalId, result.runId, targetIsCurrent);
+          operations.recordStartedExecution(params.goalId, result.runId, targetIsCurrent);
         }
       }
     }
@@ -283,7 +280,7 @@ export async function confirmChatGoalReplacement(
     unavailable: () => string | null;
     runId: () => string | null | undefined;
   },
-): Promise<boolean> {
+): Promise<boolean | { id: string; updatedAt: number }> {
   const {
     goalId,
     previousObjective,
@@ -330,12 +327,13 @@ export async function confirmChatGoalReplacement(
   if (runId() !== expectedRunId) {
     return rejectGoalOperation(host, t("chat.goals.goalChanged"));
   }
+  if (status === "complete") {
+    return { id: goalId, updatedAt };
+  }
   return await mutateChatGoal(
     host,
-    status === "complete"
-      ? { action: "restart", goalId, objective, expectedGoalUpdatedAt: updatedAt }
-      : expectedRunId
-        ? { action: "replace", goalId, objective, expectedRunId, expectedGoalUpdatedAt: updatedAt }
-        : { action: "edit", goalId, objective },
+    expectedRunId
+      ? { action: "replace", goalId, objective, expectedRunId, expectedGoalUpdatedAt: updatedAt }
+      : { action: "edit", goalId, objective },
   );
 }

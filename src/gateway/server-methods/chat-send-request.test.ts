@@ -57,42 +57,6 @@ async function expectError(
 const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
 const mention = (start: number, end: number, profileId = "bob") => ({ profileId, start, end });
 const goalIntent = () => ({ kind: "session-goal-start", version: 1, issuedAtMs: Date.now() });
-it.each(["resume", "restart"] as const)(
-  "retains %s Goal admission without treating a new human objective as a system continuation",
-  async (action) => {
-    const message = "/stop";
-    const operation = {
-      operationId: "request-1",
-      issuedAtMs: Date.now(),
-      requestFingerprint: "reviewed-request",
-      goalId: "completed-goal",
-      ...(action === "restart"
-        ? { action, objective: message, expectedGoalUpdatedAt: 2 }
-        : { action }),
-    };
-    const result = await normalizeChatSendRequest({
-      params: requestParams({ message }),
-      client: null,
-      goalResume: operation,
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        goalOperation: operation,
-        inboundMessage: message,
-        suppressCommandInterpretation: true,
-        stopCommand: false,
-      },
-    });
-    if (result.ok) {
-      expect(result.value.systemInputProvenance).toEqual(
-        action === "resume"
-          ? { kind: "internal_system", sourceTool: "session_goal_resume" }
-          : undefined,
-      );
-    }
-  },
-);
 async function expectRejected(overrides: Record<string, unknown>, client: Client = humanClient()) {
   expect(await normalize(overrides, client)).toMatchObject({ ok: false });
 }
@@ -188,6 +152,33 @@ it("keeps chat context out of authored text while preserving the model payload",
   expect(other.requestIdentity).not.toBe(value.requestIdentity);
 });
 
+it("binds confirmed completed-goal identity and revision into start and retry fingerprints", async () => {
+  const intent = { ...goalIntent(), expectedCompletedGoal: { id: "old-goal", updatedAt: 2 } };
+  const first = await normalizeValue({ message: "Fresh objective", intent }, null);
+  expect(first.goalOperation).toMatchObject({
+    action: "start",
+    objective: "Fresh objective",
+    expectedCompletedGoal: intent.expectedCompletedGoal,
+  });
+  for (const changed of [
+    { message: "Other objective", intent },
+    {
+      message: "Fresh objective",
+      intent: { ...intent, expectedCompletedGoal: { id: "other", updatedAt: 2 } },
+    },
+    {
+      message: "Fresh objective",
+      intent: { ...intent, expectedCompletedGoal: { id: "old-goal", updatedAt: 3 } },
+    },
+    { message: "Fresh objective", intent: goalIntent() },
+  ]) {
+    const conflict = await normalizeValue(changed, null);
+    expect(conflict.goalOperation?.requestFingerprint).not.toBe(
+      first.goalOperation?.requestFingerprint,
+    );
+  }
+});
+
 it.each([
   { message: "/stop", workContext: { page: "chat" } },
   { workContext: { page: "chat", selection: "x".repeat(641) } },
@@ -277,6 +268,12 @@ it.each([
   { intent: { kind: "session-goal-resume", version: 1, issuedAtMs: 1 } },
   { intent: { kind: "session-goal-start", version: 2, issuedAtMs: 1 } },
   { intent: { kind: "session-goal-start", version: 1 } },
+  {
+    intent: {
+      ...goalIntent(),
+      expectedCompletedGoal: { id: "completed-goal", updatedAt: 2, status: "complete" },
+    },
+  },
   {
     intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1, objective: "second target" },
   },

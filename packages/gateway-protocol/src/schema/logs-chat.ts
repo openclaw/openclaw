@@ -12,6 +12,7 @@ import {
 import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
+import { SessionGoalSchema } from "./sessions-goal.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
@@ -349,6 +350,9 @@ export const ChatSendIntentSchema = closedObject({
   kind: Type.Literal("session-goal-start"),
   version: Type.Literal(1),
   issuedAtMs: Type.Integer({ minimum: 0 }),
+  expectedCompletedGoal: Type.Optional(
+    Type.Pick(SessionGoalSchema, ["id", "updatedAt"], { additionalProperties: false }),
+  ),
 });
 export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;
 

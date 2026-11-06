@@ -64,7 +64,7 @@ type ChatSendRequestParams = Omit<
 
 export type NormalizedChatSendRequest = {
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
-  goalOperation?: SessionGoalOperation & { action: "start" | "resume" | "restart" };
+  goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
   clientInfo?: GatewayClientInfo;
   supportsTaskSuggestions: boolean;
@@ -95,7 +95,7 @@ export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
-  goalResume?: SessionGoalOperation & { action: "resume" | "restart" };
+  goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
@@ -209,14 +209,10 @@ export function normalizeChatSendRequest(params: {
   const commandInterpretationSuppressed =
     suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
-  const inboundMessage =
-    p.intent || params.goalResume?.action === "restart" || providerReview
-      ? p.message
-      : sanitizedMessageResult.message;
-  const systemInputProvenance =
-    params.goalResume?.action === "resume"
-      ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
-      : normalizeInputProvenance(p.systemInputProvenance);
+  const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
+  const systemInputProvenance = params.goalResume
+    ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
+    : normalizeInputProvenance(p.systemInputProvenance);
   if (!params.trustedSystemInput && isProgressCardRefreshInputProvenance(systemInputProvenance)) {
     return reject("Progress refresh input is reserved for progressCard.refresh.");
   }
@@ -344,6 +340,9 @@ export function normalizeChatSendRequest(params: {
         operationId: p.idempotencyKey,
         issuedAtMs: p.intent.issuedAtMs,
         objective: p.message,
+        ...(p.intent.expectedCompletedGoal
+          ? { expectedCompletedGoal: p.intent.expectedCompletedGoal }
+          : {}),
       };
       return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
         (requestFingerprint) => ({

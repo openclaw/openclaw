@@ -133,9 +133,6 @@ export function registerGoalReplacementCases(
       const resumeSpy = vi.spyOn(chatHandler, "handleSessionGoalResumeChat");
       if (mode === "revoke-resume") {
         resumeSpy.mockImplementationOnce(async (options, operation) => {
-          if (operation.action !== "resume") {
-            throw new Error("Active-goal replacement must resume the existing goal.");
-          }
           attemptedResume = operation;
           const lookup = goalReads.lookupSessionGoalOperation;
           const checkpoint = vi

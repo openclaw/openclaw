@@ -222,30 +222,6 @@ async function handleSessionGoalMutation(
       });
       return;
     }
-    if (request.action === "restart") {
-      const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
-      await handleSessionGoalResumeChat(
-        {
-          ...options,
-          sessionMutationAuthorization: resumeAuthorization,
-          params: {
-            sessionKey: target.canonicalKey,
-            agentId: target.agentId,
-            sessionId: target.entry.sessionId,
-            message: request.objective,
-            idempotencyKey: request.operationId,
-            deliver: false,
-          },
-        },
-        {
-          ...identity,
-          action: "restart",
-          objective: request.objective,
-          expectedGoalUpdatedAt: request.expectedGoalUpdatedAt,
-        },
-      );
-      return;
-    }
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       const message =

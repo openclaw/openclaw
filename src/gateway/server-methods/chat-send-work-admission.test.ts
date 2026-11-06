@@ -186,13 +186,15 @@ describe("retained chat work admission", () => {
 });
 
 it.each([
-  { kind: "active", review: false },
-  { kind: "queued", review: false },
-  { kind: "active", review: true },
-  { kind: "queued", review: true },
+  { kind: "active", review: false, completed: false },
+  { kind: "queued", review: false, completed: false },
+  { kind: "active", review: true, completed: false },
+  { kind: "queued", review: true, completed: false },
+  { kind: "active", review: false, completed: true },
+  { kind: "queued", review: false, completed: true },
 ] as const)(
-  "refuses exclusive admission without a terminal for $kind work (provider review=$review)",
-  ({ kind, review }) =>
+  "refuses exclusive admission without a terminal for $kind work (provider review=$review, confirmed completion=$completed)",
+  ({ kind, review, completed }) =>
     withOpenClawTestState({ label: "exclusive-store-scope" }, async () => {
       const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg, cfg);
@@ -208,7 +210,14 @@ it.each([
           message: "Complete the synthetic goal",
           idempotencyKey: "exclusive-store-goal",
           ...(!review && {
-            intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+            intent: {
+              kind: "session-goal-start",
+              version: 1,
+              issuedAtMs: Date.now(),
+              ...(completed
+                ? { expectedCompletedGoal: { id: "completed-goal", updatedAt: 2 } }
+                : {}),
+            },
           }),
         },
       });

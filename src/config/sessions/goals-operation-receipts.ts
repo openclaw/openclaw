@@ -99,11 +99,7 @@ export function readSessionGoalOperationReceipt(
     result.operationId !== operation.operationId ||
     result.action !== operation.action ||
     result.sessionId !== sessionId ||
-    ("goalId" in operation &&
-      operation.action !== "restart" &&
-      result.goalId !== operation.goalId) ||
-    (operation.action === "restart" &&
-      (!result.goal || result.goalId === operation.goalId || result.status !== "started")) ||
+    ("goalId" in operation && result.goalId !== operation.goalId) ||
     (result.goal !== undefined && result.goal.id !== result.goalId)
   ) {
     throw new SessionGoalOperationError(

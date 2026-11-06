@@ -8,7 +8,7 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { chatGoalCreationObjective, chatGoalPresentation, chatGoalRecovery } from "./chat-goals.ts";
+import { chatGoalCreationObjective, chatGoalRecovery } from "./chat-goals.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 
@@ -55,7 +55,10 @@ function fixture(
     currentSessionId: row.sessionId,
     chatMessage: "/goal Write rollout notes",
     sessionsResult: { ...createSessionsListResult(), sessions: [row] },
-    requestHandlers: { "sessions.goal.update": update },
+    requestHandlers: {
+      "sessions.goal.update": update,
+      "chat.send": { status: "started", runId: "fresh-turn" },
+    },
   });
   onTestFinished(() => host.sessions.dispose());
   return { host, row };
@@ -212,42 +215,26 @@ it("preserves a newer composer draft while an accepted edit is saving", async ()
   expect(host.chatMessage).toBe("A newer conversation draft");
 });
 it.each(["start", "new", "structured"] as const)(
-  "starts a fresh goal after confirming a completed-goal %s proposal",
+  "uses normal chat.send after confirming a completed-goal %s proposal",
   async (mode) => {
-    const nextGoal = {
-      ...goal,
-      id: "goal-b",
-      objective: mode === "new" ? "new objective" : "Write rollout notes",
-      status: "active" as const,
-      // A fresh identity does not share the completed goal’s revision clock.
-      createdAt: mode === "new" ? 1 : 3,
-      updatedAt: mode === "new" ? 1 : 3,
-      tokenStart: 12_500,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    };
-    const { host, row } = fixture({
-      status: "started",
-      action: "restart",
-      goalId: nextGoal.id,
-      goal: nextGoal,
-      runId: "fresh-turn",
-    });
+    const { host, row } = fixture();
     row.goal.status = "complete";
-    const applyGoal = vi.spyOn(host.sessions, "patchRowLocal");
-    onTestFinished(() => applyGoal.mockRestore());
+    const previous = { ...row.goal };
+    const objective = "Write rollout notes";
     host.chatMessage =
       mode === "structured"
-        ? nextGoal.objective
+        ? objective
         : mode === "new"
-          ? "/goal " + nextGoal.objective
-          : "/goal start " + nextGoal.objective;
+          ? "/goal " + objective
+          : "/goal start " + objective;
     const pending = dialogs.track(
       handleSendChat(
         host,
         undefined,
         mode === "structured"
-          ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
+          ? {
+              intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+            }
           : undefined,
       ),
     );
@@ -256,51 +243,37 @@ it.each(["start", "new", "structured"] as const)(
       "Do you want to replace the current goal with the new goal?",
     );
     await answer("Replace objective");
-    expect(await pending).toBe(true);
-    expect(requestCalls(host.request, "sessions.goal.update")[0]?.[1]).toMatchObject({
-      action: "restart",
-      goalId: goal.id,
-      objective: nextGoal.objective,
-      expectedGoalUpdatedAt: goal.updatedAt,
-    });
+    await pending;
+    expect(requestCalls(host.request, "chat.send").map((call) => call[1])).toEqual([
+      expect.objectContaining({
+        message: objective,
+        sessionId: row.sessionId,
+        intent: expect.objectContaining({
+          kind: "session-goal-start",
+          version: 1,
+          expectedCompletedGoal: { id: previous.id, updatedAt: previous.updatedAt },
+        }),
+      }),
+    ]);
+    expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
     expect(requestCalls(host.request, "sessions.goal.clear")).toHaveLength(0);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(applyGoal).toHaveBeenCalledWith(
-      row.key,
-      { goal: nextGoal },
-      { agentId: "main", sessionId: row.sessionId },
-    );
-    expect(chatGoalPresentation(host, nextGoal)?.executionConfirmed).toBe(true);
-    expect(host.chatRunId).toBe("fresh-turn");
+    // Only an authoritative session event replaces the renderer's completed row.
+    expect(row.goal).toEqual(previous);
     expect(host.chatMessage).toBe("");
   },
 );
-it("preserves a completed goal and its proposal when replacement is cancelled or uncertain", async () => {
-  const failed = createDeferred<never>();
-  const { host, row } = fixture(() => failed.promise);
+it("preserves a completed goal and its proposal when replacement is cancelled", async () => {
+  const { host, row } = fixture();
   row.goal.status = "complete";
   const previous = { ...row.goal };
   const draft = host.chatMessage;
-  const cancelled = dialogs.track(handleSendChat(host));
-  await answer("Cancel");
-  expect(await cancelled).toBe(false);
-  expect(row.goal).toEqual(previous);
-  expect(host.chatMessage).toBe(draft);
-  expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
   const pending = dialogs.track(handleSendChat(host));
-  await answer("Replace objective");
-  try {
-    await vi.waitFor(() => expect(chatGoalRecovery(host)?.pending).toBe(true));
-    expect(await handleSendChat(host)).toBe(false);
-  } finally {
-    failed.reject(new Error("Connection closed"));
-  }
+  await answer("Cancel");
   expect(await pending).toBe(false);
   expect(row.goal).toEqual(previous);
   expect(host.chatMessage).toBe(draft);
-  expect(chatGoalRecovery(host)?.action).toBe("restart");
-  expect(await handleSendChat(host)).toBe(false);
-  expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(1);
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+  expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
   expect(requestCalls(host.request, "sessions.goal.clear")).toHaveLength(0);
 });
 it.each(["session", "incarnation", "connection", "goal", "revision", "status", "run"] as const)(

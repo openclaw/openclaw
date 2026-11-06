@@ -1,4 +1,4 @@
-# Completed-goal rollover regressions: exactly +379 test/helper lines.
-# Covers UI confirmation/cancel/stale/pending recovery and normal-admission routing,
-# plus SQLite goal/turn/lifecycle/receipt atomicity, fresh accounting, and replay.
-379
+# Confirmed completed-goal starts: exactly +257 test lines versus the PR base.
+# Extends existing SQLite, send-normalization (including closed preconditions),
+# busy-admission and UI suites; removes restart-specific helpers and coverage.
+257

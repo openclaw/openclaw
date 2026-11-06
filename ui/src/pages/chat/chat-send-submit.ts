@@ -126,11 +126,11 @@ export async function handleSendChat(
   const previousMentions = host.chatMentions?.map((mention) => ({ ...mention }));
   const previousReplyTarget = host.chatReplyTarget ? { ...host.chatReplyTarget } : null;
   const previousGoalDraftMode = host.chatGoalDraftMode;
-  const intent = opts?.intent;
+  let intent = opts?.intent;
   const rawMessage = messageOverride ?? host.chatMessage;
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
   const submitted = trimHumanMentions(rawMessage, draftMentions);
-  const userMessage = intent ? rawMessage : submitted.text;
+  let userMessage = intent ? rawMessage : submitted.text;
   const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedSessionId = host.currentSessionId;
@@ -195,7 +195,7 @@ export async function handleSendChat(
   // Classify the operator's raw row draft before browser annotation context is
   // prepended. Otherwise annotation text can hide /stop, /compact, or a stop
   // alias from the inline-edit command fence.
-  const rawParsedCommand = intent ? null : parseSlashCommand(userMessage);
+  let rawParsedCommand = intent ? null : parseSlashCommand(userMessage);
   if (
     submitted.mentions?.length &&
     (rawParsedCommand || /^\/(?:btw|side)(?::|\s|$)/i.test(userMessage))
@@ -211,24 +211,27 @@ export async function handleSendChat(
     return undefined;
   }
 
-  const goalObjective =
-    intent?.kind === "session-goal-start"
-      ? userMessage
-      : !intent
-        ? chatGoalCreationObjective(userMessage)
-        : undefined;
-  if (goalObjective) {
+  const goalObjective = intent ? userMessage : chatGoalCreationObjective(userMessage);
+  if (goalObjective && !intent?.expectedCompletedGoal) {
     const replaced = await replaceExistingChatGoal(host, goalObjective);
-    if (replaced !== undefined) {
+    if (typeof replaced === "object") {
+      intent = {
+        kind: "session-goal-start",
+        version: 1,
+        issuedAtMs: intent?.issuedAtMs ?? Date.now(),
+        expectedCompletedGoal: replaced,
+      };
+      userMessage = goalObjective;
+      rawParsedCommand = null;
+    } else if (replaced !== undefined) {
       if (
         replaced &&
         submitGuardOptions.isCurrent() &&
-        host.currentSessionId === submittedSessionId
+        host.currentSessionId === submittedSessionId &&
+        messageOverride == null
       ) {
-        if (messageOverride == null) {
-          clearComposer("all");
-          recordNonTranscriptInputHistory(host, userMessage);
-        }
+        clearComposer("all");
+        recordNonTranscriptInputHistory(host, userMessage);
       }
       return replaced;
     }

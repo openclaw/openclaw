@@ -52,7 +52,9 @@ export function operationFingerprint(operation: SessionGoalOperation): string {
       "note" in operation ? operation.note : null,
       ...(operation.action === "resume" && operation.preserveBudget ? ["preserve-budget"] : []),
       ...(operation.action === "replace" ? [operation.expectedRunId] : []),
-      ...(operation.action === "restart" ? [operation.expectedGoalUpdatedAt] : []),
+      ...(operation.action === "start" && operation.expectedCompletedGoal
+        ? [operation.expectedCompletedGoal.id, operation.expectedCompletedGoal.updatedAt]
+        : []),
     ]),
   );
 }
@@ -65,7 +67,26 @@ export function applySessionGoalOperation(
 ): SessionGoal | undefined {
   try {
     if (operation.action === "start") {
-      return buildCreatedSessionGoal(entry, operation, now);
+      const expected = operation.expectedCompletedGoal;
+      const current = entry.goal;
+      if (
+        expected &&
+        (!current ||
+          current.id !== expected.id ||
+          current.updatedAt !== expected.updatedAt ||
+          current.status !== "complete")
+      ) {
+        throw new SessionGoalOperationError(
+          "goal-rebound",
+          "The completed goal changed. Review it before starting a new objective.",
+        );
+      }
+      // The existing turn transaction replaces the confirmed completion atomically.
+      return buildCreatedSessionGoal(
+        expected ? { ...entry, goal: undefined } : entry,
+        operation,
+        now,
+      );
     }
     if (!entry.goal || entry.goal.id !== operation.goalId) {
       throw new SessionGoalOperationError(
@@ -87,24 +108,6 @@ export function applySessionGoalOperation(
     }
     if (operation.action === "clear") {
       return undefined;
-    }
-    if (operation.action === "restart") {
-      if (entry.goal.status !== "complete") {
-        throw new SessionGoalOperationError("invalid", "Only a completed goal can be restarted.");
-      }
-      if (entry.goal.updatedAt !== operation.expectedGoalUpdatedAt) {
-        throw new SessionGoalOperationError(
-          "goal-rebound",
-          "The completed goal changed. Review it before starting a new objective.",
-        );
-      }
-      // Called inside turn admission: the old completion, new identity, user turn,
-      // and operation receipt commit together, never as clear-then-start writes.
-      return buildCreatedSessionGoal(
-        { ...entry, goal: undefined },
-        { objective: operation.objective },
-        now,
-      );
     }
     if (operation.action === "edit") {
       return buildUpdatedSessionGoalObjective(entry, operation.objective, now);

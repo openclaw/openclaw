@@ -353,7 +353,6 @@ describe("Goal control requests", () => {
   it.each([
     { action: "resume", recovery: "reconnect" },
     { action: "clear", recovery: "reload" },
-    { action: "restart", recovery: "reload" },
   ] as const)(
     "reconciles a lost $action ACK after $recovery without resurrecting the run",
     async ({ action, recovery }) => {
@@ -362,14 +361,7 @@ describe("Goal control requests", () => {
       const method = action === "clear" ? "sessions.goal.clear" : "sessions.goal.update";
       const current = observedRoster();
       current.sessions[0]!.goal =
-        action === "clear"
-          ? undefined
-          : {
-              ...goal,
-              id: action === "restart" ? "fresh-goal" : goal.id,
-              status: "active",
-              updatedAt: 3,
-            };
+        action === "clear" ? undefined : { ...goal, status: "active", updatedAt: 3 };
       const handlers = {
         "sessions.list": current,
         "sessions.describe": { session: current.sessions[0] },
@@ -385,25 +377,15 @@ describe("Goal control requests", () => {
           }
           return {
             status: "started",
-            goalId: current.sessions[0]!.goal!.id,
+            goalId: goal.id,
             runId: "old-resume-run",
             replayed: true,
-            goal: current.sessions[0]!.goal,
+            goal: { ...goal, status: "active", updatedAt: 3 },
           };
         },
       };
       let host = goalHost(handlers);
-      const submitted = mutateChatGoal(
-        host,
-        action === "restart"
-          ? {
-              action,
-              goalId: goal.id,
-              objective: "Fresh objective",
-              expectedGoalUpdatedAt: goal.updatedAt,
-            }
-          : { action, goalId: goal.id },
-      );
+      const submitted = mutateChatGoal(host, { action, goalId: goal.id });
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await submitted).toBe(false);
       const firstRequest = host.request.mock.calls.find(

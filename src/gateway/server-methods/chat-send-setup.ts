@@ -36,7 +36,7 @@ export async function prepareAndAdmitChatSend(
   options?: {
     trustedSystemInput?: boolean;
     isDirectExternalUser?: boolean;
-    goalResume?: SessionGoalOperation & { action: "resume" | "restart" };
+    goalResume?: SessionGoalOperation & { action: "resume" };
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,

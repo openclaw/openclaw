@@ -14,12 +14,11 @@ type SessionGoalOperationIdentity = {
 
 export type SessionGoalOperation = SessionGoalOperationIdentity &
   (
-    | { action: "start"; objective: string; tokenBudget?: number }
     | {
-        action: "restart";
-        goalId: string;
+        action: "start";
         objective: string;
-        expectedGoalUpdatedAt: number;
+        tokenBudget?: number;
+        expectedCompletedGoal?: Pick<SessionGoal, "id" | "updatedAt">;
       }
     | { action: "edit"; goalId: string; objective: string }
     /** Internal completed-interruption receipt; preserves the Goal unchanged. */
@@ -82,7 +81,7 @@ export type SessionTranscriptTurnMutation = {
     storePath: string;
     canonicalKey: string;
   };
-  operation: SessionGoalOperation & { action: "start" | "resume" | "restart" };
+  operation: SessionGoalOperation & { action: "start" | "resume" };
   runId: string;
 };
 
