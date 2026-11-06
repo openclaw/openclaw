@@ -23,12 +23,12 @@ import {
   projectContextEngineAssemblyForCodex,
   resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
-  type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
+import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
@@ -199,6 +199,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     | (() => ReturnType<typeof projectContextEngineAssemblyForCodex>)
     | undefined;
   let contextEngineBootstrapPromptApplied = false;
+  // A before_prompt_build `systemPrompt` replaces OpenClaw's base and developer policy,
+  // so once one is known, configured history budgets reserve it instead.
+  let replacedSystemPromptForBudget: string | undefined;
   const applySelectedHistoryProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
   ) => {
@@ -210,8 +213,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             resolveProjectionPromptBudgetTokens({ contextTokenBudget: configuredContextBudget }),
           inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
           systemPrompt: joinPresentSections(
-            openClawBaseInstructions,
-            baseDeveloperInstructions,
+            ...(replacedSystemPromptForBudget !== undefined
+              ? [replacedSystemPromptForBudget]
+              : [openClawBaseInstructions, baseDeveloperInstructions]),
             refreshableInstructions,
             buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
             JSON.stringify(toolBridge.specs),
@@ -316,14 +320,25 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       });
     }
   };
-  if (usesSelectedHistory) {
-    await applySelectedHistoryProjection(
-      resolveCodexProjectionStartupBinding({
+  const projectionStartupBinding = usesSelectedHistory
+    ? resolveCodexProjectionStartupBinding({
         params,
         binding: mutable.startupBinding,
         nativeToolSurfaceEnabled: runtime.nativeToolSurfaceEnabled,
-      }),
-    );
+      })
+    : undefined;
+  let deferredHistoryRejection: CodexContextAttachmentError | undefined;
+  if (usesSelectedHistory) {
+    try {
+      await applySelectedHistoryProjection(projectionStartupBinding);
+    } catch (error) {
+      // A configured allowance may reject history only because it still reserves the
+      // base. The prompt hook below may replace that base, so it settles the rejection.
+      if (!configuredContextBudget || !(error instanceof CodexContextAttachmentError)) {
+        throw error;
+      }
+      deferredHistoryRejection = error;
+    }
   }
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
@@ -351,54 +366,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         assertActive: connection.assertLegacyCurrent,
       },
     });
-  const resolveShiftedPromptRanges = (
-    prompt: string,
-    promptInputRange: { start: number; end: number } | undefined,
-    turnPromptText: string,
-  ): {
-    inputRange?: CodexProjectedContextRange;
-    contextRange?: CodexProjectedContextRange;
-    requestRange?: CodexProjectedContextRange;
-  } => {
-    if (
-      !promptInputRange ||
-      promptInputRange.start < 0 ||
-      promptInputRange.end < promptInputRange.start ||
-      promptInputRange.end > prompt.length ||
-      !turnPromptText.endsWith(prompt)
-    ) {
-      return {};
-    }
-    const turnPromptOffset = turnPromptText.length - prompt.length;
-    const inputRange = {
-      start: turnPromptOffset + promptInputRange.start,
-      end: turnPromptOffset + promptInputRange.end,
-    };
-    const promptTextInputOffset = promptInputRange.end - promptState.promptText.length;
-    if (
-      !promptState.promptContextRange ||
-      promptTextInputOffset < promptInputRange.start ||
-      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptState.promptText
-    ) {
-      return { inputRange };
-    }
-    const promptTextOffset = prompt.endsWith(promptState.promptText)
-      ? prompt.length - promptState.promptText.length
-      : promptTextInputOffset;
-    const contextOffset = turnPromptOffset + promptTextOffset;
-    const contextRange = {
-      start: contextOffset + promptState.promptContextRange.start,
-      end: contextOffset + promptState.promptContextRange.end,
-    };
-    return {
-      inputRange,
-      contextRange,
-      requestRange: {
-        start: contextRange.end,
-        end: contextOffset + promptState.promptText.length,
-      },
-    };
-  };
   const decorateCodexTurnPromptText = (
     promptBuildResult: {
       prompt: string;
@@ -415,11 +382,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           params.bootstrapContextRunKind === "cron",
       },
     );
-    const projectedRanges = resolveShiftedPromptRanges(
-      promptBuildResult.prompt,
-      promptBuildResult.promptInputRange,
+    const projectedRanges = resolveCodexShiftedPromptRanges({
+      prompt: promptBuildResult.prompt,
+      promptInputRange: promptBuildResult.promptInputRange,
       turnPromptText,
-    );
+      promptText: promptState.promptText,
+      promptContextRange: promptState.promptContextRange,
+    });
     const preservedRange =
       projectedRanges.inputRange ??
       resolveCodexDeliveryHintPreservedInputRange({
@@ -506,6 +475,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       : nextPromptBuild;
     turnState.codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
   };
+  if (configuredContextBudget && firstPromptBuild.systemPromptReplaced) {
+    // Selection ran before the hook replaced the base. Reselect against the replacement;
+    // configured selection never renders history into the prompt, so the hook only runs
+    // again when a deferred rejection left it an unprojected prompt.
+    const hookPromptText = promptState.promptText;
+    replacedSystemPromptForBudget = firstPromptBuild.developerInstructions;
+    await applySelectedHistoryProjection(projectionStartupBinding);
+    if (promptState.promptText !== hookPromptText) {
+      await rebuildCodexPromptBuildFromCurrentProjection();
+    }
+  } else if (deferredHistoryRejection) {
+    throw deferredHistoryRejection;
+  }
   const applyResumeStaleBindingContinuityProjection = async (
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
