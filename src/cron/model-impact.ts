@@ -5,8 +5,6 @@ import type {
   CronModelImpactSelection,
 } from "../../packages/gateway-protocol/src/schema/cron-model-impact.js";
 import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope-config.js";
-import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
-import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -16,14 +14,14 @@ import { resolveHookExternalContentSource } from "../security/external-content-s
 import { tryResolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 import { resolveCarriedCronModelSelection } from "./isolated-agent/session-carried-model.js";
-import { assessCronModelCompatibility } from "./model-impact-compatibility.js";
+import {
+  assessCronModelCompatibility,
+  type CronModelImpactOwner,
+} from "./model-impact-compatibility.js";
 import type { CronStoredJob } from "./types.js";
 
 const unresolved: CronModelImpactSelection = { model: null, source: null };
 export type CronModelImpactSession = { entry?: SessionEntry; available: boolean };
-export type CronModelImpactOwner = ResolvedPublishedModelCatalogOwner & {
-  authMaterializations?: readonly RuntimeAuthMaterialization[];
-};
 
 /** A proposed primary is a private value, never an activated runtime or config write. */
 export function deriveCronModelImpactConfig(

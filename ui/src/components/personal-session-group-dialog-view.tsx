@@ -1,5 +1,6 @@
 import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type {
@@ -10,10 +11,13 @@ import type {
   PersonalSessionGroupScopeChoices,
 } from "../lib/sessions/personal-groups.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Radio } from "./solid/radio.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 
+registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 
 export type PersonalSessionGroupDialogOptions = {
@@ -78,8 +82,7 @@ function SessionChoice(props: {
 }) {
   return (
     <label class="personal-section-dialog__option">
-      <input
-        type="checkbox"
+      <Checkbox
         checked={props.checked}
         onChange={(event) => props.onToggle(event.currentTarget.checked)}
       />
@@ -285,14 +288,13 @@ export function PersonalSessionGroupDialogView(props: {
                 <div class="personal-section-dialog__list personal-section-dialog__scopes">
                   <For each={scopeOptions(props.options.scopes)}>
                     {(option) => (
-                      <label class="personal-section-dialog__option">
-                        <input
-                          type="radio"
-                          name="personal-section-scope"
-                          value={option[0]}
-                          checked={kind() === option[0]}
-                          onChange={() => setKind(option[0])}
-                        />
+                      <Radio
+                        class="personal-section-dialog__option"
+                        name="personal-section-scope"
+                        value={option[0]}
+                        checked={kind() === option[0]}
+                        onChange={() => setKind(option[0])}
+                      >
                         <span class="personal-section-dialog__label">{t(option[1])}</span>
                         <Show
                           when={option[0] === "project" && kind() === "project"}
@@ -314,7 +316,7 @@ export function PersonalSessionGroupDialogView(props: {
                             />
                           </span>
                         </Show>
-                      </label>
+                      </Radio>
                     )}
                   </For>
                 </div>

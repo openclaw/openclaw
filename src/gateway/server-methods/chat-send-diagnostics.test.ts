@@ -88,6 +88,7 @@ test.each(["startup", "steer", "queued"] as const)(
     using _ = { [Symbol.dispose]: stop };
     const { info, diagnostics } = createDiagnostics();
     const request = diagnostics.scope("persist")!;
+    diagnostics.setRunIdentity("synthetic-session", "synthetic-run");
     at(10, () => request.mark("response"));
     const snapshot = diagnostics.scope("snapshot")!;
     at(15, request.finish);
@@ -103,7 +104,10 @@ test.each(["startup", "steer", "queued"] as const)(
       isTerminal: () => false,
     });
     expect(events).toEqual([]);
-    expectLog(info, `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`);
+    expectLog(
+      info,
+      `slow chat send 1400ms stage=${stage} sessionId=synthetic-session runId=synthetic-run ack=15ms snapshot=2000ms dispatch=200ms`,
+    );
 
     at(4_000, () => snapshot.mark("effects"));
     snapshot.finish();
@@ -182,7 +186,7 @@ test("span observer failures preserve synchronous and asynchronous results and e
   await expect(observeTimeline(() => observer, rejectOperation)).rejects.toBe(failure);
 });
 
-test("slow startup consumes the sandbox owner's nested timing facts", async () => {
+test("slow startup separates allocation wait from the sandbox owner's nested preparation", async () => {
   const { info, diagnostics } = createDiagnostics();
   diagnostics.acknowledge();
   await observeTimeline(diagnostics.observeSpan, () =>
@@ -191,11 +195,10 @@ test("slow startup consumes the sandbox owner's nested timing facts", async () =
       () =>
         withWorktreePreparationTiming("sandbox", async () => {
           markManagedWorktreePreparation();
-          await timeWorktreePreparationPhase("templatePrepare", async () => {
-            at(50_000);
-          });
-          await timeWorktreePreparationPhase("containerStart", async () => {
-            at(75_000);
+          await timeWorktreePreparationPhase("allocationWait", async () => at(490_000));
+          await timeWorktreePreparationPhase("reservation", async () => {
+            await timeWorktreePreparationPhase("templatePrepare", async () => at(540_000));
+            await timeWorktreePreparationPhase("containerStart", async () => at(546_000));
           });
         }),
       { attributes: { stage: "attempt.setup" } },
@@ -204,6 +207,6 @@ test("slow startup consumes the sandbox owner's nested timing facts", async () =
   diagnostics.finish();
   expectLog(
     info,
-    "slow chat send 75000ms stage=startup ack=0ms detail.attempt.setup=75000ms detail.worktree.sandbox=75000ms detail.worktree.sandbox.containerStart=25000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
+    "slow chat send 546000ms stage=startup ack=0ms detail.attempt.setup=546000ms detail.worktree.sandbox=546000ms detail.worktree.sandbox.allocationWait=490000ms detail.worktree.sandbox.containerStart=6000ms detail.worktree.sandbox.reservation=56000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
   );
 });

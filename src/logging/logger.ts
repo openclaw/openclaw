@@ -13,9 +13,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
-  isValidDiagnosticSpanId,
-  isValidDiagnosticTraceFlags,
-  isValidDiagnosticTraceId,
+  normalizeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
@@ -155,30 +153,11 @@ function isPlainLogRecordObject(value: unknown): value is Record<string, unknown
   return prototype === Object.prototype || prototype === null;
 }
 
-function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  const candidate = asOptionalRecord(value);
-  if (!candidate || !isValidDiagnosticTraceId(candidate.traceId)) {
-    return undefined;
-  }
-  if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
-    return undefined;
-  }
-  if (candidate.parentSpanId !== undefined && !isValidDiagnosticSpanId(candidate.parentSpanId)) {
-    return undefined;
-  }
-  if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
-    return undefined;
-  }
-  return {
-    traceId: candidate.traceId,
-    ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
-    ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
-    ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
-  };
-}
-
 function extractTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  return normalizeTraceContext(value) ?? normalizeTraceContext(asOptionalRecord(value)?.trace);
+  return (
+    normalizeDiagnosticTraceContext(value) ??
+    normalizeDiagnosticTraceContext(asOptionalRecord(value)?.trace)
+  );
 }
 
 function getSortedNumericLogEntries(logObj: TsLogRecord): Array<[string, unknown]> {

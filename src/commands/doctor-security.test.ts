@@ -22,13 +22,14 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
-const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
+const listReadOnlyChannelPluginsForConfigAsyncMock = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Capture Doctor warnings without rendering terminal UI.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
+vi.mock("../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/read-only.js")>()),
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfigAsyncMock,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
@@ -52,8 +53,8 @@ import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security
 describe("noteSecurityWarnings gateway exposure", () => {
   beforeEach(() => {
     note.mockClear();
-    listReadOnlyChannelPluginsForConfigMock.mockReset();
-    listReadOnlyChannelPluginsForConfigMock.mockImplementation(() => pluginRegistry.list);
+    listReadOnlyChannelPluginsForConfigAsyncMock.mockReset();
+    listReadOnlyChannelPluginsForConfigAsyncMock.mockImplementation(() => pluginRegistry.list);
     pluginRegistry.list = [];
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);

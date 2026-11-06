@@ -419,6 +419,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 await callGateway(`cron.${action}`, gatewayOpts, {
                   id,
                   ...(runId ? { runId } : {}),
+                  ...(action === "runs"
+                    ? {
+                        limit: readPositiveIntegerParam(params, "limit", {
+                          max: CRON_TOOL_LIST_MAX_LIMIT,
+                        }),
+                        offset: readNonNegativeIntegerParam(params, "offset"),
+                      }
+                    : {}),
                 }),
               );
             }
@@ -518,14 +526,13 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
                     agentId: callerAgentId,
+                    job: { agentId: job.agentId, delivery },
+                    requesterOrigin: getGatewayToolCallerIdentity()?.requesterOrigin,
                     currentDeliveryContext: opts.currentDeliveryContext,
                     agentSessionKey: opts.agentSessionKey,
                   });
                   if (inferred) {
-                    job.delivery = {
-                      ...inferred,
-                      ...delivery,
-                    } satisfies CronDelivery;
+                    job.delivery = { ...inferred, ...delivery } satisfies CronDelivery;
                   }
                 }
               }

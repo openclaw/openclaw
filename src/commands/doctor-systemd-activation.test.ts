@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { resolveCliStartupPolicy } from "../cli/command-startup-policy.js";
 import { bootstrapGatewayRun } from "../cli/gateway-cli/run-command.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
@@ -158,7 +159,7 @@ it.each(["ordinary", "child", "newer", "corrupt", "foreign"])(
       }
       const before = await fs.readFile(pathname);
       await expect(bootstrap()).rejects.toThrow();
-      expect(await fs.readFile(pathname)).toEqual(before);
+      expectBytesEqual(await fs.readFile(pathname), before, pathname);
       expect((await fs.readdir(path.dirname(pathname))).some((file) => file.includes(".bak"))).toBe(
         false,
       );
@@ -176,7 +177,7 @@ test("parks failed activation repair without migrating unbacked state", async ()
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain("synthetic pre-migration backup refusal");
     expect(resolveGatewayStartupFailureExitCode(failure)).toBe(78);
-    expect(await fs.readFile(pathname)).toEqual(before);
+    expectBytesEqual(await fs.readFile(pathname), before, pathname);
     expect((await fs.readdir(path.dirname(pathname))).some((file) => file.includes(".bak"))).toBe(
       false,
     );

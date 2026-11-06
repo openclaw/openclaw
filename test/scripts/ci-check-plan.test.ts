@@ -132,6 +132,8 @@ it.each([
   ["hybrid", "none"],
   ["hybrid", "full"],
   ["github", "full"],
+  ["github", "affected"],
+  ["github", "none"],
   ["blacksmith", "affected"],
 ] as const)("preserves extension scope: %s / %s", async (runnerProfile, mode) => {
   const roots = selectLint(mode);
@@ -151,6 +153,13 @@ it.each([
     ...plan.lint_core_matrix.include.map((row) => row.lint_selection_json),
     ...plan.lint_extension_matrix.include.map((row) => row.lint_selection_json),
   ].flatMap((value) => (value ? [JSON.parse(value)] : []));
+  for (const row of plan.lint_core_matrix.include) {
+    const payload = row.lint_selection_json ? JSON.parse(row.lint_selection_json) : {};
+    const hasExtensions = Boolean(
+      payload.extensionStripes?.length || payload.fullExtensionStripes?.length,
+    );
+    expect(row.requires_sdk_declarations === true).toBe(hasExtensions);
+  }
   const central = JSON.parse(plan.central_lint_selection_json);
   expect(central.fullGroups).toEqual(
     runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
@@ -249,19 +258,58 @@ it.each(["hybrid", "github"])(
   },
 );
 
+it.each(["hybrid", "github"])(
+  "packs singleton pairs beside larger rows on %s",
+  async (runnerProfile) => {
+    typeSelection.graphs = resolveCiTsgoGraphs([
+      "core-test-agents-root",
+      "core-test-agents-other",
+      "core-test-agents-tools",
+      "core-test-gateway-root",
+      "core-test-gateway-other",
+    ]);
+    const plan = await createPlan({ runnerProfile });
+    expect(
+      plan.core_type_matrix.include.map((row) => JSON.parse(row.type_graph_names_json!)),
+    ).toEqual([
+      ["core-test-agents-root", "core-test-gateway-other"],
+      ["core-test-agents-other", "core-test-agents-tools"],
+      ["core-test-gateway-root"],
+    ]);
+  },
+);
+
 it("retains the complete full-check stripe inventory", async () => {
   const plan = await createPlan({ preserveFullChecks: true });
   expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
 });
 
 it.each([
-  ["hybrid", [1, 2, 4, 5], ["test-root-tooling", "test-root-other"]],
-  ["hybrid", [1, 2, 5], ["test-root-e2e"]],
-  ["hybrid", [1, 2, 4, 5], ["test-root"]],
-  ["blacksmith", [1, 2, 3, 4, 5], ["test-root"]],
+  [
+    "hybrid",
+    [1, 2, 4, 5],
+    ["test-root-tooling", "test-root-other"],
+    [
+      [1, "1/4"],
+      [5, "4/4"],
+    ],
+  ],
+  ["hybrid", [1, 2, 5], ["test-root-e2e"], []],
+  [
+    "hybrid",
+    [1, 2, 4, 5],
+    ["test-root"],
+    [
+      [1, "1/4"],
+      [2, "2/4"],
+      [4, "3/4"],
+      [5, "4/4"],
+    ],
+  ],
+  ["blacksmith", [1, 2, 3, 4, 5], ["test-root"], []],
 ] as const)(
   "preserves selected root partition identity on %s (%j, %j)",
-  async (runnerProfile, stripes, roots) => {
+  async (runnerProfile, stripes, roots, rootOwners) => {
     typeSelection.graphs = resolveCiTsgoGraphs([
       ...stripes.map((stripe) => `core-test-${coreGraphNames[stripe - 1]}`),
       "scripts",
@@ -269,18 +317,20 @@ it.each([
     ]);
     const plan = await createPlan({ runnerProfile });
     const moved = runnerProfile === "hybrid" && stripes.length >= 4;
-    expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(
-      runnerProfile === "hybrid" ? stripes : [],
+    expect(
+      plan.core_type_matrix.include
+        .flatMap((row) => JSON.parse(row.type_graph_names_json!))
+        .toSorted((a: string, b: string) => a.localeCompare(b)),
+    ).toEqual(
+      runnerProfile === "hybrid"
+        ? stripes.map((stripe) => `core-test-${coreGraphNames[stripe - 1]}`).toSorted()
+        : [],
     );
-    expect(plan.core_type_matrix.include.flatMap((row) => row.root_type_stripe ?? [])).toEqual(
-      !moved
-        ? []
-        : roots[0] === "test-root"
-          ? ["1/4", "2/4", "3/4", "4/4"]
-          : roots[0] === "test-root-e2e"
-            ? ["3/4"]
-            : ["1/4", "4/4"],
-    );
+    expect(
+      plan.core_type_matrix.include.flatMap((row) =>
+        row.root_type_stripe ? [[row.stripe, row.root_type_stripe]] : [],
+      ),
+    ).toEqual(rootOwners);
     expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual(
       moved
         ? ["scripts"]

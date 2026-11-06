@@ -56,6 +56,25 @@ async function inspectSurfaces(page: Page) {
       host: hostStyle.backgroundColor,
       mobileHost: host.classList.contains("sidebar-region--mobile-host"),
       fade: { display: fade.display, background: fade.backgroundImage },
+      // Safari tints its bars from theme-color and exposes the document canvas in safe areas.
+      chrome: {
+        meta: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content,
+        html: getComputedStyle(root).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
+        topEdge: (() => {
+          for (
+            let element = document.elementFromPoint(innerWidth / 2, 1);
+            element;
+            element = element.parentElement
+          ) {
+            const color = getComputedStyle(element).backgroundColor;
+            if (color !== "rgba(0, 0, 0, 0)") {
+              return color;
+            }
+          }
+          return getComputedStyle(root).backgroundColor;
+        })(),
+      },
       dimensions: {
         composer: dimensions(composer),
         bubble: dimensions(bubble),
@@ -223,6 +242,19 @@ suite.define(() => {
             });
           }
           expect(original.mobileHost).toBe(true);
+          if (width === 390) {
+            const edges = await page.evaluate(resolveRenderedColors, {
+              host: original.host,
+              ...original.chrome,
+            });
+            expect(edges, "system chrome continues the narrow chat surface").toEqual({
+              host: edges.host,
+              meta: edges.host,
+              html: edges.host,
+              body: edges.host,
+              topEdge: edges.host,
+            });
+          }
           expect(original.fade.display).toBe(width === 390 ? "none" : "block");
           if (width > 768) {
             expect

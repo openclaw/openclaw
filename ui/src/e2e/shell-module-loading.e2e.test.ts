@@ -204,7 +204,7 @@ suite.define(() => {
       await installMockGateway(page, { awaitInitialRoster: false });
       await page.goto(`${suite.server.baseUrl}chat/main`);
       const error = page.locator(".lazy-view-error");
-      await error.getByText("Panel failed to load", { exact: true }).waitFor();
+      await error.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
       expect(await error.getByRole("button", { name: "Retry", exact: true }).isVisible()).toBe(
         true,
       );
@@ -273,7 +273,7 @@ suite.define(() => {
           await composer.fill(draft);
           await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
           const failure = page.locator(".sidebar-region__right-runtime .lazy-view-error");
-          await failure.getByText("Panel failed to load", { exact: true }).waitFor();
+          await failure.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
           expect(failedImports).toBe(1);
           const close = page.getByRole("button", { name: "Close Files", exact: true });
           expect(await close.count()).toBe(1);

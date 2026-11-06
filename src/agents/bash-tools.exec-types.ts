@@ -1,20 +1,12 @@
-import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/node-permissions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type {
-  ExecApprovalDecision,
-  ExecAsk,
-  ExecHost,
-  ExecMode,
-  ExecSecurity,
-} from "../infra/exec-approvals.js";
+import type { ExecAsk, ExecMode, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
-import type { TerminationReason } from "../process/supervisor/types.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
-import type { ToolApprovalReview } from "../shared/tool-approval-reviews.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
+import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
 import type { ExecToolRoutingDefaults } from "./bash-tools.exec-routing.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
@@ -92,6 +84,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
   currentChannelId?: string;
+  /** Conversation reply destination, including a thread created from the arrival channel. */
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
@@ -143,16 +137,6 @@ export type ExecHostCommandParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
-/** Outcome passed to approval follow-up factories after approved async exec. */
-export type ExecApprovalFollowupOutcome = {
-  status: "completed" | "failed";
-  exitCode: number | null;
-  exitReason?: TerminationReason;
-  timedOut: boolean;
-  aggregated: string;
-  reason?: string;
-};
-
 type ExecApprovalFollowupContext = {
   approvalId: string;
   sessionId: string;
@@ -187,74 +171,3 @@ export function cloneExecElevatedDefaults(value: ExecElevatedDefaults): ExecElev
       : {}),
   };
 }
-
-/** One model-backed approval review recorded on an exec tool call. */
-export type ExecToolApprovalReview = Omit<ToolApprovalReview, "userAuthorization">;
-
-/** Structured details returned by exec tool calls. */
-export type ExecToolDetails = {
-  permissionMissing?: NodePermissionRequest;
-  approvalReviews?: readonly ExecToolApprovalReview[];
-  approvalReviewOutcome?: "approved" | "denied" | "reviewing";
-} & (
-  | {
-      status: "running";
-      sessionId: string;
-      pid?: number;
-      startedAt: number;
-      deadlineAtMs?: number;
-      cwd?: string;
-      tail?: string;
-      warningText?: string;
-      followUp?: string;
-    }
-  | {
-      status: "completed" | "failed";
-      exitCode: number | null;
-      exitSignal?: NodeJS.Signals | number | null;
-      failureKind?: string;
-      message?: string;
-      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied" | "permission-missing";
-      nodeInvokeFailure?: {
-        failureCode?: string;
-        message: string;
-        nodeCommandDispatched?: boolean;
-        requestSent?: boolean;
-      };
-      exitReason?: TerminationReason;
-      durationMs: number;
-      aggregated: string;
-      timedOut?: boolean;
-      noOutputTimedOut?: boolean;
-      cwd?: string;
-      nodeId?: string;
-    }
-  | {
-      status: "approval-pending";
-      approvalId: string;
-      approvalSlug: string;
-      expiresAtMs: number;
-      allowedDecisions?: readonly ExecApprovalDecision[];
-      host: ExecHost;
-      command: string;
-      cwd?: string;
-      nodeId?: string;
-      warningText?: string;
-    }
-  | {
-      status: "approval-unavailable";
-      reason:
-        | "initiating-platform-disabled"
-        | "initiating-platform-unsupported"
-        | "no-approval-route";
-      channel?: string;
-      channelLabel?: string;
-      accountId?: string;
-      sentApproverDms?: boolean;
-      host: ExecHost;
-      command: string;
-      cwd?: string;
-      nodeId?: string;
-      warningText?: string;
-    }
-);

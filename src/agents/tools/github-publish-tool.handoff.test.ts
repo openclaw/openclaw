@@ -45,6 +45,7 @@ import {
   captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
@@ -154,6 +155,11 @@ it.for([
               : { sessionKey, action: "prepare_pr" },
           );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
+          if (!localPublication) {
+            const selected = resolveGatewayToolOperatorSelection();
+            expect(selected.operatorAuthority).toMatchObject({ profileId, scopes });
+            selected.assertCurrent();
+          }
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {

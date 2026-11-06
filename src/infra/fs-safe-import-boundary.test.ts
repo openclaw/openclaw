@@ -43,6 +43,7 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   ]),
   "extensions/feishu/src/doctor.ts": allow("path", ["safeStatSync"]),
   "extensions/knowledge/src/attachment-file.ts": allow("advanced", ["readFileWindowFullySync"]),
+  "extensions/knowledge/src/directory-sync.ts": allow("durability", ["syncDirectorySync"]),
   "extensions/knowledge/src/files.ts": allow("root", ["root"]),
   "extensions/llama-cpp/src/llama-server-install.ts": allow("durability", ["sha256File"]),
   "extensions/qa-lab/src/lab-server-ui.ts": allow("walk", ["walkDirectorySync"]),

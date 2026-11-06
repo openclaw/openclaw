@@ -23,7 +23,7 @@ import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
 import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
-  assertBrowserNavigationAllowed,
+  assertChromeMcpNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -145,7 +145,7 @@ export function registerBrowserAgentSnapshotRoutes(
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-          await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+          await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,

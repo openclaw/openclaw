@@ -1,4 +1,5 @@
 import type { CronModelImpactIssue } from "../../packages/gateway-protocol/src/schema/cron-model-impact.js";
+import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   selectCliExecutionAuthProfile,
@@ -14,6 +15,7 @@ import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { getModelRefStatus } from "../agents/model-selection-resolve.js";
 import { resolveConfiguredModelPolicyAllow } from "../agents/model-selection-shared.js";
+import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -24,8 +26,11 @@ import {
   resolveCronInferenceCandidateMismatch,
   resolveCronRuntimeSessionEntry,
 } from "./inference-binding.js";
-import type { CronModelImpactOwner } from "./model-impact.js";
 import type { CronStoredJob } from "./types.js";
+
+export type CronModelImpactOwner = ResolvedPublishedModelCatalogOwner & {
+  authMaterializations?: readonly RuntimeAuthMaterialization[];
+};
 
 const accountRecovery =
   "Select a model and runtime compatible with the recorded account, or deliberately select an authorized account with openclaw automations edit <jobId> --model <provider/model>@<profileId>. Doctor leaves existing bindings unchanged.";

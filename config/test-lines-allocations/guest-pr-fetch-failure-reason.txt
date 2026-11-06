@@ -1,0 +1,2 @@
+# Issue #188776: acquisition failure stages and bounded, redacted recovery diagnostics.
+70

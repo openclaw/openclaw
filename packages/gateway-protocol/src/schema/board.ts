@@ -55,6 +55,42 @@ export const BoardTabSchema = closedObject({
 });
 export type BoardTab = Static<typeof BoardTabSchema>;
 
+export const BOARD_GITHUB_ACTIONS_QUERY_FIELDS = [
+  "total_count",
+  "id",
+  "name",
+  "display_title",
+  "head_branch",
+  "status",
+  "conclusion",
+  "html_url",
+  "run_started_at",
+  "created_at",
+  "updated_at",
+  "event",
+  "workflow_id",
+  "run_attempt",
+] as const;
+export const BoardWidgetDataQuerySchema = closedObject({
+  name: BoardWidgetNameSchema,
+  bindingId: Type.Literal("github.actions.runs"),
+  params: closedObject({
+    repository: Type.String({ minLength: 1, maxLength: 140 }),
+    workflow: Type.Union([
+      Type.String({ minLength: 1, maxLength: 255 }),
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    branch: Type.Union([Type.String({ minLength: 1, maxLength: 255 }), Type.Null()]),
+    status: Type.Union([Type.String({ minLength: 1, maxLength: 32 }), Type.Null()]),
+    created: Type.Union([Type.String({ minLength: 1, maxLength: 32 }), Type.Null()]),
+    perPage: Type.Integer({ minimum: 1, maximum: 30 }),
+    excludePullRequests: Type.Boolean(),
+  }),
+  fields: Type.Array(Type.Enum(BOARD_GITHUB_ACTIONS_QUERY_FIELDS), { minItems: 1, maxItems: 14 }),
+});
+export type BoardWidgetDataQuery = Static<typeof BoardWidgetDataQuerySchema>;
+
 export const BoardWidgetDeclaredSchema = closedObject({
   netOrigins: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 2048 }), { maxItems: 32 }),
@@ -62,6 +98,13 @@ export const BoardWidgetDeclaredSchema = closedObject({
   tools: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }), {
       maxItems: 64,
+    }),
+  ),
+  queries: Type.Optional(
+    Type.Array(BoardWidgetDataQuerySchema, {
+      maxItems: 8,
+      description:
+        "Named live GitHub Actions queries shared with session readers using the agent's credentials. Fix every selector, result limit, and response field; use null explicitly for all workflows/branches or no filter. Changed definitions require renewed approval. For saved summaries, use session:report instead.",
     }),
   ),
 });
@@ -312,15 +355,21 @@ export const BoardPromptAuthorizeParamsSchema = closedObject({
 });
 export type BoardPromptAuthorizeParams = Static<typeof BoardPromptAuthorizeParamsSchema>;
 
-export const BoardDataReadParamsSchema = closedObject({
-  ticket: BoardViewTicketSchema,
-  bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
-  params: Type.Optional(
-    Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
-      maxProperties: 64,
-    }),
-  ),
-});
+export const BoardDataReadParamsSchema = Type.Union([
+  closedObject({
+    ticket: BoardViewTicketSchema,
+    bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
+    params: Type.Optional(
+      Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+        maxProperties: 64,
+      }),
+    ),
+  }),
+  closedObject({
+    ticket: BoardViewTicketSchema,
+    queryName: BoardWidgetNameSchema,
+  }),
+]);
 export type BoardDataReadParams = Static<typeof BoardDataReadParamsSchema>;
 
 export const BoardCronActionParamsSchema = closedObject({

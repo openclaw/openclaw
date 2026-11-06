@@ -116,8 +116,11 @@ export function prepareMemoryPendingInputStore(
             { type: "session.pendingInput.mutate", input },
             {
               ...authority,
+              ...(input.kind === "finish" ? { assertCurrent: assertOpen } : {}),
               authorize(stage, hot, publication) {
-                binding.authority.authorize(stage, hot, publication);
+                if (input.kind !== "finish") {
+                  binding.authority.authorize(stage, hot, publication);
+                }
                 if (
                   isRecord(publication) &&
                   publication.kind === "pending-input-settlement-custody"

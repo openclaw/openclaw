@@ -105,17 +105,21 @@ export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>
 
 // A placement-lifetime memo self-bounds its worker entries (each remote capture
 // replaces them wholesale) but gateway entries accumulate as stat identities
-// change across turns. Reset the whole memo once its estimated footprint
-// crosses the shared byte cap so one placement cannot hold unbounded hash state.
+// change across turns. Evict the oldest identities to preserve fresh hashes when
+// a large workspace crosses the cap; clearing everything rehashes it on every read.
 export function pruneWorkspaceHashMemo(memo: WorkspaceHashMemo): void {
   let bytes = 0;
   memo.forEach((sha256, identity) => {
     // Identities and digests are ASCII, so string length equals byte length.
     bytes += identity.length + sha256.length;
-    if (bytes > MAX_WORKSPACE_HASH_MEMO_BYTES) {
-      memo.clear();
-    }
   });
+  for (const [identity, sha256] of memo) {
+    if (bytes <= MAX_WORKSPACE_HASH_MEMO_BYTES) {
+      break;
+    }
+    memo.delete(identity);
+    bytes -= identity.length + sha256.length;
+  }
 }
 
 /** Returns the placement-owned memo for a key, pruning it before each reuse. */

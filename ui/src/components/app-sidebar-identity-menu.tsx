@@ -19,14 +19,15 @@ import {
 } from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
+import "./solid/viewer-facepile.tsx";
+import "./tooltip.ts";
 import {
   createMenuControls,
   type MenuEntry,
   type MenuItem,
   type MenuItemBindings,
 } from "./solid/menu.tsx";
-import "./solid/viewer-facepile.tsx";
-import "./tooltip.ts";
 
 function ThemeModeToggle(props: {
   mode: ThemeMode;
@@ -185,7 +186,8 @@ function renderIdentityGateways(
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): SolidJSX.Element {
   const controls = createMenuControls();
   // Rebuilt entries reuse these nodes. Replacing the content on both sides of an
-  // open submenu makes the keyed list re-insert it, which closes its popover.
+  // open submenu makes the keyed list re-insert it, which closes its popover, and
+  // replacing the avatar would reload its image on every Gateway update.
   const separator = (id: string): MenuEntry => ({
     kind: "content",
     id,
@@ -194,7 +196,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   const gatewayTitle: MenuEntry = {
     kind: "content",
     id: "gateway-title",
-    content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
+    content: <MenuHeading label={t("nav.gateway.sectionLabel")} />,
   };
   const profileSeparator = separator("profile-separator");
   const gatewaySeparator = separator("gateway-separator");
@@ -210,6 +212,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
     ...params.profileViewer,
     name: profileName(),
   }));
+  const profileAvatar = (
+    <span class="sidebar-identity-menu__avatar" aria-hidden="true">
+      <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+    </span>
+  );
   const profileEmail = () =>
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
@@ -222,11 +229,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         id: "command:profile",
         label: profileName(),
         class: "sidebar-customize-menu__item sidebar-identity-menu__header",
-        icon: (
-          <span class="sidebar-identity-menu__avatar" aria-hidden="true">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
-          </span>
-        ),
+        icon: profileAvatar,
         content: (
           <span class="sidebar-identity-menu__identity">
             <span class="sidebar-identity-menu__name" title={profileName()}>

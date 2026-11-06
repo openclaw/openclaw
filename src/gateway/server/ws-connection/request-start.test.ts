@@ -18,6 +18,7 @@ const independentReads = [
   "board.get",
   "sessions.resolve",
   "sessions.list",
+  "sessions.catalog.list",
   "cron.list",
   "cron.modelImpact",
   "push.web.vapidPublicKey",

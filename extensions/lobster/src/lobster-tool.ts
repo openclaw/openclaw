@@ -7,6 +7,30 @@ import {
   resolveLobsterCwd,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
+
+const LobsterParameters = Type.Object({
+  action: Type.Enum(["run", "resume"], { type: "string" }),
+  pipeline: Type.Optional(Type.String()),
+  argsJson: Type.Optional(Type.String()),
+  token: Type.Optional(Type.String()),
+  approvalId: Type.Optional(Type.String()),
+  approve: Type.Optional(Type.Boolean()),
+  responseJson: Type.Optional(
+    Type.String({
+      description: "User's answer as JSON for an input checkpoint. Use instead of approve.",
+    }),
+  ),
+  cancel: Type.Optional(Type.Literal(true)),
+  cwd: Type.Optional(
+    Type.String({
+      description:
+        "Relative working directory (optional). Must stay within the gateway working directory.",
+    }),
+  ),
+  timeoutMs: optionalPositiveIntegerSchema(),
+  maxStdoutBytes: optionalPositiveIntegerSchema(),
+});
+
 export function createLobsterTool() {
   const runner = createEmbeddedLobsterRunner();
   return {
@@ -14,28 +38,7 @@ export function createLobsterTool() {
     label: "Lobster Workflow",
     description:
       "Run Lobster workflows with resumable approvals and structured input. For needs_input, ask the user the returned prompt, then resume with their answer as responseJson matching responseSchema. For approvals, resume with approve. Use cancel: true to cancel a checkpoint.",
-    parameters: Type.Object({
-      action: Type.Enum(["run", "resume"], { type: "string" }),
-      pipeline: Type.Optional(Type.String()),
-      argsJson: Type.Optional(Type.String()),
-      token: Type.Optional(Type.String()),
-      approvalId: Type.Optional(Type.String()),
-      approve: Type.Optional(Type.Boolean()),
-      responseJson: Type.Optional(
-        Type.String({
-          description: "User's answer as JSON for an input checkpoint. Use instead of approve.",
-        }),
-      ),
-      cancel: Type.Optional(Type.Literal(true)),
-      cwd: Type.Optional(
-        Type.String({
-          description:
-            "Relative working directory (optional). Must stay within the gateway working directory.",
-        }),
-      ),
-      timeoutMs: optionalPositiveIntegerSchema(),
-      maxStdoutBytes: optionalPositiveIntegerSchema(),
-    }),
+    parameters: LobsterParameters,
     async execute(_id: string, params: Record<string, unknown>) {
       const action = typeof params.action === "string" ? params.action.trim() : "";
       if (!action) {

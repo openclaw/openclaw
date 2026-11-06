@@ -94,6 +94,7 @@ export async function readCheckoutDiffRevision(
   previousPaths: string[] = [],
   summaryOnly = false,
   timing?: DiffReadTiming,
+  refreshIndex = false,
 ): Promise<GitReadOperations["checkout.revision"]["output"]> {
   const environment = createHash("sha256")
     .update(
@@ -338,7 +339,13 @@ export async function readCheckoutDiffRevision(
   if (fingerprint === null && summaryOnly) {
     return null;
   }
-  const memoKey = JSON.stringify([root, environment, summaryOnly, previousPaths.toSorted()]);
+  const memoKey = JSON.stringify([
+    root,
+    environment,
+    summaryOnly,
+    refreshIndex,
+    previousPaths.toSorted(),
+  ]);
   const memo = smallDiffRevisions.get(memoKey);
   smallDiffRevisions.delete(memoKey);
   if (fingerprint && memo?.fingerprint === fingerprint) {
@@ -348,7 +355,8 @@ export async function readCheckoutDiffRevision(
   const status = await runPullRequestGit(
     root,
     [
-      "--no-optional-locks",
+      // Managed checkouts retain verified stat data so the diff need not hash it again.
+      ...(refreshIndex ? [] : ["--no-optional-locks"]),
       "status",
       "--porcelain=v2",
       "--branch",

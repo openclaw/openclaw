@@ -7,6 +7,61 @@ read_when: "You are moving, stopping, or recovering a placed session, or you nee
 
 Dispatch a session to a worker, synchronize its workspace, and move, stop, or recover it. The Gateway retains the conversation and accepted workspace results even when a worker machine is lost.
 
+## Retained-disk lifecycle integration
+
+Repository-only cloud profiles may opt in with
+[`workspaceDurability.mode: "retained-disk"`](/gateway/config-cloud-workers#repository-workspace-durability)
+and a finite compute window. Mirroring remains the default. The selected allocation
+commits its policy before provisioning, hydrates its pinned source and any accepted
+checkpoint once, then atomically publishes active placement and exact disk authority.
+It does not consume fixed-lease prepared reserves or adopt a new Crabbox release.
+
+Ordinary turns keep their files and private Git state on that disk. Result acceptance,
+tool settlement, transcript ownership, and claim release remain durable, but the
+Gateway does not capture/upload a workspace checkpoint after every turn. Explicit
+publication and Move still capture fresh immutable exports. The first hydration
+checkpoint is only initialization history, never a current recovery fallback.
+
+Acquisition policy is committed before allocation. Each lifecycle operation records
+its ID, action, and expected provider claim revision before effects. Restart and
+lost-reply recovery keep that operation and resource; uncertain observations never
+authorize deletion or replacement. For a disk-bound repository, use **Move to Gateway**
+for the fresh export and confirmed exact-resource retirement. Unsupported Stop,
+archive/delete cleanup, and other Move targets refuse before draining the disk.
+Retained compute closes through its finite window owner, not legacy idle reclaim.
+
+Compute windows are finite and never renewed by activity. Maintenance may close
+expired compute, but new compute requires an explicit authorized wake. New execution
+admission rejects expired or unfinished windows; accepted transcript/result
+settlement keeps its existing owner. The internal **ensureRetainedRunning** operation
+checks resource identity, environment epoch, and current caller authority, waits for
+the original enrolled node, and verifies runtime admission through the existing
+supervisor and bundle installer. Provider resume alone is not usable readiness.
+If initial provisioning stopped after recording the resource receipt but before
+node enrollment, retry the original creation request with the same idempotency key
+and retention policy. The fresh request revalidates caller and source authority,
+recovers compute against the same receipt and operation, and resumes normal
+provisioning admission. Background reconciliation cannot reopen that window.
+Pending provider readiness is polled without starting or renewing compute; closed
+windows still require explicit recovery.
+
+Crabbox checks Linux Azure Sandbox retention capabilities, owner binding, policy,
+window, and independent lifecycle readback. One unavailable provider cannot prevent
+unrelated environments from recovering. Cold-boot reconnect requires a separately
+qualified node/controller release; Crabbox 0.80.0 capability metadata is not that proof.
+
+Shared-state schema 39 adds nullable lifecycle custody after disk-authority schema 38.
+Older environments remain unretained. Package-only downgrade is refused; restore the
+matching pre-upgrade backup and binary only after settling retained operations and cleanup.
+
+On Gateway restart, local workspace recovery journals settle before readiness.
+Remote provider reconciliation and Git publication recovery run in the background,
+so an unavailable cloud provider does not block the Gateway from becoming ready.
+Restart recovery may interrupt only placement turn claims captured before startup;
+newly admitted or replaced claims keep their live execution ownership. Gateway
+shutdown drains accepted recovery work before stopping the environment service.
+Gateway readiness does not imply that every retained worker is ready to execute.
+
 ## Dispatch a session
 
 `sessions.dispatch` rejects a busy session without interrupting its active work. Wait for the current turn to finish, then retry. For an idle session, dispatch closes local turn admission, validates the workspace source, provisions the lease for the selected execution mode, and runs setup. With project warm images enabled, it prepares the committed checkout and node runtime and captures any needed image before enrollment. It then enrolls the node, installs the required pinned Gateway bundle, applies the session workspace, and returns once the placement reaches `active` ownership. Gateway-source inventory validation happens before provider allocation. Repository-only inventory is captured on the enrolled node after fetching the pinned source; either path reports actionable size or entry limits. Budget several minutes for the first cloud dispatch, including capture when needed; later dispatches can reuse the image, project seed, and runtime installs. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.
@@ -34,6 +89,8 @@ After a Gateway update, background reconciliation starts installing the new runt
 If a submitted turn encounters the old build before execution starts, OpenClaw releases that unstarted claim, refreshes the runtime, and retries admission once with fresh authority. This also retries an earlier failed update, so a reconnected worker can handle the submission without waiting for periodic recovery. The session and original submission stay intact. Work already handed to a worker is never replayed through this admission retry.
 
 If the node is still reconnecting after a Gateway restart or update, that same submission waits for its current node connection before retrying admission. A current worker build reconnects without a runtime refresh. The wait uses the existing two-minute worker admission window, capped by the turn's configured timeout. Stop, a replaced session or placement, and another Gateway restart cancel the wait. An incompatible node runtime still reports that it needs an update.
+
+For an exclusively attached, dedicated Linux Crabbox worker with saved runtime identity, admission can restart the same enrolled node process before waiting for reconnect. The provider verifies the existing lease, runtime, device identity, and process receipt; a live process is left to reconnect on its own. Recovery reuses the saved node configuration and paired credential. It does not allocate, download a runtime, pair again, run setup, change repository files, or replay interrupted work. Missing or changed identity and uncertain process ownership refuse restart while retaining the machine and workspace. Other providers, desktop workers, and environments without saved runtime identity retain reconnect-only behavior. This requires a retained node runtime that supports exact-device resume; older runtimes need an operator restart or normal node update, not automatic replacement.
 
 A message that arrives while the Gateway is installing an updated worker runtime on its machine waits for that installation before admission instead of interrupting it. Bytes still transferring to the node keep the turn alive; Stop, the turn's timeout, or a Gateway restart cancels the wait. After installation, the turn runs on the updated runtime; a failed update follows the existing pending-update recovery.
 
@@ -83,7 +140,7 @@ A change on either side uses the full reconciliation path, including conflict ha
 
 Completed cloud turns preserve eligible, size-bounded workspace files before the turn claim is released. Repository-only sessions accept a cumulative immutable checkpoint in the Gateway's bare artifact repository. Gateway-source sessions apply those changes to their managed worktree. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Gateway-source changes remain in the managed worktree for normal review and commit; repository-only changes remain on the node and in the accepted checkpoint.
 
-At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`, `.cache/ms-playwright/`, and `.local/share/pnpm/store/` are derived caches, `.artifacts/vitest-workers/` contains generated compiler outputs, and `.artifacts/dist-artifacts.lock/` contains runtime ownership files. Workspace capture, transfer, and reconciliation exclude these exact roots. Recovery applies the same rule to previously retained results without changing their authenticated receipts. Other files under `.cache/`, `.local/`, and `.artifacts/`, nested paths, and explicit staged inputs remain subject to the normal workspace eligibility and size limits; genuine concurrent source edits still produce conflicts.
+At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`, `.cache/ms-playwright/`, `.local/share/pnpm/store/`, and `artifacts/task-environment/local/share/pnpm/store/` are derived caches, `.artifacts/vitest-workers/` contains generated compiler outputs, and `.artifacts/dist-artifacts.lock/` contains runtime ownership files. Workspace capture, transfer, and reconciliation exclude these exact roots. Recovery applies the same rule to previously retained results without changing their authenticated receipts. Other files under `.cache/`, `.local/`, `.artifacts/`, and `artifacts/`, nested paths, and explicit staged inputs remain subject to the normal workspace eligibility and size limits; genuine concurrent source edits still produce conflicts.
 
 ### Retain idle workers
 
@@ -163,15 +220,15 @@ ordinary reconcile-first move instead.
 
 ## Stop, reclaim, or remove a session
 
-To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud worker…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
+To stop a running turn in the Control UI, use **Stop** on **Chat** or `/stop` first. Once no turn is running, choose **Stop cloud device…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
-Stop and idle suspension retain this final-save obligation across Gateway restarts, even when capture failed before a workspace result was staged. Startup resumes reconciliation before releasing the machine. If a Gateway update changed the worker bundle, recovery stops the old process, installs the current bundle on that exact draining placement, and finishes the save and teardown without restarting a turn. Failed capture or installation retains the machine for another recovery attempt. If the machine is gone, only the last accepted workspace survives and the session records the failure, as described below.
+Stop and idle suspension retain this final-save obligation across Gateway restarts, even when capture failed before a workspace result was staged. Startup resumes reconciliation before releasing the machine. If Stop is interrupted after the placement enters `draining` but before its final-save claim is recorded, background recovery enrolls the save on the same attached worker without requiring a Gateway restart. It leaves active claims and moves with their existing owners; an offline worker waits for reconnection without replaying input or allocating a replacement. If a Gateway update changed the worker bundle, recovery stops the old process, installs the current bundle on that exact draining placement, and finishes the save and teardown without restarting a turn. Failed capture or installation retains the machine for another recovery attempt. If the machine is gone, only the last accepted workspace survives and the session records the failure, as described below.
 
 While a replacement worker is being prepared, the turn remains queued for admission and uses the setup operation's existing timeouts. It is not treated as a stalled model turn. Chat **Stop** also cancels replacement setup; the Gateway waits for any started provisioning work to settle and clean up before releasing its ownership. A stopped or superseded turn cannot launch a replacement later when a setup wait finishes.
 
 ### Recover a failed placement
 
-A failed placement does not always mean its worker has stopped. The sidebar, session list, and placement chip keep **Stop cloud worker…** available when cleanup is still needed. Once a previously active worker is confirmed gone, send another message to continue in the same conversation. The Gateway restores its last saved workspace on the original device or cloud profile with fresh execution authority. Pending workspace results, unfinished recovery, and placement moves must settle before a replacement starts. Stop or a changed session cancels pending recovery; the interrupted turn is not replayed.
+A failed placement does not always mean its worker has stopped. The sidebar, session list, and placement chip keep **Stop cloud device…** available when cleanup is still needed. Once a previously active worker is confirmed gone, send another message to continue in the same conversation. The Gateway restores its last saved workspace on the original device or cloud profile with fresh execution authority. Pending workspace results, unfinished recovery, and placement moves must settle before a replacement starts. Stop or a changed session cancels pending recovery; the interrupted turn is not replayed.
 
 The placement chip also offers **Restart session…** to choose **Gateway · local**, an eligible paired device, or a configured cloud profile. This choice is required when initial setup never completed or the original destination is unavailable. Local recovery restores the last accepted workspace checkpoint before enabling local turns, including creating a managed worktree for a repository-only session. Unsynced changes from a lost worker may be unavailable. The previous failure clears when restart begins; a failed restart reports its new error. An archived session must be unarchived before continuing.
 
@@ -199,7 +256,7 @@ openclaw gateway call sessions.reclaim \
 
 Calling `sessions.reclaim` while a turn is active cancels running and pending work and records the active turn’s stopped outcome before workspace reconciliation and teardown. Inputs already waiting, or submitted while reclaim is in progress, do not restart the worker when reclaim completes. Send a new message after reclaim finishes to start new work.
 
-`sessions.reclaim` also cancels a dispatch that is still preparing or provisioning, including project snapshot and transfer work before enrollment. The UI exposes **Stop cloud worker…** once a requested or provisioning placement appears. Crabbox stops the active acquisition/setup command, readiness wait, or enrollment wait, then the Gateway completes authoritative lease cleanup before reporting success. The initial prompt remains **Not sent**; only an explicit retry sends it later. A provider that cannot interrupt an operation still retains its cleanup ownership until that operation settles. Cancellation never reports a caller timeout as proof of release.
+`sessions.reclaim` also cancels a dispatch that is still preparing or provisioning, including project snapshot and transfer work before enrollment. The UI exposes **Stop cloud device…** once a requested or provisioning placement appears. Crabbox stops the active acquisition/setup command, readiness wait, or enrollment wait, then the Gateway completes authoritative lease cleanup before reporting success. The initial prompt remains **Not sent**; only an explicit retry sends it later. A provider that cannot interrupt an operation still retains its cleanup ownership until that operation settles. Cancellation never reports a caller timeout as proof of release.
 
 Cancellation and drain preparation begin immediately, outside the placement queue, so targeted recovery can finish a terminal workspace result and release its turn claim. A pending result for a Gateway Move rejected by the current required worker profile can settle its accepted checkpoint and release its turn claim without materializing a Gateway checkout or tearing down its drained source. The Move remains inspectable until policy permits it or Stop safely reclaims the source. If recovery observes that source destruction already committed, or required-worker policy activates during destruction or final placement admission, its accepted result settles as reclaimed without authorizing the rejected destination. A Gateway checkout prepared while policy allowed the Move remains available, but settlement does not enable local turns after policy revocation. Successful Stop retires only that source’s obsolete Move. Only entered cleanup joins the session queue. Final workspace reconciliation and machine release wait for earlier placement operations for the same session, including admitted recovery and forced destruction of its environment. A later dispatch or move of that session waits for the whole Stop, so it cannot replace the worker before Stop finishes.
 
@@ -216,6 +273,8 @@ On a dedicated cloud machine, each desktop cleanup phase gets up to one minute t
 If provider teardown fails or times out during stop or move, the request reports the bounded, redacted provider cause even if recovery subsequently finishes cleanup. Retrying Stop on a failed placement reports that cleanup attempt's cause, which can differ from the original session failure. Follow the reported recovery guidance and check the current placement before retrying. A dedicated cloud worker can remain recorded as attached while destruction is uncertain, but its closed authority cannot resume remote workspace processes.
 
 While cleanup remains pending, the placement keeps the original failure and the latest cleanup cause. Repeated recovery checks do not append another copy of the same error, and long diagnostics retain the final provider cause.
+
+Before accepting a fresh worker or remote-exec turn, OpenClaw checks the exact attached provider lease. An unavailable observation rejects admission without replacing or releasing the worker; retry after provider connectivity returns. A dormant paired device keeps its lease and follows the existing reconnect path. Confirmed lease loss enters the same cleanup path as background recovery before any new input is claimed; this check never allocates a replacement or replays input.
 
 An ended or unusable provider lease is not proof that its machine was deleted. OpenClaw fences that worker, stops renewing the lease, and requests explicit provider teardown. Failed teardown stays retryable; a missing local claim or an earlier “not found” warning does not turn a failed stop into success.
 
@@ -245,11 +304,11 @@ unsynced-file and in-flight-work loss boundary as the Control UI confirmation.
 
 Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), with durable resource cleanup so interruption does not justify guessing or leaking a machine. In-flight provisioning is cancelled at graceful shutdown rather than replayed as execution at startup. A failed model turn keeps the active placement available for a retry. In Gateway-source worktrees, workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
-Recovery requested for one worker inspects that environment and resumes only its associated workspace results and moves, waiting for earlier operations on those sessions. Regular background sweeps reconcile all environments, then recover sessions one at a time. They skip sessions with an unfinished placement operation and retry them on the next sweep. Orphan workspace cleanup also waits until every session sharing that workspace is idle. A targeted recovery does not wait for an unrelated background sweep. These queues exist only in the running Gateway; updates do not change persisted placement state or configuration.
+Recovery requested for one worker inspects that environment and resumes only its associated workspace results and moves, waiting for earlier operations on those sessions. Regular background sweeps reconcile all environments, then recover interrupted or unhealthy sessions one at a time. Healthy active placements without pending workspace results, moves, or journals use their committed placement and environment facts without loading workspace recovery projections. Session identity evidence refreshes after identity, placement, or store/config changes; environment-only diagnostics do not rebuild it. Sweeps skip sessions with an unfinished placement operation and retry them on the next sweep. Orphan workspace cleanup also waits until every session sharing that workspace is idle. A targeted recovery does not wait for an unrelated background sweep. These queues exist only in the running Gateway; updates do not change persisted placement state or configuration.
 
 If a turn reports `Cloud worker finished, but its workspace result could not be reconciled`, inspect the cause after the colon. A failed node manifest capture includes its bounded, redacted stderr, or its termination status when stderr is empty. Node cleanup preserves manifests needed between upload and verification, including when other workers finish simultaneously; increasing transfer timeouts does not repair a missing manifest.
 
-Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. Results support up to 500,000 before/after records across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
+Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. New results support up to 50,000 changed paths (including deletions and directories) across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. A result above the changed-path limit reports the count and asks you to exclude generated output or split the work. Add unwanted output to `.gitignore`; files already tracked by Git must also be removed from the index. Previously accepted receipts remain recoverable under their original record limits. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
 
 ## What survives a dead machine
 
@@ -265,12 +324,93 @@ Worker-turn transcript commits validate the session in their existing database w
 
 Worker-turn live previews are snapshots of the current assistant message. Corrections, shorter previews, and empty replacements update that message without replaying or erasing earlier messages in the turn. Explicit commentary is kept out of answer text, including when its phase arrives at message completion. Live previews are bounded and can be dropped after stream degradation; the committed transcript remains authoritative.
 
-Workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud worker…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
+With default mirrored durability, workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud device…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
 
 For repository-only sessions, the Gateway retains complete base/current file manifests, changed file contents, and bounded worker Git delta packs in immutable checkpoints. The packs exclude the pinned base and its ancestors: the Gateway does not keep a full copy of upstream Git history or unchanged base files. Replacement workers therefore need the pinned upstream commit to be fetchable or already present in the node's verified seed cache. An explicit Gateway move needs that commit available to its project clone. A moved or deleted remote branch does not change the pinned commit, but losing access to that commit can prevent restoration.
+
+The initial repository checkpoint is accepted before activation, including when adopting a prepared worker, so eligible setup output survives a lost machine before the first turn. Checkpoint capture verifies the uploaded files at the transfer boundary, then checks the remote workspace and Git HEAD before accepting the staged result. It does not rescan the remote workspace between upload and staging.
+
+After the first repository checkpoint, node transfers use the last accepted manifest as their baseline. The Gateway reuses unchanged checkpoint blobs while retaining the original pinned source in recovery metadata. An unchanged file manifest reuses the accepted checkpoint only when its publication snapshot and Git lineage also match; empty commits and changed publication bytes still create a new checkpoint. Stale or missing accepted parents are rejected.
 
 Checkpoint history stays until session deletion; the managed-worktree seven-day idle cleanup and thirty-day snapshot expiry do not apply. Back up the [state database and repository artifacts](/reference/database-schemas#cloud-repository-workspaces) together. This saves Gateway checkout space, not all storage used by a session's accepted changes.
 
 While the worker is active, **Files**, file editing, and diffs inspect its actual checkout through the authenticated node connection. After Stop, retained changed-file previews and change paths remain available, but unchanged upstream files, editing, and full diffs require a running worker. The diff panel explains that the workspace is stopped. Opening these views never substitutes the agent's Gateway workspace.
 
-After a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+For mirrored workspaces, after a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+
+## Exact provider-resource receipts
+
+New Linux Azure Sandbox allocations made through Crabbox record their observed
+resource identity in the existing environment store before setup or node enrollment.
+The original provision operation remains the allocation recovery key. Restart
+recovery reuses that operation and refuses a different resource; an unavailable
+observation does not prove that the original resource was deleted.
+
+Stop still performs the existing final workspace save. Provider teardown then
+uses the saved exact resource identity and remains pending until the provider
+confirms deletion. A missing local claim, timeout, or failed observation cannot
+complete cleanup. Existing environments without a receipt retain their original
+fixed-lease cleanup behavior; they are not silently rebound to a newly observed
+resource. Providers without receipt support remain unchanged, but cannot operate
+on an environment that already has a receipt.
+
+A receipt alone does not change durability. Existing and unselected profiles retain
+mirrored recovery; the explicit retained-disk selection above binds repository
+authority only after initialization and exact runtime admission. Old pending
+mirrored results must settle first and keep their recorded semantics across upgrades.
+
+<a id="explicit-current-disk-consumers-not-activated" />
+
+### Explicit current-disk consumers
+
+For an opted-in disk binding, file reads, edits, downloads, and incoming
+attachments use the original attached node. Editor writes settle their existing
+result custody without updating an older Gateway mirror.
+
+Explicit publication captures a fresh immutable snapshot under the existing session
+reservation and node quiescence. All requests selected for the same accepted turn
+reuse that snapshot, including a retry after artifact capture but before receipt
+binding. An already selected publication never includes later disk edits.
+
+Gateway export preparation also requires the original attached disk and a fresh
+snapshot, preserving private Git history and working files. It verifies the source
+again before binding the local worktree. Staged changes and unavailable history
+fail closed rather than silently losing index contents or commits. This preparation
+also serves an explicit **Move to Gateway** for an already-bound, active disk.
+The existing pending-result record retains the immutable export and original
+resource receipt. Only after the verified managed worktree is bound to the session
+does the repository owner retire disk custody; the existing environment owner
+then settles exact-resource cleanup before the placement finishes locally.
+
+An interrupted Move before local binding captures the original disk again rather
+than restoring an old mirror. After local binding, recovery keeps that worktree
+and finishes custody retirement and cleanup without reapplying an export. Missing
+exports, replaced disks, or changed session ownership keep recovery held. Existing
+mirrored pending results keep their original acceptance semantics. This uses the
+existing schema and cleanup owners; activation adds no further schema version.
+For an already-bound retained disk, explicit file reads, edits, downloads, and new
+publication snapshots request readiness from the retained lifecycle owner. That
+owner waits for the original node and current bundle; provider resume alone does
+not admit file I/O. Editor preparation runs inside the existing session mutation
+and workspace exclusion, before result custody is claimed. Downloads retain their
+current read authority across preparation and each byte window.
+
+Move records its intent and exact result custody before preparing its source and
+taking node quiescence. A runtime update may preserve the draining Move only for
+its exact original disk and retained result, including after interruption. An
+unavailable wake leaves that durable Move held for retry, without replacing its
+source. Both host admission and the native writer check that custody;
+caller revocation during installation refuses the refreshed receipt. This grants
+no new turn and does not replay input. Capture inside Move quiescence never wakes
+or refreshes the runtime again. Publication retries with
+an immutable snapshot reuse it without waking or recapturing the disk. Explicit
+new turns wait for pending results, then prepare the original retained worker before
+claiming execution. Passive result recovery never authorizes another compute window.
+Ordinary mirrored sessions keep their existing admission and settlement behavior. Missing or replaced disks
+never fall back to a stored mirror or source-only reconstruction.
+
+The shared-state schema upgrade preserves old rows with an absent receipt and
+fences older binaries that cannot honor recorded identities. To roll back, first
+settle the new environments and their pending cleanup, then restore the matching
+pre-upgrade state backup with its binary. Do not perform a package-only downgrade
+or erase receipt metadata to force cleanup.

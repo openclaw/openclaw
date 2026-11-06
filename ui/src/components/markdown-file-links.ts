@@ -1,3 +1,5 @@
+import { MARKDOWN_LINK_START_BOUNDARY_SOURCE } from "./markdown-link-boundary.ts";
+
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[\\p{L}\\p{M}\\p{N}_.@#+-]+";
@@ -22,15 +24,20 @@ function fileGrammar(extension: string, segment = FILE_SEGMENT_SOURCE) {
   const end = "(?!\\.?[\\p{L}\\p{M}\\p{N}_])";
   const multiSegment = `(?:${prefixed}|${windowsAbsolute}|${unprefixed})(?:${FILE_LINE_SUFFIX_SOURCE})?${end}`;
   const bareWithLine = `${name}${FILE_LINE_SUFFIX_SOURCE}${end}`;
+  const source = `${multiSegment}|${bareWithLine}`;
   return {
-    scan: new RegExp(`${multiSegment}|${bareWithLine}`, "gu"),
+    source,
     exact: new RegExp(`^(?:${multiSegment}|${bareWithLine})$`, "u"),
     bare: new RegExp(`^${segment}\\.(${SCANNED_EXTENSION_SOURCE})$`, "u"),
   };
 }
 const SCANNED_FILE = fileGrammar(SCANNED_EXTENSION_SOURCE);
 const AUTHORED_FILE = fileGrammar(AUTHORED_EXTENSION_SOURCE, AUTHORED_FILE_SEGMENT_SOURCE);
-export const MARKDOWN_FILE_LINK_SCAN_RE = SCANNED_FILE.scan;
+// Reject impossible starts before walking a long path candidate.
+export const MARKDOWN_FILE_LINK_SCAN_RE = new RegExp(
+  `${MARKDOWN_LINK_START_BOUNDARY_SOURCE}(?:${SCANNED_FILE.source})`,
+  "gu",
+);
 const FILE_LINE_SUFFIX_RE = /:(\d{1,6})(?:[-:]\d{1,6})?$/;
 const BARE_FILE_EXTENSIONS = new Set([
   "astro",

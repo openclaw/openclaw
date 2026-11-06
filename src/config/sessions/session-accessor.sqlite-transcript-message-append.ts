@@ -52,7 +52,7 @@ import {
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+import { normalizeTranscriptJsonValue } from "./transcript-json-normalize.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 

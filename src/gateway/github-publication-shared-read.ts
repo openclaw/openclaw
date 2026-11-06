@@ -76,7 +76,7 @@ export async function readSharedGitHubPublication(
         executeExistingOpenClawStateRead(
           { path: context.admission.databasePath, env: context.environment },
           { type: "githubPublications.sharedObservation", input },
-          { current: true, preferIndependentWarmRead: true, context },
+          { live: true, context },
         ),
       );
       if (key) {

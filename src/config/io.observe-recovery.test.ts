@@ -332,7 +332,6 @@ ${snapshot.raw}`;
 
   it("does not auto-restore read snapshots when observation is disabled", async () => {
     const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
-    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
     await seedConfigBackup(configPath, recoverableCoreConfig);
     const clobbered = await writeConfigRaw(configPath, {
       meta: { lastTouchedVersion: "2026.5.28" },
@@ -343,7 +342,9 @@ ${snapshot.raw}`;
     expect(snapshot.valid).toBe(true);
     expect(snapshot.config.gateway?.mode).toBeUndefined();
     await expectRaw(configPath, clobbered.raw);
-    await expectPathMissing(auditPath);
+    expect(listConfigAuditRecordsForTests({ env: { HOME: home }, homedir: () => home })).toEqual(
+      [],
+    );
   });
 
   it("does not auto-restore include-authored roots from stale full-file backups", async () => {

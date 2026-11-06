@@ -19,6 +19,7 @@ import {
   installMockGateway,
   pollLocatorText,
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionUrl,
 } from "./new-session-page.test-support.ts";
 
@@ -132,9 +133,20 @@ suite.define(() => {
   it("keeps session-only browsing free of forbidden optional discovery", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const key = "agent:main:scoped-reader";
-      const forbidden = ["sessions.catalog.list", "plugins.list", "sessions.usage"];
+      const forbidden = [
+        "commands.list",
+        "sessions.catalog.list",
+        "plugins.list",
+        "sessions.usage",
+        "worktrees.branches",
+        "users.background.get",
+        "cron.list",
+      ];
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.sessions.read"],
+        workspace: "/workspace/scoped-project",
+        workspaceGit: true,
+        presenceUsers: [{ id: "scoped-reader", name: "Scoped reader", self: true }],
         featureMethods: [...chatMethods, ...forbidden, "sessions.create", "tools.effective"],
         sessionKey: key,
         sessions: [
@@ -148,6 +160,7 @@ suite.define(() => {
             contextTokens: 100000,
             totalTokens: 50000,
             totalTokensFresh: true,
+            spawnedCwd: "/workspace/scoped-project",
           },
         ],
         agentModel: "example/demo",
@@ -185,27 +198,60 @@ suite.define(() => {
       await page.locator(".chat-controls__model-search").waitFor();
       expect(await page.locator('[data-chat-model-target-group="cliAgents"]').count()).toBe(0);
       await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
+      await captureUiProof(suite, page, "scoped-reader-new-session.png");
+      if (captureUiProofEnabled) {
+        console.info(
+          "Scoped new-session forbidden calls",
+          (await gateway.getRequests("worktrees.branches")).length,
+        );
+      }
       for (const method of [...forbidden, "sessions.create"]) {
-        expect(await gateway.getRequests(method), method).toHaveLength(0);
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       await page.getByText("The scoped conversation remains readable.", { exact: true }).waitFor();
+      await page.locator(".chat-header-session-menu__trigger").filter({ visible: true }).click();
+      expect(await page.locator('[data-value="copy-branch"]').count()).toBe(0);
+      await page.keyboard.press("Escape");
       await page.locator(".context-ring").filter({ visible: true }).click();
       const summary = page.locator(".context-usage__popover").filter({ visible: true });
       await summary.getByRole("meter").waitFor();
       expect(await summary.getByRole("meter").getAttribute("aria-valuenow")).toBe("50000");
       await summary.getByRole("button", { name: "View context", exact: true }).click();
       const panel = page.locator("openclaw-chat-context-panel");
-      await panel.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      await panel.getByText(/Ask an admin to grant read access\./).waitFor();
       expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       for (const method of [...forbidden, "sessions.create"]) {
-        expect(await gateway.getRequests(method), method).toHaveLength(0);
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
+      expect(await page.getByText("missing scope: operator.read", { exact: false }).count()).toBe(
+        0,
+      );
       await captureUiProof(suite, page, "scoped-reader-context.png");
       await page.goto(`${suite.server.baseUrl}usage`);
-      await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
+      await page.getByText(/Ask an admin to grant read access\./).waitFor();
       for (const method of ["sessions.usage", "usage.status"]) {
-        expect(await gateway.getRequests(method), method).toHaveLength(0);
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
+      }
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
+      expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
+      await page
+        .getByText("You need permission to edit your profile to upload images.", { exact: true })
+        .waitFor();
+      await captureUiProof(suite, page, "scoped-reader-background.png");
+      if (captureUiProofEnabled) {
+        console.info(
+          "Scoped background forbidden calls",
+          (await gateway.getRequests("users.background.get")).length,
+        );
+      }
+      expect.soft(await gateway.getRequests("users.background.get")).toHaveLength(0);
+      await page.goto(`${suite.server.baseUrl}automations`);
+      await page.getByText(/Ask an admin to grant read access\./).waitFor();
+      for (const method of forbidden) {
+        expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
     });
   });
@@ -347,7 +393,7 @@ suite.define(() => {
       await pollAttribute(fullAccess, "disabled").not.toBeNull();
       await expect
         .poll(() => tooltipTitleText(fullAccess))
-        .toBe("Full access requires operator.admin access.");
+        .toBe("Only admins can turn on Full access.");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").press("Enter");
       await pollLocatorText(
@@ -382,6 +428,7 @@ suite.define(() => {
       await gateway.waitForRequest("projects.list");
       await page.locator("#new-session-project-trigger").click();
       const place = page.locator(".oc-popover.new-session-page__project-popover");
+      await place.locator(".header-search__toggle").click();
       await place.getByRole("searchbox").fill("openclaw");
       await gateway.waitForRequest("projects.searchRemote");
       const remote = place.getByRole("button", { name: /openclaw\/openclaw/u });
@@ -434,7 +481,7 @@ suite.define(() => {
         await pollValue(pathInput).toBe(workspace);
         await page
           .locator(".new-session-page__browser")
-          .getByText("No subfolders", { exact: true })
+          .getByText("No subfolders yet.", { exact: true })
           .waitFor();
         await gateway.deferNext("fs.listDir", { path: "/tmp" });
         await pathInput.fill("/tmp");
@@ -452,9 +499,7 @@ suite.define(() => {
         });
         await pollLocatorText(
           page.locator(".new-session-page__browser .new-session-page__error"),
-        ).toContain(
-          "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-        );
+        ).toContain("You need admin access to browse outside agent workspaces.");
         expect(await pathInput.inputValue()).toBe("/tmp");
         expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
       },
@@ -510,8 +555,8 @@ suite.define(() => {
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
       });
-      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
-        "missing scope: operator.admin",
+      await pollLocatorText(page.locator(".new-session-page__error")).toBe(
+        "Couldn’t complete this request. Ask an admin to grant admin access.",
       );
     });
   });

@@ -196,7 +196,7 @@ suite.define(() => {
           expect(await updating.locator("p").textContent()).toContain("Testing focus behavior");
           expect(await updating.locator(".activity-feed__note").count()).toBe(0);
           const unavailable = await recap(keys.unavailable).textContent();
-          expect(unavailable).toContain("Couldn’t refresh recap");
+          expect(unavailable).toContain("Couldn’t refresh the recap. Try again.");
           expect(unavailable).not.toContain("Recap unavailable");
           expect(await recap(keys.initial).locator(".skeleton").count()).toBe(2);
           const thumbnails = currentRow.locator(".chat-message-image-button");

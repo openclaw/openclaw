@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
@@ -497,10 +498,12 @@ describe("agentCommand embedded maintenance", () => {
     ).toHaveLength(1);
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({ totalTokens: lastCallUsage.total }),
+      }),
     );
     expect(storedBeforeMaintenance).toMatchObject({
-      totalTokens: 904_869,
+      totalTokens: lastCallUsage.total,
       inputTokens: lastCallUsage.input,
       outputTokens: lastCallUsage.output,
       cacheRead: lastCallUsage.cacheRead,
@@ -612,7 +615,7 @@ describe("agentCommand embedded maintenance", () => {
             compactionCount: 7,
             totalTokens: 777,
             totalTokensFresh: true,
-            totalTokensVersion: 1,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           }));
         }
         const entry = loadSessionEntry(target);

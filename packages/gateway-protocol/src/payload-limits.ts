@@ -1,0 +1,1 @@
+export const MAX_PREAUTH_PAYLOAD_BYTES = 64 * 1024;

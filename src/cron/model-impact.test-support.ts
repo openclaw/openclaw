@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import type { CronModelImpactOwner } from "./model-impact.js";
+import type { CronModelImpactOwner } from "./model-impact-compatibility.js";
 import type { CronStoredJob } from "./types.js";
 
 export function impactConfig(): OpenClawConfig {

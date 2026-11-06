@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { assert, describe, expect, it, vi } from "vitest";
+import * as configureShared from "../../commands/configure.shared.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import * as doctorContributions from "../../flows/doctor-health-contributions.js";
@@ -607,34 +608,126 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
 
 registerOriginalCaptureTests({ fixture, dirs });
 
-it("continues a completed update when original-state capture fails", async () => {
-  try {
+it.each([
+  "SQLite file generation changed while reading",
+  "State schema inventory failed (output-limit)",
+])(
+  "reports a warning and continues a completed update after capture failure: %s",
+  async (failure) => {
+    try {
+      prepareCurrentUpdate();
+      const cause = `${failure}: /fixture/state/openclaw.sqlite`;
+      vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
+        new Error("Original update capture failed; evidence retained at /fixture/capture", {
+          cause: new Error(cause),
+        }),
+      );
+
+      await expect(runUpdate()).resolves.toBeUndefined();
+
+      const [finished] = history.listUpdateRuns();
+      expect(finished).toMatchObject({ status: "skipped", reason: "already-current" });
+      const warning = finished?.steps.find(
+        (step) => step.step === "warning:original-state-capture:1",
+      )?.detail;
+      assert(warning);
+      expect(warning).toMatch(
+        /^NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable\. The update continues without a complete pre-update recovery copy\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
+      );
+      expect(warning).toContain(cause);
+      expectJson({
+        status: "skipped",
+        run: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "warning:original-state-capture:1", detail: warning }),
+          ]),
+        }),
+      });
+      expect(warning).not.toContain("retry");
+      expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([true, false])(
+  "uses the operator's agent after candidate admission fails (repair consent=%s)",
+  async (consent) => {
     prepareCurrentUpdate();
-    const cause = "SQLite file generation changed while reading: /fixture/state/openclaw.sqlite";
-    vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
-      new Error("Original update capture failed; evidence retained at /fixture/capture", {
-        cause: new Error(cause),
-      }),
+    const operatorHome = process.env.HOME!;
+    const operatorBin = path.join(operatorHome, "bin");
+    const operatorCodexHome = path.join(operatorHome, ".codex");
+    const receiptPath = path.join(operatorHome, "agent-receipt.json");
+    fs.mkdirSync(operatorBin);
+    fs.writeFileSync(
+      path.join(operatorBin, "codex"),
+      `#!${process.execPath}\n` +
+        `require("node:fs").writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
+        `  home: process.env.HOME, path: process.env.PATH, codexHome: process.env.CODEX_HOME,\n` +
+        `  stateDir: process.env.OPENCLAW_STATE_DIR, configPath: process.env.OPENCLAW_CONFIG_PATH,\n` +
+        `  workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,\n` +
+        `  updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,\n` +
+        `  runId: process.env.OPENCLAW_UPDATE_RUN_ID, prompt: process.argv.at(-1),\n` +
+        `}));\n`,
+      { mode: 0o700 },
     );
-
-    await expect(runUpdate()).resolves.toBeUndefined();
-
-    const [finished] = history.listUpdateRuns();
-    expect(finished).toMatchObject({ status: "skipped", reason: "already-current" });
-    const warning = finished?.steps.find(
-      (step) => step.step === "warning:original-state-capture:1",
-    )?.detail;
-    assert(warning);
-    expect(warning).toMatch(
-      /^Original state capture is unavailable; the update continues without it\. A running Gateway or another active writer changing state during capture is expected to cause this\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
-    );
-    expect(warning).toContain(cause);
-    expect(warning).not.toContain("retry");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-  }
-});
+    const serviceHome = dirs.make("openclaw-triage-service-");
+    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", path.join(serviceHome, "workspace"));
+    const serviceEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: serviceHome,
+      PATH: serviceHome,
+      CODEX_HOME: path.join(serviceHome, ".codex"),
+    };
+    vi.stubEnv("PATH", operatorBin);
+    vi.stubEnv("CODEX_HOME", operatorCodexHome);
+    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockResolvedValue(serviceEnv);
+    const admit = commandRun.admitUpdateCommandRun;
+    vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
+      await admit(params);
+      // Keep initialization, run registration, triage preparation, and unwind real.
+      expect(process.env.PATH).toBe(serviceEnv.PATH);
+      throw new Error("fixture candidate validation failed");
+    });
+    vi.spyOn(configureShared, "select").mockResolvedValue("triage");
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    promptConfirm.mockClear();
+    promptConfirm.mockImplementation(async () => {
+      expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
+      return consent;
+    });
+    try {
+      await withTriageTerminal(true, async () => {
+        await expect(updateCommand({ restart: false })).rejects.toMatchObject({ code: 1 });
+      });
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        "Agent: codex. This will use your own account/tokens.",
+      );
+      expect(promptConfirm).toHaveBeenCalledOnce();
+      expect(fs.existsSync(receiptPath)).toBe(consent);
+      if (consent) {
+        expect(JSON.parse(fs.readFileSync(receiptPath, "utf8"))).toEqual({
+          home: operatorHome,
+          path: operatorBin,
+          codexHome: operatorCodexHome,
+          stateDir: serviceEnv.OPENCLAW_STATE_DIR,
+          configPath: serviceEnv.OPENCLAW_CONFIG_PATH,
+          workspaceDir: serviceEnv.OPENCLAW_WORKSPACE_DIR,
+          prompt: expect.stringContaining("fixture candidate validation failed"),
+        });
+      }
+      expect(process.env.PATH).toBe(operatorBin);
+      expect(process.env.HOME).toBe(operatorHome);
+    } finally {
+      promptConfirm.mockResolvedValue(false);
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
+);
 
 it("Doctor sees an already-current update's completed history after original-state capture", async () => {
   try {

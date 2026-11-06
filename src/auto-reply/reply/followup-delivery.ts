@@ -211,11 +211,16 @@ export async function resolveFollowupDeliveryDecision(params: {
     trigger: turn.queued.run.internalEventExecution ? "event" : "user",
     currentInboundEventKind: turn.queued.currentInboundEventKind,
   });
-  const { authoredSilence, pendingContinuation, automationNoChange, reasoningPayloadsEnabled } =
-    resolveAutomationReplyState(execution.outcome, {
-      opts,
-      terminalFailurePayload: accounting.terminalFailurePayload,
-    });
+  const {
+    successfulTerminal,
+    authoredSilence,
+    pendingContinuation,
+    automationNoChange,
+    reasoningPayloadsEnabled,
+  } = resolveAutomationReplyState(execution.outcome, {
+    opts,
+    terminalFailurePayload: accounting.terminalFailurePayload,
+  });
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
   const sourceReplyDelivery = resolveSourceReplyDelivery(
     result,
@@ -249,9 +254,14 @@ export async function resolveFollowupDeliveryDecision(params: {
     return { kind: "suppress" as const, reason: "silent" as const };
   }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
-  const hasLegacyMessagingToolEvidence =
+  // A terminal payload can confirm an earlier progress send as its final answer.
+  // Explicit delivery custody and unfinished/failed turns remain authoritative.
+  const canCompleteFromMessagingToolDuplicate =
     result.sourceReplyDeliveryState === undefined &&
-    resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined;
+    (resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined ||
+      (successfulTerminal &&
+        !pendingContinuation &&
+        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only"));
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
     result.meta?.finalAssistantVisibleText ?? "",
   );
@@ -261,7 +271,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     sentMediaUrls: result.messagingToolSentMediaUrls,
     sentTargets: result.messagingToolSentTargets,
     sentTexts: result.messagingToolSentTexts,
-    onDeliveredTerminalDuplicate: hasLegacyMessagingToolEvidence
+    onDeliveredTerminalDuplicate: canCompleteFromMessagingToolDuplicate
       ? () => {
           if (completion.outcome !== "blocked") {
             completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");

@@ -1,6 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
@@ -9,11 +10,9 @@ import { sessionControllerMailboxes } from "../sessions/session-controller.mailb
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { activeSessionOperations } from "../sessions/session-controller.state.js";
 import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import {
-  GatewayShutdownCleanupRetainedError,
-  recordGatewayShutdownWarning,
-} from "./server-shutdown.js";
+import { recordGatewayShutdownWarning } from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 
@@ -29,7 +28,6 @@ export type GatewayRunShutdownParams = {
 export async function prepareGatewayRunShutdown(
   params: GatewayRunShutdownParams & {
     warnings: string[];
-    exitAfterClose?: boolean;
   },
 ): Promise<{ released: Promise<void>; failure?: { error: unknown } }> {
   const sources = listRpcSourceEntries().filter(([, entry]) =>
@@ -47,13 +45,18 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
-  // Marker writes share the lifecycle owner's deadline, including worker/writer queueing.
+  // Leave time for abort finalizers and resource retirement within the owner's deadline.
   const budget = getProcessCleanupBudget();
-  const persistenceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
+  const remainingCleanupMs = () =>
+    budget ? Math.min(10_000, Math.max(0, budget.deadline - performance.now())) : 1_000;
+  const persistenceMs = remainingCleanupMs();
   let failure: { error: unknown } | undefined;
   try {
     await raceWithTimeout(
-      async () => params.persistRunningSessionsForRestart?.(persistence.signal),
+      () =>
+        measureGatewayCloseStep("restart.close.session-markers", async () =>
+          params.persistRunningSessionsForRestart?.(persistence.signal),
+        ),
       persistenceMs,
       () => {
         const error = new Error(
@@ -69,18 +72,11 @@ export async function prepareGatewayRunShutdown(
     shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
-  try {
-    await raceWithTimeout(
-      async () => params.terminateRunningSubagentsForShutdown?.(),
-      1_000,
-      () => {
-        throw new Error("Shutdown subagent settlement did not settle within 1000ms");
-      },
-      { ref: false },
-    );
-  } catch (error) {
-    failure ??= { error };
-  }
+  // Start child retirement, then signal every captured owner before joining any of them.
+  const subagents = measureGatewayCloseStep("restart.close.subagent-settlement", async () =>
+    params.terminateRunningSubagentsForShutdown?.(),
+  );
+  void subagents.catch(() => {});
   stopSession({
     capture,
     source: "restart",
@@ -102,32 +98,31 @@ export async function prepareGatewayRunShutdown(
   const reason = createAgentRunRestartAbortError();
   params.cancelReceivedWork?.(reason);
   const interrupted = effects.interrupt(reason);
+  const subagentMs = remainingCleanupMs();
+  try {
+    await raceWithTimeout(
+      () => subagents,
+      subagentMs,
+      () => {
+        throw new Error(`Shutdown subagent settlement did not settle within ${subagentMs}ms`);
+      },
+      { ref: false },
+    );
+  } catch (error) {
+    shutdownLog.warn(`Subagent settlement failed: ${String(error)}`);
+    failure ??= { error };
+  }
   // Raw model/tool ownership is resource cleanup, not permission to wait forever.
   const terminalPersistence = sources.flatMap(([, source]) =>
     source.adapter.projectSessionTerminalPersistence
       ? [source.adapter.projectSessionTerminalPersistence]
       : [],
   );
-  const released = Promise.all([
+  const released = Promise.allSettled([
+    subagents,
     capture.settled,
     interrupted.released,
     ...terminalPersistence,
-  ]).then(() => undefined);
-  return {
-    failure,
-    released: params.exitAfterClose
-      ? raceWithTimeout(
-          released,
-          5_000,
-          () => {
-            // Do not dispose or reuse a generation whose raw cleanup is still live.
-            throw new GatewayShutdownCleanupRetainedError(
-              [],
-              "session admissions remain after shutdown grace",
-            );
-          },
-          { ref: false },
-        )
-      : released,
-  };
+  ]).then((results) => throwIfSettledRejected(results, "Session shutdown persistence failed"));
+  return { failure, released };
 }

@@ -108,6 +108,12 @@
           - "docs/plugins/knowledge.md"
           - "docs/plugins/knowledge/**"
           - "docs/plugins/reference/knowledge.md"
+"plugin: skill-workshop":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/skill-workshop/**"
+          - "docs/plugins/reference/skill-workshop.md"
+          - "docs/tools/skill-workshop.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -600,6 +606,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/crabbox/**"
+"extensions: deep-research":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deep-research/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -693,6 +703,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: rerank":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/rerank/**"
+          - "docs/providers/rerank.md"
 "extensions: liquid-ai":
   - changed-files:
       - any-glob-to-any-file:

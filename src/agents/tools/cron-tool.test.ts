@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   consumeCronCreatorAuthorityGrant,
   createCronCreatorAuthorityRunScope,
@@ -23,7 +24,10 @@ import {
   installCronToolTestFixture,
   readGatewayCall,
 } from "./cron-tool.test-support.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 
 type Options = Parameters<typeof createCronTool>[0];
 const ok = { ok: true };
@@ -179,6 +183,11 @@ installCronToolTestFixture();
 it("allows scoped isolated cron runs to remove the current job", async () => {
   await executeCron({ action: "remove", jobId: "job-current" }, scopedCaller);
   expect(expectSingleCall("cron.remove")).toEqual({ id: "job-current" });
+});
+
+it("passes the requested page of the current job's run receipts", async () => {
+  await executeCron({ action: "runs", jobId: "job-current", limit: 2, offset: 1 }, scopedCaller);
+  expect(expectSingleCall("cron.runs")).toEqual({ id: "job-current", limit: 2, offset: 1 });
 });
 
 it("redacts global status while preserving authenticated caller identity", async () => {
@@ -811,6 +820,55 @@ it.each([
   },
 ])("$name", async ({ name: _name, expected, ...params }) => {
   expect(await executeAddAndReadDelivery(params)).toEqual(expected);
+});
+
+it.each([
+  { name: "Gateway default", cron: { delivery: { channel: "telegram", to: "-100123456789" } } },
+  {
+    name: "agent default",
+    cron: { agents: { main: { delivery: { channel: "telegram", to: "-100123456789" } } } },
+  },
+])("leaves a route-less job unpinned when a $name applies", async ({ cron }) => {
+  setRuntimeConfigSnapshot({ cron });
+  const delivery = await executeAddAndReadDelivery({
+    agentSessionKey: "agent:main:discord:dm:buddy",
+    currentDeliveryContext: { channel: "discord", to: "user:buddy" },
+  });
+  expect(delivery?.channel).toBeUndefined();
+  expect(delivery?.to).toBeUndefined();
+});
+
+it("still pins the creating chat when the default belongs to another agent", async () => {
+  setRuntimeConfigSnapshot({
+    cron: { agents: { other: { delivery: { channel: "telegram", to: "-100123456789" } } } },
+  });
+  expect(
+    await executeAddAndReadDelivery({
+      agentSessionKey: "agent:main:discord:dm:buddy",
+      currentDeliveryContext: { channel: "discord", to: "user:buddy" },
+    }),
+  ).toMatchObject({ mode: "announce", channel: "discord", to: "user:buddy" });
+});
+
+it.each([
+  { name: "the requesting profile", origin: { operatorProfileId: "alice" }, pinned: false },
+  { name: "a delegating profile", origin: { delegatedCreatorProfileId: "alice" }, pinned: false },
+  { name: "another profile", origin: { operatorProfileId: "bob" }, pinned: true },
+  { name: "a requester without a profile", origin: {}, pinned: true },
+])("applies a creator default to create-time pinning for $name", async ({ origin, pinned }) => {
+  setRuntimeConfigSnapshot({
+    cron: { creators: { alice: { delivery: { channel: "telegram", to: "-100123456789" } } } },
+  });
+  const sessionKey = "agent:main:discord:dm:buddy";
+  const delivery = await withGatewayToolCallerIdentity(
+    { agentId: "main", sessionKey, requesterOrigin: { sessionKey, ...origin } },
+    () =>
+      executeAddAndReadDelivery({
+        agentSessionKey: sessionKey,
+        currentDeliveryContext: { channel: "discord", to: "user:buddy" },
+      }),
+  );
+  expect(delivery?.to).toBe(pinned ? "user:buddy" : undefined);
 });
 
 it("recovers flat text and toolsAllow as a systemEvent payload", async () => {

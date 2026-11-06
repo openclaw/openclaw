@@ -1,5 +1,5 @@
 import { createMemo } from "solid-js";
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 
 const hues = [8, 32, 48, 82, 142, 174, 202, 232, 272, 322] as const;
 

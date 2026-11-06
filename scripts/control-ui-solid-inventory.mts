@@ -138,33 +138,34 @@ type LitBinding = {
   property?: string;
 };
 
+export function bindingScope(node: ts.Node, tree: ts.SourceFile, functionOnly = false): ts.Node {
+  for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+    if (
+      ts.isSourceFile(scope) ||
+      ts.isFunctionLikeDeclaration(scope) ||
+      ts.isClassStaticBlockDeclaration(scope)
+    ) {
+      return scope;
+    }
+    if (
+      !functionOnly &&
+      (ts.isBlock(scope) ||
+        ts.isModuleBlock(scope) ||
+        ts.isCaseBlock(scope) ||
+        ts.isCatchClause(scope) ||
+        ts.isForStatement(scope) ||
+        ts.isForInStatement(scope) ||
+        ts.isForOfStatement(scope))
+    ) {
+      return scope;
+    }
+  }
+  return tree;
+}
+
 // Sibling views may use the same local name for different Lit exports.
 function createLitNameResolver(tree: ts.SourceFile) {
   const scopes = new WeakMap<ts.Node, Map<string, LitBinding>>();
-  const scopeFor = (node: ts.Node, functionOnly = false): ts.Node => {
-    for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
-      if (
-        ts.isSourceFile(scope) ||
-        ts.isFunctionLikeDeclaration(scope) ||
-        ts.isClassStaticBlockDeclaration(scope)
-      ) {
-        return scope;
-      }
-      if (
-        !functionOnly &&
-        (ts.isBlock(scope) ||
-          ts.isModuleBlock(scope) ||
-          ts.isCaseBlock(scope) ||
-          ts.isCatchClause(scope) ||
-          ts.isForStatement(scope) ||
-          ts.isForInStatement(scope) ||
-          ts.isForOfStatement(scope))
-      ) {
-        return scope;
-      }
-    }
-    return tree;
-  };
   const bind = (scope: ts.Node, name: string, binding: LitBinding) => {
     let entries = scopes.get(scope);
     if (!entries) {
@@ -198,16 +199,20 @@ function createLitNameResolver(tree: ts.SourceFile) {
       const lit = isLitModule(node.moduleSpecifier);
       const clause = node.importClause;
       if (clause?.name) {
-        bind(scopeFor(node), clause.name.text, {});
+        bind(bindingScope(node, tree), clause.name.text, {});
       }
       const bindings = clause?.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) {
-        bind(scopeFor(node), bindings.name.text, lit ? { imported: { kind: "namespace" } } : {});
+        bind(
+          bindingScope(node, tree),
+          bindings.name.text,
+          lit ? { imported: { kind: "namespace" } } : {},
+        );
       }
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
           bind(
-            scopeFor(node),
+            bindingScope(node, tree),
             specifier.name.text,
             lit
               ? {
@@ -223,7 +228,7 @@ function createLitNameResolver(tree: ts.SourceFile) {
     }
     if (ts.isImportEqualsDeclaration(node)) {
       bind(
-        scopeFor(node),
+        bindingScope(node, tree),
         node.name.text,
         ts.isExternalModuleReference(node.moduleReference) &&
           isLitModule(node.moduleReference.expression)
@@ -235,7 +240,9 @@ function createLitNameResolver(tree: ts.SourceFile) {
       const isVar =
         ts.isVariableDeclarationList(node.parent) &&
         !(node.parent.flags & ts.NodeFlags.BlockScoped);
-      bindPattern(scopeFor(node, isVar), node.name, { initializer: node.initializer });
+      bindPattern(bindingScope(node, tree, isVar), node.name, {
+        initializer: node.initializer,
+      });
     }
     if (ts.isFunctionLikeDeclaration(node)) {
       for (const parameter of node.parameters) {
@@ -243,7 +250,7 @@ function createLitNameResolver(tree: ts.SourceFile) {
       }
     }
     if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) {
-      bind(scopeFor(node), node.name.text, {});
+      bind(bindingScope(node, tree), node.name.text, {});
     }
     if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) {
       bind(node, node.name.text, {});

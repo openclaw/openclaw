@@ -508,8 +508,8 @@ export function runServiceChildGroupAnchor(): void {
       (socket as Socket & { connect(options: { fd: number }): Socket }).connect({ fd: controlFd });
     }
 
-    if (!next.ownedWorker) {
-      enterAgentExecCgroup();
+    if (next.executionIntent === "agent-tool") {
+      enterAgentExecCgroup(next.executionScopeKey);
     }
     // Prepare before launch: loading this writer during TERM consumes cleanup grace
     // and can race a source loader's compiler receiving the same group signal.

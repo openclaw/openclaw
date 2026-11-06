@@ -103,14 +103,25 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     for (const rect of rects) {
       const key = cellKey(rect.name);
       const visible = activeNames.has(rect.name);
+      const previous = entries.get(key);
+      const previousRect = previous?.options.rect;
+      // Equal geometry must not invalidate every retained card on a tab switch.
+      const stableRect =
+        previousRect &&
+        previousRect.x === rect.x &&
+        previousRect.y === rect.y &&
+        previousRect.w === rect.w &&
+        previousRect.h === rect.h
+          ? previousRect
+          : rect;
       entries.set(key, {
-        ...entries.get(key),
+        ...previous,
         key,
         present: true,
         options: {
           widget: widgetsByName.get(rect.name),
           boardRevision: snapshot?.revision ?? 0,
-          rect,
+          rect: stableRect,
           contentHeightPx: owner.contentHeights.get(rect.name),
           fitAutoContent: props.fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
@@ -231,19 +242,27 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             hidden={view().empty}
           >
             <For each={view().cells} keyed={(entry) => entry.key}>
-              {(entry) => (
-                <BoardWidgetCell
-                  {...entry().options}
-                  ref={(element) => {
-                    const current = entries.get(entry().key);
-                    if (current) {
-                      current.element = element;
-                    }
-                  }}
-                  hidden={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
-                  inert={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
-                />
-              )}
+              {(entry) => {
+                const cellRef = (element: NonNullable<CellEntry["element"]>) => {
+                  const current = entries.get(entry().key);
+                  if (current) {
+                    current.element = element;
+                  }
+                };
+                // One reactive object avoids retaining a getter for every field on every card.
+                return (
+                  <BoardWidgetCell
+                    {...{
+                      ...entry().options,
+                      ref: cellRef,
+                      hidden:
+                        !entry().present || !view().activeNames.has(entry().options.widget!.name),
+                      inert:
+                        !entry().present || !view().activeNames.has(entry().options.widget!.name),
+                    }}
+                  />
+                );
+              }}
             </For>
             <Show when={view().state.gesture.mode === "move"}>
               <div class="board-grid__append-zone" aria-hidden="true" />

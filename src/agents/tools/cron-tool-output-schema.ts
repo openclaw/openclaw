@@ -62,6 +62,7 @@ const CompactCronJobSchema = closedObject({
   lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
   lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
+  admissionDeferred: job.state.properties.admissionDeferred,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
   lastDeliveryError: job.lastDeliveryError,

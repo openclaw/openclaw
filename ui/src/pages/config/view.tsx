@@ -6,7 +6,6 @@ import {
   Errored,
   For,
   isPending,
-  lazy,
   latest,
   Loading,
   Show,
@@ -27,7 +26,7 @@ import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
-import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
+import { ConfigForm, HighlightedJson, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,
@@ -53,10 +52,6 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
-const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
-  export: "HighlightedJson",
-});
-
 export function Config(props: ConfigProps) {
   const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
@@ -215,7 +210,10 @@ export function Config(props: ConfigProps) {
     const configBusy = props.loading || props.saving || props.applying || props.updating;
     const formBusy = configBusy || props.schemaLoading;
     const mutationAllowed = props.mutationAllowed !== false;
-    const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
+    const showSectionTabs =
+      props.settingsLayout !== "accordion" &&
+      props.settingsLayout !== "stack" &&
+      topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
@@ -226,6 +224,10 @@ export function Config(props: ConfigProps) {
       analysis,
       unsupportedActivePaths,
       rawAvailable,
+      activeTabLabel: showSectionTabs
+        ? topTabs.find((tab) => tab.key === props.activeSection)?.label
+        : undefined,
+      openRaw: showModeToggle && rawAvailable ? () => props.onFormModeChange("raw") : undefined,
       rawDraftPending,
       formMode,
       categories,
@@ -385,9 +387,7 @@ export function Config(props: ConfigProps) {
               >
                 {saving() ? (
                   <>
-                    <span class="config-action-spinner" aria-hidden="true">
-                      <Icon name="loader" />
-                    </span>
+                    <span class="btn__spinner" aria-hidden="true" />
                     {t("common.saving")}
                   </>
                 ) : (
@@ -453,12 +453,16 @@ export function Config(props: ConfigProps) {
     const editor = (
       <ConfigForm
         schema={state().editorSchema}
+        progressive={props.progressive}
         uiHints={props.uiHints}
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}
         rawAvailable={state().rawAvailable}
+        repeatedHeadings={[props.navRootLabel, state().activeTabLabel]}
+        onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
+        secretFields={props.secretFields}
         onPatch={props.onFormPatch}
         onRemove={props.onFormRemove}
         activeSection={props.activeSection}
@@ -490,7 +494,9 @@ export function Config(props: ConfigProps) {
           ) : undefined
         }
         showSectionDocs={props.showSectionDocs}
+        sectionTitle={props.sectionTitle}
         sectionPrelude={props.sectionPrelude}
+        curatedSections={props.curatedSections}
         revealSensitive={props.activeSection === "env" && view().envRevealed}
         maskSensitive
         isSensitivePathRevealed={(path) => isSensitivePathRevealed(view(), path)}
@@ -513,7 +519,6 @@ export function Config(props: ConfigProps) {
               {state().showModeToggle ? (
                 <SettingsSegmented
                   mode="buttons"
-                  variant="primary"
                   value={state().formMode}
                   onChange={props.onFormModeChange}
                   onReselect={props.onFormModeChange}
@@ -626,17 +631,11 @@ export function Config(props: ConfigProps) {
             ) : null
           ) : state().formMode === "form" ? (
             <>
-              {state().unsupportedActivePaths.length > 0 &&
-              state().showModeToggle &&
-              state().rawAvailable ? (
+              {state().unsupportedActivePaths.length > 0 && state().openRaw ? (
                 <div class="config-content-callout">
                   <div class="callout info">
                     <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      onClick={() => props.onFormModeChange("raw")}
-                    >
+                    <button type="button" class="btn btn--sm" onClick={() => state().openRaw?.()}>
                       {t("configView.openRawEditor")}
                     </button>
                   </div>
@@ -660,7 +659,7 @@ export function Config(props: ConfigProps) {
               >
                 <Loading
                   on={hasSchema() ? undefined : schemaRead()}
-                  fallback={<ConfigReadLoading message={t("configView.loadingSchema")} />}
+                  fallback={<ConfigReadLoading message={t("common.loading")} />}
                 >
                   <Show when={readSchemaReady()}>
                     {(message) => (
@@ -671,7 +670,7 @@ export function Config(props: ConfigProps) {
                     )}
                   </Show>
                   <span class="sr-only" role="status">
-                    {isPending(schemaReady) ? t("configView.loadingSchema") : ""}
+                    {isPending(schemaReady) ? t("common.loading") : ""}
                   </span>
                   <FormEditor />
                   {state().showSetup ? (

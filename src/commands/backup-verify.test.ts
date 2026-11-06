@@ -12,6 +12,7 @@ import * as diskSpace from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
+import * as backupVerifySpool from "./backup-verify-spool.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -270,31 +271,60 @@ describe("backupVerifyCommand", () => {
     vi.mocked(tar.x).mockReset().mockImplementation(actualTar.x);
   });
 
-  it.each(["first", "last"])(
-    "reads legacy databases once with its manifest %s",
-    async (position) => {
+  it.each(
+    ["first", "last"].flatMap((position) => [
+      { position, inventory: false, global: true },
+      { position, inventory: true, global: true },
+      { position, inventory: true, global: false },
+    ]),
+  )(
+    "releases opaque candidates after final selection (manifest $position, inventory $inventory, global $global)",
+    async ({ position, inventory, global: hasGlobal }) => {
       const archive = path.join(tempDirs.make("openclaw-backup-single-pass-"), "backup.tar.gz");
       const agentDir = "/tmp/legacy-agent";
       const agentPath = `${agentDir}/store-without-extension`;
+      const declaredPath = `${agentDir}/declared.sqlite`;
       const content = createBackupManifest(STATE_ROOT);
       content.assets.push({
         kind: "agent",
         sourcePath: agentDir,
         archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir),
       });
+      if (inventory) {
+        content.sqliteSnapshots = [
+          ...(hasGlobal
+            ? [{ sourcePath: "/tmp/.openclaw/state/openclaw.sqlite", role: "global" as const }]
+            : []),
+          { sourcePath: declaredPath, role: "agent", agentId: "declared" },
+        ];
+      }
       const manifest = encodeTarEntry({
         // Repeated separators are accepted archive spelling, including for a final manifest.
         path: `${TEST_ARCHIVE_ROOT}//manifest.json`,
         contents: JSON.stringify(content),
       });
       const global = await createRegisteredAgentPayload("main", agentPath);
+      const opaque = Buffer.from("opaque candidate");
       const payload = Buffer.concat([
         // Discover this owner from the later global database, after its bytes have passed.
-        encodeTarEntry({
-          path: buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentPath),
-          contents: await agentPayload("agent", "main"),
-        }),
-        encodeTarEntry({ path: global.archivePath, contents: global.contents }),
+        ...(hasGlobal
+          ? [
+              encodeTarEntry({
+                path: buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentPath),
+                contents: await agentPayload("agent", "main"),
+              }),
+              encodeTarEntry({ path: global.archivePath, contents: global.contents }),
+            ]
+          : []),
+        ...(inventory
+          ? [
+              encodeTarEntry({
+                path: buildBackupArchivePath(TEST_ARCHIVE_ROOT, declaredPath),
+                contents: await agentPayload("agent", "declared"),
+              }),
+            ]
+          : []),
+        encodeTarEntry({ path: `${STATE_ROOT}/opaque.sqlite`, contents: opaque }),
       ]);
       await fs.writeFile(
         archive,
@@ -305,11 +335,45 @@ describe("backupVerifyCommand", () => {
           ]),
         ),
       );
+      vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: 1024 * 1024 * 1024,
+        totalBytes: 1024 * 1024 * 1024,
+      }));
+      let released: string | undefined;
+      const remove = fs.rm;
+      vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        const discardedOpaque =
+          path.basename(file).startsWith("candidate-") && (await fs.readFile(file)).equals(opaque);
+        await remove(...args);
+        if (discardedOpaque) {
+          released = file;
+        }
+      });
+      const selectedPath = buildBackupArchivePath(
+        TEST_ARCHIVE_ROOT,
+        hasGlobal ? agentPath : declaredPath,
+      );
+      const observed = vi.fn();
+      const checkShape = backupVerifySpool.assertSqliteSnapshotFileShape;
+      vi.spyOn(backupVerifySpool, "assertSqliteSnapshotFileShape").mockImplementation(
+        async (...args) => {
+          if (args[1] === selectedPath) {
+            expect(released).toBeDefined();
+            await expect(fs.stat(released!)).rejects.toMatchObject({ code: "ENOENT" });
+            observed();
+          }
+          return checkShape(...args);
+        },
+      );
       await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
         ok: true,
         assetCount: 2,
-        entryCount: 3,
+        entryCount: 2 + (hasGlobal ? 2 : 0) + (inventory ? 1 : 0),
       });
+      expect(observed).toHaveBeenCalledTimes(1);
       expect(tar.t).toHaveBeenCalledTimes(1);
       expect(tar.x).not.toHaveBeenCalled();
     },
@@ -342,11 +406,11 @@ describe("backupVerifyCommand", () => {
     });
     let staged = false;
     let released = false;
-    const mkdtemp = fs.mkdtemp.bind(fs);
-    vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
-      const result = await mkdtemp(...args);
-      staged = true;
-      return result;
+    const open = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      staged ||= path.basename(String(args[0])).startsWith("candidate-");
+      return handle;
     });
     const remove = fs.rm.bind(fs);
     vi.spyOn(fs, "rm").mockImplementation(async (file, ...args) => {

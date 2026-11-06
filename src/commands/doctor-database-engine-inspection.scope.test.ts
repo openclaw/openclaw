@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  createWorkerNativeSectionState,
+  createWorkerTaskControl,
+  type WorkerTaskHandler,
+} from "@openclaw/worker-runtime/worker";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -12,7 +17,7 @@ import {
 import type { DoctorDatabaseEngineInspectionInput } from "./doctor-database-engine-inspection.types.js";
 
 const fixture = vi.hoisted(() => {
-  const handlers: Array<(input: DoctorDatabaseEngineInspectionInput) => Promise<unknown>> = [];
+  const handlers: Array<WorkerTaskHandler<unknown, DoctorDatabaseEngineInspectionInput>> = [];
   return { handlers, metadata: vi.fn() };
 });
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
@@ -69,7 +74,11 @@ it("shares one metadata read image per SQLite engine inspection and refreshes th
   });
   const producer = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
   for (const expected of ["first", "second"]) {
-    await fixture.handlers[0]!({ config: {}, env, stateDir });
+    await fixture.handlers[0]!(
+      { config: {}, env, stateDir },
+      undefined,
+      createWorkerTaskControl(createWorkerNativeSectionState(), () => true),
+    );
     expect(observed.at(-1)).toEqual([expected, expected]);
     expect(readers.at(-1) === readers.at(-2)).toBe(true);
     expect(readers.every((reader) => !reader.isOpen)).toBe(true);

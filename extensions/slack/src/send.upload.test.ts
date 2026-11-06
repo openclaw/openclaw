@@ -122,6 +122,17 @@ function mockUploadDestination(client: UploadTestClient, uploadUrl: string) {
 }
 
 async function useRealUploadGuard(networkFetch: typeof fetch, lookupAddress?: string) {
+  // DNS fixtures own direct routing; an ambient trusted proxy delegates DNS remotely.
+  for (const key of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
     "openclaw/plugin-sdk/ssrf-runtime",
   );
@@ -315,8 +326,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
         res.end("ok");
       },
       async (baseUrl) => {
-        vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
-        vi.stubEnv("no_proxy", "127.0.0.1,localhost");
         const alternateClient = createUploadTestClient(`${baseUrl}/api/`);
         const onDeliveryResult = vi.fn();
         mockUploadDestination(alternateClient, `${baseUrl}/upload/v1/capability`);
@@ -368,6 +377,11 @@ describe("sendMessageSlack file upload with user IDs", () => {
         mockUploadDestination(caseClient, upload);
       }
       const networkFetch = vi.fn(async () => new Response("ok"));
+      if (failure === "private") {
+        // Reproduce a proxy-bearing runner even when the host has no proxy configured.
+        vi.stubEnv("https_proxy", "http://proxy.example:8080");
+        vi.stubEnv("no_proxy", "");
+      }
       if (failure !== "origin") {
         await useRealUploadGuard(networkFetch, lookup);
       }
@@ -386,16 +400,26 @@ describe("sendMessageSlack file upload with user IDs", () => {
       } else {
         const error = await result.catch((cause: unknown) => cause);
         expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-        if (failure !== "private") {
-          expect(error).toMatchObject({
-            cause: { name: failure === "host" ? "SsrFBlockedError" : failure },
-          });
-        }
+        expect(error).toMatchObject({
+          cause: {
+            name: failure === "host" || failure === "private" ? "SsrFBlockedError" : failure,
+          },
+        });
       }
       expect(networkFetch).not.toHaveBeenCalled();
       expect(caseClient.files.completeUploadExternal).not.toHaveBeenCalled();
     },
   );
+
+  it("delegates upload DNS to an explicitly configured trusted environment proxy", async () => {
+    const networkFetch = vi.fn(async () => new Response("ok"));
+    await useRealUploadGuard(networkFetch, "10.0.0.1");
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example:8080");
+
+    await expect(sendUpload(client)).resolves.toMatchObject({ messageId: "F001" });
+    expect(networkFetch).toHaveBeenCalledOnce();
+    expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
+  });
 
   it("times out a hanging presigned URL upload", async () => {
     const closedResponse = createDeferred<void>();

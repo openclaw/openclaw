@@ -1,6 +1,11 @@
 /** One controller-owned steer of a reserved input into its captured execution owner. */
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import type {
+  ReplySteerNowResult,
+  ReplySteerNowState,
+} from "./session-controller.backend-contracts.js";
+import { replyMessageInjectionTargetOwner } from "./session-controller.contracts.js";
+import type {
   ReplyBackendQueueMessageResult,
   ReplyMessageInjectionAttempt,
   ReplyMessageInjectionOptions,
@@ -52,6 +57,8 @@ export async function beginSessionControllerSteer(
   if (!(await injection.admit())) {
     return undefined;
   }
+  const pending = params.input.injection;
+  const queueIdentity = params.options.queueIdentity ?? params.input.instance.id;
   let attempt: ReplyMessageInjectionAttempt;
   try {
     const assertInputCurrent = () => {
@@ -87,6 +94,7 @@ export async function beginSessionControllerSteer(
     params.options.assertCurrent?.();
     attempt = await beginReplyMessageInjectionTarget(params.target, params.text, {
       ...params.options,
+      queueIdentity,
       // Deferred message preparation updates these facts on the caller's options.
       get toolAuthorityOverlay() {
         return params.options.toolAuthorityOverlay;
@@ -111,22 +119,24 @@ export async function beginSessionControllerSteer(
   // Failed acknowledgement does not settle accepted native work.
   const acceptance = attempt.acceptance.then((accepted) => {
     injection.accepted(accepted);
+    if (accepted && pending && params.input.injection === pending) {
+      pending.steerNow = { target: params.target, queueIdentity };
+    }
     return accepted;
   });
   void acceptance.catch(() => {});
   const outcome = attempt.outcome.then(
     async (nativeOutcome) => {
-      // Native ownership and an indeterminate commit are never replayable.
-      let accepted: boolean;
       try {
-        accepted = await acceptance;
+        await acceptance;
       } catch (error) {
         // The native outcome has now settled; an unknown ACK never permits replay.
         injection.finish(true);
         throw error;
       }
+      // The failure owner already retains ambiguous acceptance and releases proven withdrawal.
       injection.finish(
-        accepted || nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate",
+        nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate",
       );
       return nativeOutcome;
     },
@@ -138,6 +148,49 @@ export async function beginSessionControllerSteer(
   );
   void outcome.catch(() => {});
   return { ...attempt, acceptance, outcome };
+}
+
+function resolvePendingSteerControl(input: SessionControllerInput) {
+  const pending = input.injection?.steerNow;
+  if (!pending || input.abortSignal.aborted || input.retirementRequested) {
+    return undefined;
+  }
+  const resolved = pending.target[replyMessageInjectionTargetOwner].resolve({});
+  return "injection" in resolved
+    ? { pending, control: resolved.backend.messageInjectionV2?.steerNow }
+    : undefined;
+}
+
+/** Projects the captured execution's capability; never substitutes the session's next run. */
+export function readSessionControllerSteerNow(
+  input: SessionControllerInput,
+): ReplySteerNowState | undefined {
+  const selected = resolvePendingSteerControl(input);
+  return selected
+    ? (selected.control?.read(selected.pending.queueIdentity) ??
+        (selected.control ? undefined : { status: "blocked", tools: [] }))
+    : undefined;
+}
+
+/** The RPC caller checks current session write authority immediately before this synchronous effect. */
+export function sendSessionControllerSteerNow(input: SessionControllerInput): ReplySteerNowResult {
+  const selected = resolvePendingSteerControl(input);
+  if (!selected) {
+    return { status: "settled", tools: [] };
+  }
+  input.sourceAdapter?.authority?.assertCurrent();
+  const { pending, control } = selected;
+  if (pending.result) {
+    return pending.result;
+  }
+  const result = control?.send(pending.queueIdentity) ?? {
+    status: "unavailable" as const,
+    tools: [],
+  };
+  if (result.status === "interrupted" || result.status === "idle") {
+    pending.result = result;
+  }
+  return result;
 }
 
 /** Steers once into the exact target (default: the input owner's current turn); authority failures throw. */

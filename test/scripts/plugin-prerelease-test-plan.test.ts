@@ -108,7 +108,11 @@ function runPluginManifest(
   }
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
-  const result = spawnSync("bash", ["-c", step.run], {
+  const run = step.run.replace(
+    "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
+    new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
+  );
+  const result = spawnSync("bash", ["-c", run], {
     cwd: targetRoot,
     encoding: "utf8",
     env: {
@@ -256,9 +260,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       stateScenario: "empty",
       weight: 3,
     });
-    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
-    expect(script).toContain("npm-latest-conformance");
-    expect(script).toContain("npm-latest-adversarial");
+    const recordedVersion = readFileSync(
+      "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
+      "utf8",
+    ).trim();
+    expect(recordedVersion).toMatch(/^\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/);
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
@@ -326,12 +332,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       weight: 6,
     });
     expect(prereleasePlan.surfaces).toContain("external-install-boundary");
-    const bootstrapIndex = sweepScript.indexOf(
-      'run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-bootstrap.json" plugins list --json',
-    );
-    const trustIndex = sweepScript.indexOf("record-fixture-plugin-trust");
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-    expect(trustIndex).toBeGreaterThan(bootstrapIndex);
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
@@ -361,6 +361,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
       "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
     );
+    expect(extensionStep.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 

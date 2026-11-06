@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
+import { runManagerStartupIdentityReconcile } from "../acp/control-plane/manager.startup-identity-reconcile.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
@@ -9,7 +11,9 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
+import type { postAttachMocks } from "./server-startup-post-attach.mocks.test-support.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
+import type { startGatewaySidecars } from "./server-startup-sidecars.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 
@@ -32,7 +36,58 @@ export function registerGatewayStartupReadinessTests(params: {
   createRuntimeDeps: () => GatewayStartupModuleMocks;
   path: (...parts: string[]) => string;
   expectAutonomousSidecarsNotStarted: () => void;
+  startSidecars: (
+    overrides: Partial<Parameters<typeof startGatewaySidecars>[0]>,
+  ) => Promise<number>;
+  waitForState: (assertion: () => void) => Promise<unknown>;
+  acpMocks: Pick<
+    typeof postAttachMocks,
+    "getAcpRuntimeBackend" | "reconcilePendingSessionIdentities"
+  >;
 }): void {
+  it.each([
+    { name: "I/O failure", error: new Error("EIO: session scan failed") },
+    { name: "parse failure", error: new SyntaxError("invalid session metadata") },
+    { name: "successful empty scan", error: null },
+  ])("keeps ACP startup non-fatal and reports $name", async ({ error }) => {
+    const log = { warn: vi.fn() };
+    const cfg = {
+      hooks: { internal: { enabled: false } },
+      acp: { enabled: true, backend: "acpx" },
+    };
+    params.acpMocks.getAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime: {} });
+    params.acpMocks.reconcilePendingSessionIdentities.mockImplementationOnce(() =>
+      runManagerStartupIdentityReconcile({
+        cfg,
+        deps: {
+          listAcpSessions: async () => {
+            if (error) {
+              throw error;
+            }
+            return [];
+          },
+        },
+        withSessionActor: vi.fn(),
+        resolveSession: vi.fn(),
+        ensureRuntimeHandle: vi.fn(),
+        reconcileRuntimeSessionIdentifiers: vi.fn(),
+      }),
+    );
+
+    await params.startSidecars({ cfg, log });
+    await params.waitForState(() => {
+      expect(params.acpMocks.reconcilePendingSessionIdentities).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    if (error) {
+      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/acp startup identity reconcile .*checked=0 resolved=0 failed=1/),
+      );
+    } else {
+      expect(log.warn).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([true, false])(
     "admits update canary readiness only for attributed plugin failures (attributed=%s)",
     async (attributed) => {

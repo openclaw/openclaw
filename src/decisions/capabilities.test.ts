@@ -25,7 +25,7 @@ const list: DecisionBatchV2 = {
 
 it("distinguishes missing capabilities, undeclared question kinds, and explicit exclusions", () => {
   expect(supportsDecisionInput(undefined, text, undefined)).toBe(false);
-  expect(supportsDecisionInput(capability, text, undefined)).toBe(true);
+  expect(supportsDecisionInput({ input: ["text", "image"] }, text, undefined)).toBe(true);
   expect(
     supportsDecisionInput(
       { ...capability, questions: { choice: { probabilities: "none", abstention: false } } },

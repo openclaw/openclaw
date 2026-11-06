@@ -13,10 +13,10 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
+import type { CronModelImpactOwner } from "../../cron/model-impact-compatibility.js";
 import {
   deriveCronModelImpactConfig,
   resolveCronModelImpact,
-  type CronModelImpactOwner,
   type CronModelImpactSession,
 } from "../../cron/model-impact.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
@@ -74,6 +74,7 @@ export const cronModelImpactHandler: GatewayRequestHandler = async (options) => 
   const revisions = new Map(jobs.map((job) => [job.id, resolveCronJobConfigRevision(job)]));
   const owners = new Map<string, CronModelImpactOwner | undefined>();
   const sessions = new Map<string, Promise<CronModelImpactSession>>();
+  const executionSessions = new Map<string, { sessionKey: string; agentId: string }>();
   const result = await resolveCronModelImpact({
     cfg,
     input,
@@ -116,12 +117,14 @@ export const cronModelImpactHandler: GatewayRequestHandler = async (options) => 
       });
       // Job-management visibility does not grant read access to another private execution session.
       if (
-        (job.sessionTarget === "main" ||
-          job.sessionTarget.startsWith("session:") ||
-          (job.sessionTarget === "current" && Boolean(job.sessionKey))) &&
-        visibility.resolve()?.(sessionKey, agentId) === false
+        job.sessionTarget === "main" ||
+        job.sessionTarget.startsWith("session:") ||
+        (job.sessionTarget === "current" && Boolean(job.sessionKey))
       ) {
-        return Promise.resolve({ available: false });
+        if (visibility.resolve()?.(sessionKey, agentId) === false) {
+          return Promise.resolve({ available: false });
+        }
+        executionSessions.set(job.id, { sessionKey, agentId });
       }
       const key = agentId + "\0" + sessionKey;
       let pending = sessions.get(key);
@@ -156,9 +159,12 @@ export const cronModelImpactHandler: GatewayRequestHandler = async (options) => 
   }
   for (const job of jobs) {
     const current = context.cron.getJob(job.id);
+    // Owning the automation does not preserve access to its consulted execution session.
+    const execution = executionSessions.get(job.id);
     if (
       !current ||
       !matches(current) ||
+      (execution && visibility.resolve()?.(execution.sessionKey, execution.agentId) === false) ||
       resolveCronJobConfigRevision(current) !== revisions.get(job.id)
     ) {
       respond(

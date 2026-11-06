@@ -11,7 +11,10 @@ import {
   computeModelPolicyAllowlist,
   hasExplicitModelPolicyAllow,
 } from "../config/model-policy-allowlist-migration.js";
-import { parseModelPolicyWildcardRef } from "../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../config/model-policy-ref.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasUtilityModelSeparationMigrationMarker } from "../config/utility-model-separation-migration.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -283,7 +286,7 @@ export function inferUniqueProviderFromConfiguredModels(
     const matcher = createModelProviderMatcher(params.model);
     for (const key of Object.keys(models ?? {})) {
       const ref = key.trim();
-      if (!ref.includes("/") || ref.endsWith("/*")) {
+      if (!ref.includes("/") || parseModelPolicyWildcardRef(ref)) {
         continue;
       }
       const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
@@ -1097,7 +1100,7 @@ function hasConfiguredModelRefsNeedingManifestLookup(
   return listConfiguredModelMaps(cfg, agentId).some((models) =>
     Object.keys(models ?? {}).some((keyRaw) => {
       const key = keyRaw.trim();
-      if (!key || key.endsWith("/*")) {
+      if (!key || parseModelPolicyWildcardRef(key)) {
         return false;
       }
       const slashIndex = key.indexOf("/");
@@ -1281,17 +1284,12 @@ export function parseConfiguredModelVisibilityEntries(params: {
 }
 
 export function isModelKeyAllowedBySet(allowedKeys: ReadonlySet<string>, key: string): boolean {
-  if (allowedKeys.has(key)) {
-    return true;
-  }
-  let separator = key.indexOf("/");
-  while (separator > 0) {
-    if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
-      return true;
-    }
-    separator = key.indexOf("/", separator + 1);
-  }
-  return false;
+  return (
+    allowedKeys.has(key) ||
+    [...allowedKeys].some(
+      (allowed) => allowed.endsWith("*") && modelPolicyWildcardMatches(allowed, key),
+    )
+  );
 }
 
 export type ModelVisibilityPolicy = {
