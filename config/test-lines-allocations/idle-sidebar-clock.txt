@@ -1,2 +1,0 @@
-# Offscreen elapsed-clock suspension and immediate catch-up on return.
-23

@@ -18,15 +18,7 @@ afterEach(() => {
 
 function mount(initial: Props) {
   let props = initial;
-  const view = mountSolid(
-    ElapsedTime,
-    props,
-    document.body.appendChild(document.createElement("div")),
-  );
-  onTestFinished(() => {
-    view.dispose();
-    view.container.remove();
-  });
+  const view = mountSolid(ElapsedTime, props);
   return {
     element: view.container,
     label: () => view.container.textContent?.trim(),
@@ -37,7 +29,7 @@ function mount(initial: Props) {
   };
 }
 
-it("changes minute labels only at their boundary and applies timing changes with an unchanged label", async () => {
+it.each(["endMs", "paused"] as const)("resumes %s clocks", async (reason) => {
   const view = mount({ minimumUnit: "minute", startMs: NOW - 65_000 });
   expect(view.label()).toBe("1m");
   const changed = vi.fn();
@@ -51,39 +43,24 @@ it("changes minute labels only at their boundary and applies timing changes with
   expect(view.label()).toBe("2m");
   expect(changed).toHaveBeenCalledOnce();
 
-  view.update({ endMs: Date.now() });
+  view.update(reason === "paused" ? { paused: true } : { endMs: Date.now() });
+  expect(vi.getTimerCount()).toBe(0);
   changed.mockClear();
   await vi.advanceTimersByTimeAsync(61_000);
   expect(changed).not.toHaveBeenCalled();
   expect(view.label()).toBe("2m");
-  view.update({ endMs: null });
+  view.update({ endMs: null, paused: false });
   expect(view.label()).toBe("3m");
+  expect(vi.getTimerCount()).toBe(1);
   view.update({ minimumUnit: "second" });
   expect(view.label()).toBe("3m 1s");
   await vi.advanceTimersByTimeAsync(1_000);
   expect(view.label()).toBe("3m 2s");
-});
-
-it("releases an offscreen clock and catches up immediately when it returns", async () => {
-  const view = mount({ startMs: NOW - 5_000 });
-  expect(view.label()).toBe("5s");
-  expect(vi.getTimerCount()).toBe(1);
-
-  view.update({ paused: true });
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(view.label()).toBe("5s");
-
-  view.update({ paused: false });
-  expect(view.label()).toBe("1m 5s");
-  expect(vi.getTimerCount()).toBe(1);
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(view.label()).toBe("1m 6s");
 
   view.update({ paused: true, endMs: NOW + 5_000 });
-  expect(view.label()).toBe("10s");
+  expect(view.label()).toBe("1m 10s");
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(view.label()).toBe("10s");
+  expect(view.label()).toBe("1m 10s");
   expect(vi.getTimerCount()).toBe(0);
 });
 
