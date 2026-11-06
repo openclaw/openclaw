@@ -611,6 +611,8 @@ openclaw-select-picker {
   width: max-content;
   height: 0;
   overflow: hidden;
+  /* Match the real list's intrinsic scrollbar gutter, including in WebKit. */
+  overflow-y: scroll;
   visibility: hidden;
 }
 
