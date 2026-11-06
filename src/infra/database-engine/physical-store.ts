@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "../sqlite-lifecycle-errors.js";
+import { tryInspectSqliteReadOnlyInProcess } from "../sqlite-readonly-inspection.js";
+import { prepareSqliteReadOnlyCopyInProcess } from "../sqlite-readonly-location.js";
+import { runSqliteReadOnlyWorkerSync } from "../sqlite-readonly-worker.js";
 import { readEngineAnchor } from "./open.js";
 import type { BackupEngine } from "./types.js";
 
@@ -30,12 +33,32 @@ export function readEngineAnchorIdentity(db: DatabaseSync, sourcePath: string): 
   return { engine: "postgres", storeId: row.store_id, namespace: row.schema };
 }
 
-/** Acquire the private image in a child so source descriptor closes preserve live POSIX locks. */
+/** Source opens and closes stay in a child to preserve the caller's live POSIX locks. */
 export function readBackupEngine(sourcePath: string): BackupEngine {
-  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
-  try {
-    return readBackupEngineImage(prepared.location, sourcePath);
-  } finally {
-    prepared.cleanup();
+  return runSqliteReadOnlyWorkerSync(sourcePath, undefined, "backup-engine");
+}
+
+/** Child-only: healthy sources need only the schema and anchor pages, never a full image. */
+export async function readBackupEngineInProcess(sourcePath: string): Promise<BackupEngine> {
+  const inspected = tryInspectSqliteReadOnlyInProcess(sourcePath, (db) =>
+    readEngineAnchorIdentity(db, sourcePath),
+  );
+  if (inspected) {
+    return inspected.value;
   }
+  // Hot rollback journals and incomplete WAL families still recover on private bytes.
+  const prepared = await prepareSqliteReadOnlyCopyInProcess(sourcePath);
+  return runWithSqliteCleanup(
+    {
+      release() {
+        if (!prepared.cleanup()) {
+          throw new SqliteSnapshotCleanupError(
+            `SQLite engine inspection cleanup failed: ${sourcePath}`,
+          );
+        }
+      },
+    },
+    "SQLite engine inspection",
+    () => readBackupEngineImage(prepared.location, sourcePath),
+  );
 }

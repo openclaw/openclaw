@@ -3,6 +3,7 @@ import { toUSVString } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {
@@ -18,6 +19,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
+  | "backup-engine"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -46,6 +48,7 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 }
 
 export type SqliteReadOnlyWorkerResult =
+  | { ok: true; engine: BackupEngine }
   | { ok: true; reclamation: SqliteSnapshotReclamation }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
@@ -151,6 +154,7 @@ export type SqliteReadOnlyWorkerOutput =
     }
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
+  | BackupEngine
   | SqliteSnapshotReclamation
   | string
   | SqliteAuthProfileRows
@@ -166,6 +170,13 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
     return false;
   }
   return (
+    (value.ok === true &&
+      "engine" in value &&
+      isRecord(value.engine) &&
+      (value.engine.engine === "sqlite" ||
+        (value.engine.engine === "postgres" &&
+          typeof value.engine.storeId === "string" &&
+          typeof value.engine.namespace === "string"))) ||
     (value.ok === true &&
       "reclamation" in value &&
       isRecord(value.reclamation) &&
@@ -223,6 +234,10 @@ function parseSqliteReadOnlyWorkerResult(
   return message;
 }
 
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "backup-engine",
+): BackupEngine;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: "task-delivery-recovery",
@@ -309,6 +324,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (mode === "staging-sweep" && "reclamation" in result) {
     return result.reclamation;
+  }
+  if (mode === "backup-engine" && "engine" in result) {
+    return result.engine;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

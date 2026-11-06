@@ -343,7 +343,7 @@ export async function createUpdateDatabaseBackupInProcess(
           ReturnType<typeof readUpdatePhysicalDatabaseObservation>
         >();
         // Reuse classification from the generation image; only a failed acquisition needs
-        // an engine-only image. PostgreSQL access still waits for the inventory custody gate.
+        // an engine probe. PostgreSQL access still waits for the inventory custody gate.
         const engines = new Map(
           inventory.present
             .filter((file) => !stoppedSources.has(file))

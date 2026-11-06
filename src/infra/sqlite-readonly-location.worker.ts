@@ -79,6 +79,7 @@ async function inspect(
       mode !== "staged-sync" &&
       mode !== "staged-async" &&
       mode !== "metadata" &&
+      mode !== "backup-engine" &&
       mode !== "consolidated" &&
       mode !== "task-delivery-recovery" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -90,6 +91,10 @@ async function inspect(
     };
   }
   try {
+    if (mode === "backup-engine") {
+      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      return { ok: true, engine: await readBackupEngineInProcess(pathname) };
+    }
     if (mode === "staging-sweep") {
       const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
       return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
