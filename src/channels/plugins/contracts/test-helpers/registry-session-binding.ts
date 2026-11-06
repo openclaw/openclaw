@@ -21,6 +21,7 @@ import {
   createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
+import { createPluginRuntimeMock } from "../../../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
@@ -296,6 +297,22 @@ async function prepareMatrixSessionBindingContract() {
 async function prepareTelegramSessionBindingContract() {
   await stopTelegramSessionBindingManager();
   const { telegramPlugin } = await getTelegramContractApi();
+  const { setTelegramRuntime } = await loadBundledPluginFacade<{
+    setTelegramRuntime: (runtime: ReturnType<typeof createPluginRuntimeMock>) => void;
+  }>({
+    pluginId: "telegram",
+    artifactBasename: "runtime-setter-api.js",
+  });
+  setTelegramRuntime(
+    createPluginRuntimeMock({
+      state: {
+        openKeyedStoreV2: (
+          options: OpenAsyncKeyedStoreOptions,
+          authority: PluginStateActionAuthority = { assertCurrent() {} },
+        ) => createPluginStateKeyedStoreV2ForTests("telegram", options, authority),
+      },
+    }),
+  );
   setActivePluginRegistry(
     createTestRegistry([
       {
