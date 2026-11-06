@@ -2,7 +2,7 @@
 import type { StoredClaw } from "./claw-store.js";
 
 /** Display-only facts; none of these fields grant access or create an email alias. */
-export type MemberProfileDisplay = { id: string; displayName: string | null; email: string | null };
+type MemberProfileDisplay = { id: string; displayName: string | null; email: string | null };
 
 /** The existing profile owner, injectable alongside the claw store in isolated authority tests. */
 export type OpenClawIdMemberProfiles = {

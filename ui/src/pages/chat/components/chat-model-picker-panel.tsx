@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -120,14 +120,21 @@ function ModelList(props: { label: string; id: string; more?: boolean; children:
   );
 }
 
-export function ChatModelPickerPanel(panel: {
+type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
   onSelectionClose: (event: MouseEvent) => void;
   searchRef: (element: HTMLInputElement) => void;
-}) {
+};
+
+export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   const search = useContext(ChatModelSearchContext);
   // Parent controls also publish effort and copy changes; retain unchanged model facts.
   const modelOptions = createMemo(() => panel.params.modelOptions);
+  const providerPresentation = (provider: string) =>
+    modelOptions().find((option) => option.provider === provider && option.presentation)
+      ?.presentation;
+  const providerDisplayLabel = (provider: string) =>
+    defaultProviderLabel(provider, providerPresentation(provider));
   const modelTargetGroups = createMemo(() => panel.params.targetGroups);
   const selectedModelValue = createMemo(() => panel.params.selectedModelValue);
   const selectedAgentRuntime = createMemo(() => panel.params.selectedAgentRuntime);
@@ -472,7 +479,10 @@ export function ChatModelPickerPanel(panel: {
                 searchView?.toggleProvider(props.provider);
               }}
             >
-              <ChatModelProviderIcon provider={props.provider} />
+              <ChatModelProviderIcon
+                provider={props.provider}
+                presentation={providerPresentation(props.provider)}
+              />
               <span class="chat-controls__provider-label">{providerLabel()}</span>
               <span>{options().length}</span>
               <span class="chat-controls__inline-select-chevron" aria-hidden="true">
@@ -596,7 +606,10 @@ export function ChatModelPickerPanel(panel: {
                 onKeyDown={handleModelSearchKeydown}
               />
               {modelOptions().length > 0 ? (
-                <ChatModelCatalogRefresh state={panel.params.modelCatalogState} />
+                <ChatModelCatalogRefresh
+                  state={panel.params.modelCatalogState}
+                  providerLabel={providerDisplayLabel}
+                />
               ) : undefined}
             </div>
           ) : undefined}

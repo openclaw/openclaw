@@ -8,7 +8,7 @@ type CalculationInput = {
   quote: string;
 };
 
-export type Calculation = {
+type Calculation = {
   operation: "sum" | "difference" | "ratio" | "percent-change";
   inputs: [CalculationInput, CalculationInput];
   value: number;
@@ -18,7 +18,7 @@ export type Calculation = {
 
 const text = (maxLength: number) => Type.String({ minLength: 1, maxLength });
 const limit = (maximum: number) => Type.Optional(Type.Integer({ minimum: 1, maximum }));
-export const researchRequestSchema = Type.Object(
+const researchRequestSchema = Type.Object(
   {
     question: text(8_000),
     engine: Type.Optional(Type.Union([Type.Literal("portable"), Type.Literal("google")])),

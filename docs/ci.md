@@ -35,6 +35,12 @@ the following declaration phase; a complete Windows installer job previously too
 compilation, desktop tests, and installer packaging. The override stays on each
 source-build step; release-workflow budgets and package-integrity checks are unchanged.
 
+Precise PR plans can run the complete source-boundary gate first in an existing
+short, serial 8-class tooling job. Both configs retain separate test processes;
+a 90-second boundary reservation must fit the existing 150-second test budget.
+Other runners, preparation modes, parallel jobs, and full validation keep their
+standalone boundary ownership.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
@@ -217,6 +223,36 @@ Main-tier and selected manual/release CI run the [published-driver update cell](
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted upstream `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible standard groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Successful current iOS builds run SwiftLint and SwiftFormat once through their required Xcode prebuild phases; a standalone fallback retains both checks after failed or skipped builds and for historical or frozen targets. Debug builds select their simulator before compiling, overlap its boot and SimSlim preparation with compilation, and join preparation before either focused simulator test group. Preparation failures or a timed-out join fail the job with its log; test selection and build settings stay unchanged. Current smoke builds prepare testing products once with `build-for-testing`; the voice cleanup and lifecycle groups separately reuse those products with `test-without-building`. Historical targets and other phases retain their existing build actions. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+
+iOS Store Release reuses its locked Fastlane gems through `ruby/setup-ruby`'s
+Bundler cache for trusted `main` upload jobs. The action keys gems by runner
+OS and architecture, Ruby, bundle configuration, and the lockfile; it still runs
+a frozen install on a hit and installs normally on a miss or cache-transfer
+failure. Generated Bundler configuration stays in the runner's temporary
+directory, and its absolute gem path lets the detached release worktree reuse
+the installed bundle without copying gems or dirtying the source checkout. Both mobile
+release entry points separately log elapsed time for the clean-checkout check
+and the current-main fetch, including failed checks, without logging arguments
+or credentials.
+
+For a non-publishing notes/archive contention comparison, run
+`node scripts/bench-ios-release-note-overlap.mjs --root CLEAN_SOURCE --plan PLAN.json --output IGNORED_DIR --samples 5`
+with `OPENAI_API_KEY` available. The plan schema is documented in the helper;
+freeze the source SHA and release identity before running. After warming the
+archive and notes generator, it interleaves warm serial and overlapping samples
+using the same generated inputs and isolated compilation caches. Each archive
+starts with fresh DerivedData while retaining compilation replay and package
+download caches to model a fresh release runner with restored caches. Results include timings, task counts, compilation replay
+hits/misses, and resource samples. Archives are unsigned: this does not validate
+signing, export, upload, or hosted-runner performance.
+
+Store and TestFlight archives share an optional Xcode compilation cache, separated
+by Xcode build, runner OS, and architecture. The release job restores the latest
+matching compiler storage and saves an immutable run-specific snapshot after a
+successful release. Each transfer has a three-minute limit and cannot fail the
+release. Compiler input hashes own invalidation across source changes; signed
+products and DerivedData are never saved in this cache. Existing clean archive,
+signing, export, and IPA validation remain required.
 
 Current iOS builds restore three independent input caches: verified Mermaid assets, SwiftPM source packages and binary artifacts, and the Watch RTC Cargo registry and compiled simulator library. Only trusted `main` push and scheduled runs save them; PRs restore only. Frozen targets retain their original cold path. Mermaid validates source and output hashes before copying resources. Its key covers the renderer's complete locked dependency graph, including workspace sources and optional build dependencies, so unrelated root dependency upgrades reuse the assets. SwiftPM downloads use `apps/ios/build/SourcePackages`, shared with screenshot capture through the same exact cache key and Xcode's `-clonedSourcePackagesDirPath` option. Keys cover Xcode, package manifests, and available `Package.resolved` files; automatic resolution remains enabled (the generated iOS project currently has no tracked lockfile). Watch keys cover Xcode, architecture, target mappings, the pinned Rust toolchain, lockfile, crate sources, and iOS build settings; restores first try the exact key, then fall back to the same OS, architecture, and Xcode prefix so unrelated iOS project edits can reuse existing slices. The build phase verifies the library checksum and input fingerprint before reuse, and otherwise runs the locked Cargo build. Caching the finished slice avoids rebuilding the Rust standard library when a fresh runner installs `rust-src` with new timestamps. The hourly Watch engine test shares registry downloads, while its host Debug products stay out of the simulator Release cache.
 

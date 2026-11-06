@@ -28,7 +28,7 @@ import {
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError as ProjectionUnavailable } from "./session-transcript-projection-error.js";
 import {
-  prepareSessionTranscriptProjection as prepareProjection,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
   claimPreparedSessionTranscriptProjectionInTransaction as claimProjection,
   deletePreparedSessionTranscriptProjectionChunkInTransaction as deleteProjectionChunk,
   appendPreparedSessionTranscriptProjectionChunkInTransaction as appendProjectionChunk,
@@ -37,6 +37,11 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile as reconcile } from "./session-transcript-reconcile.js";
 import { messageEvent } from "./transcript-message.test-support.js";
+
+function prepareProjection(...args: Parameters<typeof prepareStreamingProjection>) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const sessionId = "eligibility";
 const entries = [
@@ -79,7 +84,7 @@ function projectionFixture(env: NodeJS.ProcessEnv) {
     return prepared;
   };
   const publish = (
-    prepared: PreparedSessionTranscriptProjection,
+    prepared: NonNullable<ReturnType<typeof prepareProjection>>,
     partial = false,
     run: (action: () => void) => void = (action) => action(),
   ) => {
