@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { inheritOptionFromParent } from "openclaw/plugin-sdk/cli-runtime";
-import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -139,7 +138,6 @@ async function runBrowserDoctor(
     try {
       checks.push({ name, ...(await read()) });
     } catch (error) {
-      getAsyncWorkSignal()?.throwIfAborted();
       checks.push({ name, ok: false, detail: String(error) });
     }
   };
@@ -158,7 +156,6 @@ async function runBrowserDoctor(
       detail: "browser control endpoint reachable",
     });
   } catch (err) {
-    getAsyncWorkSignal()?.throwIfAborted();
     checks.push({
       name: "gateway",
       ok: false,

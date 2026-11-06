@@ -1,4 +1,3 @@
-import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserStatus, ProfileStatus } from "../browser/client.js";
 import {
@@ -105,12 +104,6 @@ function lastRuntimeLog(): string {
   return value;
 }
 
-function parseSingleRuntimeJson(): unknown {
-  const logs = capture.runtimeLogs;
-  expect(logs).toHaveLength(1);
-  return JSON.parse(logs[0] ?? "");
-}
-
 function expectHumanOutput(exitCode: number) {
   expect(runtime.writeJson).not.toHaveBeenCalled();
   expect(runtime.exit).not.toHaveBeenCalled();
@@ -134,80 +127,53 @@ describe("browser manage output", () => {
   });
 
   const userDataDir = "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser";
-  it.each(["/doctor", "/profiles"])("does not print a cancelled doctor %s probe", async (path) => {
-    const scope = new AsyncWorkScope();
-    gateway.mockImplementation(async (_method, _opts, request) => {
-      if (request.path === path) {
-        scope.beginClose();
-        throw new Error("Cancelled doctor transport");
+  it.each([
+    {
+      overrides: { headlessSource: "default" },
+      includes: ["transport: chrome-mcp", "headless: false (default)"],
+      excludes: ["cdpPort:", "cdpUrl:"],
+    },
+    {
+      overrides: { profile: "brave-live", userDataDir, color: "#FB542B" },
+      includes: [`userDataDir: ${userDataDir}`],
+      excludes: [],
+    },
+    {
+      overrides: { cdpUrl: secretUrl, userDataDir },
+      includes: ["transport: chrome-mcp"],
+      excludes: ["userDataDir:"],
+    },
+    {
+      overrides: { driver: "openclaw", transport: "cdp", graphics: graphics({}) },
+      includes: ["graphics: hardware; renderer ANGLE (Intel); backend (gl=angle,angle=metal)"],
+      excludes: [],
+    },
+  ] satisfies { overrides: Partial<BrowserStatus>; includes: string[]; excludes: string[] }[])(
+    "renders status facts without leaking unrelated fields: $overrides",
+    async ({ overrides, includes, excludes }) => {
+      const output = await statusOutput(overrides);
+      expect(includes.filter((text) => !output.includes(text))).toEqual([]);
+      expect(excludes.filter((text) => output.includes(text))).toEqual([]);
+      if ("cdpUrl" in overrides) {
+        expectRedactedUrl(output);
       }
-      return { status: makeStatus(), checks: [] };
-    });
-    await scope.run(() => run(["--json", "doctor"]));
-    expect(capture.runtimeLogs).toEqual([]);
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(0);
-  });
-  it("shows chrome-mcp status without fake CDP fields", async () => {
-    const output = await statusOutput({ headlessSource: "default" });
-    expect(output).toContain("transport: chrome-mcp");
-    expect(output).toContain("headless: false (default)");
-    expect(output).not.toContain("cdpPort:");
-    expect(output).not.toContain("cdpUrl:");
-  });
-  it("shows the configured userDataDir", async () => {
-    expect(await statusOutput({ profile: "brave-live", userDataDir, color: "#FB542B" })).toContain(
-      `userDataDir: ${userDataDir}`,
-    );
-  });
-  it("redacts cdpUrl and prefers it over userDataDir", async () => {
-    const output = await statusOutput({ cdpUrl: secretUrl, userDataDir });
-    expect(output).toContain("transport: chrome-mcp");
-    expectRedactedUrl(output);
-    expect(output).not.toContain("userDataDir:");
-  });
-  it("prints managed graphics facts in status output", async () => {
-    const output = await statusOutput({
-      profile: "openclaw",
-      driver: "openclaw",
-      transport: "cdp",
-      cdpPort: 18800,
-      cdpUrl: "http://127.0.0.1:18800",
-      chosenBrowser: "chromium",
-      headless: true,
-      attachOnly: false,
-      graphics: graphics({}),
-    });
-    expect(output).toContain(
-      "graphics: hardware; renderer ANGLE (Intel); backend (gl=angle,angle=metal)",
-    );
-  });
-
-  it("shows chrome-mcp transport in browser profiles output", async () => {
-    mockResponse("/profiles", { profiles: [makeProfile()] });
-    await run(["profiles"]);
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
-    expect(output).toContain("transport: chrome-mcp");
-    expect(output).not.toContain("port: 0");
-  });
-
-  it("redacts remote cdpUrl details in browser profiles output", async () => {
+    },
+  );
+  it.each([false, true])("renders profiles with remote=%s", async (remote) => {
     mockResponse("/profiles", {
       profiles: [
-        makeProfile({
-          name: "remote",
-          driver: "openclaw",
-          transport: "cdp",
-          tabCount: 1,
-          isRemote: true,
-          cdpUrl: secretUrl,
-        }),
+        makeProfile(remote ? { name: "remote", transport: "cdp", cdpUrl: secretUrl } : {}),
       ],
     });
     await run(["profiles"]);
-    expectRedactedUrl(lastRuntimeLog());
+    const output = lastRuntimeLog();
+    if (remote) {
+      expectRedactedUrl(output);
+    } else {
+      expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
+      expect(output).toContain("transport: chrome-mcp");
+      expect(output).not.toContain("port: 0");
+    }
   });
 
   it.each([
@@ -367,7 +333,8 @@ describe("browser manage output", () => {
 
     await run(["--json", "doctor"]);
 
-    expect(parseSingleRuntimeJson()).toMatchObject({
+    expect(capture.runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
       ok: false,
       checks: expect.arrayContaining([
         expect.objectContaining({ name: "gateway", ok: true }),

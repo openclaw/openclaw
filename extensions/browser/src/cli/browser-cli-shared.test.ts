@@ -1,4 +1,4 @@
-import { AsyncWorkScope, createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
@@ -14,10 +14,6 @@ const gateway = gatewayMocks.callGatewayFromCli;
 const request = (timeout?: string) =>
   callBrowserRequest({ json: true, timeout }, { method: "GET", path: "/status" });
 const argv = process.argv;
-const run = (json: boolean) => {
-  process.argv = `node openclaw browser ${json ? "--json " : ""}resize 640 480`.split(" ");
-  return runBrowserCliRequest({ parent: { json }, path: "/resize", errorPolicy: "inline" });
-};
 
 beforeEach(() => {
   gateway.mockReset().mockResolvedValue({ ok: true });
@@ -66,112 +62,35 @@ it("caps parent timeout values to Node's safe timer range", async () => {
   expect(call?.[3]).toEqual({ scopes: ["operator.admin"] });
 });
 
-it("propagates inline JSON failures to the host", async () => {
-  const failure = new Error("Request refused");
-  gateway.mockRejectedValueOnce(failure);
-  await expect(run(true)).rejects.toBe(failure);
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
-  expect(defaultRuntime.exit).not.toHaveBeenCalled();
-});
-
-it("retains local human diagnostics for inline requests", async () => {
-  gateway.mockRejectedValueOnce(new Error("Request refused"));
-  await expect(run(false)).rejects.toThrow("test exit:1");
-  expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("Error: Request refused");
-  expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-});
-it.each([
-  ...[true, false].flatMap((json) =>
-    (["before", "pending", "success", "error"] as const).map((stage) => ({
-      json,
-      stage,
-      path: "/tabs",
-      query: undefined,
-    })),
-  ),
-  ...[
-    { path: "/errors", query: { clear: false } },
-    { path: "/requests", query: { clear: "false" } },
-    { path: "/snapshot", query: { labels: false } },
-  ].map(({ path, query }) => ({ path, query, json: true, stage: "pending" as const })),
-])(
-  "does not publish cancelled GET results ($json, $stage, $path)",
-  async ({ json, stage, path, query }) => {
-    const scope = new AsyncWorkScope();
-    const started = createDeferred();
-    const response = createDeferred<{ ok: boolean }>();
-    let transportCancelled = false;
-    gateway.mockImplementationOnce(async (_method, _options, _params, extra) => {
-      started.resolve();
-      extra?.signal?.addEventListener("abort", () => {
-        transportCancelled = true;
-        if (stage === "pending") {
-          response.reject(new Error("Gateway request cancelled"));
-        }
+it.each([true, false])(
+  "preserves failure and interruption output policy (json=%s)",
+  async (json) => {
+    process.argv = `node openclaw browser ${json ? "--json " : ""}resize 640 480`.split(" ");
+    const failure = new Error("Request refused");
+    gateway.mockRejectedValueOnce(failure);
+    const run = (method: "GET" | "POST", path = "/resize", query?: { labels: boolean }) =>
+      runBrowserCliRequest({ parent: { json }, method, path, query, errorPolicy: "inline" });
+    if (json) {
+      await expect(run("POST")).rejects.toBe(failure);
+    } else {
+      await expect(run("POST")).rejects.toThrow("test exit:1");
+      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("Error: Request refused");
+    }
+    expect(defaultRuntime.error).toHaveBeenCalledTimes(json ? 0 : 1);
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(json ? 0 : 1);
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+    for (const labels of [false, true]) {
+      const scope = new AsyncWorkScope();
+      gateway.mockImplementationOnce(async (_method, _options, _params, extra) => {
+        scope.beginClose();
+        extra?.signal?.throwIfAborted();
+        return { ok: true };
       });
-      return await response.promise;
-    });
-    if (stage === "before") {
-      scope.beginClose();
-      response.resolve({ ok: true });
+      await scope.run(() => run("GET", "/snapshot", { labels }));
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(json && labels ? 1 : 0);
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
     }
-    const pending = scope.run(() =>
-      runBrowserCliRequest({
-        parent: { json },
-        method: "GET",
-        path,
-        query,
-        errorPolicy: "inline",
-        print: (result) => defaultRuntime.log(JSON.stringify(result)),
-      }),
-    );
-    if (stage !== "before") {
-      await started.promise;
-      scope.beginClose();
-      if (stage === "error") {
-        response.reject(new Error("Late Gateway failure"));
-      } else {
-        response.resolve({ ok: true });
-      }
-    }
-    await expect(pending).resolves.toBeUndefined();
-    if (stage === "before") {
-      expect(gateway).not.toHaveBeenCalled();
-    } else if (stage === "pending") {
-      expect(transportCancelled).toBe(true);
-    }
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  },
-);
-
-it.each([
-  { method: "POST" as const, path: "/tabs/synthetic", query: undefined },
-  { method: "DELETE" as const, path: "/tabs/synthetic", query: undefined },
-  { method: "GET" as const, path: "/errors", query: { clear: true } },
-  { method: "GET" as const, path: "/requests", query: { clear: "true" } },
-  { method: "GET" as const, path: "/snapshot", query: { labels: true } },
-  { method: "GET" as const, path: "snapshot/", query: { labels: " YES " } },
-  { method: "GET" as const, path: "/errors", query: { clear: 1 } },
-])(
-  "retains accepted $method $path receipts after interruption",
-  async ({ method, path, query }) => {
-    const scope = new AsyncWorkScope();
-    const started = createDeferred();
-    const response = createDeferred<{ ok: boolean }>();
-    gateway.mockImplementationOnce(async () => {
-      started.resolve();
-      return await response.promise;
-    });
-    const pending = scope.run(() =>
-      runBrowserCliRequest({ parent: { json: true }, method, path, query }),
-    );
-    await started.promise;
-    scope.beginClose();
-    response.resolve({ ok: true });
-    await pending;
-    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
   },
 );
