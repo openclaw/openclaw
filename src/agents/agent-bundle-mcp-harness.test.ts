@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 const startAuthorization = vi.hoisted(() => vi.fn());
 const readCredentialsStatus = vi.hoisted(() => vi.fn());
@@ -481,6 +483,37 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     );
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
     await result!.dispose();
+
+    // A senderless turn lists the same sign-in tool, so the catalog stays stable,
+    // but it refuses without starting sign-in for anyone.
+    startAuthorization.mockClear();
+    mocks.resolveRuntime.mockResolvedValue(undefined);
+    const senderless = await requesterTools("session-connect", {
+      cfg: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            calendar: {
+              transport: "streamable-http",
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+    const spec = ({ name, description, parameters }: AnyAgentTool) => ({
+      name,
+      description,
+      parameters,
+    });
+    expect(senderless?.advertisedTools.map(spec)).toEqual(result!.advertisedTools.map(spec));
+    const refusal = await senderless!.tools[0]!.execute("connect", {});
+    expect(refusal.content[0]).toMatchObject({
+      text: expect.stringContaining("this turn has no verified user"),
+    });
+    expect(startAuthorization).not.toHaveBeenCalled();
   });
 
   it("releases the live runtime when pre-return catalog publication fails", async () => {

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { after, it } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
@@ -12,6 +14,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { shutdownProcessSupervisor } from "../process/supervisor/index.js";
 import type { SecretEgressProxyHandle } from "../secrets/egress-proxy/proxy-server.js";
 import {
@@ -19,6 +23,7 @@ import {
   publishSecretEgressProxy,
 } from "../secrets/egress-proxy/registry.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -27,11 +32,16 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDurableProcessStore } from "./bash-durable-process-store.js";
-import { disposeDurableProcesses, initializeDurableProcesses } from "./bash-process-durable.js";
+import {
+  disposeDurableProcesses,
+  initializeDurableProcesses,
+  startDurableExecProcess,
+} from "./bash-process-durable.js";
 import {
   getSession,
   getFinishedSession,
   getActiveBackgroundExecSessionCount,
+  createProcessSession,
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -49,6 +59,7 @@ const sessionId = "durable-session";
 const managerSource = `#!${process.execPath}
 const fs = require('node:fs');
 const file = process.env.OPENCLAW_DURABLE_MANAGER_FIXTURE;
+fs.appendFileSync(file + '.parents', process.ppid + '\\n');
 const args = process.argv.slice(2);
 const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
 const save = value => fs.writeFileSync(file, JSON.stringify(value));
@@ -126,7 +137,22 @@ async function scenario(run: (state: OpenClawTestState, managerFile: string) => 
           openOpenClawStateDatabase({ env: state.env });
           const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           writeSessionEntry(agent, sessionKey, { sessionId, updatedAt: Date.now() });
-          await run(state, managerFile);
+          const broker = createSpawnBrokerHost();
+          try {
+            await broker.ready();
+            await runWithSpawnBroker(broker, () => run(state, managerFile));
+            const parents = (await fs.readFile(managerFile + ".parents", "utf8"))
+              .trim()
+              .split("\n")
+              .map(Number);
+            assert.ok(parents.length > 0);
+            assert.ok(
+              parents.every((pid) => pid === broker.pid),
+              JSON.stringify(parents),
+            );
+          } finally {
+            await broker.close();
+          }
         } finally {
           clearSecretEgressProxy(proxy);
           await disposeDurableProcesses();
@@ -172,6 +198,36 @@ async function launch(state: OpenClawTestState, notifyOnExit: boolean) {
   return { id: result.details.sessionId, content: result.content };
 }
 
+void it("observes durable completion outside the initiating request context", async (t) => {
+  await scenario(async (state, managerFile) => {
+    const request = new AsyncLocalStorage<string>();
+    let launching = true;
+    const observation = createDeferredCore<string | undefined>();
+    let now = Math.floor(performance.now());
+    t.mock.method(performance, "now", () => now);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    await initializeDurableProcesses({
+      assertCurrent: () => {
+        if (!launching) {
+          observation.resolve(request.getStore());
+        }
+      },
+    });
+    const { id } = await request.run("expired-request", () => launch(state, false));
+    const session = getSession(id)!;
+    const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));
+    await fs.writeFile(managerFile, JSON.stringify({ ...manager, state: "exited" }));
+    launching = false;
+    now += 1000;
+    t.mock.timers.tick(1000);
+    const context = await observation.promise;
+    await waitForExecSession(session);
+    assert.equal(context, undefined);
+    t.mock.timers.reset();
+    t.mock.restoreAll();
+  });
+});
+
 void it("re-adopts persisted work with scoped list/log/poll/kill and restart admission", async () => {
   await scenario(async (state, managerFile) => {
     await writeSecretStoreEntry({
@@ -216,7 +272,9 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     const adopted = getSession(id)!;
     await tool.execute("kill", { action: "kill", sessionId: id });
     await waitForExecSession(adopted);
-    const poll = await tool.execute("poll", { action: "poll", sessionId: id });
+    const poll = await runWithSpawnBroker(undefined, () =>
+      tool.execute("poll", { action: "poll", sessionId: id }),
+    );
     assert.partialDeepStrictEqual(poll.details, {
       status: "completed",
       exitReason: "manual-cancel",
@@ -253,7 +311,9 @@ void it("records a downtime exit and queues one unattributed session completion"
       await initializeDurableProcesses();
       const tool = createProcessTool({ agentId: "main", sessionKey, scopeKey: sessionKey });
       const adopted = getSession(id)!;
-      const poll = await tool.execute("downtime", { action: "poll", sessionId: id });
+      const poll = await runWithSpawnBroker(undefined, () =>
+        tool.execute("downtime", { action: "poll", sessionId: id }),
+      );
       await waitForExecSession(adopted);
       assert.match(JSON.stringify(poll), /worker final output/);
       assert.equal(getFinishedSession(id)?.exitCode, 7);
@@ -274,6 +334,58 @@ void it("records a downtime exit and queues one unattributed session completion"
       await waitForExecSession(reAdopted);
       assert.equal(peekSystemEventEntries(sessionKey).length, 1);
       // Retire the queued occurrence before reopening admission; no inference is needed for queue proof.
+      const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");
+      consumeSelectedSystemEventEntries(sessionKey, events);
+    } finally {
+      suspended!.release("fixture complete");
+    }
+  });
+});
+
+void it("recovers a memory-limit completion before its notification settles", async () => {
+  await scenario(async (state) => {
+    await initializeDurableProcesses();
+    const session = createProcessSession({
+      id: "memory-limit-recovery",
+      command: "printf worker",
+      agentId: "main",
+      sessionKey,
+      scopeKey: sessionKey,
+      cwd: state.workspaceDir,
+      startedAt: Date.now(),
+      cleanupMs: 60_000,
+      maxOutputChars: 8_000,
+      totalOutputChars: 0,
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      pendingOutputDropped: false,
+      exited: false,
+      truncated: false,
+      backgrounded: true,
+      cursorKeyMode: "normal",
+      notifyOnExit: true,
+    });
+    const run = await startDurableExecProcess(session, sessionId, {
+      mode: "child",
+      argv: ["/bin/sh", "-c", session.command],
+      cwd: state.workspaceDir,
+      env: process.env,
+    });
+    run.cancel("memory-limit");
+    assert.equal((await run.wait()).reason, "memory-limit");
+    // Reconstruct after the native result is durable but before caller settlement.
+    await disposeDurableProcesses();
+    resetProcessRegistryForTests();
+    const suspended = tryBeginGatewaySuspendAdmission(() => {});
+    assert.ok(suspended?.commit());
+    try {
+      await initializeDurableProcesses();
+      const adopted = getSession(session.id)!;
+      await adopted.durable!.observe();
+      await waitForExecSession(adopted);
+      assert.equal(getFinishedSession(session.id)?.exitReason, "memory-limit");
+      const events = peekSystemEventEntries(sessionKey);
+      assert.equal(events.length, 1);
       const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");
       consumeSelectedSystemEventEntries(sessionKey, events);
     } finally {

@@ -34,12 +34,11 @@ import {
 } from "../../lib/skills-shared.ts";
 import { SkillStatusChips } from "../skills/skill-status.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
-import { AgentPanelAction } from "./panel-ui.tsx";
+import { AgentPanelAction, type AgentConfigState } from "./panel-ui.tsx";
 
 registerSettingsEnglish();
 
-type AgentSkillsProps = AgentConfigActions &
+type AgentSkillsProps = AgentConfigState &
   AgentsPageView["agentSkills"] &
   Pick<AgentsPageView, "readData"> & {
     agentId: string;
@@ -150,10 +149,10 @@ function AgentSkillsContent(
       skill,
       text: normalizeLowercaseStringOrEmpty(
         [skill.name, skill.description, skill.source].join(" "),
-      ),
+      ).normalize("NFC"),
     })),
   );
-  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
+  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC"));
   const filtered = createMemo(
     () =>
       filter()
@@ -210,7 +209,7 @@ function AgentSkillsContent(
         title={t("agents.skillsPanel.title")}
         description={
           <>
-            {t("agents.skillsPanel.subtitle")}
+            {t("agents.skillsPanel.subtitle")}{" "}
             {rawSkills().length > 0 ? (
               <span class="mono">
                 {enabledCount()}/{rawSkills().length}
@@ -230,13 +229,11 @@ function AgentSkillsContent(
               disabled={!params.canPatchConfig || !params.explicit || !configReady()}
               onClick={() => params.onClear()}
             />
-            <AgentConfigButtons {...params}>
-              <AgentPanelAction
-                label={params.pending ? t("common.loading") : t("common.refresh")}
-                disabled={params.pending}
-                onClick={params.onRefresh}
-              />
-            </AgentConfigButtons>
+            <AgentPanelAction
+              label={params.pending ? t("common.refreshing") : t("common.refresh")}
+              disabled={params.pending}
+              onClick={params.onRefresh}
+            />
           </>
         }
       >

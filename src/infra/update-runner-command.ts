@@ -2,7 +2,11 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
-import { retryableGitNetworkOperation, withGitNetworkRetry } from "./git-network-retry.js";
+import {
+  retryableGitNetworkOperation,
+  UPDATE_GIT_RETRY_DELAYS_MS,
+  withGitNetworkRetry,
+} from "./git-network-retry.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
@@ -93,6 +97,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
       cwd,
       timeoutMs,
       env,
+      ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.input !== undefined ? { input: opts.input } : {}),
     });
   } catch (error) {
@@ -210,6 +215,7 @@ export async function buildUpdateCommandRunner(
           operation,
           {
             timeoutMs: options.timeoutMs,
+            retryDelaysMs: operation === "fetch" ? UPDATE_GIT_RETRY_DELAYS_MS : undefined,
             signal: resolveCommandProcessSignal(options.signal),
             beforeRun: operation ? beforeGitNetworkAttempt : undefined,
           },

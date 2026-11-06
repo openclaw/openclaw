@@ -3,6 +3,7 @@ import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveChecked } from "../../lib/reactive/live-checked.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
@@ -12,9 +13,10 @@ export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-u
 let radioId = 0;
 const nextSettingsRadioName = () => `settings-radio-${++radioId}`;
 
-type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
+type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "running" | "muted";
 const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
   accent: "oc-status-info",
+  running: "oc-status-info",
   danger: "oc-status-error",
   muted: "",
   ok: "oc-status-success",
@@ -54,10 +56,12 @@ export function SettingsPage(props: {
   children?: JSX.Element;
   wide?: boolean;
   carapace?: boolean;
+  busy?: boolean;
 }) {
   return (
     <ShellLayoutBoundary traits={{ settingsPage: true, settingsWide: props.wide }}>
       <div
+        aria-busy={props.busy ? "true" : undefined}
         class={[
           "settings-page",
           { "settings-page--wide": props.wide, "oc-app-surface": props.carapace },
@@ -99,6 +103,8 @@ export function SettingsPageHeader(props: {
   stacked?: boolean;
 }) {
   let heading!: HTMLHeadingElement;
+  // Resolve once: actions may own a portal, which a second read would mount again.
+  const actions = children(() => props.actions);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
@@ -116,8 +122,8 @@ export function SettingsPageHeader(props: {
             <div class="page-subtitle">{props.subtitle}</div>
           </Show>
         </div>
-        <Show when={props.actions}>
-          <div class="page-header-actions">{props.actions}</div>
+        <Show when={actions()}>
+          <div class="page-header-actions">{actions()}</div>
         </Show>
       </section>
     </ShellLayoutBoundary>
@@ -167,9 +173,7 @@ export function SettingsSection(props: {
         </div>
       </Show>
       {props.notice}
-      <SettingsGroup danger={props.danger} carapace={props.carapace}>
-        {props.children}
-      </SettingsGroup>
+      <SettingsGroup carapace={props.carapace}>{props.children}</SettingsGroup>
     </section>
   );
 }
@@ -189,20 +193,9 @@ export function SettingsSummary(props: { items: ReadonlyArray<{ label: string; v
   );
 }
 
-export function SettingsGroup(props: {
-  children?: JSX.Element;
-  danger?: boolean;
-  carapace?: boolean;
-}) {
+export function SettingsGroup(props: { children?: JSX.Element; carapace?: boolean }) {
   return (
-    <div
-      class={[
-        "settings-group",
-        { "settings-group--danger": props.danger, "oc-settings-group": props.carapace },
-      ]}
-    >
-      {props.children}
-    </div>
+    <div class={["settings-group", { "oc-settings-group": props.carapace }]}>{props.children}</div>
   );
 }
 
@@ -284,11 +277,10 @@ function ToggleControl(
   return (
     <span class="settings-toggle">
       <input
-        ref={(element) => props.inputRef?.(element)}
+        ref={[liveChecked(() => props.checked), (element) => props.inputRef?.(element)]}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        checked={props.checked}
         disabled={props.disabled}
         aria-disabled={props.saving ? "true" : undefined}
         aria-label={props.inputLabel}
@@ -532,14 +524,9 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
 }
 
 function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProps<T, JSX.Element>) {
-  const variant = () => (props.mode === "buttons" ? props.variant : undefined);
   return (
     <div
-      class={[
-        "settings-segmented",
-        props.class,
-        { [`settings-segmented--${variant()}`]: Boolean(variant()) },
-      ]}
+      class={["settings-segmented", props.class]}
       role={props.ariaLabel ? "group" : undefined}
       aria-label={props.ariaLabel}
     >
@@ -549,10 +536,7 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             type="button"
             class={[
               "settings-segmented__btn",
-              {
-                "settings-segmented__btn--active": option().value === props.value,
-                "btn btn--sm": variant() === "accent",
-              },
+              { "settings-segmented__btn--active": option().value === props.value },
             ]}
             aria-pressed={option().value === props.value ? "true" : "false"}
             aria-label={option().ariaLabel}
@@ -624,6 +608,11 @@ export function SettingsEmpty(props: { message: JSX.Element; carapace?: boolean 
       </div>
     </Show>
   );
+}
+
+/** Says why a surface can't be used here, in the same quiet state as an empty list. */
+export function SettingsUnavailable(props: { message: JSX.Element }) {
+  return <SettingsEmpty message={<span role="status">{props.message}</span>} />;
 }
 
 export function SettingsLoadingSkeleton(props: {

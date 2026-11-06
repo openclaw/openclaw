@@ -50,6 +50,23 @@ function composerState(flow: ReturnType<typeof createDraftFixture>["flow"]) {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("formats typed submission failures before storing presentation text", async () => {
+    const error = new TypeError("Cannot read properties of undefined (reading 'map')");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => report.mockRestore());
+    const { create, flow } = createDraftFixture();
+    flow.setMessage("A synthetic task");
+    create.mockRejectedValueOnce(error);
+
+    await flow.submit();
+
+    expect(flow.error).toBe("Request failed");
+    expect(report).toHaveBeenCalledWith(
+      "[control-ui] programming error hidden from the UI:",
+      error,
+    );
+  });
+
   it("keeps explicit Draft intent when its chooser becomes unavailable before submission", async () => {
     const { context, create, flow } = createDraftFixture();
     expectDefined(context.gateway.snapshot.hello, "connected hello").policy = {
@@ -133,7 +150,7 @@ describe("DraftSubmissionFlow", () => {
       }
       await vi.advanceTimersByTimeAsync(210_000);
       ready = true;
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(8_000);
       await submission;
       expect(writes).toBe(cancel ? 0 : 1);
       expect(new Set(frames).size).toBe(1);
@@ -210,8 +227,8 @@ describe("DraftSubmissionFlow", () => {
         expect(flow).toMatchObject({
           error:
             storage === "unavailable before create"
-              ? "Couldn't prepare session recovery. Your draft has been kept."
-              : "The session was created, but startup needs attention: placement recovery storage is unavailable",
+              ? "Couldn’t prepare session recovery. Your draft has been kept."
+              : "Couldn’t start this session. Retry setup. placement recovery storage is unavailable",
           message: "Keep my model and runtime",
         });
       }
@@ -260,6 +277,7 @@ describe("DraftSubmissionFlow", () => {
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: "error",
           message: "Too large to send: second.txt",
         });
       } else {

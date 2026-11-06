@@ -335,12 +335,17 @@ export function normalizeProviderTransportWithPlugin(
     return undefined;
   }
 
+  // Other plugins may only tidy a transport within its origin; another origin would receive
+  // this provider's credential.
+  const origin = (url?: string) => (url ? URL.parse(url)?.origin : undefined);
+  const requestOrigin = origin(params.context.baseUrl);
   for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
-      continue;
-    }
-    const normalized = candidate.normalizeTransport(context);
-    if (normalized && hasTransportChange(normalized)) {
+    const normalized =
+      candidate === matchedPlugin ? undefined : candidate.normalizeTransport?.(context);
+    const keepsOrigin =
+      !normalized?.baseUrl ||
+      (requestOrigin !== undefined && origin(normalized.baseUrl) === requestOrigin);
+    if (normalized && hasTransportChange(normalized) && keepsOrigin) {
       return normalized;
     }
   }

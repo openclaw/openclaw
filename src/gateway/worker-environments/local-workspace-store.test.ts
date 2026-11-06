@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { inflateRawSync, zstdDecompressSync } from "node:zlib";
+import { zstdDecompressSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -33,21 +33,12 @@ import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-leas
 import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import {
-  localWorkspaceDigestBytes,
-  prepareLocalWorkspaceTreePacks,
-  type LocalWorkspacePreparation,
-} from "./local-workspace-cas.js";
-import {
-  prepareLocalWorkspaceContentInDatabase,
   readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
-import {
-  executeLocalWorkspaceManifestRead,
-  readLocalWorkspaceManifestRows,
-  type LocalWorkspaceManifestCheckpoint,
-} from "./local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
@@ -82,20 +73,14 @@ afterEach(() => vi.restoreAllMocks());
 function readManifestRows(db: EngineConnection, worktreeId: string) {
   const projection = readProjectionInDatabase(db, worktreeId);
   return projection?.tree_root_digest
-    ? [...readLocalWorkspaceTree(db, projection.tree_root_digest).values()]
+    ? [
+        ...decodeLocalWorkspaceTree(
+          readLocalWorkspaceTree(db, projection.tree_root_digest),
+        ).values(),
+      ]
         .map((record) => ({ path: record.node.path, node_json: JSON.stringify(record) }))
         .toSorted((left, right) => left.path.localeCompare(right.path))
     : [];
-}
-
-function prepareTreePacks(
-  db: EngineConnection,
-  records: Parameters<typeof prepareLocalWorkspaceTreePacks>[0],
-) {
-  for (const batch of prepareLocalWorkspaceTreePacks(records)) {
-    const preparation = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
-    prepareLocalWorkspaceContentInDatabase(db, preparation);
-  }
 }
 
 it("keeps admitted paths and checkpoint documents out of root-publication requests", async () => {
@@ -380,54 +365,10 @@ it("releases the state reader with captured manifest facts before filesystem dis
   expect(deserialize(zstdDecompressSync(result.snapshot))).toEqual([
     {
       row: expect.objectContaining({ revision: 0, projection_path: fixture.projection_path }),
-      records: new Map(),
+      records: [],
     },
     action,
   ]);
-});
-
-it("materializes a manifest snapshot after its database closes", async () => {
-  const database = new DatabaseSync(":memory:");
-  const worktreeId = randomUUID();
-  const records = createLocalWorkspaceManifestTree([
-    { path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) },
-  ]);
-  const action = { kind: "materialize" as const };
-  const snapshot = (() => {
-    try {
-      mutateProjection(database, worktreeId, {
-        kind: "create",
-        row: localWorkspaceProjectionFixture(worktreeId, root),
-      });
-      prepareTreePacks(database, records);
-      mutateProjection(database, worktreeId, {
-        kind: "update",
-        revision: 0,
-        patch: {},
-        manifest: {
-          treeRoot: records.get("")!.treeRef,
-          previousRoot: null,
-          resultingRoot: localWorkspaceManifestRootReference(records, "a".repeat(40)),
-          records: [...records.values()],
-          removed: [],
-          replace: true,
-        },
-      });
-      return readLocalWorkspaceManifestRows(database, { id: worktreeId, revision: 1, action });
-    } finally {
-      database.close();
-    }
-  })();
-  // The read scope is closed: materialization must own all facts, not a live SQLite cursor.
-  const value = await executeLocalWorkspaceManifestRead(snapshot, action);
-  expect(value).toMatchObject({
-    kind: "materialize",
-    rawManifest: JSON.stringify({
-      version: 1,
-      baseCommit: "a".repeat(40),
-      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
-    }),
-  });
 });
 
 it("accepts manifest nodes and checkpoint headers atomically and preserves them on rollback", async () => {
@@ -538,7 +479,11 @@ it("keeps prepared baseline replacement atomic through GC, rollback, and a lost 
   const nodePaths = () => {
     const projection = readProjectionInDatabase(database.db, worktreeId);
     return projection?.tree_root_digest
-      ? [...readLocalWorkspaceTree(database.db, projection.tree_root_digest).keys()].toSorted()
+      ? [
+          ...decodeLocalWorkspaceTree(
+            readLocalWorkspaceTree(database.db, projection.tree_root_digest),
+          ).keys(),
+        ].toSorted()
       : [];
   };
   const replace = () =>

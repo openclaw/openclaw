@@ -55,8 +55,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export { resolveProviderToolPolicy };
 
 /**
- * Default hard denies for sub-agents regardless of depth. Visible spawned
- * sessions retain message delivery; all other hard denies still apply.
+ * Default hard denies for hidden sub-agents regardless of depth. Visible spawned
+ * sessions are interactive and skip these defaults.
  */
 const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
@@ -75,7 +75,10 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "conversations_turn",
 ];
 
-/** Tools that only make sense for orchestrator sub-agents that can spawn children. */
+/**
+ * Tools that only make sense for orchestrator sub-agents that can spawn children.
+ * Visible spawned sessions keep them; spawn admission still enforces depth and child caps.
+ */
 const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
@@ -96,17 +99,16 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store: opts?.store,
   });
-  const capabilities = resolveStoredSubagentCapabilities(sessionKey, {
-    cfg,
-    store,
-  });
   const allow = configured?.allow;
   const alsoAllow = configured?.alsoAllow;
+  // Operator-configured sub-agent policy applies to every spawned session; the
+  // built-in defaults only constrain hidden delegated workers.
+  const visibleSpawn = isVisibleSpawnedSession(sessionKey, { cfg, store });
+  const leaf =
+    !visibleSpawn && resolveStoredSubagentCapabilities(sessionKey, { cfg, store }).role === "leaf";
   const deny = [
-    ...SUBAGENT_TOOL_DENY_ALWAYS.filter(
-      (tool) => tool !== "message" || !isVisibleSpawnedSession(sessionKey, { cfg, store }),
-    ),
-    ...(capabilities.role === "leaf" ? SUBAGENT_TOOL_DENY_LEAF : []),
+    ...(visibleSpawn ? [] : SUBAGENT_TOOL_DENY_ALWAYS),
+    ...(leaf ? SUBAGENT_TOOL_DENY_LEAF : []),
     ...(configured?.deny ?? []),
   ];
   const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;

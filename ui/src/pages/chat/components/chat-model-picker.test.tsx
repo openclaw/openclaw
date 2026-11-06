@@ -290,3 +290,12 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectTarget).toHaveBeenCalledWith("target", "remote");
   expect(selectAccount).not.toHaveBeenCalled();
 });
+
+it("keeps unconfigured unknown provider trigger icons unchanged", () => {
+  const { container } = mountPicker({
+    modelOptions: [option("workstation", "local")],
+    selectedModelValue: "workstation/local",
+    triggerModelLabel: "Local",
+  });
+  expect(container.querySelector(".chat-controls__trigger-provider-icon")).toBeNull();
+});

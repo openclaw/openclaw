@@ -426,13 +426,10 @@ export function configuredAppGitHubOptionsIdentity(
   selection: GitHubAppSelection,
   source: "system-configured" | "agent-override",
 ) {
-  const metadata = readGitHubAppInstallationMetadata(
-    selection,
-    resolveGitHubHost(),
-    resolveGitHubApiBaseUrl(),
-  );
+  const host = resolveGitHubHost();
+  const metadata = readGitHubAppInstallationMetadata(selection, host, resolveGitHubApiBaseUrl());
   if (!metadata) {
     throw new GitHubIdentityError("unavailable");
   }
-  return { source, account: metadata.account, stale: undefined };
+  return { source, host, account: metadata.account, stale: undefined };
 }

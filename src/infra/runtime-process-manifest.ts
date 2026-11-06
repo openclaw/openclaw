@@ -39,6 +39,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
+    doctorDatabaseBloat: runtimeProcessEntrypoint("commands/doctor-db-bloat.worker"),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
     sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
@@ -49,6 +50,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     databasePortCommand: runtimeProcessEntrypoint(
       "infra/database-engine/port-command.entry.worker",
     ),
+    stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
     shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
@@ -98,6 +100,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
     fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
     attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
+    widgetScriptSyntax: runtimeProcessEntrypoint("canvas/widget-script-syntax.worker"),
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
@@ -242,6 +245,7 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
   },
+  codexStdio: pluginRuntimeProcess("codex", "stdio-worker-entrypoint", "stdio.worker"),
   codexCatalogPage: pluginRuntimeProcess(
     "codex",
     "catalog-page-worker-entrypoint",

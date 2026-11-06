@@ -368,6 +368,9 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   registerGatewayStartupReadinessTests({
+    startSidecars: startGatewaySidecars,
+    waitForState: waitForGatewayTestState,
+    acpMocks: hoisted,
     start: startGatewayPostAttachRuntime,
     createParams: createPostAttachParams,
     createRuntimeDeps: createPostAttachRuntimeDeps,

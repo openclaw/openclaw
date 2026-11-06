@@ -94,7 +94,7 @@ suite.define(() => {
               platform: "web",
               mode: "ui",
             },
-            caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
+            caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS, GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS],
           },
         } as GatewayClient;
         return { page, gateway, client, connId };
@@ -170,6 +170,8 @@ suite.define(() => {
     })(
       createScreenTool({
         agentSessionKey: source,
+        agentId: "main",
+        githubIdentitySettingsAvailable: true,
       }),
     );
 
@@ -190,6 +192,26 @@ suite.define(() => {
 
     const requester = expectDefined(browsers[0], "requester");
     const other = expectDefined(browsers[1], "other user");
+    await captureUiProof(suite, requester.page, "github-reconnect", "before.png");
+    await screen.execute("reconnect-github", { action: "github_identity_settings" });
+    await Promise.all(deliveries);
+    await expect
+      .poll(() => new URL(requester.page.url()).pathname)
+      .toBe("/settings/agents/main/tools");
+    await requester.gateway.waitForRequest("tools.github.status", {
+      match: { agentId: "main", selectedScope: "agent" },
+    });
+    const identity = requester.page.locator("openclaw-github-identity");
+    await identity.waitFor();
+    await identity.scrollIntoViewIfNeeded();
+    await captureUiProof(suite, requester.page, "github-reconnect", "after.png");
+    expect(new URL(other.page.url()).pathname).toBe(controlUiSessionPath(source));
+    expect(await other.gateway.getRequests("tools.github.status")).toHaveLength(0);
+    await screen.execute("return-to-chat", { action: "navigate", sessionKey: destination });
+    await Promise.all(deliveries);
+    await expect
+      .poll(() => new URL(requester.page.url()).pathname)
+      .toBe(controlUiSessionPath(destination));
     const rfb = await installScriptedRfbServer(requester.page);
     await screen.execute("show-native", {
       action: "desktop_show",
@@ -200,7 +222,7 @@ suite.define(() => {
     const desktop = requester.page.locator("openclaw-desktop-panel[embedded]");
     await requester.gateway.waitForRequest("environments.status");
     await desktop.locator(".desktop-status-surface[role='status']").waitFor();
-    await desktop.getByText("Starting your machine…", { exact: true }).waitFor();
+    await desktop.getByText("Starting your device…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("desktop.observe")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-desktop.png");
     await requester.gateway.setMethodResponse("environments.status", {
@@ -286,15 +308,11 @@ suite.define(() => {
     });
     await Promise.all(deliveries);
     const portal = requester.page.locator("openclaw-portals-page[embedded]");
-    await portal
-      .getByText("Machine ready. Waiting for your application…", { exact: true })
-      .waitFor();
+    await portal.getByText("Device ready. Waiting for your app…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("portal.list")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-portal.png");
     await requester.page.reload();
-    await portal
-      .getByText("Machine ready. Waiting for your application…", { exact: true })
-      .waitFor();
+    await portal.getByText("Device ready. Waiting for your app…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("portal.list")).toHaveLength(0);
 
     await screen.execute("show-web", {

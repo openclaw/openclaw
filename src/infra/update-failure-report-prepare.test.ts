@@ -259,6 +259,32 @@ it("keeps allowlisted stderr causes alongside a classified startup fact", async 
   );
 });
 
+it.each([
+  { error: undefined, expected: undefined },
+  { error: " \n", expected: undefined },
+  {
+    error:
+      "EACCES: permission denied at /private/customer/config.json token=synthetic-secret\n" +
+      "private-host.example private-customer-text\n".repeat(1000),
+    expected: "EACCES; Permission denied",
+  },
+  { error: "custom-tool --token synthetic-secret", expected: "[redacted-diagnostic]" },
+])(
+  "renders only bounded public facts from the top-level error: $expected",
+  async ({ error, expected }) => {
+    const prepared = await report({}, { error });
+    const line = prepared.body.split("\n").find((value) => value.startsWith("- Error: "));
+    expect(line).toBe(expected ? `- Error: ${expected}` : undefined);
+    expect(Buffer.byteLength(line?.slice("- Error: ".length) ?? "")).toBeLessThanOrEqual(200);
+    expect(Buffer.byteLength(prepared.body)).toBeLessThanOrEqual(16_000);
+    expectText(
+      prepared.body,
+      [],
+      /\/private\/customer|config\.json|synthetic-secret|private-host|private-customer-text/u,
+    );
+  },
+);
+
 it("preserves classified destination ownership and recovery without exposing usernames", async () => {
   const redaction = { env: { HOME: "/Users/Fixture Owner" }, stateDir: "/report-test-state" };
   const fact = createUpdateFailureFact(

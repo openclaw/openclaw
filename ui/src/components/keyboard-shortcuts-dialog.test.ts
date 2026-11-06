@@ -124,10 +124,7 @@ it.each(
     dialog.newSessionHost = sessionHost;
     const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
     await openDialog(dialog);
-    const chord = [
-      platform === "MacIntel" ? "⌘" : "Ctrl",
-      ...(native ? ["N"] : [platform === "MacIntel" ? "⇧" : "Shift", "O"]),
-    ];
+    const chord = [platform === "MacIntel" ? "⌘" : "Ctrl", ...(native ? ["N"] : ["⇧", "O"])];
     expect(chips(dialog, "Open New Session")).toEqual(chord);
     dialog.sendShortcut = "modifier-enter";
     await dialog.updateComplete;

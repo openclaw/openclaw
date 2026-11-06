@@ -101,6 +101,7 @@ export const baseProps = () => ({
   onRawChange: vi.fn(),
   onFormModeChange: vi.fn(),
   onViewStateChange: vi.fn(),
+  secretFields: undefined,
   onFormPatch: vi.fn(),
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
@@ -177,7 +178,6 @@ export const baseProps = () => ({
   resetChatFollowUpMode: vi.fn(),
   catalogOpenTarget: "viewer" as const,
   gatewayUrl: "",
-  assistantName: "OpenClaw",
 });
 
 export function renderConfigView(overrides: Partial<ConfigProps> = {}): {

@@ -4,7 +4,7 @@ import {
 } from "../../agents/prepared-model-runtime.errors.js";
 import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
 import { PluginInventoryRetiredError } from "../plugin-instance-error.js";
-import type { LlmCompleteErrorCode } from "./types-core.js";
+import type { LlmCompleteErrorCode } from "./runtime-llm.types.js";
 
 export function createLlmCompleteError(
   code: LlmCompleteErrorCode,

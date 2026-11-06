@@ -17,7 +17,8 @@ export function collectRootPackageExcludedExtensionDirs(params = {}) {
       continue;
     }
     const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
+    // The package excludes dependency aliases from npm, not a runtime plugin.
+    if (match?.[1] && match[1] !== "node_modules") {
       excluded.add(match[1]);
     }
   }

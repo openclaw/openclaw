@@ -6,6 +6,7 @@ import {
   getAdmittedSqliteSchemaFacts,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { createWorkboardDatabase } from "./src/sqlite-store-schema.js";
+import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./src/workboard-postgres-schema.js";
 import { SCHEMA_VERSION } from "./src/workboard-schema.js";
 
 class WorkboardPortSchemaError extends Error {}
@@ -46,6 +47,7 @@ function admitWorkboardPort(dbPath: string, input?: DatabaseEngineInput): void {
 }
 export const workboardDatabasePortApi: WorkboardDatabasePortApi<DatabaseSync, DatabaseEngineInput> =
   {
+    postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
     inspectWorkboardPortSource,
     admitWorkboardPort,
     WorkboardPortSchemaError,

@@ -126,6 +126,7 @@ export function createSessionsArchive(host: {
           ),
         });
         showToast({
+          severity: "success",
           message: t("sessionsView.sessionArchived"),
           actionLabel: t("common.undo"),
           onAction: () => {
@@ -153,7 +154,7 @@ export function createSessionsArchive(host: {
               })
               .catch((error: unknown) => {
                 if (archiveSessions.isConnectionScopeCurrent(connection)) {
-                  showToast({ message: formatUiError(error) });
+                  showToast({ severity: "error", message: formatUiError(error) });
                 }
               });
           },

@@ -1,0 +1,2 @@
+# Isolate the existing CLI exit fixtures from incoming process status.
+5

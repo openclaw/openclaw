@@ -13,10 +13,11 @@ afterEach(() => __setFsSafeTestHooksForTest());
 const repository = (parent: string, name: string) =>
   initializeGitFixture(parent, name, "seed.txt", "fixture\n");
 
-function fileTools(root: string) {
+function fileTools(root: string, attachmentReadRoot?: string) {
   const tools = createCoreCodingTools({
     codingRoot: root,
     containmentRoot: root,
+    attachmentReadRoot,
     includeBaseCodingTools: true,
     shellTools: "patch-only",
     readOnly: false,
@@ -53,7 +54,21 @@ it("explains how to bind a worker before editing another repository's linked wor
 it("uses newly registered linked worktrees for host file tools and observes unregistration", async () => {
   const fixture = await fs.realpath(tempDirs.make("openclaw-linked-worktrees-"));
   const root = await repository(fixture, "repo");
-  const execute = fileTools(root);
+  const attachmentReadRoot = path.join(fixture, "attachments");
+  using exists = vi.spyOn(syncFs, "existsSync");
+  const execute = fileTools(root, attachmentReadRoot);
+  expect(exists).not.toHaveBeenCalled();
+  await fs.mkdir(attachmentReadRoot);
+  const attachment = path.join(attachmentReadRoot, "input.txt");
+  await fs.writeFile(attachment, "Attached input.");
+  expect((await execute("read", { path: attachment })).content).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ text: expect.stringContaining("Attached input.") }),
+    ]),
+  );
+  await expect(execute("write", { path: attachment, content: "denied" })).rejects.toThrow(
+    /escapes .*root/,
+  );
   const linked = path.join(fixture, "linked");
   await git(root, "worktree", "add", "--quiet", "--detach", linked);
   const target = path.join(linked, "nested", "note.txt");

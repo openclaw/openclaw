@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  type MockGatewayWindow,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI boot composer" });
@@ -85,14 +89,25 @@ suite.define(() => {
     { name: "phone", options: { ...phoneOptions, viewport: { width: 390, height: 844 } } },
     { name: "phone landscape", options: { ...phoneOptions, viewport: landscapeViewport } },
     { name: "small phone", options: { ...phoneOptions, viewport: { width: 568, height: 320 } } },
+    ...["connect", "sessions.resolve"].map((pendingScrollAt) => ({
+      name: `phone landscape, pending scroll at ${pendingScrollAt}`,
+      options: { ...phoneOptions, viewport: landscapeViewport },
+      pendingScrollAt,
+    })),
   ])(
     "keeps an unsent draft, its focus and its frame still when the session opens ($name)",
-    async ({ options }) => {
+    async (scenario) => {
+      const { options } = scenario;
+      const pendingScrollAt = "pendingScrollAt" in scenario ? scenario.pendingScrollAt : null;
+      const heldMethod = pendingScrollAt ?? "connect";
       await suite.withPage(options, async ({ page }) => {
-        const gateway = await bootGateway(page, ["connect"]);
+        const gateway = await bootGateway(page, [heldMethod]);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey), {
           waitUntil: "domcontentloaded",
         });
+        // Start this handoff check after the static frame moves, so a touch gesture
+        // cannot land on its retired layout before keyboard input begins.
+        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
         const boot = page.locator("#openclaw-boot-composer");
         await boot.waitFor({ state: "visible" });
         // Like the chat composer, it takes focus only from the operator.
@@ -102,6 +117,7 @@ suite.define(() => {
         } else {
           await boot.click();
         }
+        await expect.poll(() => boot.evaluate((el) => el === document.activeElement)).toBe(true);
         const text =
           options.isMobile && options.viewport.width > options.viewport.height
             ? "First line\nSecond line\nThird line\nFourth line"
@@ -128,36 +144,51 @@ suite.define(() => {
               editor.scrollTop,
             ].map(Math.round);
           });
-        // Module startup moves the editor out of the static frame first.
-        await page.locator("#openclaw-boot-shell").waitFor({ state: "detached" });
         const before = await geometry(".loading-skeleton__composer:has(#openclaw-boot-composer)");
+        await gateway.waitForRequest(heldMethod);
+        if (pendingScrollAt) {
+          expect(before[6]).toBeGreaterThan(0);
+          // Deliver the old viewport, then move again in the same browser task as
+          // admission. The second native scroll event must not gate the handoff.
+          await boot.evaluate(async (element) => {
+            await new Promise<void>((resolve) => {
+              element.addEventListener("scroll", () => resolve(), { once: true });
+              element.scrollTop = 0;
+            });
+          });
+        }
         // Every frame keeps one stationary composer, its visible draft and scroll position.
-        await page.evaluate(() => {
-          const frames: string[] = [];
-          Reflect.set(window, "__bootComposerFrames", frames);
-          const sample = () => {
-            const editors = document.querySelectorAll(
-              "#openclaw-boot-composer, .agent-chat__composer-combobox textarea",
-            );
-            const editor = editors[0] as HTMLTextAreaElement | undefined;
-            const host = editor?.closest(".loading-skeleton__composer, .agent-chat__input");
-            const box = host?.getBoundingClientRect();
-            frames.push(
-              editors.length === 1 && box
-                ? JSON.stringify([
-                    ...[box.x, box.y, box.width, box.height, editor!.scrollTop].map(Math.round),
-                    editor!.value.length,
-                  ])
-                : `editors:${editors.length}`,
-            );
-            if (frames.length < 90) {
-              requestAnimationFrame(sample);
+        await page.evaluate(
+          ({ heldMethod: method, scrollTop }) => {
+            if (scrollTop !== null) {
+              document.getElementById("openclaw-boot-composer")!.scrollTop = scrollTop;
             }
-          };
-          requestAnimationFrame(sample);
-        });
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
+            const frames: string[] = [];
+            Reflect.set(window, "__bootComposerFrames", frames);
+            const sample = () => {
+              const editors = document.querySelectorAll(
+                "#openclaw-boot-composer, .agent-chat__composer-combobox textarea",
+              );
+              const editor = editors[0] as HTMLTextAreaElement | undefined;
+              const host = editor?.closest(".loading-skeleton__composer, .agent-chat__input");
+              const box = host?.getBoundingClientRect();
+              frames.push(
+                editors.length === 1 && box
+                  ? JSON.stringify([
+                      ...[box.x, box.y, box.width, box.height, editor!.scrollTop].map(Math.round),
+                      editor!.value.length,
+                    ])
+                  : `editors:${editors.length}`,
+              );
+              if (frames.length < 90) {
+                requestAnimationFrame(sample);
+              }
+            };
+            requestAnimationFrame(sample);
+            (window as MockGatewayWindow).openclawControlUiE2eGateway!.resolveDeferred(method);
+          },
+          { heldMethod, scrollTop: pendingScrollAt ? before[6]! : null },
+        );
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = `${text}\nsecond line`;
         await expect.poll(() => composer.inputValue()).toBe(draft);

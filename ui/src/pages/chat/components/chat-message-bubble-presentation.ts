@@ -3,6 +3,11 @@ import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import {
+  type ChatMessageRenderPreparation,
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -15,25 +20,152 @@ import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts"
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import { openMessageImage } from "./chat-message-image-open.ts";
 import {
-  type ChatMessageRenderPreparation,
-  prepareChatMessageRender,
-} from "./chat-message-markdown-view.tsx";
-import { type AttachmentItem, projectMessageMedia } from "./chat-message-media.ts";
+  prepareMarkdownMediaSource,
+  readMarkdownImageSlots,
+} from "./chat-message-media-markdown.ts";
+import {
+  type AttachmentItem,
+  type ImageBlock,
+  type ImageRenderOptions,
+  projectMessageMedia,
+} from "./chat-message-media.ts";
+import {
+  type AssistantMessageDisclosure,
+  resolveMessageMarkdownRender,
+} from "./chat-message-text-preparation.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
+type MessageMediaProjection = Pick<
+  ReturnType<typeof projectMessageMedia>,
+  "images" | "orderedContent" | "supplementalImages" | "supplementalAttachments"
+>;
+
 function messageVideoSlots(
-  projection: Pick<
-    ReturnType<typeof projectMessageMedia>,
-    "orderedContent" | "supplementalAttachments"
-  >,
+  projection: Pick<MessageMediaProjection, "orderedContent" | "supplementalAttachments">,
 ): AttachmentItem[] {
   return [...projection.orderedContent, ...projection.supplementalAttachments].filter(
     (item): item is AttachmentItem =>
       item.type === "attachment" && item.attachment.kind === "video",
   );
+}
+
+/** Image tiles in transcript order; in-order replies render unpositioned images first. */
+function messageImageSlots(projection: MessageMediaProjection, renderInOrder: boolean) {
+  return renderInOrder
+    ? [
+        ...projection.supplementalImages,
+        ...projection.orderedContent.flatMap((item) => (item.type === "image" ? [item.image] : [])),
+      ]
+    : projection.images;
+}
+
+function rendersMediaInOrder(params: {
+  role: string;
+  markdown: string | null;
+  asyncQuestions: boolean;
+  disclosure?: GroupedMessageOptions["assistantMessageDisclosure"];
+  orderedContent: MessageMediaProjection["orderedContent"];
+}) {
+  return (
+    params.role === "assistant" &&
+    Boolean(params.markdown) &&
+    !params.asyncQuestions &&
+    (!params.disclosure?.expanded || Boolean(params.disclosure.message)) &&
+    params.orderedContent.some((item) => item.type !== "text")
+  );
+}
+
+/** Mirrors the rendered message, including inline Markdown and positioned media. */
+function preparedImageSlots(
+  preparation: ChatMessageRenderPreparation,
+  opts: MessageMediaOptions,
+  projection: MessageMediaProjection = projectMessageMedia(
+    preparation.message,
+    preparation.normalizedMessage.content,
+  ),
+  renderInOrder?: boolean,
+  rawMarkdown = preparation.displayMarkdown,
+  isStreaming = false,
+  disclosure?: AssistantMessageDisclosure,
+) {
+  const asyncQuestions = Boolean(
+    opts.asyncQuestions?.submit && readAsyncQuestions(preparation.message),
+  );
+  const role = normalizeRoleForGrouping(preparation.normalizedMessage.role);
+  const rendered = resolveMessageMarkdownRender(
+    rawMarkdown,
+    { role, assistantMessageDisclosure: disclosure },
+    messageMarkdownRenderOptions(role, preparation, rawMarkdown, {
+      onOpenImage: opts.onOpenImage,
+      isStreaming,
+    }),
+  );
+  const markdown = rendered.source;
+  const inOrder =
+    renderInOrder ??
+    rendersMediaInOrder({
+      role,
+      markdown: markdown || null,
+      asyncQuestions,
+      orderedContent: projection.orderedContent,
+    });
+  const slots = messageImageSlots(projection, inOrder);
+  // The parser remains lazy; ordinary text and attachment-only replies need no Markdown render.
+  if (
+    asyncQuestions ||
+    !markdown.includes("![") ||
+    (!inOrder && !isStreaming && parseMarkdownJson(markdown))
+  ) {
+    const inlineImages: ImageBlock[] = [];
+    return { slots, inlineImages };
+  }
+  const media = inOrder ? prepareMarkdownMediaSource(projection.orderedContent) : undefined;
+  const source = media
+    ? resolveMessageDisplayMarkdown(preparation.message, {
+        ...preparation.normalizedMessage,
+        content: [{ type: "text", text: media.markdown }],
+      })
+    : markdown;
+  const inline = readMarkdownImageSlots(source, rendered.options, media);
+  return {
+    slots: inOrder
+      ? [...projection.supplementalImages, ...inline.images]
+      : [...projection.images, ...inline.images],
+    inlineImages: inline.inlineImages,
+  };
+}
+
+/** Spans the loaded thread when one is projected; otherwise the opened message. */
+function threadMediaGallery<Slot, Item>(
+  messageKey: string,
+  opts: MessageMediaOptions,
+  local: { slots: readonly Slot[]; messageId?: string },
+  selected: Slot,
+  readSibling: (preparation: ChatMessageRenderPreparation) => readonly Slot[],
+  toItem: (slot: Slot, messageId: string | undefined) => Item,
+) {
+  const slot = local.slots.indexOf(selected);
+  const thread = slot < 0 ? undefined : opts.getThreadMediaMessages?.(messageKey);
+  if (!thread?.some((entry) => entry.key === messageKey)) {
+    return { index: slot, items: local.slots.map((value) => toItem(value, local.messageId)) };
+  }
+  const items: Item[] = [];
+  let index = -1;
+  for (const entry of thread) {
+    if (entry.key === messageKey) {
+      index = items.length + slot;
+      items.push(...local.slots.map((value) => toItem(value, local.messageId)));
+    } else {
+      const prepared = prepareChatMessageRender(entry.message);
+      const messageId = readSessionMessageIdentity(prepared.message)?.id ?? undefined;
+      items.push(...readSibling(prepared).map((value) => toItem(value, messageId)));
+    }
+  }
+  return { index, items };
 }
 
 function messageMediaIdentity(message: unknown, sessionKey: string | undefined) {
@@ -67,54 +199,66 @@ export type MessageMediaOptions = Pick<
   | "onOpenImage"
   | "onFindWorkspaceFile"
   | "resolveArtifactDownload"
-  | "getTurnVideoMessages"
->;
+  | "getThreadMediaMessages"
+  | "asyncQuestions"
+> &
+  Partial<Pick<GroupedMessageOptions, "isStreaming" | "assistantMessageDisclosure">>;
 
 /** Shared by transcript bubbles and read-only attachment catalogs. */
 export function createMessageMediaOptions(
   message: unknown,
   messageKey: string,
   opts: MessageMediaOptions,
-  projection: Pick<
-    ReturnType<typeof projectMessageMedia>,
-    "images" | "orderedContent" | "supplementalAttachments"
-  >,
+  projection: MessageMediaProjection,
+  /** The mounted bubble's layout; catalogs derive it like an unmounted sibling. */
+  renderInOrder?: boolean,
+  markdown?: string | null,
 ) {
-  const { images, orderedContent, supplementalAttachments } = projection;
+  let imageSlots: ReturnType<typeof preparedImageSlots> | undefined;
+  const readImages = () =>
+    (imageSlots ??= preparedImageSlots(
+      prepareChatMessageRender(message),
+      opts,
+      projection,
+      renderInOrder,
+      markdown ?? undefined,
+      opts.isStreaming,
+      // Recovery belongs to this message, never its lazily projected siblings.
+      opts.assistantMessageDisclosure,
+    ));
   const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
-  return {
-    galleryImages: images,
-    galleryVideos: (selected: AttachmentItem) => {
-      const local = messageVideoSlots({ orderedContent, supplementalAttachments });
-      const slot = local.indexOf(selected);
-      const turn = opts.getTurnVideoMessages?.(messageKey);
-      if (!turn || slot < 0) {
-        return {
-          index: slot,
-          items: local.map(({ type, attachment }) => ({ type, attachment, messageId })),
-        };
+  const options: ImageRenderOptions & { openInlineImage: (index: number, src: string) => void } = {
+    // Galleries read membership on open; layout and sibling projection stay off the render path.
+    galleryImages: (selected: ImageBlock) =>
+      threadMediaGallery(
+        messageKey,
+        opts,
+        {
+          slots: readImages().slots,
+          messageId,
+        },
+        selected,
+        (prepared) => preparedImageSlots(prepared, opts).slots,
+        (image, id) => ({ image, messageId: id }),
+      ),
+    openInlineImage: (index, src) => {
+      const selected = readImages().inlineImages[index];
+      if (selected) {
+        openMessageImage(selected, src, options);
       }
-      const items: (AttachmentItem & { messageId?: string })[] = [];
-      let index = -1;
-      for (const entry of turn) {
-        if (entry.key === messageKey) {
-          index = items.length + slot;
-          items.push(...local.map(({ type, attachment }) => ({ type, attachment, messageId })));
-        } else {
-          const prepared = prepareChatMessageRender(entry.message);
-          items.push(
-            ...messageVideoSlots(
-              projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
-            ).map(({ type, attachment }) => ({
-              type,
-              attachment,
-              messageId: readSessionMessageIdentity(prepared.message)?.id ?? undefined,
-            })),
-          );
-        }
-      }
-      return { index, items };
     },
+    galleryVideos: (selected: AttachmentItem) =>
+      threadMediaGallery(
+        messageKey,
+        opts,
+        { slots: messageVideoSlots(projection), messageId },
+        selected,
+        (prepared) =>
+          messageVideoSlots(
+            projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
+          ),
+        ({ type, attachment }, id) => ({ type, attachment, messageId: id }),
+      ),
     sessionKey: opts.sessionKey,
     messageId,
     agentId: opts.agentId,
@@ -130,6 +274,26 @@ export function createMessageMediaOptions(
     onFindWorkspaceFile: opts.onFindWorkspaceFile,
     resolveArtifactDownload: opts.resolveArtifactDownload,
   };
+  return options;
+}
+
+export function messageMarkdownRenderOptions(
+  role: string,
+  preparation: Pick<ChatMessageRenderPreparation, "displayMarkdown" | "humanMentions">,
+  markdown: string | null,
+  opts: Pick<GroupedMessageOptions, "onOpenImage" | "fetchLinkFavicon" | "isStreaming">,
+): MarkdownRenderOptions {
+  return {
+    assistantTranscriptRoleHeaders: role === "assistant",
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    fileLinks: true,
+    humanMentions: markdown === preparation.displayMarkdown ? preparation.humanMentions : undefined,
+    interactiveImages: opts.onOpenImage !== undefined,
+    sessionLinks: true,
+    tableInteractions: "enabled",
+    linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
+  };
 }
 
 export function prepareGroupedMessage(
@@ -139,10 +303,11 @@ export function prepareGroupedMessage(
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
-  const { message, normalizedMessage, displayMarkdown, humanMentions } =
+  const selected =
     disclosure?.expanded && disclosure.message
       ? prepareChatMessageRender(disclosure.message)
       : preparation;
+  const { message, normalizedMessage, displayMarkdown } = selected;
   // SAFETY: The group render boundary supplies transcript message records; fields remain unknown.
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
@@ -179,11 +344,6 @@ export function prepareGroupedMessage(
     (item) => item.type !== "attachment" || !videoPreviews.includes(item),
   );
   const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
-  const imageRenderOptions = createMessageMediaOptions(message, messageKey, opts, {
-    images,
-    orderedContent,
-    supplementalAttachments,
-  });
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
@@ -201,17 +361,7 @@ export function prepareGroupedMessage(
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);
-  const markdownRenderOptions: MarkdownRenderOptions = {
-    assistantTranscriptRoleHeaders: role === "assistant",
-    codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
-    fileLinks: true,
-    humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
-    interactiveImages: opts.onOpenImage !== undefined,
-    sessionLinks: true,
-    tableInteractions: "enabled",
-    linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
-  };
+  const markdownRenderOptions = messageMarkdownRenderOptions(role, selected, markdown, opts);
 
   // Classify completed bare JSON before Markdown can interpret its literal values.
   const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
@@ -278,12 +428,21 @@ export function prepareGroupedMessage(
     !hasImages &&
     singleToolCard?.outputText?.trim() === markdown?.trim();
   const bodyMarkdown = standaloneToolPayload ? null : markdown;
-  const renderInOrder =
-    normalizedRole === "assistant" &&
-    Boolean(markdown) &&
-    !asyncQuestions &&
-    (!disclosure?.expanded || Boolean(disclosure.message)) &&
-    orderedContent.some((item) => item.type !== "text");
+  const renderInOrder = rendersMediaInOrder({
+    role: normalizedRole,
+    markdown,
+    asyncQuestions: Boolean(asyncQuestions),
+    disclosure,
+    orderedContent,
+  });
+  const imageRenderOptions = createMessageMediaOptions(
+    message,
+    messageKey,
+    opts,
+    { images, orderedContent, supplementalImages, supplementalAttachments },
+    renderInOrder,
+    bodyMarkdown,
+  );
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
   const expandsSingleToolCard =

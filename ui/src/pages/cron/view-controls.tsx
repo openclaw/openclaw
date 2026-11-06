@@ -88,7 +88,7 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
           id: "clone",
           label: t("cron.actions.clone"),
           class: "cron-job-menu__item",
-          disabled: props.busy || !props.canManage,
+          disabled: props.busy || !(props.canCreate ?? props.canManage),
         },
         {
           id: "remove",
@@ -107,6 +107,9 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
             props.onRun(props.job, "due");
             break;
           case "clone":
+            if (!(props.canCreate ?? props.canManage)) {
+              return;
+            }
             props.onClone(props.job);
             break;
           case "remove":
@@ -123,7 +126,12 @@ export function EnabledSwitch(
     compact?: boolean;
   },
 ) {
-  const stateLabel = () => (props.job.enabled ? t("cron.detail.active") : t("cron.detail.paused"));
+  const stateLabel = () =>
+    props.job.state?.autoDisabled
+      ? t("cron.detail.autoDisabled")
+      : props.job.enabled
+        ? t("cron.detail.active")
+        : t("cron.detail.paused");
   const actionLabel = () =>
     t(props.job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
       name: props.job.displayName ?? props.job.name,

@@ -128,7 +128,11 @@ function captureTranscriptPrependAnchor(
   // viewport and messages removed by the new projection are not candidates.
   // Prepended refs register after retained ones; choose by DOM order, not insertion order.
   const bubbles = [...messageElements]
-    .filter((bubble) => scrollElement.contains(bubble))
+    .filter(
+      (bubble) =>
+        scrollElement.contains(bubble) &&
+        !bubble.closest('.chat-virtual-row[data-prepared-row="true"]'),
+    )
     .toSorted((left, right) => {
       const position = left.compareDocumentPosition(right);
       if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
@@ -186,9 +190,9 @@ function restoreTranscriptPrependAnchor(
   if (Math.abs(offset - before) <= 1) {
     return false;
   }
-  // Commit one measured message target through the scroll owner. This also
-  // retires deferred row corrections already represented by the measured DOM.
+  // The scroll owner retires deferred row corrections represented by the DOM.
+  // An ignored native write must not keep the measurement loop alive.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
   onLayoutCorrection(before, scrollElement.scrollTop);
-  return true;
+  return scrollElement.scrollTop !== before;
 }

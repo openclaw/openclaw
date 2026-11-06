@@ -168,9 +168,14 @@ it.each([
       lastCallUsage: { input: 1, output: 3, cacheRead: 2, total: 6 },
       usage: { input: 10, output: 30, cacheRead: 20, total: 60 },
     },
-    3,
+    6,
   ],
-  ["explicit context", { usage: { input: 1, contextUsage } }, 10],
+  ["explicit context", { usage: { input: 1, contextUsage } }, 12],
+  [
+    "measured empty context",
+    { lastCallUsage: { contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 } } },
+    0,
+  ],
   [
     "unavailable context",
     { usage: { input: 1, contextUsage: { state: "unavailable" } } },

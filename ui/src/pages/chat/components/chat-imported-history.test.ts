@@ -9,18 +9,17 @@ import {
 } from "../../../../../src/chat/session-catalog-display.js";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
 import { i18n } from "../../../i18n/index.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import {
-  prepareChatMessageRender,
-  MessageActions,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { MessageActions, resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 const importKey = "example-catalog:thread:item";
@@ -47,6 +46,24 @@ function expectDisplay(message: unknown, text: string) {
   expect(extractText(message)).toBe(text);
   expect(displayed(message)).toBe(text);
 }
+
+it("updates retained message copy labels when the locale changes", async () => {
+  await i18n.setLocale("en");
+  const details = resolveMessageActionDetails(prepareChatMessageRender(imported("Answer")), {
+    messageId: "localized-copy",
+    senderLabel: "Assistant",
+  });
+  root = mountSolid(() => createComponent(MessageActions, { details, options: {} }), { container });
+  const button = container.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
+  expect(button.getAttribute("aria-label")).toBe("Copy as markdown");
+  try {
+    await i18n.setLocale("de");
+    await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Als Markdown kopieren"));
+    expect(container.querySelector(".chat-copy-btn")).toBe(button);
+  } finally {
+    await i18n.setLocale("en");
+  }
+});
 
 it("localizes catalog truncation in retained browse/import views and the open output panel", async () => {
   const messages = [

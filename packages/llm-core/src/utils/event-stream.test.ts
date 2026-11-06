@@ -1,9 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveRuntimeWorkerUrl } from "../../../../src/infra/runtime-worker-url.js";
 import { collect } from "../../../../test/helpers/async-iterable.js";
-import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
+import { runRetentionNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { eventStreamRetentionEntrypoint } from "../retention-runtime.test-support.js";
 import { EventStream, getEventStreamCompletion } from "./event-stream.js";
 
@@ -15,20 +14,10 @@ const createNumberStream = () =>
 
 describe("EventStream", () => {
   it("releases consumed events but retains unread events and results", async ({ signal }) => {
-    const result = await runNodeScript(
-      (workerArgv) => [
-        "--expose-gc",
-        ...workerArgv(resolveRuntimeWorkerUrl(eventStreamRetentionEntrypoint)),
-      ],
-      { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
-      15_000,
-      {
-        cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
-        signal,
-        maxBuffer: 64 * 1024,
-        requireProcessTreeExit: process.platform !== "win32",
-      },
-    );
+    const result = await runRetentionNodeScript(eventStreamRetentionEntrypoint, {
+      cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
+      signal,
+    });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([

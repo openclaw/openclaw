@@ -375,7 +375,6 @@ it("refreshes cached profile aliases without rewriting non-profile or unresolved
           kind: "resolved" as const,
           profileId: "canonical-id",
           avatarUrl: "/api/users/canonical-id/avatar?v=20",
-          hasUploadedAvatar: false,
         },
   );
   const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
@@ -407,6 +406,29 @@ it("matches later audio against text left by an earlier supplement", () => {
     { ...reply(1), content: [text("same"), secondAudio] },
     { ...reply(2), content: [text("same"), caption, firstAudio] },
   ]);
+  expect(projectStable(messages, { maxChars: 2 }).map((message) => message.content)).toEqual([
+    [text("sa\n...(truncated)..."), secondAudio],
+    [text("sa\n...(truncated)..."), { ...caption, text: "ca\n...(truncated)..." }, firstAudio],
+  ]);
+});
+
+it.each([
+  ["original tail", 1],
+  ["different tail", 2],
+] as const)("compares complete delivery-mirror text before display capping (%s)", (tail, count) => {
+  const messages = [
+    assistant([text("Shared preview: original tail")], { __openclaw: { id: "source" } }),
+    assistant([text(`Shared preview: ${tail}`)], {
+      provider: "openclaw",
+      model: "delivery-mirror",
+      openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "source" },
+    }),
+  ];
+  const displayed = projectStable(messages, { maxChars: 8 });
+  expect(displayed).toHaveLength(count);
+  for (const message of displayed) {
+    expect(message.content).toEqual([text("Shared p\n...(truncated)...")]);
+  }
 });
 
 it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(

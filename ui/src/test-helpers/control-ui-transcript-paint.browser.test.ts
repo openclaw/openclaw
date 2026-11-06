@@ -84,6 +84,30 @@ it.for([
   }
 });
 
+it("waits for the active hydrated composer after an editable static fallback", async () => {
+  const proof = await runProbe(`
+      const pane = document.createElement('div');
+      pane.className = 'chat-pane-cache__pane--active';
+      pane.innerHTML = '<div class="loading-skeleton__composer"><textarea id="openclaw-boot-composer">Draft</textarea></div><textarea aria-label="Other editor"></textarea>';
+      const inactivePane = document.createElement('div');
+      inactivePane.innerHTML = '<div class="agent-chat__composer-combobox"><textarea></textarea></div>';
+      document.body.append(pane, inactivePane);
+      const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      window.probeResult = (async () => {
+        await frames();
+        const hydratedAt = performance.now();
+        const composer = document.createElement('div');
+        composer.className = 'agent-chat__composer-combobox';
+        composer.innerHTML = '<textarea></textarea>';
+        pane.append(composer);
+        await frames();
+        return { hydratedAt, ...window.__warmReload.read() };
+      })();
+  `);
+  expect(proof.milestones.inputReady).toBeTypeOf("number");
+  expect(proof.milestones.inputReady).toBeGreaterThanOrEqual(proof.hydratedAt);
+});
+
 it("records live transcript visibility after caught-up rows are revealed", async () => {
   const proof = await runProbe(`
       const pane = document.createElement('div');

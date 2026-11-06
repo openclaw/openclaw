@@ -64,7 +64,12 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
       try {
-        await assertConfiguredWorkspaceStateReady({ cfg: params.cfg, operation: "doctor" });
+        await assertConfiguredWorkspaceStateReady({
+          cfg: params.cfg,
+          operation: "doctor",
+          blockedByStepId: params.stepReceipts.find(({ id }) => id === "workspace-state")
+            ?.originatingRefusal?.stepId,
+        });
       } catch (workspaceError) {
         params.report({ changes: [], warnings: [String(workspaceError)] });
       }

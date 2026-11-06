@@ -1,3 +1,4 @@
+import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
@@ -26,6 +27,7 @@ import {
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { formatChatSelectionQuote } from "./components/chat-selection-attachment.ts";
 import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
@@ -41,8 +43,9 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-export const OFFLINE_QUEUE_STORAGE_ERROR =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+export function chatOfflineQueueStorageError(): string {
+  return t("chat.queue.storageFailed");
+}
 
 export function formatChatQueueAdmissionError(
   result: Exclude<ChatQueueAdmissionResult, "admitted">,
@@ -54,7 +57,7 @@ export function formatChatQueueAdmissionError(
   if (result === "full") {
     return t("chat.queue.full");
   }
-  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+  return editing ? t("chat.queue.editStorageFailed") : chatOfflineQueueStorageError();
 }
 
 export function isChatResetCommand(text: string) {
@@ -62,6 +65,20 @@ export function isChatResetCommand(text: string) {
   return (
     parsed?.command.key === "new" ||
     (parsed?.command.key === "reset" && !/^soft(?:\s|$)/i.test(parsed.args))
+  );
+}
+
+/** Commands and Goals never acquire ambient context, including during queued-row edits. */
+export function acceptsChatAmbientContext(
+  message: string,
+  quotedMessage: string,
+  intent?: ChatQueueItem["intent"],
+): boolean {
+  return (
+    !intent &&
+    !message.startsWith("/") &&
+    !message.startsWith("!") &&
+    !isAbortTrigger(quotedMessage)
   );
 }
 
@@ -318,7 +335,18 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+  showToast({
+    placement: "top-right",
+    severity: "error",
+    message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}`,
+  });
+}
+
+/** Model-facing text an annotation contributes ahead of the user's own message. */
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+  return attachment.selectionAnnotation
+    ? formatChatSelectionQuote(attachment.selectionAnnotation)
+    : attachment.browserAnnotation?.modelContext.trim();
 }
 
 export function prependReplyQuote(

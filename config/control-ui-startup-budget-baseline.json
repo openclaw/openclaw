@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 88830,
-  "reason": "Integrated long-tail candidate measures 88,830 B startup gzip, 46 B above its exact base, with unchanged 277,773 B raw JS, three JS requests and one CSS request. Twenty interleaved pairs reduce Skills desktop visit and filter CPU by about 70%; record the measured candidate after main integration.",
-  "updatedAt": "2026-10-31"
+  "startupJsGzipBytes": 90280,
+  "reason": "Normalize generated asset hashes before compression: current main ce8b7add7b0 measures 90,280 B budget gzip (90,664 B served). Remove rename-only variance; retain the 512 B growth allowance and reduce toolchain variance to 64 B.",
+  "updatedAt": "2026-11-06"
 }

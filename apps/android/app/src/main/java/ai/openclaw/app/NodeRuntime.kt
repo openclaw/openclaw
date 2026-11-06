@@ -46,7 +46,6 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
-import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.gateway.buildNativeControlUiConnectAuth
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
@@ -930,7 +929,7 @@ class NodeRuntime internal constructor(
       scope = scope,
       recognizer =
         when (mode) {
-          NodeRuntimeMode.Live -> AndroidOnDeviceVoiceWakeRecognizer(appContext)
+          NodeRuntimeMode.Live -> AndroidOnDeviceVoiceWakeRecognizer(appContext, scope)
           NodeRuntimeMode.ScreenshotFixture -> PreviewVoiceWakeRecognizer()
         },
       initialTriggerWords = VoiceWakePreferences.defaultTriggerWords,
@@ -3565,11 +3564,7 @@ class NodeRuntime internal constructor(
 
   internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean): Unit =
-    setVoiceCaptureMode(
-      if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off,
-      disposition = if (value) TalkSessionCloseDisposition.Detach else TalkSessionCloseDisposition.Abort,
-    )
+  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -3899,6 +3894,10 @@ class NodeRuntime internal constructor(
     }
   }
 
+  internal fun setVoiceWakeBackgroundListeningAllowed(allowed: Boolean) {
+    voiceWakeManager.setBackgroundListeningAllowed(allowed)
+  }
+
   fun refreshVoiceWakePermission() {
     voiceWakeManager.refreshPermission()
     refreshVoiceWakeCapabilitySurfaceIfChanged()
@@ -4021,7 +4020,6 @@ class NodeRuntime internal constructor(
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
-    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
@@ -4041,7 +4039,7 @@ class NodeRuntime internal constructor(
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false
-            talkMode.stopAllCapture(disposition = disposition)
+            talkMode.stopAllCapture()
             stopVoicePlayback()
             micCapture.setMicEnabled(false)
             if (persistManualMic) {

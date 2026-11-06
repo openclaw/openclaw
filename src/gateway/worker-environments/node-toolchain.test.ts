@@ -6,6 +6,7 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { snapshotNodeWorkerEnv } from "../../node-host/node-worker-environment.js";
 import {
   DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
@@ -70,21 +71,25 @@ function fixture(
     const index = JSON.stringify(
       releases.map((releaseVersion) => ({ version: `v${releaseVersion}`, files: ["linux-x64"] })),
     );
-    const install: (workspace: string, home: string, root: string) => Promise<string> =
-      runInNewContext(`(${PREPARE_REPOSITORY_NODE_JS})`, {
-        require: requireModule,
-        process: { platform: "linux", arch: "x64", execPath: process.execPath, env },
-        AbortSignal,
-        fetch: async (url: string) => {
-          fetchUrls.push(url);
-          return new Response(
-            url.endsWith("index.json")
-              ? index
-              : `${digest}  node-${url.split("/")[4]}-linux-x64.tar.gz\n`,
-          );
-        },
-      });
-    return () => install(workspace, home, root);
+    const install: (
+      workspace: string,
+      home: string,
+      root: string,
+      reusePrepared: boolean,
+    ) => Promise<string> = runInNewContext(`(${PREPARE_REPOSITORY_NODE_JS})`, {
+      require: requireModule,
+      process: { platform: "linux", arch: "x64", execPath: process.execPath, env },
+      AbortSignal,
+      fetch: async (url: string) => {
+        fetchUrls.push(url);
+        return new Response(
+          url.endsWith("index.json")
+            ? index
+            : `${digest}  node-${url.split("/")[4]}-linux-x64.tar.gz\n`,
+        );
+      },
+    });
+    return (reusePrepared = false) => install(workspace, home, root, reusePrepared);
   }
   return { root, bin, digest, env, home, checkout };
 }
@@ -107,6 +112,7 @@ exports.runMain = ([command, ...args]) => {
     console.log(JSON.stringify({ node: process.env.FIXTURE_NODE ?? "worker", argv: [command, ...args] }));
     return;
   }
+  fs.appendFileSync(path.join(process.env.HOME, "corepack-enables"), "enable\\n");
   const directory = fs.realpathSync(args[args.indexOf("--install-directory") + 1]);
   const dist = path.join(path.dirname(require.resolve("corepack/package.json")), "dist");
   fs.rmSync(path.join(directory, "pnpm"), { force: true });
@@ -150,10 +156,13 @@ it.each(["npm", "corepack"])(
     const f = fixture();
     fs.symlinkSync(process.execPath, path.join(f.bin, "node"));
     for (const name of ["wc", "tr", "mkdir", "mktemp", "rm", "tar", "sha256sum"]) {
-      fs.symlinkSync(
-        execFileSync("which", [name], { encoding: "utf8" }).trim(),
-        path.join(f.bin, name),
-      );
+      const executable = resolveExecutablePath(name, {
+        env: process.env,
+        cwd: process.cwd(),
+        useCache: false,
+      });
+      expect(executable, `fixture tool ${name}`).toBeDefined();
+      fs.symlinkSync(executable!, path.join(f.bin, name));
     }
     write(
       path.join(f.bin, "curl"),
@@ -249,10 +258,36 @@ it.each([
     f.env.PATH = corepackBin + path.delimiter + f.env.PATH;
     vi.stubEnv("PATH", corepackBin + path.delimiter + process.env.PATH);
     const { home } = f;
-    const prepare = f.checkout(`${version}\n`, [version], "pnpm@10.11.0");
-    await prepare();
-    // A commit refresh prepares the same HOME again; detected installs then re-enable Corepack.
-    const setupPath = await prepare();
+    const fetchUrls: string[] = [];
+    const prepare = f.checkout(`${version}\n`, [version], "pnpm@10.11.0", fetchUrls);
+    const firstPath = await prepare();
+    const corepack = path.join(home, ".local/bin/corepack");
+    const originalInode = fs.statSync(corepack).ino;
+    const enables = () => fs.readFileSync(path.join(home, "corepack-enables"), "utf8");
+    expect(enables()).toBe("enable\n");
+    fetchUrls.length = 0;
+    const setupPath = await prepare(true);
+    expect(setupPath).toBe(firstPath);
+    expect(fetchUrls).toEqual([]);
+    expect(enables()).toBe("enable\n");
+    expect(fs.statSync(corepack).ino).toBe(originalInode);
+    for (const invalidate of [
+      () => fs.unlinkSync(path.join(home, ".local/bin/pnpm")),
+      () => write(path.join(f.root, "workspace/.nvmrc"), `>=${version}\n`),
+      () =>
+        write(
+          path.join(f.root, "workspace/package.json"),
+          JSON.stringify({ packageManager: "pnpm@10.12.0" }),
+        ),
+    ]) {
+      const previousEnables = enables();
+      invalidate();
+      fetchUrls.length = 0;
+      expect(await prepare(true)).toBe(setupPath);
+      expect(fetchUrls).toHaveLength(2);
+      expect(enables()).toBe(previousEnables + "enable\n");
+      expect(fs.existsSync(path.join(home, ".local/bin/pnpm"))).toBe(true);
+    }
     if (runner === "worker") {
       expect(
         fs.statSync(path.join(home, ".local/lib/openclaw-corepack/readonly")).mode & 0o777,

@@ -6,11 +6,12 @@ import { requiredWorkerHelperError } from "../config/required-worker-profile.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { supportsDecisionInput } from "../decisions/capabilities.js";
 import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type { PreparedDecisionBillingFacts } from "../decisions/host-billing.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import { evaluatePreparedDecisionProvider } from "../decisions/provider-execution.js";
-import type { PreparedDecisionBilling } from "../decisions/provider-host.js";
+import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
 import type { DecisionProviderV2 } from "../decisions/provider-types.js";
-import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../decisions/types-v2.js";
+import type { DecisionBatchV2 } from "../decisions/types-v2.js";
 import {
   assertProviderAuthAuthority,
   attachProviderAuthAuthority,
@@ -61,7 +62,7 @@ export async function executePreparedDecision(params: {
   signal: AbortSignal;
   deadlineMonotonicMs: number;
   isAdmissible: () => boolean;
-  onPreparedBilling?: (facts: PreparedDecisionBilling) => void;
+  onPreparedBilling?: (facts: PreparedDecisionBillingFacts) => void;
 }): Promise<ProviderDecisionOutcomeV2> {
   const assertCurrent = () => {
     params.signal.throwIfAborted();

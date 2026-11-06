@@ -111,11 +111,12 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const creator = () => result()?.owner;
   const people = createMemo(() => projectChatSessionSharingRoster(props));
   const matches = createMemo(() => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
         `${identity.label ?? ""} ${identity.id} ${identity.type}`
           .toLocaleLowerCase()
+          .normalize("NFC")
           .includes(term),
       ),
     );

@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -564,7 +564,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
     if(s.priorCi.jobPageFault==="inconsistent-total") pages.at(-1).total_count++;
     out(args.includes("--paginate")&&args.includes("--slurp")?pages:pages[0]);
   }
-  else out({id:501,workflow_id:51,created_at:"2026-09-20T00:00:00Z",run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+  else out({id:501,workflow_id:51,created_at:"2026-09-20T00:00:00Z",run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.pr.headRefOid},base:{repo:{id:s.repoAuthority.id}}}]:[]});
   if(s.restObservation?.afterHistoricalRead&&s.restMainReads>0) applyRestObservation();
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check-runs/601"))) {
@@ -705,7 +705,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
   const checks=restCheckRuns();
   if(s.restUnseenSuite==="new-gate") checks.push(...restCheckSuites().filter(suite=>suite.id>=30).flatMap(suiteChecks));
   const runs=checks.map((check,index)=>({id:100+index,head_sha:s.pr.headRefOid,check_suite_id:check.check_suite.id,
-    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:s.priorCi.currentGateChecks.find(value=>value.id===check.id)?.event??(index===1&&s.restDuplicate==="other-event"?"push":"pull_request")}));
+    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:s.priorCi.currentGateChecks.find(value=>value.id===check.id)?.event??(s.restChecks==="manual-only"||(index===0&&s.restDuplicate==="manual-event")?"workflow_dispatch":index===1&&s.restDuplicate==="other-event"?"push":"pull_request")}));
   if(s.restDuplicate==="missing-mapping") runs.pop();
   if(s.restDuplicate==="ambiguous-mapping") runs.push({...runs[1],id:103,workflow_id:44});
   out([{total_count:runs.length,workflow_runs:runs}]);

@@ -151,13 +151,14 @@ export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
   repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
+  runCheck = runSqliteIntegrityCheckSync,
 ): T {
   beforeResume?.();
   let step = operation.next();
   while (!step.done) {
     let failure: { error: unknown } | undefined;
     try {
-      runSqliteIntegrityCheckSync(step.value);
+      runCheck(step.value);
     } catch (error) {
       failure = { error };
     }
@@ -257,7 +258,7 @@ export function assertSqliteIntegrity(
   } = {},
 ): SqliteIntegrityChecks {
   if (options.check === "quick" && options.schemaOnly) {
-    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
+    // Schema-only migrations leave existing payloads and FKs unchanged.
     runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
     return { integrityCheck: "ok" };
   }

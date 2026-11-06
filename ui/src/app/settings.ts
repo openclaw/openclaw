@@ -493,6 +493,7 @@ export function loadUiPreferences(
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.archiveShortcutEnabled === false ? { archiveShortcutEnabled: false } : {}),
       ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
+      dismissedReadOnlyConfigNotice: normalizeOptionalString(parsed.dismissedReadOnlyConfigNotice),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
@@ -698,6 +699,7 @@ export function saveSettings(
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     archiveShortcutEnabled: next.archiveShortcutEnabled === false ? false : undefined,
     chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
+    dismissedReadOnlyConfigNotice: normalizeOptionalString(next.dismissedReadOnlyConfigNotice),
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,

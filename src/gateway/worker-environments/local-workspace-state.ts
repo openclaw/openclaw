@@ -18,6 +18,7 @@ import {
   stageLocalWorkspaceCheckpoint,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
+import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
   admitLocalWorkspaceSourcePaths,
   captureLocalWorkspaceArchiveBaseline,
@@ -29,10 +30,12 @@ import type {
   LocalWorkspaceManifestAction,
   LocalWorkspaceManifestCheckpoint,
 } from "./local-workspace-manifest-scan.js";
+import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
+  loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
   workspaceManifestPaths,
 } from "./workspace-manifest-worker.js";
@@ -52,9 +55,8 @@ import {
   hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
-  withStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceManifest,
   deleteStagedWorkerWorkspaceResult,
-  readStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -72,17 +74,7 @@ export function projectionOperations(
       throw new Error("Local workspace binding is missing");
     }
     assertCurrent?.();
-    if (
-      row.worktree_id !== owner.worktree.id ||
-      row.agent_id !== owner.agentId ||
-      row.session_key !== owner.sessionKey ||
-      row.session_id !== owner.sessionId ||
-      row.lifecycle_revision !== owner.lifecycleRevision
-    ) {
-      throw new Error(
-        "Local sandbox workspace belongs to a different session incarnation; pending edits were preserved",
-      );
-    }
+    assertLocalWorkspaceProjectionOwner(row, owner);
     if (row.projection_path !== projectionPath || store.get()?.revision !== row.revision) {
       throw new Error("Local workspace binding changed");
     }
@@ -176,7 +168,9 @@ export function projectionOperations(
     const document = selected.baseline_ref ? await baselineDocument() : undefined;
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
-      admittedPaths: selected.source_paths_json,
+      admittedPaths: preparedInputPaths
+        ? undefined
+        : parseLocalWorkspaceSourcePaths(selected.source_paths_json),
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
@@ -205,9 +199,6 @@ export function projectionOperations(
     return snapshot;
   };
   const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    if (owner.worktree.snapshotRef) {
-      await buildCacheInputs();
-    }
     await assertLocalWorkspaceDirectory(sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
@@ -235,16 +226,18 @@ export function projectionOperations(
     if (!selected.journal_pack || !pendingDirection(selected.pending_target)) {
       throw new Error("Local workspace recovery metadata is incomplete");
     }
-    const journal = {
-      ...parseWorkerWorkspaceReconciliationPlan(selected.journal_json),
-      basePack: selected.journal_pack,
-    };
-    await recoverWorkerWorkspaceReconciliation({
-      root: targetPath(pendingDirection(selected.pending_target)!),
-      journal,
-      buildCacheInputs: await buildCacheInputs(),
-      assertCurrent,
-    });
+    // A base refresh keeps its receipt and paused runtime until both sides accept it, so an
+    // interrupted application resumes from the files it already wrote. Restoring them would
+    // discard that progress, and a refresh longer than one turn's deadline could never finish.
+    if (!isLocalWorkspaceBaseRefreshRef(selected.pending_ref)) {
+      const plan = parseWorkerWorkspaceReconciliationPlan(selected.journal_json);
+      await recoverWorkerWorkspaceReconciliation({
+        root: targetPath(pendingDirection(selected.pending_target)!),
+        journal: { ...plan, basePack: selected.journal_pack },
+        buildCacheInputs: await buildCacheInputs(),
+        assertCurrent,
+      });
+    }
     await update({ journal_json: null, journal_pack: null });
   };
   const cleanupAccepted = async () => {
@@ -362,7 +355,7 @@ export function projectionOperations(
     }
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
     let conflictPaths: string[] | undefined;
-    await withStagedWorkerWorkspaceResult(
+    await withStagedWorkerWorkspaceManifest(
       {
         root: owner.worktree.path,
         stagedResultRef: selected.pending_ref,
@@ -389,7 +382,7 @@ export function projectionOperations(
           stagingRoot: snapshot.stagingRoot,
           baseManifestRef: snapshot.baseManifestRef,
           currentManifestRef: snapshot.currentManifestRef,
-          base: snapshot.base,
+          reconciliation: snapshot.reconciliation,
           current: snapshot.current,
           assertCurrent,
           journal: {
@@ -455,9 +448,7 @@ export function projectionOperations(
       return;
     }
     if (current().pending_target) {
-      throw new Error(
-        "Local sandbox edits conflict with the managed workspace; pending changes were preserved. Resolve the workspace conflicts before retrying.",
-      );
+      throw new LocalWorkspaceConflictError();
     }
     if (!retainAccepted) {
       await cleanupAccepted();
@@ -555,7 +546,7 @@ export function projectionOperations(
       }
       await settle();
       // The host snapshot admits selected source and retained cache inputs, including unchanged files.
-      const snapshot = await readStagedWorkerWorkspaceResult(owner.worktree.path, stagedResultRef);
+      const snapshot = await loadStagedWorkspaceManifest(owner.worktree.path, stagedResultRef);
       const incoming = buildCacheInputPaths(snapshot.current.entries.map((entry) => entry.path));
       const selected = current();
       const admitted = parseLocalWorkspaceSourcePaths(selected.source_paths_json);
@@ -580,9 +571,10 @@ export function projectionOperations(
       if (!selected.pending_target) {
         // A failed restore may have applied the overlay before its checkout was
         // rolled back. Retain and replay the same accepted receipt on retry.
-        const receipt = await readStagedWorkerWorkspaceResult(
+        const receipt = await loadStagedWorkspaceManifest(
           owner.worktree.repoRoot,
           selected.pending_ref,
+          undefined,
           await buildCacheInputs(),
         );
         current();
@@ -610,27 +602,21 @@ export function projectionOperations(
           "Workspace integration is pending; finish the original github_publish prepare_pr or refresh_base action before archiving this worktree. Saved files and merge state were preserved.",
         );
       }
-      const baseline = await baselineDocument();
-      const manifest = parseWorkerWorkspaceManifest(
-        baseline.rawManifest,
-        baseline.manifestRef,
-        await buildCacheInputs(),
-      );
-      const accepted = await capture("canonical", new Set(manifest.directories));
-      if (accepted.manifestRef !== baseline.manifestRef) {
-        throw new Error("Local workspace changed before archive capture");
-      }
-      const projection = current().projection_path;
-      const archiveBase = await captureLocalWorkspaceArchiveBaseline({
-        root: owner.worktree.repoRoot,
+      await assertLocalWorkspaceDirectory(sourcePath("canonical"));
+      const archive = await readManifest({
+        kind: "archive",
+        canonicalRoot: owner.worktree.path,
+        archiveRoot: owner.worktree.repoRoot,
         snapshotCommit,
-        manifest,
-        signal,
-        assertCurrent,
       });
-      if (archiveBase.manifestRef === accepted.manifestRef) {
+      const projection = current().projection_path;
+      if (archive.kind !== "archive") {
+        throw new Error("Local workspace archive preparation is missing");
+      }
+      if (!archive.overlay) {
         return;
       }
+      const { base: archiveBase, accepted } = archive.overlay;
       const resultRef = workerWorkspaceResultRef(randomUUID());
       // Keep accepted directory membership until the receipt owns it. Recovery
       // must not mistake derived children for deletion after interrupted staging.
@@ -669,9 +655,10 @@ export function projectionOperations(
           throw new Error("Archive receipt still owns its restore data");
         }
         if (selected.pending_target) {
-          const receipt = await readStagedWorkerWorkspaceResult(
+          const receipt = await loadStagedWorkspaceManifest(
             owner.worktree.repoRoot,
             selected.pending_ref,
+            undefined,
             await buildCacheInputs(),
           );
           current();

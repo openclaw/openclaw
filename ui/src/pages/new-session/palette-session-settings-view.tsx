@@ -1,4 +1,5 @@
 import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
@@ -37,6 +38,7 @@ export function PaletteSessionSettingsView(properties: {
     (previous = false) => !properties.options.draft.place.requiredPlacement && previous,
   );
   const [query, setQuery] = createSignal("");
+  const [searching, setSearching] = createSignal(false);
   let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
@@ -52,11 +54,13 @@ export function PaletteSessionSettingsView(properties: {
     setOpen(false);
     setPlaces(false);
     setQuery("");
+    setSearching(false);
     focusTarget = undefined;
   };
   const showPlaces = (value: boolean, pointer = false) => {
     setPlaces(value);
     setQuery("");
+    setSearching(false);
     // Pointer entry focuses Back; keyboard entry goes straight to search.
     focusTarget = value ? (pointer ? "back" : "search") : "workspace";
   };
@@ -100,7 +104,10 @@ export function PaletteSessionSettingsView(properties: {
         .composedPath()
         .some(
           (node) =>
-            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+            node instanceof Element &&
+            node.matches(
+              '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
+            ),
         )
     ) {
       return;
@@ -124,7 +131,12 @@ export function PaletteSessionSettingsView(properties: {
     }
     const panel = event.currentTarget;
     const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
-      .filter((control) => panel.contains(control) && !control.matches(":disabled"))
+      .filter(
+        (control) =>
+          panel.contains(control) &&
+          !control.matches(":disabled") &&
+          !(searching() && control.matches(".header-search__toggle")),
+      )
       .toSorted((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
       );
@@ -166,36 +178,35 @@ export function PaletteSessionSettingsView(properties: {
     const connect = nativeListener("click", () => properties.options.onConnectMachine());
     return (
       <>
-        <div class="palette-session-settings__heading">
-          <button
-            type="button"
-            class="palette-session-settings__back"
-            aria-label={t("common.back")}
-            ref={[
-              controlRef(),
-              (node) => {
-                back(node);
-                focusTargets.back = node;
-              },
-            ]}
-          >
-            <Icon name="arrowLeft" />
-          </button>
-          <span>{t("newSession.projects")}</span>
-        </div>
-        <input
-          class="palette-session-settings__search"
-          type="search"
-          aria-label={t("common.search")}
-          placeholder={t("common.search")}
-          value={query()}
-          ref={[
-            controlRef(),
-            (node) => {
-              focusTargets.search = node;
-            },
-          ]}
-          onInput={(event) => setQuery(event.currentTarget.value)}
+        <HeaderSearch
+          class="palette-session-settings__heading"
+          inputClass="palette-session-settings__search"
+          title={t("newSession.projects")}
+          label={t("common.search")}
+          query={query()}
+          open={searching()}
+          controlRef={controlRef}
+          toggleRef={(node) => {
+            focusTargets.search = node;
+          }}
+          onOpenChange={setSearching}
+          onQueryChange={setQuery}
+          leading={
+            <button
+              type="button"
+              class="palette-session-settings__back"
+              aria-label={t("common.back")}
+              ref={[
+                controlRef(),
+                (node) => {
+                  back(node);
+                  focusTargets.back = node;
+                },
+              ]}
+            >
+              <Icon name="arrowLeft" />
+            </button>
+          }
         />
         <div class="palette-session-settings__choices">
           <For each={view().groups} keyed={(group) => group.machine.id}>
@@ -336,7 +347,8 @@ export function PaletteSessionSettingsView(properties: {
                 place().selectAgentId(id);
                 properties.options.onChange();
               },
-              onOpenChange: properties.options.onAgentPickerOpen,
+              identityTargetsRef: properties.options.identityTargetsRef,
+              onIdentityTargetsChange: properties.options.onIdentityTargetsChange,
             }}
           />
         </div>

@@ -59,7 +59,10 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
-  const explicitPullRequestUrl = edit?.pullRequestUrl;
+  const explicitPullRequestUrl =
+    params.action === "edit" || params.action === "request_review"
+      ? params.pullRequestUrl
+      : undefined;
   if (explicitPullRequestUrl && params.requestId) {
     throw new Error("An explicit PR URL accepts no publication requestId; read that PR with edit.");
   }

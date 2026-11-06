@@ -59,9 +59,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Land tooling-only fixes on `main` with the `release-fast-lane` label added
   before the push (see [Release tooling fast lane](#release-tooling-fast-lane)): `openclaw/ci-gate`
   then runs lint, types, guards, dependencies, docs, and the changed Node rows
-  only. Land through the native `scripts/pr` path with its completed ClawSweeper
-  review; findings are advisory for that label, so record any P1 the release
-  owner declines to fix in the PR with its follow-up before landing.
+  only. Land through the [native maintainer workflow](../openclaw-pr-maintainer/references/landing.md).
+  That workflow owns review and landing requirements, including the advisory
+  ClawSweeper policy; the label changes only CI selection.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
   and the Release Publish parent plus its publish children to reserved capacity
   with unchanged labels; credentialed publish and approval jobs stay on default
@@ -190,6 +190,41 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   Tooling SHAs. Do not dispatch candidate Testbox workflow refs or borrow
   another checkout's wrapper.
 
+## Keep FRV off the idle path
+
+Optimize time to the next **passing** Full Release Validation. Remote FRV is
+usually the long pole; use its runtime for diagnosis, repairs, review, and
+focused proof. This is scheduling guidance, not a new checklist, approval step,
+or demand for certainty before dispatch. Existing release gates still apply.
+
+- **Start remote qualification promptly.** Favor starting remote FRV while
+  useful local checks run alongside it, rather than finishing those checks
+  first. If the remote run passes, that overlap saves an entire cycle; if local
+  work finds a defect, the run can be superseded through the existing recovery
+  path. Uncertainty alone is not a reason to leave remote validation idle.
+- **Repair as failures arrive.** Use the watcher to spot failures and start
+  diagnosis and fixes while other lanes drain. Prioritize known non-flake
+  failures over optional confidence checks. Use independent repair lanes when
+  helpful, and integrate fixes as they become ready rather than waiting for
+  the final diagnostic report to start work.
+- **Aim to be ready when diagnostics finish.** Ideally, fixes for the drained
+  failures are already on the branch, with focused proof and review done, by
+  drain completion. This is an overlap goal, not a deadline or another gate.
+  If a repair takes longer, keep working it; avoid filling the gap with
+  redundant checks or process overhead.
+- **Fix the whole known set before the next FRV.** Include fixes for every
+  known non-flake failure affecting the next run, whether in the candidate,
+  qualification harness, or trusted tooling. The waste to avoid is knowingly
+  launching another full cycle with failure B still unfixed after fixing A.
+  This does not mean proving there are no undiscovered failures or resolving
+  unrelated issues before running again.
+- **Use retries strategically.** An eligible targeted retry can run while
+  unrelated diagnostics continue. Use the existing
+  [retry budget](#run-identity-and-retry-budget) for flakes or repaired external
+  prerequisites and retain valid green evidence. A repeat of an unchanged
+  deterministic failure buys little; fix it instead. When a fresh parent is
+  needed, include the known fixes and get it running without optional delays.
+
 ## Deferred CI recovery
 
 Release validation does not pause CI or supporting workflows. The legacy
@@ -235,10 +270,8 @@ step summary. A declined label (out-of-scope path, global Node input, fork,
 push, dispatch, docs-only) logs a warning and leaves ordinary selection
 untouched. The gate stays complete: every selected lane must pass, and hourly
 full main CI covers the merged result. The label narrows only the CI gate: fork
-heads are declined, and the native `scripts/pr` landing path with its completed
-ClawSweeper review is unchanged. ClawSweeper findings are advisory for labelled
-PRs: a P1 that the release owner decides not to fix in the PR is recorded there
-with its follow-up before landing.
+heads are declined, and the [native maintainer workflow](../openclaw-pr-maintainer/references/landing.md)
+still owns review and landing requirements.
 
 ## Run identity and retry budget
 
@@ -290,14 +323,24 @@ until their dependent enforcement changes land.
   dispatch `rerun_group=all`.
 - Rerun a failed or timed out test job only after the lead records its
   real-blocker-or-flake decision (see the maintainer skill's shared release
-  boundaries). A flake gets at most two recorded reruns on the same Release SHA
-  plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
-  or new FRV. New dispatches reject `known_flaky_jobs_json`.
+  boundaries). Call it a flake only when the same job or failure signature has
+  passed on the same Release SHA. Before rerunning, read the failure's own
+  diagnostics, inspect same-SHA attempts, and compare the failing paths against
+  the candidate delta and recent `main` history; a fix on `main` is not present
+  on the frozen candidate until ancestry or patch equivalence proves it. An
+  identical signature repeated on the same or another candidate is deterministic
+  until a named mechanism and fix prove otherwise. A flake gets at most two
+  recorded reruns on the same Release SHA plus a fix-in-parallel issue or PR on
+  `main`; never a re-cut, tooling change, or new FRV. New dispatches reject
+  `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
   "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
-  before sending the request; it does not retry unrelated failures.
+  before sending the request; it does not retry unrelated failures. Without
+  `--no-follow` it then follows the whole tree through the parent reseal; pass
+  `--no-follow` to return once the new attempt is observed, then run
+  `continue --failed` to reseal.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
   [--max-attempts N]` records one bounded exact-job rerun. It waits for the
   child to finish, requires exactly one blocking failed job, sends one request
@@ -319,6 +362,17 @@ until their dependent enforcement changes land.
   to restore the same immutable plan and seal the updated all-group manifest.
   An early retry can invalidate the original Decision/Drain pairing; the final
   reseal and strict verification own completion.
+- GitHub ghost jobs (runnerless queued copies of the same job name) can follow
+  any rerun request, single-job or batched, and make that attempt unsealable.
+  Send at most one rerun request per child, only after the child is terminal;
+  never stack separate job reruns on one child. Duplicates can settle within
+  the controller's 60-second reconciliation window; once a command reports
+  ghost jobs (duplicates that persisted), stop rerunning that FRV: cancel the
+  attempt and start a fresh all-group FRV.
+- `continue --failed` reruns each failed child once per invocation. If a child
+  it reran fails again, it exits immediately with the attempt and remaining
+  rerun budget instead of waiting for siblings; rerun `continue --failed` only
+  for a confirmed flake within the flake budget above.
 - Each child or parent rerun mutation is sent exactly once per invocation;
   ambiguous transport failures trigger bounded read-only reconciliation. Do
   not blindly repeat an interrupted or timed-out command: inspect exact
@@ -333,8 +387,10 @@ until their dependent enforcement changes land.
   ```
 
 - Parents whose immutable plan predates attempt-aware evidence cannot be
-  continued. Start a fresh all-group Full Release Validation; never reconstruct
-  old state or dispatch a replacement parent.
+  continued. This legacy-plan refusal requires a fresh all-group Full Release
+  Validation parent, subject to the owned-tree settlement rules above. Preserve
+  the old receipts; never reconstruct the old state. Attempt-aware plans retain
+  their existing parent and the targeted recovery rules above.
 
 - Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
   `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
@@ -626,6 +682,11 @@ skipped, cancelled, or unknown required coverage still block.
 Use the maintainer [publication recovery guide](../release-openclaw-maintainer/references/publication-recovery.md)
 for publication ordering and prepared/direct recovery.
 
+- Watch every publish parent with one `pnpm release:watch --run <parent>`
+  ([contract](../../../docs/reference/RELEASING.md#watch-publication)), not a
+  hand-rolled monitor. It reports parent and child environment gates, failed
+  runs and failed `continue-on-error` jobs, and it backs off on rate limits.
+
 - `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
   dispatches the parent once, approves the parent's `npm-release` gate, prints
   child-approval commands only for older tooling without `npm-publish` and
@@ -681,7 +742,11 @@ for publication ordering and prepared/direct recovery.
   plugin npm and ClawHub retain target-serialized slots and refuse before any
   new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
   children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children. To clean up as a reviewer, list
+  cancels its own waiting npm children and its recorded unfinished ClawHub
+  children; it rejects a recorded child's pending gate first, because a cancel
+  request alone leaves a Plugin ClawHub New child waiting on
+  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
+  To clean up as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 
@@ -794,8 +859,13 @@ error bodies are retried on the next poll, never reported as job results.
 State lives in `$TMPDIR/openclaw-frv/<repo>-<parent>-watch.json` (`--state`
 overrides), so a restart after a harness or Monitor timeout does not re-report.
 `--once` takes one snapshot, `--interval <seconds>` sets polling (default 60),
-and `--json` prints NDJSON. It exits once the parent and every dispatched child
-are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
+and `--json` prints NDJSON. It exits with code 1 on a newly observed current
+parent/artifact-producer blocker or a policy-blocking carried child failure,
+after saving the notification. Resume with the same command and state to keep
+following diagnostics without repeating that blocker. Otherwise, it exits once
+the parent and every dispatched child are terminal; restart it after a later
+rerun. Use `status` for structured blockers and preview recovery with
+`continue --failed --dry-run`. Do not hand-roll bash or `gh`
 watchers.
 
 Watch candidate events derive the frozen SHA and context ref from the sealed
@@ -872,9 +942,17 @@ run-ID-cached bytes first.
    them in a clean-home CLI probe, never as a substitute for a required
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
-6. Decide blocker or flake for each failed test before editing. Track a fix for
-   flakes on `main`; every selected job must still pass before publication.
-   Classify blockers further:
+6. Decide blocker or flake for each failed test before editing. A flake requires
+   a passing occurrence of the same job or signature on this exact Release SHA.
+   First preserve the failing diagnostics, inspect every same-SHA attempt, and
+   run `git log <previous-release-tag>..<release-sha> -- <failing paths>` for
+   the candidate delta and `git log <release-sha>..origin/main -- <failing paths>`
+   for main-only changes. If `main` contains a repair absent from the frozen
+   candidate, treat the failure as a blocker and backport or supersede; do not
+   rerun it as inherited success. A signature repeated on another candidate is
+   deterministic until a named mechanism and fix prove otherwise. Track a fix
+   for genuine flakes on `main`; every selected job must still pass before
+   publication. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - qualification harness/contract defect: repair the candidate closure and
@@ -911,6 +989,9 @@ run-ID-cached bytes first.
    outage. Release Checks prints a `Release runner routing` notice while the
    flip is active. Codex extension tests run as file-bounded Plugin Prerelease
    jobs because one hosted Codex batch took 36-60 minutes.
+   If npm preflight keeps losing Blacksmith runners, dispatch a fresh FRV with
+   `-f npm_preflight_use_github_hosted_runners=true` instead of flipping the
+   repo-wide variable.
 8. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    First verify the PR head carries the current fallback schema:

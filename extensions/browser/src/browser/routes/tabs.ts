@@ -295,6 +295,9 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     });
   });
 
+  // Closing never contacts the tab's address, so both close routes skip the URL
+  // navigation policy that guards focus/select. Session cleanup closes tabs by raw
+  // target ID and must still end tabs that later moved to a blocked destination.
   app.delete("/tabs/:targetId", async (req, res) => {
     const targetId = parseRequiredTargetId(res, req.params.targetId);
     if (!targetId) {

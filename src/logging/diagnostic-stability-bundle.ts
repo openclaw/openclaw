@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import {
   DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  isMemoryPressureReason,
   type DiagnosticMemoryPressureFields,
 } from "../infra/diagnostic-process-types.js";
 import {
@@ -728,17 +729,6 @@ function sanitizeSessionEvidenceFileName(fileName: string): string {
     return "<session>.json";
   }
   return "<session>";
-}
-
-function isMemoryPressureReason(
-  reason: string,
-): reason is DiagnosticMemoryPressureFields["reason"] {
-  return (
-    reason === "rss_threshold" ||
-    reason === "heap_threshold" ||
-    reason === "worker_heap_threshold" ||
-    reason === "rss_growth"
-  );
 }
 
 function listDiagnosticStabilityBundleFilesSync(

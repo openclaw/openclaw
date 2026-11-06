@@ -13,8 +13,6 @@ import {
 import {
   createAccountStatusSink,
   createChannelMessageAdapterFromOutbound,
-  resolveOutboundSendDep,
-  type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -92,7 +90,7 @@ import {
   normalizeTelegramMessagingTarget,
   telegramMessagingTargetsMatch,
 } from "./normalize.js";
-import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
+import { createTelegramOutboundAdapter, resolveTelegramSend } from "./outbound-adapter.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
@@ -111,15 +109,13 @@ import { telegramSetupWizard } from "./setup-surface.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
-import { telegramThreadBindingLifecycle } from "./thread-bindings-channel.js";
+import { telegramThreadBindingSupport } from "./thread-bindings-channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import {
   parseTelegramTopicConversation,
   buildTelegramConversationId,
 } from "./topic-conversation.js";
-
-type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 
 const loadTelegramUpdateOffsetRuntime = createLazyRuntimeModule(
   () => import("../update-offset-runtime-api.js"),
@@ -142,13 +138,6 @@ function formatTelegramUnauthorizedTokenError(
   return `Telegram bot token unauthorized for account "${account.accountId}" (getMe returned ${status} from Telegram; source: ${source}). Update ${credentialPath} with the current BotFather token.`;
 }
 
-async function resolveTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
-  return (
-    resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
-    (await loadTelegramSendModule()).sendMessageTelegram
-  );
-}
-
 type TelegramHeartbeat = NonNullable<ChannelPlugin["heartbeat"]>;
 
 async function sendTelegramHeartbeatTyping(
@@ -168,8 +157,6 @@ async function sendTelegramHeartbeatTyping(
 }
 
 const telegramChannelOutbound = createTelegramOutboundAdapter({
-  resolveSend: resolveTelegramSend,
-  loadSendModule: loadTelegramSendModule,
   shouldSuppressLocalPayloadPrompt: shouldSuppressLocalTelegramExecApprovalPrompt,
   beforeDeliverPayload: async ({ cfg, target, hint }) => {
     if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {
@@ -438,7 +425,7 @@ export const telegramPlugin = createChatChannelPlugin({
         const entryTarget = parseTelegramTarget(entryTo);
         return entryTarget.chatId !== requesterTarget.chatId;
       },
-      ...telegramThreadBindingLifecycle,
+      ...telegramThreadBindingSupport,
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,

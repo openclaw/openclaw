@@ -54,6 +54,10 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
+After a Gateway restart, sandbox skill synchronization compares existing copies
+with the current source content. Unchanged files are retained; changed or removed
+instructions and supporting files are reconciled before the turn uses them.
+
 Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer
 plugin serves the agent workspace from a paired node. The node reads its configured
@@ -74,7 +78,8 @@ project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
 `worktrees/` by default), without checking Git. Identical content stays silent.
-Unchanged root-pair summaries are not repeated on refresh; changes to content,
+Unchanged root-pair summaries are not repeated on refresh or when switching
+between execution workspaces and the agent-only catalog; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
@@ -169,7 +174,7 @@ skill. Different owners can use the same friendly name without one skill
 silently replacing another.
 
 <Warning>
-A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
+A shared Gateway remains [one trust domain](/start/multiplayer#one-trust-boundary).
 Skills attached to a shared session are inputs to that session, not secret
 storage. Library ownership governs management and discovery; it does not grant
 new tools, credentials, host installation rights, or isolation from the Gateway
@@ -292,6 +297,9 @@ reference more than one skill:
 Use $github and $release_notes to summarize this change for the release.
 ```
 
+The picker matches display titles across composed and decomposed Unicode forms
+without changing the displayed title or inserted command name.
+
 OpenClaw resolves explicit references from authorized senders on every channel
 and on generic Gateway, CLI, and webhook agent turns. It matches the current
 agent's eligible, user-invocable skills and tells the model to read each
@@ -306,10 +314,17 @@ as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
 `$path`, or `$editor` to reference skills with those names. Escape a reference
 as `\$name` when it should stay literal.
 
-Skills with `disable-model-invocation: true` stay out of the `$` picker and the
-model's normal prompt, so the model cannot select them on its own. An authorized
-explicit `$skill-name` reference still invokes them; the flag only hides the
-skill from model-initiated selection.
+In the Control UI New session composer, selecting a registered project adds that
+project's eligible `skills/` and `.agents/skills/` entries to the `$` picker and
+slash commands, with the same precedence and allowlist as the execution
+workspace catalog above. They appear only when you could create a session in that
+project, and switching projects replaces the list.
+
+Eligible, user-invocable skills with `disable-model-invocation: true` appear in
+the `$` picker and inline slash suggestions, but stay out of the model's normal
+prompt so it cannot select them on its own. Selecting one inserts an explicit
+`$skill-name` reference. Bundle prompt-template commands remain available as
+leading slash commands, not as `$` references or inline skill suggestions.
 
 ## Skill Workshop
 

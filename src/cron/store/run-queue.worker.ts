@@ -98,6 +98,7 @@ function skipRequest(
     error,
   });
   if (job) {
+    delete job.state.admissionDeferred;
     if (job.state.queuedAtMs === handle.startedAtMs) {
       delete job.state.queuedAtMs;
     }
@@ -186,6 +187,8 @@ function requestCronRunsInDatabase(
     } else if (!job || job.state.queuedAtMs !== undefined || job.state.runningAtMs !== undefined) {
       reason = job ? "already-running" : "job-removed";
     } else if (
+      (request.mode === "scheduled" &&
+        input.nowMs < (job.state.admissionDeferred?.retryAtMs ?? 0)) ||
       resolveCronJobConfigRevision(job) !== request.configRevision ||
       // Disabling a command schedule withdraws its unattended authority, including force runs.
       (!isJobEnabled(job) && (request.mode !== "force" || isPluginCommandCronJob(job))) ||
@@ -234,6 +237,13 @@ function requestCronRunsInDatabase(
             startedAtMs: input.nowMs,
           },
           requestRunId: request.requestRunId,
+          replaceDeferred:
+            deferred && existing
+              ? {
+                  receiptId: existing.receipt_id,
+                  receiptSchema: prepareCronRunReceiptWriteSchema(db),
+                }
+              : undefined,
         });
       }
     }

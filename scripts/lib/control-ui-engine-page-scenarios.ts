@@ -11,7 +11,13 @@ import type { UserProfile } from "../../packages/gateway-protocol/src/schema/use
 import type { loadVoiceWakeConfig } from "../../src/infra/voicewake.ts";
 import type { ModelAuthStatusResult } from "../../ui/src/api/types.ts";
 import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
-import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
+import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
+import {
+  controlUiSessionPath,
+  waitForControlUiRoute,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
   meetingPage,
@@ -20,7 +26,11 @@ import {
 import { parityBaseScenario, parityWorkboardScenario } from "../control-ui-parity/fixtures.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
-import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
+import {
+  engineProbeInitScript,
+  waitForEngineTranscript,
+  type EngineScenario,
+} from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import type {
@@ -32,9 +42,15 @@ type PageAction = {
   label: string;
   run: InteractionScenario["run"];
 };
+type NoChangeAction = PageAction & {
+  kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
+  prepare?: InteractionScenario["prepare"];
+};
 type PageDefinition = {
   ready: string;
   rows?: { selector: string; minimum: number; totalSelector?: string };
+  /** Keep the measurement open through incremental mounting, after first visibility. */
+  completion?: { selector: string; minimum: number; maximum?: number }[];
   landed?: RouteId;
   search?: string;
   action?: PageAction;
@@ -80,6 +96,8 @@ export const enginePageFixtureCounts = {
   portals: 30,
   systems: 61,
   custodianChanges: 50,
+  advancedRows: 303,
+  advancedControls: 437,
 };
 const quantity = enginePageFixtureCounts;
 const excluded: Partial<Record<RouteId, string>> = {
@@ -193,20 +211,6 @@ function disclosure(selector: string): PageAction {
     },
   };
 }
-function refresh(selector: string, method: string): PageAction {
-  return {
-    label: `Refresh ${method}`,
-    run: async (page, gateway) => {
-      const before = (await gateway.getRequests(method)).length;
-      await page.locator(selector).first().click();
-      await gateway.waitForRequest(method, { after: before });
-      await frames(page);
-      await page.locator(`${selector}:enabled`).first().waitFor({ state: "visible" });
-      assert.equal(await page.locator('.agents-toolbar [role="alert"]').count(), 0);
-      return { refreshRequests: (await gateway.getRequests(method)).length - before };
-    },
-  };
-}
 const configPage = (): PageDefinition => ({
   ready: "openclaw-config-page .settings-page",
   action: {
@@ -291,18 +295,47 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   agents: {
-    ready: "openclaw-agents-page .agents-refresh-btn:enabled",
-    action: refresh(".agents-refresh-btn", "agents.list"),
+    ready: "openclaw-agents-page .agent-identity-editor",
+    completion: [{ selector: "openclaw-agents-page .agents-refresh-btn:enabled", minimum: 1 }],
+    action: {
+      label: "Refresh the agent roster, opening the phone action menu when needed",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("agents.list")).length;
+        const button = page.locator(".agents-refresh-btn").filter({ visible: true }).first();
+        if (await button.count()) {
+          await button.click();
+        } else {
+          await page.locator(".agents-page-menu__trigger").click();
+          await page
+            .locator('[role="menu"]:popover-open')
+            .getByRole("menuitem", { name: "Refresh", exact: true })
+            .click();
+        }
+        await gateway.waitForRequest("agents.list", { after: before });
+        await frames(page);
+        await page.locator("openclaw-agents-page .agents-refresh-btn:enabled").waitFor({
+          state: "attached",
+        });
+        assert.equal(await page.locator('.agents-toolbar [role="alert"]').count(), 0);
+        return { refreshRequests: (await gateway.getRequests("agents.list")).length - before };
+      },
+    },
   },
   approvals: {
-    ready: ".approval-history-table tbody tr",
-    rows: { selector: ".approval-history-table tbody tr", minimum: 100 },
+    ready: ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+    rows: {
+      selector: ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+      minimum: 100,
+    },
     action: {
       label: "Load the next 100 approval-history records",
       run: async (page) => {
         await page.locator('openclaw-approvals-page button:text-is("Load more")').click();
         await page.waitForFunction(
-          () => document.querySelectorAll(".approval-history-table tbody tr").length === 200,
+          () =>
+            document.querySelectorAll(
+              ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+            ).length === 200,
         );
         await frames(page);
         return { historyRows: 200 };
@@ -337,8 +370,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     action: click("openclaw-channels-page button.channels-item", ".channels-detail"),
   },
   "cloud-workers": {
-    ready: "openclaw-cloud-workers-page .cloud-environments__advanced > summary",
-    rows: { selector: 'openclaw-cloud-workers-page button[aria-label^="Edit"]', minimum: 30 },
+    ready:
+      'openclaw-cloud-workers-page .settings-empty a[href="https://docs.openclaw.ai/gateway/cloud-workers"]',
     action: {
       label: "Expand advanced cloud environment settings and edit a machine profile",
       run: async (page) => {
@@ -346,7 +379,15 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           'openclaw-cloud-workers-page input[aria-label="Crabbox backend"]',
         );
         assert.equal(await editor.filter({ visible: true }).count(), 0);
-        await page.locator(".cloud-environments__advanced > summary").click();
+        await page
+          .locator("openclaw-cloud-workers-page summary")
+          .filter({ hasText: "Advanced" })
+          .click();
+        await page.waitForFunction(
+          () =>
+            document.querySelectorAll('openclaw-cloud-workers-page button[aria-label^="Edit"]')
+              .length === 30,
+        );
         await page
           .locator('openclaw-cloud-workers-page button[aria-label^="Edit"]')
           .first()
@@ -360,7 +401,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   connection: {
     ready: "openclaw-connection-page .settings-page",
-    action: disclosure("openclaw-connection-page details"),
+    action: {
+      label: "Reveal the Gateway secret field",
+      run: async (page) => {
+        const toggle = page.locator(
+          'openclaw-connection-page button[aria-label="Toggle secret visibility"]',
+        );
+        await toggle.click();
+        await page
+          .locator('openclaw-connection-page input[aria-label="Gateway secret"][type="text"]')
+          .waitFor({ state: "visible" });
+        await frames(page);
+        return { opened: true };
+      },
+    },
   },
   custodian: {
     ready: "openclaw-custodian-page .custodian-surface",
@@ -387,9 +441,12 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   dashboards: {
     ready: "openclaw-dashboards-page .dashboard-card",
     action: {
-      label: "Filter 200 dashboards to one match",
+      label: "Type a search to filter 200 dashboards to one match",
       run: async (page) => {
-        await page.locator("openclaw-dashboards-page input[type=search]").fill("Interaction 0995");
+        // Native typing attributes expected result reflow to user input; fill() does not.
+        await page
+          .locator("openclaw-dashboards-page input[type=search]")
+          .pressSequentially("Interaction 0995");
         await page.waitForFunction(() => {
           const cards = document.querySelectorAll(".dashboard-card[data-dashboard-session]");
           return (
@@ -425,32 +482,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   devices: {
     ready: "openclaw-devices-page .device-entry",
     action: {
-      label: "Open the first device action menu and focus its enabled Copy item",
+      label: "Expand the first paired device and reveal its identity and actions",
       run: async (page) => {
-        const trigger = page.locator("openclaw-devices-page .device-entry__menu-trigger").first();
-        assert.equal(await trigger.getAttribute("aria-expanded"), "false");
-        const menuId = await trigger.getAttribute("aria-controls");
-        assert(menuId, "The device action trigger must identify its own menu");
-        const menu = page.locator(`[role="menu"][id=${JSON.stringify(menuId)}]`);
-        await trigger.click();
-        await menu.waitFor({ state: "visible" });
-        await page.waitForFunction((id) => {
-          const surface = document.getElementById(id);
-          return (
-            surface?.matches(":popover-open") &&
-            surface.querySelector('[role="menuitem"][data-value="copy"]') === document.activeElement
-          );
-        }, menuId);
-        assert.equal(await trigger.getAttribute("aria-expanded"), "true");
-        assert.equal(await menu.locator('[role="menuitem"][data-value="copy"]').isEnabled(), true);
-        assert.equal(
-          await menu.locator('[role="menuitem"][data-value="remove"]').isEnabled(),
-          true,
-        );
-        const menuItems = await menu.locator('[role="menuitem"]').count();
-        assert.equal(menuItems, 2);
+        const row = page.locator("openclaw-devices-page details.device-entry").first();
+        assert.equal(await row.getAttribute("open"), null);
+        await row.locator(":scope > summary").click();
+        await row.locator(".device-entry__body").waitFor({ state: "visible" });
+        assert.equal(await row.getAttribute("open"), "");
+        const deviceId = await row.getAttribute("data-device-id");
+        assert(deviceId);
+        assert((await row.locator(".device-fact__id").textContent())?.includes(deviceId));
+        assert.equal(await row.locator(".device-fact__id button").isEnabled(), true);
+        assert.equal(await row.locator(".device-entry__remove").isEnabled(), true);
         await frames(page);
-        return { firstMenuOpened: true, copyFocused: true, menuItems };
+        return { deviceExpanded: true, copyEnabled: true, removeEnabled: true };
       },
     },
   },
@@ -524,8 +569,13 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ready: ".memory-import__collection",
     rows: { selector: ".memory-import__collection", minimum: 10 },
     action: {
-      label: "Deselect one 10-item memory collection and present 90 selected items",
+      label: "Review 10 memory files, then deselect their collection and present 90 selected items",
       run: async (page) => {
+        const review = page.locator(".memory-import__collection details").first();
+        assert.equal(await review.evaluate((element) => element.hasAttribute("open")), false);
+        await review.locator("summary").click();
+        await review.locator("li").last().waitFor({ state: "visible" });
+        assert.equal(await review.locator("li").count(), 10);
         const control = page
           .locator('.memory-import__collection-choice input[type="checkbox"]')
           .first();
@@ -541,7 +591,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           true,
         );
         await frames(page);
-        return { selectedItems: 90 };
+        return { selectedItems: 90, reviewedFiles: 10 };
       },
     },
   },
@@ -586,6 +636,14 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "plugin-settings": {
     ready: "openclaw-plugins-page [data-plugin-id]",
+    completion: [
+      { selector: "openclaw-plugins-page [data-plugin-id]", minimum: quantity.catalog },
+      {
+        selector: '.plugins-settings-content .settings-group[aria-busy="true"]',
+        minimum: 0,
+        maximum: 0,
+      },
+    ],
     source: catalogSource,
     action: { label: "Filter 1,000 installed plugins", run: catalogSource.run },
   },
@@ -602,10 +660,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
             document.querySelector('.portals-rail__item[aria-current="true"] .portals-rail__title')
               ?.textContent === "Census portal 1",
         );
-        await page
-          .locator(".portals-preview__notice")
-          .getByText("This portal requires an operator with write access.", { exact: true })
-          .waitFor();
+        await page.getByText("Write access required", { exact: true }).waitFor();
         assert.equal(await page.locator("openclaw-portals-page iframe").count(), 0);
         await frames(page);
         return {
@@ -651,7 +706,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   search: {
     ready: 'openclaw-search-page input[aria-label="Search query"]',
     action: {
-      label: "Run a mock search and present its result",
+      label: "Run a search health check and present its success",
       run: async (page, gateway) => {
         const before = (await gateway.getRequests("webSearch.test")).length;
         const input = page.locator('openclaw-search-page input[aria-label="Search query"]');
@@ -659,21 +714,28 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
         await input.press("Enter");
         await gateway.waitForRequest("webSearch.test", { after: before });
         await page
-          .locator("openclaw-search-page .settings-row__title")
-          .getByText("Synthetic census search result", { exact: true })
+          .locator("openclaw-search-page .search-test-status")
+          .getByText("Search succeeded", { exact: true })
           .waitFor();
         await frames(page);
-        return { searchResults: 1 };
+        return { searchTests: 1 };
       },
     },
   },
   secrets: {
-    ready: "openclaw-secrets-page .secrets-store__table tbody tr",
-    rows: { selector: "openclaw-secrets-page .secrets-store__table tbody tr", minimum: 200 },
+    ready:
+      "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
+    rows: {
+      selector:
+        "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
+      minimum: 200,
+    },
     action: {
       label: "Open the first secret's row menu and edit its metadata",
       run: async (page) => {
-        const row = page.locator(".secrets-store__table tbody tr").first();
+        const row = page
+          .locator(".secrets-store__table tbody tr, .secrets-store__list .secrets-store__row")
+          .first();
         const name = (await row.locator(".secrets-store__name").textContent())?.trim();
         await row.locator(".secrets-store__menu-trigger").click();
         await page
@@ -734,9 +796,9 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ready: ".skills-group .plugins-item",
     rows: { selector: ".skills-group .plugins-item", minimum: 1000 },
     action: {
-      label: "Filter 1,000 installed skills to one match",
+      label: "Type a search to filter 1,000 installed skills to one match",
       run: async (page) => {
-        await page.locator(".skills-toolbar__search input").fill("Data skill 0999");
+        await page.locator(".skills-toolbar__search input").pressSequentially("Data skill 0999");
         await page.waitForFunction(() => {
           const rows = document.querySelectorAll(".plugins-item--clickable");
           return rows.length === 1 && rows[0]?.textContent?.includes("Data skill 0999");
@@ -747,9 +809,13 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   systems: {
-    ready: '.systems-workspace button[aria-label="Machine details"]:enabled',
+    ready:
+      '.systems-workspace button:is([aria-label="Machine details"], [aria-label="Device details"]):enabled',
     rows: { selector: ".systems-mobile-picker option:not(:disabled)", minimum: 61 },
-    action: click('.systems-workspace button[aria-label="Machine details"]', ".systems-details"),
+    action: click(
+      '.systems-workspace button:is([aria-label="Machine details"], [aria-label="Device details"])',
+      ".systems-details",
+    ),
   },
   terminal: {
     ready:
@@ -836,6 +902,15 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   security: configPage(),
   advanced: {
     ...configPage(),
+    completion: [
+      { selector: "openclaw-config-page .settings-row", minimum: quantity.advancedRows },
+      { selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 },
+      {
+        selector:
+          "openclaw-config-page input, openclaw-config-page select, openclaw-config-page textarea, openclaw-config-page button",
+        minimum: quantity.advancedControls,
+      },
+    ],
     action: disclosure("openclaw-config-page details.cfg-object:not([open])"),
   },
   automation: configPage(),
@@ -846,12 +921,12 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       run: async (page) => {
         const card = page.locator("openclaw-mcp-servers-card");
         await card.getByRole("button", { name: "Add server", exact: true }).click();
-        const form = card.locator(".mcp-server-form");
+        const form = page.locator(".mcp-server-form");
         await form.locator('input[name="mcp-name"]:enabled').waitFor({ state: "visible" });
         await form.locator('input[name="mcp-target"]:enabled').waitFor({ state: "visible" });
         assert.equal(
-          await form.locator('select[name="mcp-transport"]').inputValue(),
-          "streamable-http",
+          await form.locator('input[type="radio"][value="streamable-http"]').isChecked(),
+          true,
         );
         await frames(page);
         return { addServerForm: true };
@@ -859,21 +934,28 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   memory: {
-    ready: ".memory-overview__hero-copy h2",
+    ready: ":is(.memory-overview__hero-copy, .memory-overview__status-copy) h2",
     action: {
       label: "Refresh the memory engine status",
       run: async (page, gateway) => {
         const before = (await gateway.getRequests("doctor.memory.status")).length;
-        await page.locator(".memory-overview__hero-actions button").click();
+        await page
+          .locator(":is(.memory-overview__hero-actions, .memory-overview__status-action) button")
+          .click();
         await gateway.waitForRequest("doctor.memory.status", {
           after: before,
           match: { agentId: "main" },
         });
         await page
-          .locator(".memory-overview__hero-copy h2")
+          .locator(":is(.memory-overview__hero-copy, .memory-overview__status-copy) h2")
           .getByText("Memory is awake", { exact: true })
           .waitFor();
-        assert.equal(await page.locator(".memory-overview__hero-error").count(), 0);
+        assert.equal(
+          await page
+            .locator(".memory-overview__hero-error, .memory-overview__status-error")
+            .count(),
+          0,
+        );
         await frames(page);
         return { statusRefreshed: true };
       },
@@ -910,7 +992,10 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   infrastructure: configPage(),
   updates: configPage(),
-  "ai-agents": configPage(),
+  "ai-agents": {
+    ...configPage(),
+    completion: [{ selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 }],
+  },
   sessions: {
     ready: ".sessions-table .session-data-row",
     source: requiredScenario(interactionScenarios, "sessions-search"),
@@ -921,14 +1006,162 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   cron: {
     ready: ".cron-table__row",
-    rows: { selector: ".cron-table__row", minimum: 50 },
+    rows: {
+      selector: ".cron-table__row",
+      minimum: 50,
+      totalSelector: ".cron-table__row[aria-setsize]",
+    },
     source: requiredScenario(interactionScenarios, "cron-search"),
     action: {
-      label: "Filter 500 automations to one match",
-      run: requiredScenario(interactionScenarios, "cron-search").run,
+      label: "Type a search to filter 500 automations to one match",
+      run: requiredScenario(interactionScenarios, "cron-search-typing").run,
     },
   },
 };
+
+async function settleNoChangeAction(page: Page) {
+  await page.waitForFunction(() => {
+    const reads: { pendingMethods: string[]; queued: number } = Reflect.get(
+      window,
+      "__coldLoad",
+    ).read();
+    return reads.queued === 0 && reads.pendingMethods.length === 0;
+  });
+  await frames(page);
+}
+
+function unchangedPush(
+  event: string,
+  payload: unknown,
+  method: string,
+  kind: NoChangeAction["kind"] = "push",
+): NoChangeAction {
+  return {
+    kind,
+    label: `Deliver ${event}; ${method} returns its unchanged fixture payload`,
+    run: async (page, gateway) => {
+      const before = (await gateway.getRequests(method)).length;
+      const rosterBefore =
+        event === "config.changed" ? (await gateway.getRequests("agents.list")).length : null;
+      await page.evaluate(
+        ({ event: eventName, payload: eventPayload }) => {
+          window.openclawEngineMarkGatewayInput?.();
+          (window as MockGatewayWindow).openclawControlUiE2eGateway!.emit(eventName, eventPayload);
+        },
+        { event, payload },
+      );
+      await gateway.waitForRequest(method, { after: before });
+      // Config delivery also owns a 100ms roster debounce; include its resulting publication.
+      if (rosterBefore !== null) {
+        await gateway.waitForRequest("agents.list", { after: rosterBefore });
+      }
+      await settleNoChangeAction(page);
+      return {
+        unchangedPayload: true,
+        refreshRequests: (await gateway.getRequests(method)).length - before,
+      };
+    },
+  };
+}
+
+const unchangedPresence = Array.from({ length: 30 }, (_, index) => ({
+  instanceId: `census-node-${index}`,
+  deviceId: `census-node-${index}`,
+  host: `Census node ${index}`,
+  platform: "linux",
+  mode: "node",
+  ts: time,
+}));
+
+/** Diagnostic-only actions: fresh transport values, unchanged domain contents. */
+function noChangeActions(id: RouteId): NoChangeAction[] {
+  const configPush = unchangedPush("config.changed", {}, "config.get");
+  const actions: NoChangeAction[] = [configPush];
+  if (id === "approvals") {
+    actions[0] = unchangedPush(
+      "exec.approval.resolved",
+      { id: "census-approval-0", decision: "deny" },
+      "approval.history",
+    );
+  } else if (id === "portals") {
+    actions[0] = unchangedPush("portal.changed", {}, "portal.list");
+  } else if (id === "apps") {
+    actions[0] = unchangedPush("config.changed", {}, "mcp.app.discover");
+  } else if (id === "profile") {
+    actions[0] = unchangedPush("sessions.changed", { reason: "profile-identity" }, "users.self");
+  }
+  if (id === "devices" || id === "activity" || id === "agents" || id === "systems") {
+    actions.push({
+      kind: "presence-push",
+      label: "Deliver the identical 30-node presence snapshot twice; measure the second delivery",
+      prepare: async (page, gateway) => {
+        await gateway.emitGatewayEvent("presence", { presence: unchangedPresence });
+        await settleNoChangeAction(page);
+      },
+      run: async (page, gateway) => {
+        await gateway.emitGatewayEvent("presence", { presence: unchangedPresence });
+        await settleNoChangeAction(page);
+        return { unchangedPresenceRows: unchangedPresence.length };
+      },
+    });
+  }
+  if (id === "devices") {
+    actions.push(
+      unchangedPush("node.hostStats", { nodeId: "census-node-0" }, "node.list", "refresh"),
+    );
+  }
+  if (id === "model-providers" || id === "profile") {
+    actions.push(
+      unchangedPush(
+        "chat.metadata.changed",
+        { authChanged: true, modelCatalogChanged: true },
+        id === "profile" ? "users.listModelAccounts" : "models.list",
+        "model-push",
+      ),
+    );
+  }
+  if (id === "agents" || id === "memory") {
+    const action = definitions[id]?.action;
+    assert(action);
+    actions.push({ ...action, kind: "refresh" });
+  }
+  if (id === "debug") {
+    actions.push({
+      kind: "refresh",
+      label: "Refresh diagnostics with identical status, health, models, heartbeat and lane data",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("status")).length;
+        await page.locator("openclaw-debug-page .debug-refresh:enabled").click();
+        await gateway.waitForRequest("status", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedDiagnostics: true };
+      },
+    });
+    actions.push({
+      kind: "poll",
+      label: "Wait for the real three-second diagnostics poll to return unchanged lane data",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("diagnostics.lanes")).length;
+        await gateway.waitForRequest("diagnostics.lanes", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedDiagnostics: true, intervalMs: 3000 };
+      },
+    });
+  }
+  if (id === "connection") {
+    actions.push({
+      kind: "poll",
+      label: "Wait for the real ten-second system-info poll to return its unchanged host snapshot",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("system.info")).length;
+        await gateway.waitForRequest("system.info", { after: before });
+        await settleNoChangeAction(page);
+        return { unchangedHostSnapshot: true, intervalMs: 10000 };
+      },
+    });
+  }
+  return actions;
+}
 
 export const enginePageCoverage: readonly PageCoverage[] = APP_ROUTE_IDS.map((id) => {
   const definition = definitions[id];
@@ -946,7 +1179,7 @@ export const enginePageCoverage: readonly PageCoverage[] = APP_ROUTE_IDS.map((id
 function createPageFixture(
   definition: PageDefinition,
   id: RouteId,
-): EngineScenario["fixtureOverrides"] {
+): NonNullable<EngineScenario["fixtureOverrides"]> {
   return (sandbox, base) => {
     const catalog = catalogSource.fixtureOverrides?.(sandbox, base);
     const domain = definition.source?.fixtureOverrides?.(sandbox, base);
@@ -1411,6 +1644,44 @@ async function ready(page: Page, id: RouteId, definition: PageDefinition) {
       definition.rows,
     );
   }
+  if (definition.completion) {
+    await page.waitForFunction(
+      (requirements) =>
+        requirements.every(({ selector, minimum, maximum }) => {
+          const count = document.querySelectorAll(selector).length;
+          return count >= minimum && (maximum === undefined || count <= maximum);
+        }),
+      definition.completion,
+    );
+  }
+  if (id === "cloud-workers") {
+    await page.waitForFunction(() => {
+      const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
+        Reflect.get(window, "__coldLoad").read();
+      const completed = reads.rpcs.filter(
+        (rpc) =>
+          rpc.method === "environments.list" && rpc.responseOk && rpc.dispatchMs !== undefined,
+      );
+      return (
+        reads.queued === 0 &&
+        !reads.pendingMethods.includes("environments.list") &&
+        completed.some(
+          ({ params }) =>
+            params !== null &&
+            typeof params === "object" &&
+            "projection" in params &&
+            params.projection === "profiles",
+        ) &&
+        completed.some(
+          ({ params }) =>
+            params !== null &&
+            typeof params === "object" &&
+            "includePreparedDetails" in params &&
+            params.includePreparedDetails === true,
+        )
+      );
+    });
+  }
   await frames(page);
 }
 export async function collectEnginePageStructure(page: Page): Promise<InteractionEvidence> {
@@ -1435,10 +1706,17 @@ export async function collectEnginePageStructure(page: Page): Promise<Interactio
 
 async function measureVisit(page: Page, id: RouteId, definition: PageDefinition) {
   return page.evaluate(
-    ({ id: routeId, pathname, search: routeSearch, landed, selector, rows }) =>
-      new Promise<number>((resolve, reject) => {
+    ({ id: routeId, pathname, search: routeSearch, landed, selector, rows, completion }) =>
+      new Promise<{
+        startedAtMs: number;
+        readyMs: number;
+        readyAtMs: number;
+        contentReadyMs: number;
+      }>((resolve, reject) => {
         const started = performance.now();
         let readyFrames = 0;
+        let completeFrames = 0;
+        let readyMs: number | undefined;
         const probe = () => {
           const snapshot = window.openclawControlUi?.snapshot();
           const route = snapshot?.route;
@@ -1454,16 +1732,61 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
                 (row) => row.getAttribute("aria-setsize") === String(rows.minimum),
               ),
             );
+          let cloudReadsReady = true;
+          if (routeId === "cloud-workers") {
+            const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
+              Reflect.get(window, "__coldLoad").read();
+            const completed = reads.rpcs.filter(
+              (rpc) =>
+                rpc.method === "environments.list" &&
+                rpc.responseOk &&
+                rpc.dispatchMs !== undefined,
+            );
+            cloudReadsReady =
+              reads.queued === 0 &&
+              !reads.pendingMethods.includes("environments.list") &&
+              completed.some(
+                ({ params }) =>
+                  params !== null &&
+                  typeof params === "object" &&
+                  "projection" in params &&
+                  params.projection === "profiles",
+              ) &&
+              completed.some(
+                ({ params }) =>
+                  params !== null &&
+                  typeof params === "object" &&
+                  "includePreparedDetails" in params &&
+                  params.includePreparedDetails === true,
+              );
+          }
           const pageReady =
             snapshot?.routeReady &&
             route?.status === "success" &&
             route.matches[0]?.routeId === landed &&
             route.pendingMatches.length === 0 &&
             visible &&
-            rowsReady;
+            rowsReady &&
+            cloudReadsReady;
           readyFrames = pageReady ? readyFrames + 1 : 0;
           if (readyFrames >= 2) {
-            resolve(performance.now() - started);
+            readyMs ??= performance.now() - started;
+          }
+          const contentReady =
+            pageReady &&
+            (!completion ||
+              completion.every(({ selector: contentSelector, minimum, maximum }) => {
+                const count = document.querySelectorAll(contentSelector).length;
+                return count >= minimum && (maximum === undefined || count <= maximum);
+              }));
+          completeFrames = contentReady ? completeFrames + 1 : 0;
+          if (readyMs !== undefined && completeFrames >= 2) {
+            resolve({
+              startedAtMs: started,
+              readyMs,
+              readyAtMs: started + readyMs,
+              contentReadyMs: performance.now() - started,
+            });
           } else if (performance.now() - started > 60_000) {
             reject(new Error(`Page readiness timed out: ${routeId} (${selector})`));
           } else {
@@ -1480,13 +1803,24 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
       landed: definition.landed ?? id,
       selector: definition.ready,
       rows: definition.rows,
+      completion: definition.completion,
     },
   );
 }
 
 /** One fresh context per phase preserves first-visit lazy imports and isolates local drafts. */
-export function createEnginePageScenarios(): readonly EngineScenario[] {
-  const boot = (page: Page) => waitForControlUiRoute(page, { routeId: "new-session" });
+export function createEnginePageScenarios(
+  gatewayLatencyMs = 0,
+  pageOrigin: "new-session" | "chat" = "new-session",
+): readonly EngineScenario[] {
+  const originSessionKey = "agent:main:interaction-a";
+  const boot = async (page: Page) => {
+    if (pageOrigin === "chat") {
+      await waitForEngineTranscript(page);
+    } else {
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+    }
+  };
   return enginePageCoverage.flatMap((coverage) => {
     if (coverage.status === "excluded" || coverage.status === "unavailable") {
       return [];
@@ -1494,10 +1828,37 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
     const definition = definitions[coverage.id];
     assert(definition, `Missing census definition for ${coverage.id}`);
     const id = coverage.id;
+    const pageFixture = createPageFixture(definition, id);
     const common = {
       explicitOnly: true,
-      route: "/new",
-      fixtureOverrides: createPageFixture(definition, id),
+      route: pageOrigin === "chat" ? controlUiSessionPath(originSessionKey) : "/new",
+      fixtureOverrides: ((sandbox, base) => {
+        const fixture = pageFixture(sandbox, base);
+        if (pageOrigin === "new-session") {
+          return fixture;
+        }
+        // Keep the boot transcript when a route replaces the fixture's other sessions.
+        return {
+          ...fixture,
+          sessionTranscripts: {
+            ...fixture.sessionTranscripts,
+            [originSessionKey]: base.sessionTranscripts![originSessionKey]!,
+          },
+        };
+      }) satisfies NonNullable<EngineScenario["fixtureOverrides"]>,
+      ...(pageOrigin === "chat"
+        ? { initScript: engineProbeInitScript(false, gatewayLatencyMs) }
+        : gatewayLatencyMs || id === "cloud-workers"
+          ? {
+              initScript: createColdLoadProbeInitScript({
+                ownerProbes: false,
+                sidebarCounters: false,
+                latencyMs: gatewayLatencyMs,
+                frameGapMs: 0,
+                events: [],
+              }),
+            }
+          : {}),
       ...(id === "workboard" || id === "plugin" ? { fixture: { workboardResources: true } } : {}),
       ...(definition.source?.createRequestHandlers
         ? { createRequestHandlers: definition.source.createRequestHandlers }
@@ -1508,15 +1869,86 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       await navigate(page, id, definition.search);
       await ready(page, id, definition);
     };
+    const noChanges: EngineScenario[] = definition.landed
+      ? []
+      : noChangeActions(id).map((action) =>
+          Object.assign({}, common, {
+            id: `page-${id}-${action.kind}`,
+            expected: action.label,
+            initScript: createColdLoadProbeInitScript({
+              ownerProbes: false,
+              sidebarCounters: false,
+              latencyMs: 0,
+              frameGapMs: 0,
+              events: [],
+            }),
+            // Successful, deterministic diagnostics keep the poll census on the data path.
+            // The existing visit/action fixtures keep their original responses.
+            fixtureOverrides: (sandbox, base) => {
+              const fixture = common.fixtureOverrides?.(sandbox, base) ?? {};
+              return id === "debug" || id === "connection"
+                ? {
+                    ...fixture,
+                    featureMethods: [
+                      ...new Set([
+                        ...(fixture.featureMethods ?? []),
+                        "diagnostics.lanes",
+                        "system.info",
+                      ]),
+                    ],
+                    methodResponses: {
+                      ...fixture.methodResponses,
+                      "last-heartbeat": { ts: time, status: "ok" },
+                      "diagnostics.lanes": {
+                        lanes: Array.from({ length: 30 }, (_, index) => ({
+                          lane: `census-lane-${index}`,
+                          activeCount: 0,
+                          queuedCount: 0,
+                          maxConcurrent: 4,
+                        })),
+                        dynamic: null,
+                      },
+                    },
+                  }
+                : fixture;
+            },
+            prepare: async (page, gateway) => {
+              await enter(page);
+              await settleNoChangeAction(page);
+              await action.prepare?.(page, gateway);
+            },
+            run: async (page, gateway) => {
+              const evidence = await action.run(page, gateway);
+              await ready(page, id, definition);
+              return evidence;
+            },
+          } satisfies Partial<EngineScenario>),
+        );
     const visit: EngineScenario = {
       ...common,
       id: `page-${id}-visit`,
-      expected: `First visit after boot to ${coverage.path}; ${definition.ready} is visible and the route is settled.`,
+      expected: `First visit after ${pageOrigin} boot to ${coverage.path}; ${definition.ready} is visible, the route is settled, and all configured content counts are complete.`,
       prepare: boot,
       run: async (page) => {
-        const visitReadyMs = await measureVisit(page, id, definition);
+        const timing = await measureVisit(page, id, definition);
         await ready(page, id, definition);
-        return { visitReadyMs };
+        return {
+          visitStartedAtMs: timing.startedAtMs,
+          visitReadyMs: timing.readyMs,
+          visitReadyAtMs: timing.readyAtMs,
+          contentReadyMs: timing.contentReadyMs,
+        };
+      },
+    };
+    const revisit: EngineScenario = {
+      ...visit,
+      id: `page-${id}-revisit`,
+      expected: `Warm return to ${coverage.path} after its first visit.`,
+      prepare: async (page) => {
+        await enter(page);
+        const destination = id === "about" ? "connection" : "about";
+        await navigate(page, destination);
+        await ready(page, destination, definitions[destination]!);
       },
     };
     const leave: EngineScenario = {
@@ -1526,14 +1958,14 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       prepare: enter,
       run: async (page) => {
         const destination = id === "about" ? "connection" : "about";
-        const leaveReadyMs = await measureVisit(page, destination, definitions[destination]!);
+        const timing = await measureVisit(page, destination, definitions[destination]!);
         await frames(page);
         assert.equal(await page.locator(definition.ready).filter({ visible: true }).count(), 0);
-        return { retired: true, leaveReadyMs };
+        return { retired: true, leaveReadyMs: timing.readyMs };
       },
     };
     if (!definition.action) {
-      return [visit, leave];
+      return [visit, revisit, leave].concat(noChanges);
     }
     const action: EngineScenario = {
       ...common,
@@ -1548,6 +1980,80 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
         return evidence;
       },
     };
-    return [visit, action, leave];
+    if (id === "search") {
+      const firstAdvancedOpen: EngineScenario = {
+        ...common,
+        id: "page-search-advanced-open",
+        expected: "First opening of Search Advanced settings presents the config fields.",
+        prepare: enter,
+        run: async (page) => {
+          const advanced = page.locator(".config-advanced-disclosure");
+          const fields = advanced.locator(":scope > .settings-group > .settings-row");
+          const inputs = advanced.locator("input, select, textarea, button");
+          assert.equal(await advanced.getAttribute("open"), null);
+          const mountedFieldsBefore = await fields.count();
+          await advanced.locator(":scope > summary").click();
+          // The base schema has three numeric fields and the native-search object (ten controls).
+          await page.waitForFunction(() => {
+            const details = document.querySelector<HTMLDetailsElement>(
+              ".config-advanced-disclosure",
+            );
+            return (
+              details?.open &&
+              details.querySelectorAll(":scope > .settings-group > .settings-row").length === 4 &&
+              details.querySelectorAll("input, select, textarea, button").length === 10
+            );
+          });
+          await frames(page);
+          return {
+            opened: true,
+            mountedFieldsBefore,
+            mountedFields: await fields.count(),
+            mountedInputs: await inputs.count(),
+          };
+        },
+      };
+      return [visit, revisit, action, leave, firstAdvancedOpen].concat(noChanges);
+    }
+    if (id === "terminal") {
+      const composerInput: EngineScenario = {
+        ...common,
+        id: "page-terminal-composer-input",
+        expected: "Type ten characters and submit through an already running terminal composer.",
+        prepare: async (page, gateway) => {
+          await enter(page);
+          await definition.action!.run(page, gateway);
+          await page.evaluate(() => document.fonts.ready.then(() => undefined));
+          await frames(page);
+        },
+        run: async (page, gateway) => {
+          const command = "echo warm0";
+          const input = page.locator("openclaw-terminal-page .tp-composer input");
+          assert.equal(await input.inputValue(), "");
+          const openedBefore = (await gateway.getRequests("terminal.open")).length;
+          const commandMatch = { data: command };
+          const enterMatch = { data: "\r" };
+          const commandBefore = (await gateway.getRequests("terminal.input", commandMatch)).length;
+          const enterBefore = (await gateway.getRequests("terminal.input", enterMatch)).length;
+          await input.pressSequentially(command);
+          await input.press("Enter");
+          await gateway.waitForRequest("terminal.input", {
+            after: commandBefore,
+            match: commandMatch,
+          });
+          await gateway.waitForRequest("terminal.input", { after: enterBefore, match: enterMatch });
+          await page.waitForFunction(
+            () =>
+              document.querySelector<HTMLInputElement>("openclaw-terminal-page .tp-composer input")
+                ?.value === "",
+          );
+          await frames(page);
+          assert.equal((await gateway.getRequests("terminal.open")).length, openedBefore);
+          return { typedCharacters: command.length, inputSent: true };
+        },
+      };
+      return [visit, revisit, action, leave, composerInput].concat(noChanges);
+    }
+    return [visit, revisit, action, leave].concat(noChanges);
   });
 }

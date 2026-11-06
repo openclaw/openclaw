@@ -44,6 +44,23 @@ function fixture(scrollHeight = 1600) {
 const messages = (...ids: string[]) => new Set(ids);
 afterEach(() => document.body.replaceChildren());
 
+it("stops requesting commits when a reachable scroll correction makes no progress", () => {
+  const { scroller, bubble, virtualizer, instance, anchor, measureRows } = fixture();
+  scroller.scrollTop = 200;
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  bubble.getBoundingClientRect = () => rect(130, 180);
+  // Model a native scroll command ignored until layout is available.
+  virtualizer.scrollToOffset.mockImplementation(() => {});
+
+  const commits = Array.from({ length: 3 }, () => anchor.update(scroller, instance, measureRows));
+  expect(commits).toEqual([true, true, false]);
+  expect(anchor.messageKey).toBeNull();
+  expect(scroller.scrollTop).toBe(200);
+});
+
 it.each([true, false])(
   "preserves only an existing end anchor through measured prepend correction (%s)",
   (following) => {
@@ -86,6 +103,17 @@ it("preserves a partially visible retained message rather than overscan across m
   overscan.getBoundingClientRect = () => rect(-200, 100);
   row.prepend(overscan);
   messageElements.set("above", overscan);
+  const prepared = document.createElement("div");
+  prepared.className = "chat-virtual-row";
+  prepared.dataset.preparedRow = "true";
+  const cached = document.createElement("div");
+  cached.dataset.messageId = "cached";
+  cached.getBoundingClientRect = () => {
+    throw new Error("Prepend must not force layout of a prepared offscreen row");
+  };
+  prepared.append(cached);
+  scroller.prepend(prepared);
+  messageElements.set("cached", cached);
   anchor.messageKeys = messages("above", "visible");
   anchor.capture(scroller, false);
   anchor.messageKeys = messages("older", "above", "visible");

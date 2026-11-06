@@ -166,6 +166,7 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
           const prefix = value.slice(0, 498);
           const complete =
             prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:\s+\[[^\]\r\n]+\]/u)?.[0] ??
             prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
           return complete
             ? `${complete.trimEnd()} …`
@@ -200,6 +201,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;

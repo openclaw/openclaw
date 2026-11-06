@@ -62,6 +62,7 @@ import {
   runServiceUninstall,
 } from "./lifecycle-core.js";
 import {
+  assertNativeRestartFlags,
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
@@ -132,7 +133,7 @@ async function stopGatewayWithoutServiceManager(
     serviceContext?.env ?? process.env,
     serviceContext?.command ?? null,
   );
-  const stalled = captureStalledGatewayStartup(env);
+  const stalled = await captureStalledGatewayStartup(env);
   if (stalled) {
     await stopStalledGatewayStartup(stalled, assertGatewayServiceUpdateCurrent);
     appendGatewayLifecycleAudit({
@@ -394,8 +395,17 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         );
         return;
       }
+      // Health can fail well before the deadline; only a spent deadline is a timeout.
+      const timedOut = health.healthy || health.waitOutcome === "timeout";
       fail(
-        `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+        timedOut
+          ? `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`
+          : formatGatewayRestartFailure({
+              health,
+              port,
+              defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+              action: "start",
+            }).failMessage,
         [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
       );
     },
@@ -453,13 +463,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
     assertGatewayServiceMutationAllowed("restart the gateway");
-    if (opts.safe) {
-      throw new Error("--preserve-definition requires a native restart without --safe");
-    }
   }
-  if (opts.skipDeferral && !opts.safe) {
-    throw new Error("--skip-deferral requires --safe");
-  }
+  assertNativeRestartFlags(opts);
   if (isGatewayExternallySupervised()) {
     assertGatewayServiceFallbackAllowed("external-supervisor restart");
     return await runExternalSupervisorRestart(opts);

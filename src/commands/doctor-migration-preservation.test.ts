@@ -8,7 +8,7 @@ import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-sup
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { resolveCapturedRegistryPath } from "../infra/update-recovery-path.js";
-import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import * as pluginResources from "../plugins/doctor-contract-preparation.js";
 import {
   MEDIA_ROWS_MIGRATION_META_KEY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
