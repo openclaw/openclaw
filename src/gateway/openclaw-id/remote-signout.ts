@@ -1,12 +1,17 @@
 // Remote sign-out ends browser credentials and RPC connections, not device membership.
 import type { OpenClawIdAuthority } from "./authority.js";
-import type { OpenClawIdEffects } from "./service.js";
+
+// The connection effects sign-out uses from the service's removal effects.
+type SignOutEffects = {
+  captureConnections: (peerKeys: readonly string[]) => string[];
+  closeConnections: (connectionIds: readonly string[]) => void;
+};
 
 /** Revokes only the authenticated tunnel peer's issued tokens while keeping its device approved. */
 export async function signOutTunnelPeer(
   peerKey: string,
   authority: OpenClawIdAuthority,
-  effects: OpenClawIdEffects | undefined,
+  effects: SignOutEffects | undefined,
   stateDir: string,
 ): Promise<boolean> {
   if (!effects) {
