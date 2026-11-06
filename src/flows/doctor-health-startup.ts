@@ -3,7 +3,6 @@ import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exit.js";
-import { hasCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
@@ -26,7 +25,7 @@ export const showDoctorOutro = (message: string) =>
 
 export function showDoctorComplete(params: { watchExit: boolean }): void {
   showDoctorOutro("Doctor complete.");
-  if (params.watchExit && hasCliProcessScope()) {
+  if (params.watchExit) {
     // Cleanup after this line can outlive arming the settled-exit watchdog; name what it holds.
     watchCliExitAfterOutput(() => {
       writeSync(

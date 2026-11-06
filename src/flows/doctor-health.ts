@@ -710,5 +710,5 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  startup.showDoctorComplete({ watchExit: !updateResult });
+  startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
 }

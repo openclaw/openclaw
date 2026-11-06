@@ -258,6 +258,7 @@ export function registerMaintenanceCommands(
           await doctorCommand(
             defaultRuntime,
             {
+              watchExitAfterComplete: hasCliProcessScope(),
               ...(modelReplacements.length ? { modelReplacements } : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
