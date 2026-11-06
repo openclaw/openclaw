@@ -1,3 +1,4 @@
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserStatus, ProfileStatus } from "../browser/client.js";
 import {
@@ -133,6 +134,20 @@ describe("browser manage output", () => {
   });
 
   const userDataDir = "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser";
+  it.each(["/doctor", "/profiles"])("does not print a cancelled doctor %s probe", async (path) => {
+    const scope = new AsyncWorkScope();
+    gateway.mockImplementation(async (_method, _opts, request) => {
+      if (request.path === path) {
+        scope.beginClose();
+        throw new Error("Cancelled doctor transport");
+      }
+      return { status: makeStatus(), checks: [] };
+    });
+    await scope.run(() => run(["--json", "doctor"]));
+    expect(capture.runtimeLogs).toEqual([]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(0);
+  });
   it("shows chrome-mcp status without fake CDP fields", async () => {
     const output = await statusOutput({ headlessSource: "default" });
     expect(output).toContain("transport: chrome-mcp");
