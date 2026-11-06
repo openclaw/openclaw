@@ -116,6 +116,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
           });
           void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
+            void owner?.loadFullModelCatalog?.({ changedOnly: true }).catch(() => undefined);
             void owner?.loadNativeModelCatalog?.().catch(() => undefined);
           }
         }
