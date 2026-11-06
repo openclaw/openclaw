@@ -60,10 +60,10 @@ the idle limit is not a substitute for caller cleanup.
 
 | Testbox               | Allowed runner        | Default runtime | Maximum requested runtime |
 | --------------------- | --------------------- | --------------- | ------------------------- |
-| General runtime proof | 16-vCPU Ubuntu x64    | 60 minutes      | 240 minutes               |
-| High-memory exception | 32-vCPU Ubuntu x64    | 240 minutes     | 240 minutes               |
+| General runtime proof | 4-vCPU Ubuntu x64     | 60 minutes      | 240 minutes               |
+| High-memory exception | 8-vCPU Ubuntu x64     | 240 minutes     | 240 minutes               |
 | ARM proof             | 16-vCPU Ubuntu ARM    | 120 minutes     | 120 minutes               |
-| Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes      | 35 minutes                |
+| Build artifacts       | 4-vCPU Ubuntu x64     | 35 minutes      | 35 minutes                |
 | Windows               | 8- or 16-vCPU Windows | 75 minutes      | 75 minutes                |
 
 The ARM workflow's pull-request setup check uses `ubuntu-24.04-arm`. Manual

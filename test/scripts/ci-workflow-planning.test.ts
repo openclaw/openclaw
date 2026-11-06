@@ -14150,3 +14150,49 @@ it.each([
   expect(result.status, result.output).toBe(0);
   expect(readJsonOutput(result.outputs, "skills_python_targets_json")).toEqual(expected);
 });
+
+describe("Blacksmith physical runner allocation", () => {
+  it("preserves planner profiles while requesting physical capacity and the Gateway memory floor", () => {
+    const profiles = [4, 8, 16, 32, 16];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      runnerBackend: "blacksmith",
+      eventName: "push",
+      nodeTestShards: profiles.map((size, index) => ({
+        checkName: `physical-allocation-${index}`,
+        shardName: `physical-allocation-${index}`,
+        runner: `blacksmith-${size}vcpu-ubuntu-2404`,
+        requiresDist: false,
+        groups: [
+          {
+            shard_name: `physical-allocation-${index}`,
+            configs: ["test/vitest/bundled.config.ts"],
+            requiresDist: false,
+            runner: `blacksmith-${size}vcpu-ubuntu-2404`,
+            ...(index === 4 ? { minTotalMemoryBytes: 28 * 1024 ** 3 } : {}),
+          },
+        ],
+      })),
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+    const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+    const physicalSizes = [2, 2, 4, 8, 8];
+    for (const [index, size] of profiles.entries()) {
+      const row = rows.find(
+        (entry: { check_name: string }) => entry.check_name === `physical-allocation-${index}`,
+      );
+      expect(row.runner).toBe(`blacksmith-${size}vcpu-ubuntu-2404`);
+      expect(
+        evaluateWorkflowExpression(job["runs-on"], {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend: "blacksmith",
+          runAttempt: 1,
+          matrix: row,
+          preflightOutputs: manifest.outputs,
+        }),
+      ).toBe(`blacksmith-${physicalSizes[index]}vcpu-ubuntu-2404`);
+    }
+  });
+});
