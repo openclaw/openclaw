@@ -22,7 +22,6 @@ import type { StartupResult } from "./server/readiness.js";
 
 // This document must not depend on application assets or the request runtime it explains.
 const recoveryScript = `(() => {
-  const status = document.getElementById("recovery-status");
   let timer;
   let controller;
   let attempts = 0;
@@ -54,7 +53,6 @@ const recoveryScript = `(() => {
       clearTimeout(timeout);
       controller = undefined;
       if (!stopped) {
-        status.textContent = "Not ready yet. Checking again automatically.";
         timer = setTimeout(check, Math.min(15000, 1000 * 2 ** Math.min(attempts++, 4)));
       }
     }
@@ -74,7 +72,7 @@ const recoveryScript = `(() => {
 })();`;
 
 /** Also usable by a disposable ingress fixture; the Gateway cannot serve a stopped listener. */
-export function renderControlUiUnavailableDocument(title: string, detail: string): string {
+export function renderControlUiUnavailableDocument(title: string): string {
   // Control UI default theme tokens (ui/src/styles/base.css); the fonts are app assets, so system faces stand in.
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -86,12 +84,10 @@ export function renderControlUiUnavailableDocument(title: string, detail: string
 main{width:min(100%,480px);padding-bottom:9vh}.wordmark{display:block;height:32px;width:auto;margin:0 0 48px}
 h1{margin:0;font-size:clamp(30px,3.2vw,44px);font-weight:600;line-height:1.15;letter-spacing:-.035em;text-wrap:balance}
 p{margin:16px 0 0;max-width:46ch;color:var(--muted);font-size:16px;line-height:1.65}
-#recovery-status{min-height:3.3em;margin-top:28px;font-size:14px}
 @media(max-width:560px){body{padding:32px 24px}main{padding-bottom:6vh}.wordmark{height:28px;margin-bottom:40px}p{font-size:15px}}
 </style></head><body>
 <main id="openclaw-maintenance">${OPENCLAW_WORDMARK_SVG}
-<h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)} This page will open automatically when it’s ready.</p>
-<p id="recovery-status" role="status" aria-live="polite">Checking now — no need to reload.</p>
+<h1>${escapeHtml(title)}</h1><p>Your workspace opens when it’s ready.</p>
 </main><script>${recoveryScript}</script></body></html>`;
 }
 
@@ -127,10 +123,7 @@ function serveControlUiUnavailableDocument(
     return false;
   }
   const html = renderControlUiUnavailableDocument(
-    startup.status === "starting" ? "OpenClaw is starting" : "OpenClaw is temporarily unavailable",
-    startup.status === "starting"
-      ? "The Gateway is still starting up."
-      : "The Gateway is finishing its current work and isn’t accepting new connections right now.",
+    startup.status === "starting" ? "OpenClaw is waking up" : "OpenClaw is temporarily unavailable",
   );
   const ingress = getRemoteControlUiIngressContext(req);
   applyControlUiSecurityHeaders(res, ingress);

@@ -104,7 +104,7 @@ suite.define(() => {
         await page.goto(new URL("/healthz", target).href, { waitUntil: "domcontentloaded" });
         await page.goBack({ waitUntil: "commit" });
         expect(page.url()).toBe(target);
-        await page.getByRole("heading", { name: "OpenClaw is starting", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "OpenClaw is waking up", exact: true }).waitFor();
         // Exercise the browser's actual restoration choice, not synthetic pageshow dispatch.
         expect(await page.getByRole("button").count()).toBe(0);
         const before = requests;
@@ -126,7 +126,7 @@ suite.define(() => {
           .catch(() => null);
         try {
           await expect.poll(() => requests).toBeGreaterThan(0);
-          const title = page.getByRole("heading", { name: "OpenClaw is starting", exact: true });
+          const title = page.getByRole("heading", { name: "OpenClaw is waking up", exact: true });
           const visible = await title.waitFor({ state: "visible", timeout: 3_000 }).then(
             () => true,
             () => false,
