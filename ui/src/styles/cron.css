@@ -790,7 +790,7 @@
   color: var(--text);
   font-size: 13px;
   text-align: left;
-  padding: 7px 10px;
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
   border-radius: var(--menu-item-radius);
   cursor: var(--cursor-action);
 }

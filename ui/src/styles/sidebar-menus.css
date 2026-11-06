@@ -854,7 +854,7 @@
 .sidebar-agent-menu__agent-switch,
 .sidebar-agent-menu__create {
   flex: none;
-  min-height: 44px;
+  min-height: 36px;
   min-width: 0;
   padding: 0 !important;
   color: var(--muted) !important;
@@ -888,8 +888,8 @@
   gap: 10px;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px;
+  min-height: 36px;
+  padding: 6px 8px;
 }
 
 .sidebar-agent-menu__agent-avatar {
@@ -1072,9 +1072,10 @@
 }
 
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */
+/* Avatar rows: 36 tall around a 24px avatar, one step above option rows. */
 .sidebar-agent-menu {
-  --agent-avatar-size: 28px;
-  --agent-avatar-glyph-size: 18px;
+  --agent-avatar-size: 24px;
+  --agent-avatar-glyph-size: 16px;
 }
 
 .oc-menu.sidebar-agent-menu {

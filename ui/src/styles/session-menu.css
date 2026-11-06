@@ -22,14 +22,12 @@
 
 .session-menu__item,
 .sidebar-session-sort-menu__item {
-  --oc-menu-item-padding-inline: 8px;
-
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 5px 8px;
+  padding: 5px var(--oc-menu-item-padding-inline, 8px);
   border: none;
   border-radius: var(--menu-item-radius);
   background: transparent;

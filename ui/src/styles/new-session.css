@@ -746,9 +746,9 @@ span.new-session-page__select {
 }
 
 .new-session-page__environment-option {
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   gap: 8px;
-  padding: 3px 8px;
+  padding: 3px var(--oc-menu-item-padding-inline, 8px);
 }
 
 .new-session-page__unavailable-status ~ .session-menu__check:empty {

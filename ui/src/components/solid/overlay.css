@@ -366,6 +366,33 @@
   padding: var(--oc-popover-padding, 1.5rem);
 }
 
+/* Phone rows: 14px labels, 18px glyphs and a 12px text inset; the 40px height
+   comes from the coarse --menu-item-height. */
+@media (pointer: coarse) and (max-width: 640px) {
+  .oc-menu {
+    --oc-menu-item-padding-inline: 12px;
+
+    font-size: var(--control-ui-text-md);
+  }
+
+  /* Owners that pin a desktop label size still take the phone one. */
+  .oc-menu.oc-menu :is(.oc-menu-item, .session-menu__item, .sidebar-session-sort-menu__item) {
+    font-size: var(--control-ui-text-md);
+  }
+
+  .oc-menu-item__icon {
+    min-width: 18px;
+    min-height: 18px;
+  }
+
+  .oc-menu-item__icon > svg,
+  .oc-menu .session-menu__icon,
+  .oc-menu .session-menu__icon > svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
 .oc-menu-item {
   position: relative;
   display: flex;
