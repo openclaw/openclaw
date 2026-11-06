@@ -52,7 +52,9 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     var statusTitle: LocalizedStringResource {
         // Missing execution status is not missing output. Keep unknown outcomes
         // neutral while allowing the recorded result to be opened.
-        if self.displayState == .unavailable, self.resultText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        if self.displayState == .unavailable,
+           self.resultText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        {
             return "Outcome unknown"
         }
         return self.displayState.title
