@@ -7,6 +7,7 @@ import * as chatThreadBuild from "./chat-thread-build.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
+import { groupsOf, messagesOf } from "./chat-thread-fixtures.test-support.ts";
 import * as threadItems from "./chat-thread-items.ts";
 import { createPrependCorpus } from "./chat-thread-prepend-corpus.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
@@ -538,9 +539,7 @@ it("preserves independent session seeds and peer-published rows during partial r
     expect(getChatItemsGeneration(otherNext)).toBeGreaterThan(otherGeneration);
     expect(getExpandedToolCards(props.sessionKey).get("remembered-choice")).toBe(true);
     const next = buildCachedChatItems({ ...props, messages: messages.slice(2) });
-    const retainedMessages = next
-      .filter((item) => item.kind === "group")
-      .flatMap((item) => item.messages.map((entry) => entry.message));
+    const retainedMessages = messagesOf(groupsOf(next));
     expect(retainedMessages).toEqual(messages.slice(2));
     expect(retainedMessages[0]).toBe(messages[2]);
     expect(next).toHaveLength(2);
@@ -595,11 +594,7 @@ it("keeps raw seeds while rebuilding uncertified derived and stream rows after r
       );
       expect(kept).toBeDefined();
       expect(next).toContain(kept);
-      expect(
-        next
-          .filter((item) => item.kind === "group")
-          .flatMap((item) => item.messages.map((entry) => entry.message)),
-      ).not.toContain(retired[0]);
+      expect(messagesOf(groupsOf(next))).not.toContain(retired[0]);
     }
   } finally {
     resetChatThreadState(props.paneId);

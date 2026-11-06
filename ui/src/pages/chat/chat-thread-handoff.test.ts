@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { createProps, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import {
@@ -14,7 +15,8 @@ import {
 // A handoff makes the pane reload history: stored rows replace the live ones
 // under other message keys, and the handed-off run's live rows linger briefly.
 
-function preparedGroup(key: string, message: unknown): MessageGroup {
+function toolGroup(key: string, id: string): MessageGroup {
+  const message = chatMessage("assistant", [{ type: "toolcall", id, name: "browser.open" }]);
   const [group] = groupMessages([{ kind: "message", key, message }]);
   expect(group?.kind).toBe("group");
   return group as MessageGroup;
@@ -77,19 +79,14 @@ describe("opened tool rows across a handoff", () => {
   it("carries what the reader opened to the stored rows that replace live ones", () => {
     resetChatThreadState();
     const sessionKey = "handoff-swaps-live-rows";
-    const group = (key: string, id: string) =>
-      preparedGroup(key, {
-        role: "assistant",
-        content: [{ type: "toolcall", id, name: "browser.open" }],
-      });
-    const live = [group("live-row", "call-1")];
+    const live = [toolGroup("live-row", "call-1")];
     syncToolCardExpansionState(sessionKey, live, false);
     const expanded = getExpandedToolCards(sessionKey);
     setExpansionState(expanded, "live-row:toolcard:0", true);
     setExpansionState(expanded, `activity:${live[0]!.key}`, true);
 
     // A handoff reloads the same call under another message key.
-    const stored = [group("stored-row", "call-1")];
+    const stored = [toolGroup("stored-row", "call-1")];
     syncToolCardExpansionState(sessionKey, stored, false);
 
     expect(expanded.get("stored-row:toolcard:0")).toBe(true);
@@ -102,11 +99,7 @@ describe("opened tool rows across a handoff", () => {
   it("does not carry an opened row between messages that reuse one call id", () => {
     resetChatThreadState();
     const sessionKey = "reused-call-ids-stay-apart";
-    const group = (key: string) =>
-      preparedGroup(key, {
-        role: "assistant",
-        content: [{ type: "toolcall", id: "shared-call", name: "browser.open" }],
-      });
+    const group = (key: string) => toolGroup(key, "shared-call");
     syncToolCardExpansionState(sessionKey, [group("first"), group("second")], false);
     const expanded = getExpandedToolCards(sessionKey);
     setExpansionState(expanded, "first:toolcard:0", true);

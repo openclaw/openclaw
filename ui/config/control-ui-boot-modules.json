@@ -1619,6 +1619,7 @@
   "ui/src/pages/chat/chat-system-notice.ts",
   "ui/src/pages/chat/chat-thread-build.ts",
   "ui/src/pages/chat/chat-thread-canvas.ts",
+  "ui/src/pages/chat/chat-thread-display.ts",
   "ui/src/pages/chat/chat-thread-duplicates.ts",
   "ui/src/pages/chat/chat-thread-facts.ts",
   "ui/src/pages/chat/chat-thread-grouping.ts",

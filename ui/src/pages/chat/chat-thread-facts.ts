@@ -65,6 +65,7 @@ export function sameEntries<T>(previous?: readonly T[], next?: readonly T[]): bo
 export function sameChatItemsStructuralInput(
   previous: BuildChatItemsProps,
   next: BuildChatItemsProps,
+  ignoreWorkingPhase = false,
 ): boolean {
   const previousReasoning = previous.reasoning?.items;
   const nextReasoning = next.reasoning?.items;
@@ -102,8 +103,8 @@ export function sameChatItemsStructuralInput(
     previous.workerSetupPending === next.workerSetupPending &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
-    previous.runWorking === next.runWorking &&
-    previous.runFinalizing === next.runFinalizing &&
+    (ignoreWorkingPhase ||
+      (previous.runWorking === next.runWorking && previous.runFinalizing === next.runFinalizing)) &&
     previous.runActive === next.runActive &&
     previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
     previous.subagentWait?.runId === next.subagentWait?.runId &&

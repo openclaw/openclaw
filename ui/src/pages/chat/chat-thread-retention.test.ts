@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import type { ChatItemsFacts } from "./chat-thread-facts.ts";
 import { buildItems, createProps, makeMessage } from "./chat-thread.test-support.ts";
 import {
   buildCachedChatItems,
@@ -13,6 +15,19 @@ import {
 function hasLiveTarget(reference: WeakRef<object>): boolean {
   // Keep JSC's dereferenced temporary out of the suspended async test frame.
   return reference.deref() !== undefined;
+}
+
+function replyPrompt(id: string, index: 0 | 1) {
+  return makeMessage(id, index + 1, {
+    role: "user",
+    __openclaw: {
+      id,
+      seq: index + 1,
+      runId: index === 0 ? "first" : "follow",
+      senderId: index === 0 ? "alice" : "bob",
+      senderName: index === 0 ? "Alice" : "Bob",
+    },
+  });
 }
 
 describe("tool expansion state", () => {
@@ -108,26 +123,8 @@ it.each(["current", "turn"] as const)(
   async (dependency) => {
     const paneId = `reply-retirement-${dependency}`;
     const populate = () => {
-      const prompt = makeMessage("first-prompt", 1, {
-        role: "user",
-        __openclaw: {
-          id: "first-prompt",
-          seq: 1,
-          runId: "first",
-          senderId: "alice",
-          senderName: "Alice",
-        },
-      });
-      const follow = makeMessage("follow-prompt", 2, {
-        role: "user",
-        __openclaw: {
-          id: "follow-prompt",
-          seq: 2,
-          runId: "follow",
-          senderId: "bob",
-          senderName: "Bob",
-        },
-      });
+      const prompt = replyPrompt("first-prompt", 0);
+      const follow = replyPrompt("follow-prompt", 1);
       const answer = makeMessage("answer", 3, {
         runId: "first",
         openclawDelivery: { replyToCurrent: true },
@@ -160,6 +157,77 @@ it.each(["current", "turn"] as const)(
       expect(reference.deref()).toBeUndefined();
       expect(rows.map(hasLiveTarget)).toEqual([false, false]);
       expect(remaining.at(-1)?.content).toBe("answer");
+    } finally {
+      resetChatThreadState(paneId);
+    }
+  },
+);
+
+it.each(["current", "turn"] as const)(
+  "releases a retired %s reply from its unseen first-text seed before the next render",
+  async (dependency) => {
+    const paneId = `onset-retirement-${dependency}`;
+    const populate = () => {
+      const messages = [replyPrompt("onset-first", 0), replyPrompt("onset-follow", 1)];
+      const retired = messages[dependency === "current" ? 0 : 1]!;
+      const props = createProps({
+        paneId,
+        sessionKey: paneId,
+        messages,
+        runId: dependency === "current" ? "first" : "follow",
+        runActive: true,
+        runWorking: true,
+        stream: null,
+        streamStartedAt: 30,
+      });
+      const facts: ChatItemsFacts = { firsts: new Map(), indexedDividers: [] };
+      const coldWaiting = buildChatItems(props, undefined, "transcript", facts);
+      expect(facts.streamOnset).toMatchObject({ kind: "stream", text: "", isStreaming: true });
+      expect(facts.streamOnset?.replyToMessage?.message).toBe(retired);
+      const rows = (["visible", "unfiltered"] as const).map((view) => {
+        const items = buildCachedChatItems(props, view);
+        expect(items).toEqual(coldWaiting);
+        expect(items.some((item) => item.kind === "stream")).toBe(false);
+        expect(items.some((item) => item.kind === "reading-indicator")).toBe(true);
+        const row = items.find(
+          (item) =>
+            item.kind === "group" && item.messages.some((entry) => entry.message === retired),
+        );
+        if (!row) {
+          throw new Error("Expected source row");
+        }
+        return new WeakRef(row);
+      });
+      const reference = new WeakRef(retired);
+      retireChatThreadSources(paneId, [retired]);
+      return {
+        reference,
+        rows,
+        remaining: messages.filter((source) => source !== retired),
+        runId: props.runId,
+        control: new WeakRef({ unowned: true }),
+      };
+    };
+    try {
+      const { reference, rows, remaining, runId, control } = populate();
+      await collectGarbageForTest();
+      expect(control.deref()).toBeUndefined();
+      expect(reference.deref()).toBeUndefined();
+      expect(rows.map(hasLiveTarget)).toEqual([false, false]);
+      const next = createProps({
+        paneId,
+        sessionKey: paneId,
+        messages: remaining,
+        runId,
+        runActive: true,
+        runWorking: true,
+        stream: "First text after retirement",
+        streamStartedAt: 30,
+      });
+      const expected = buildChatItems(structuredClone(next));
+      for (const view of ["visible", "unfiltered"] as const) {
+        expect(buildCachedChatItems(next, view)).toEqual(expected);
+      }
     } finally {
       resetChatThreadState(paneId);
     }
