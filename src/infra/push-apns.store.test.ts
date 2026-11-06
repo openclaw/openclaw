@@ -1,17 +1,24 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withLoopbackTestServer } from "../commands/loopback-server.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import * as identityRuntime from "./device-identity-async.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   registerApnsRegistration,
+  sendApnsAlert,
 } from "./push-apns.js";
+import { mockApnsRelayIdentity } from "./push-apns.relay.test-support.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
@@ -104,11 +111,179 @@ function queryRegistration(table: string, nodeId = "ios-node-1") {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
 describe("push APNs registration store", () => {
+  it("upgrades an older registration without replacing credentials or assuming delivery health", async () => {
+    const original = await registerRelay();
+    const databasePath = openOpenClawStateDatabase({ env: databaseEnv() }).path;
+    await closeStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const older = new DatabaseSync(databasePath);
+    try {
+      older.exec("ALTER TABLE apns_registrations DROP COLUMN relay_rejection_reason");
+    } finally {
+      older.close();
+    }
+    // Upgrade admission starts from an unseen physical store, not an external mutation
+    // of a database whose schema this process already admitted.
+    baseDir = await tempDirs.make("openclaw-push-apns-upgrade-copy-");
+    const copiedDatabasePath = path.join(baseDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
+    await fs.copyFile(databasePath, copiedDatabasePath);
+    const { updatedAtMs: _version, ...credentials } = original;
+    await expect(registerRelay()).resolves.toMatchObject(credentials);
+    expect(queryRegistration("apns_registrations", original.nodeId)).toMatchObject({
+      relay_rejection_reason: null,
+    });
+  });
+
+  it("retains relay rejection across real HTTP, reconnect and restart without poisoning a replacement or peer", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
+    const peer = await registerRelay({ nodeId: "healthy-peer", relayHandle: "peer-handle" });
+    const direct = await registerDirect();
+    const rejected = await registerRelay();
+    if (rejected.transport !== "relay") {
+      throw new Error("expected relay registration");
+    }
+    const identity = mockApnsRelayIdentity();
+    const requests: Array<{ body: unknown; grant: string | undefined }> = [];
+    let responseStatus = 410;
+    let holdRequest = false;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const server = createServer((request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        requests.push({ body, grant: request.headers.authorization });
+        if (holdRequest) {
+          holdRequest = false;
+          entered.resolve();
+          await release.promise;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: responseStatus === 200,
+            status: responseStatus,
+            ...(responseStatus === 410 ? { reason: "Unregistered" } : {}),
+            environment: "production",
+          }),
+        );
+      })().catch(() => {
+        response.writeHead(500);
+        response.end("Fixture request failed");
+      });
+    });
+    await withLoopbackTestServer(server, async (port) => {
+      const relayConfig = { baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 2500 };
+      const push = () =>
+        sendApnsAlert({
+          nodeId: rejected.nodeId,
+          registration: rejected,
+          relayConfig,
+          title: "Synthetic recovery test",
+          body: "Only the fixture device",
+        });
+      await expect(push()).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        reason: "Unregistered",
+      });
+      expect(requests).toEqual([
+        {
+          body: expect.objectContaining({ relayHandle: "relay-handle-123" }),
+          grant: "Bearer send-grant-123",
+        },
+      ]);
+      await closeStateDatabaseForTest();
+      const replay = await registerRelay();
+      expect(replay).toMatchObject({ relayRejection: { status: 410, reason: "Unregistered" } });
+      if (replay.transport !== "relay") {
+        throw new Error("expected relay registration");
+      }
+      await expect(
+        sendApnsAlert({
+          nodeId: replay.nodeId,
+          registration: replay,
+          relayConfig,
+          title: "Synthetic",
+          body: "Known rejection",
+        }),
+      ).resolves.toMatchObject({ ok: false, status: 410, reason: "Unregistered" });
+      expect(requests).toHaveLength(1);
+      await expect(load("healthy-peer")).resolves.toEqual(peer);
+      await expect(load()).resolves.toEqual(direct);
+
+      holdRequest = true;
+      const late = push();
+      void late.catch(() => {});
+      await entered.promise;
+      const replacement = await registerRelay({
+        relayHandle: "renewed-handle",
+        sendGrant: "renewed-grant",
+      });
+      release.resolve();
+      await late;
+      await expect(load(rejected.nodeId)).resolves.toEqual(replacement);
+      expect(replacement).not.toHaveProperty("relayRejection");
+      if (replacement.transport !== "relay") {
+        throw new Error("expected relay registration");
+      }
+      responseStatus = 200;
+      await expect(
+        sendApnsAlert({
+          nodeId: replacement.nodeId,
+          registration: replacement,
+          relayConfig,
+          title: "Synthetic recovery test",
+          body: "Only the fixture device",
+        }),
+      ).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toMatchObject({
+        body: { relayHandle: "renewed-handle" },
+        grant: "Bearer renewed-grant",
+      });
+
+      const identityEntered = createDeferred();
+      const identityRelease = createDeferred();
+      vi.spyOn(identityRuntime, "loadOrCreateProcessDeviceIdentityAsync").mockImplementationOnce(
+        async () => {
+          identityEntered.resolve();
+          await identityRelease.promise;
+          return identity;
+        },
+      );
+      const authority = new AbortController();
+      const revoked = sendApnsAlert({
+        nodeId: replacement.nodeId,
+        registration: replacement,
+        relayConfig,
+        title: "Synthetic",
+        body: "Must not be sent",
+        signal: authority.signal,
+      });
+      void revoked.catch(() => {});
+      await identityEntered.promise;
+      const reason = new Error("Recovery authority revoked");
+      authority.abort(reason);
+      identityRelease.resolve();
+      await expect(revoked).rejects.toBe(reason);
+      expect(requests).toHaveLength(3);
+      await expect(load(rejected.nodeId)).resolves.toEqual(replacement);
+    });
+  });
+
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
     const relay = await registerRelay({
       environment: "sandbox",

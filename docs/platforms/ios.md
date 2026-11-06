@@ -667,7 +667,7 @@ How the flow works:
 - The iOS app fetches the paired Gateway identity (`gateway.identity.get`) and includes it in relay registration, so the relay-backed registration is delegated to that specific Gateway.
 - The app forwards that relay-backed registration to the paired Gateway with `push.apns.register`.
 - The Gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
-- If the app later connects to a different Gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
+- Each installation/Gateway/relay/environment/profile/proof-policy/topic context has its own cached registration. A new context enrolls separately; returning to a previous Gateway reuses only that context’s registration and rejection state.
 
 What the Gateway does **not** need for this path: no deployment-wide relay token, no direct APNs key for official App Store relay-backed sends.
 
@@ -678,6 +678,31 @@ Expected operator flow:
 3. Pair the app to the Gateway and let it finish connecting.
 4. The app publishes `push.apns.register` once it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
+
+### Rejected relay registration
+
+When the relay reports APNs `410 Unregistered` for the registered environment,
+the Gateway retains that rejection with the affected enrollment. Republishing
+the same handle and grant does not clear it, even if the publication timestamp
+changes. The next authenticated app publication receives an `apns_unregistered`
+result instead of a registration acknowledgment.
+
+The app requests a current APNs token and renews relay enrollment once
+automatically for that unchanged token and enrollment scope. Apple can return
+the same token; renewal does not require the token to change. The attempt is
+remembered across app relaunches and Gateway switches, and a replacement handle alone does not reset
+the recovery budget. Repeated rejection or a failed attempt leaves notification
+setup degraded rather than repeatedly enrolling on every reconnect.
+
+Open **Settings → This iPhone/This iPad → Diagnostics** to inspect notification
+permission separately from push registration. **Retry notification setup**
+allows another explicit attempt while the affected Gateway is connected.
+Registration publication and relay renewal are not proof of notification
+receipt: the app reports **delivery unverified**, not healthy delivery. A legacy
+Gateway without registration-result feedback requires a Gateway update.
+
+Local/manual direct APNs registrations keep their existing invalidation behavior.
+Recovery does not remove other devices, pairing credentials, or App Attest keys.
 
 ## Background alive beacons
 

@@ -72,9 +72,25 @@ extension SettingsProTab {
             self.diagnosticCheckRow(
                 icon: "bell",
                 title: "Notifications",
-                detail: "Approval and event alert channel",
+                detail: "System permission, not delivery health",
                 value: .verbatim(self.notificationPresentation.text),
                 color: self.notificationPresentation.color)
+            self.diagnosticCheckRow(
+                icon: "paperplane",
+                title: "Push Registration",
+                detail: .verbatim(self.appModel.pushRegistrationHealth.detail),
+                value: self.appModel.pushRegistrationHealth == .publishedUnverified ? "Published" : "Unverified",
+                color: .secondary,
+                detailLineLimit: nil)
+            if self.appModel.pushRegistrationHealth == .needsRetry {
+                Button {
+                    Task { await self.appModel.retryPushRegistration() }
+                } label: {
+                    Text("Retry notification setup")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .disabled(!self.appModel.gatewayConnected)
+            }
             self.diagnosticCheckRow(
                 icon: "rectangle.on.rectangle",
                 title: "Screen Capture",
@@ -99,7 +115,8 @@ extension SettingsProTab {
         title: OpenClawTextValue,
         detail: OpenClawTextValue,
         value: OpenClawTextValue,
-        color: Color) -> some View
+        color: Color,
+        detailLineLimit: Int? = 1) -> some View
     {
         HStack(spacing: 12) {
             SettingsIcon(systemName: icon, color: color)
@@ -109,7 +126,7 @@ extension SettingsProTab {
                 detail.text
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(detailLineLimit)
             }
             Spacer(minLength: 8)
             value.text
@@ -216,7 +233,9 @@ extension SettingsProTab {
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationPresentation.isActive).count
+            notificationsAllowed: self.notificationPresentation.isActive,
+            pushRegistrationDegraded: self.appModel.pushRegistrationHealth == .needsRetry ||
+                self.appModel.pushRegistrationHealth == .gatewayUpgradeRequired).count
         self.diagnosticsLastRunText = Date().formatted(date: .omitted, time: .shortened)
     }
 

@@ -16,7 +16,7 @@ import {
   readApnsRegistrationFromDatabase,
   readApnsRegistrationsFromDatabase,
 } from "./push-apns-store.js";
-import { apnsRegistrationToRow } from "./push-apns-store.rows.js";
+import { apnsRegistrationToRow, sameRelayEnrollment } from "./push-apns-store.rows.js";
 import type { ApnsRegistration } from "./push-apns-store.types.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
@@ -42,12 +42,9 @@ function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration)
   return (
     left.transport === "relay" &&
     right.transport === "relay" &&
-    left.relayHandle === right.relayHandle &&
-    left.sendGrant === right.sendGrant &&
-    left.installationId === right.installationId &&
-    left.distribution === right.distribution &&
-    left.relayOrigin === right.relayOrigin &&
-    left.tokenDebugSuffix === right.tokenDebugSuffix
+    sameRelayEnrollment(left, right) &&
+    left.tokenDebugSuffix === right.tokenDebugSuffix &&
+    left.relayRejection?.reason === right.relayRejection?.reason
   );
 }
 
@@ -78,8 +75,15 @@ function registerApnsRegistrationInDatabase(
       // The tombstone carries the deleted row's successor version. Advancing past
       // both rows keeps stale compare-and-delete callers harmless after re-registration.
       const previousVersions = readApnsRegistrationVersions(db, nodeId);
+      const current = readApnsRegistrationFromDatabase(db, nodeId);
       const next: ApnsRegistration = {
         ...candidate,
+        ...(candidate.transport === "relay" &&
+        current?.transport === "relay" &&
+        sameRelayEnrollment(current, candidate) &&
+        current.relayRejection
+          ? { relayRejection: current.relayRejection }
+          : {}),
         updatedAtMs: nextApnsRegistrationVersion(nodeId, previousVersions, input.nowMs),
       };
       const row = apnsRegistrationToRow(next);
@@ -103,6 +107,30 @@ function registerApnsRegistrationInDatabase(
 }
 
 export const apnsOperations = {
+  "apns.registration.rejectRelayIfCurrent": (input: ApnsRegistration, { open }) => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const current = readApnsRegistrationFromDatabase(db, input.nodeId);
+        if (
+          input.transport !== "relay" ||
+          current?.transport !== "relay" ||
+          !sameRelayEnrollment(current, input)
+        ) {
+          return false;
+        }
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<ApnsRegistrationDatabase>(db)
+            .updateTable("apns_registrations")
+            .set({ relay_rejection_reason: "Unregistered" })
+            .where("node_id", "=", input.nodeId),
+        );
+        return true;
+      },
+      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    );
+  },
   "apns.registration.register": (
     input: Parameters<typeof registerApnsRegistrationInDatabase>[1],
     { open },

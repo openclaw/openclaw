@@ -180,7 +180,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
-        self.logger.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
+        self.logger.error("APNs registration failed; retry notification setup in Diagnostics.")
+        self.resolvedAppModel()?.handleAPNsRegistrationFailure()
     }
 
     func application(

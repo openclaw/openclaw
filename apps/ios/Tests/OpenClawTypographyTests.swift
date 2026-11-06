@@ -22,6 +22,13 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `notification recovery action uses branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Design/SettingsProTabActions.swift"), encoding: .utf8)
+        #expect(source
+            .contains(
+                "Text(\"Retry notification setup\")\n                        .font(OpenClawType.subheadSemiBold)"))
+    }
+
     @Test func `ESP setup controls and secret prompts use branded typography`() throws {
         let source = try String(contentsOf: Self.sourceURL("Settings/ESPDeviceSetupScreen.swift"), encoding: .utf8)
         #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "ESPDeviceSetupScreen.swift").isEmpty)

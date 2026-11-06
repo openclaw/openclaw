@@ -8,6 +8,7 @@ type LazyColumn = readonly [
 
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
+  ["apns_registrations", "relay_rejection_reason", "TEXT"],
   ["agent_deletion_journal", "phase", "TEXT", true],
   ["agent_database_leases", "provenance", "TEXT", true],
   ["user_profile_identities", "canonical_login", "TEXT"],

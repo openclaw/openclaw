@@ -1,27 +1,27 @@
 import Foundation
 
-enum PushTransportMode: String {
+enum PushTransportMode: String, Sendable {
     case direct
     case relay
 }
 
-enum PushDistributionMode: String {
+enum PushDistributionMode: String, Sendable {
     case local
     case official
 }
 
-enum PushAPNsEnvironment: String {
+enum PushAPNsEnvironment: String, Sendable {
     case sandbox
     case production
 }
 
-enum PushRelayProfile: String {
+enum PushRelayProfile: String, Sendable {
     case production
     case deviceSandbox
     case simulatorSandbox
 }
 
-enum PushProofPolicy: String {
+enum PushProofPolicy: String, Sendable {
     case appleStrict
     case appleDevelopment
     case internalSimulator

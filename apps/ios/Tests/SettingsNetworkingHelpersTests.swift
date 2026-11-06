@@ -1,21 +1,27 @@
 import Testing
 @testable import OpenClaw
 
-@Suite struct SettingsNetworkingHelpersTests {
-    @Test func diagnosticsIssuesNameEachReviewerVisibleCheck() {
+struct SettingsNetworkingHelpersTests {
+    @Test func `permission does not hide rejected push registration`() {
+        #expect(SettingsDiagnostics.issues(
+            gatewayConnected: true, discoveredGatewayCount: 1, talkConfigLoaded: true,
+            notificationsAllowed: true, pushRegistrationDegraded: true) == [.notificationRegistrationUnavailable])
+    }
+
+    @Test func `diagnostics issues name each reviewer visible check`() {
         #expect(
             SettingsDiagnostics.issues(
                 gatewayConnected: false,
                 discoveredGatewayCount: 0,
                 talkConfigLoaded: false,
                 notificationsAllowed: false) == [
-                    .gatewayOffline,
-                    .discoveryUnavailable,
-                    .notificationsUnavailable,
-                ])
+                .gatewayOffline,
+                .discoveryUnavailable,
+                .notificationsUnavailable,
+            ])
     }
 
-    @Test func diagnosticsIssuesRequireTalkConfigOnlyAfterGatewayConnects() {
+    @Test func `diagnostics issues require talk config only after gateway connects`() {
         #expect(
             SettingsDiagnostics.issues(
                 gatewayConnected: true,

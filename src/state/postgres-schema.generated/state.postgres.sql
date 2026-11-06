@@ -80,6 +80,7 @@ CREATE TABLE "apns_registrations" (
   "environment" text COLLATE "C" NOT NULL,
   "distribution" text COLLATE "C",
   "token_debug_suffix" text COLLATE "C",
+  "relay_rejection_reason" text COLLATE "C",
   "updated_at_ms" bigint NOT NULL,
   PRIMARY KEY ("node_id")
 );

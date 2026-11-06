@@ -183,8 +183,37 @@ const relayRegistration = {
 };
 
 describe("node exec events", () => {
+  it.each([false, true])(
+    "reports relay registration rejection to the authenticated app (%s)",
+    async (rejected) => {
+      registerApns.mockResolvedValueOnce({
+        ...relayRegistration,
+        nodeId: "node-relay-sandbox",
+        updatedAtMs: 1,
+        ...(rejected ? { relayRejection: { status: 410, reason: "Unregistered" } } : {}),
+      });
+      const { emit } = nodeFixture("node-relay-sandbox");
+      await expect(
+        emit(
+          "push.apns.register",
+          { ...relayRegistration, gatewayDeviceId: "gateway-device-1" },
+          { resolveApnsRegistrationGeneration: () => "generation-node-relay-sandbox" },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        event: "push.apns.register",
+        handled: !rejected,
+        reason: rejected ? "apns_unregistered" : "registered",
+      });
+    },
+  );
+
   beforeEach(() => {
-    registerApns.mockClear();
+    registerApns.mockReset().mockResolvedValue({
+      ...relayRegistration,
+      nodeId: "node-relay-sandbox",
+      updatedAtMs: 1,
+    });
     deviceIdentity.mockClear();
   });
 

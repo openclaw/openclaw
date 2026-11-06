@@ -64,6 +64,7 @@ function registrationRow(nodeId: string, relay = false): RegistrationRow {
     environment: relay ? "production" : "sandbox",
     distribution: relay ? "official" : null,
     token_debug_suffix: relay ? "abcd1234" : null,
+    relay_rejection_reason: null,
     updated_at_ms: 7,
   };
 }
