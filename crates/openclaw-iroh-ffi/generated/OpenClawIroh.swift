@@ -539,6 +539,142 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 
+/**
+ * Caller-held cancellation for one or more pending operations.
+ *
+ * Swift's generated async calls cannot cancel the Rust future, so callers pass a
+ * token and call `cancel()` from their task cancellation handler. Cancelling is
+ * idempotent and affects every operation that received this token.
+ */
+public protocol CancelTokenProtocol: AnyObject, Sendable {
+
+    func cancel()
+
+}
+/**
+ * Caller-held cancellation for one or more pending operations.
+ *
+ * Swift's generated async calls cannot cancel the Rust future, so callers pass a
+ * token and call `cancel()` from their task cancellation handler. Cancelling is
+ * idempotent and affects every operation that received this token.
+ */
+open class CancelToken: CancelTokenProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_openclaw_iroh_ffi_fn_clone_canceltoken(self.handle, $0) }
+    }
+public convenience init() {
+    let handle =
+        try! rustCall() {
+    uniffi_openclaw_iroh_ffi_fn_constructor_canceltoken_new($0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_openclaw_iroh_ffi_fn_free_canceltoken(handle, $0) }
+    }
+
+
+
+
+open func cancel()  {try! rustCall() {
+    uniffi_openclaw_iroh_ffi_fn_method_canceltoken_cancel(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCancelToken: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = CancelToken
+
+    public static func lift(_ handle: UInt64) throws -> CancelToken {
+        return CancelToken(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: CancelToken) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CancelToken {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: CancelToken, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCancelToken_lift(_ handle: UInt64) throws -> CancelToken {
+    return try FfiConverterTypeCancelToken.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCancelToken_lower(_ value: CancelToken) -> UInt64 {
+    return FfiConverterTypeCancelToken.lower(value)
+}
+
+
+
+
+
+
 public protocol ConnectionProtocol: AnyObject, Sendable {
 
     func acceptBi() async throws  -> BiStream
@@ -740,7 +876,10 @@ public protocol EndpointProtocol: AnyObject, Sendable {
 
     func boundSockets()  -> [String]
 
-    func connect(endpointId: String, alpn: Data, relayUrl: String?, directAddrs: [String]) async throws  -> Connection
+    /**
+     * Dials a verified endpoint. Cancelling `cancel` aborts only this dial.
+     */
+    func connect(endpointId: String, alpn: Data, relayUrl: String?, directAddrs: [String], cancel: CancelToken?) async throws  -> Connection
 
     func id()  -> String
 
@@ -827,13 +966,16 @@ open func boundSockets() -> [String]  {
 })
 }
 
-open func connect(endpointId: String, alpn: Data, relayUrl: String?, directAddrs: [String])async throws  -> Connection  {
+    /**
+     * Dials a verified endpoint. Cancelling `cancel` aborts only this dial.
+     */
+open func connect(endpointId: String, alpn: Data, relayUrl: String?, directAddrs: [String], cancel: CancelToken? = nil)async throws  -> Connection  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_openclaw_iroh_ffi_fn_method_endpoint_connect(
                     self.uniffiCloneHandle(),
-                    FfiConverterString.lower(endpointId),FfiConverterData.lower(alpn),FfiConverterOptionString.lower(relayUrl),FfiConverterSequenceString.lower(directAddrs)
+                    FfiConverterString.lower(endpointId),FfiConverterData.lower(alpn),FfiConverterOptionString.lower(relayUrl),FfiConverterSequenceString.lower(directAddrs),FfiConverterOptionTypeCancelToken.lower(cancel)
                 )
             },
             pollFunc: ffi_openclaw_iroh_ffi_rust_future_poll_u64,
@@ -1821,6 +1963,30 @@ fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeCancelToken: FfiConverterRustBuffer {
+    typealias SwiftType = CancelToken?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeCancelToken.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeCancelToken.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeConnection: FfiConverterRustBuffer {
     typealias SwiftType = Connection?
 
@@ -2021,6 +2187,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openclaw_iroh_ffi_checksum_func_bind() != 42850) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openclaw_iroh_ffi_checksum_method_canceltoken_cancel() != 43830) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openclaw_iroh_ffi_checksum_method_connection_accept_bi() != 56680) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2045,7 +2214,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openclaw_iroh_ffi_checksum_method_endpoint_bound_sockets() != 41913) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_openclaw_iroh_ffi_checksum_method_endpoint_connect() != 8580) {
+    if (uniffi_openclaw_iroh_ffi_checksum_method_endpoint_connect() != 30078) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openclaw_iroh_ffi_checksum_method_endpoint_id() != 27641) {
@@ -2073,6 +2242,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openclaw_iroh_ffi_checksum_method_sendstream_write() != 38839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openclaw_iroh_ffi_checksum_constructor_canceltoken_new() != 38268) {
         return InitializationResult.apiChecksumMismatch
     }
 

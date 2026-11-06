@@ -243,6 +243,27 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_CLONE_CANCELTOKEN
+#define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_CLONE_CANCELTOKEN
+uint64_t uniffi_openclaw_iroh_ffi_fn_clone_canceltoken(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_FREE_CANCELTOKEN
+#define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_FREE_CANCELTOKEN
+void uniffi_openclaw_iroh_ffi_fn_free_canceltoken(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_CONSTRUCTOR_CANCELTOKEN_NEW
+#define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_CONSTRUCTOR_CANCELTOKEN_NEW
+uint64_t uniffi_openclaw_iroh_ffi_fn_constructor_canceltoken_new(RustCallStatus *_Nonnull out_status
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_METHOD_CANCELTOKEN_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_METHOD_CANCELTOKEN_CANCEL
+void uniffi_openclaw_iroh_ffi_fn_method_canceltoken_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_CLONE_CONNECTION
 #define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_CLONE_CONNECTION
 uint64_t uniffi_openclaw_iroh_ffi_fn_clone_connection(uint64_t handle, RustCallStatus *_Nonnull out_status
@@ -305,7 +326,7 @@ RustBuffer uniffi_openclaw_iroh_ffi_fn_method_endpoint_bound_sockets(uint64_t pt
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_METHOD_ENDPOINT_CONNECT
 #define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_METHOD_ENDPOINT_CONNECT
-uint64_t uniffi_openclaw_iroh_ffi_fn_method_endpoint_connect(uint64_t ptr, RustBuffer endpoint_id, RustBuffer alpn, RustBuffer relay_url, RustBuffer direct_addrs
+uint64_t uniffi_openclaw_iroh_ffi_fn_method_endpoint_connect(uint64_t ptr, RustBuffer endpoint_id, RustBuffer alpn, RustBuffer relay_url, RustBuffer direct_addrs, RustBuffer cancel
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_FN_METHOD_ENDPOINT_ID
@@ -654,6 +675,12 @@ uint16_t uniffi_openclaw_iroh_ffi_checksum_func_bind(void
 
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_METHOD_CANCELTOKEN_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_METHOD_CANCELTOKEN_CANCEL
+uint16_t uniffi_openclaw_iroh_ffi_checksum_method_canceltoken_cancel(void
+
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_METHOD_CONNECTION_ACCEPT_BI
 #define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_METHOD_CONNECTION_ACCEPT_BI
 uint16_t uniffi_openclaw_iroh_ffi_checksum_method_connection_accept_bi(void
@@ -759,6 +786,12 @@ uint16_t uniffi_openclaw_iroh_ffi_checksum_method_sendstream_reset(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_METHOD_SENDSTREAM_WRITE
 #define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_METHOD_SENDSTREAM_WRITE
 uint16_t uniffi_openclaw_iroh_ffi_checksum_method_sendstream_write(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_CONSTRUCTOR_CANCELTOKEN_NEW
+#define UNIFFI_FFIDEF_UNIFFI_OPENCLAW_IROH_FFI_CHECKSUM_CONSTRUCTOR_CANCELTOKEN_NEW
+uint16_t uniffi_openclaw_iroh_ffi_checksum_constructor_canceltoken_new(void
 
 );
 #endif

@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
-use crate::{Connection, IrohError, cancelled, invalid, transport};
+use crate::{CancelToken, Connection, IrohError, cancelled, invalid, transport};
 use iroh::{
     EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, Watcher,
     endpoint::{QuicTransportConfig, RelayStatus, presets},
@@ -109,12 +109,15 @@ impl Endpoint {
             .map(ToString::to_string)
             .collect()
     }
+    /// Dials a verified endpoint. Cancelling `cancel` aborts only this dial.
+    #[uniffi::method(default(cancel = None))]
     pub async fn connect(
         &self,
         endpoint_id: String,
         alpn: Vec<u8>,
         relay_url: Option<String>,
         direct_addrs: Vec<String>,
+        cancel: Option<Arc<CancelToken>>,
     ) -> Result<Arc<Connection>, IrohError> {
         let id = EndpointId::from_str(&endpoint_id).map_err(|_| invalid("invalid endpoint ID"))?;
         if alpn.is_empty() || alpn.len() > 255 {
@@ -132,6 +135,7 @@ impl Endpoint {
         tokio::select! {
             biased;
             () = cancelled(self.shutdown.subscribe()) => Err(IrohError::EndpointClosed),
+            () = CancelToken::wait(cancel.as_ref()) => Err(IrohError::Cancelled),
             result = self.inner.connect(addr, &alpn) => {
                 let inner = result.map_err(|_| transport("connection failed"))?;
                 Ok(Connection::new(inner, self.shutdown.subscribe()))
