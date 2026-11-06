@@ -412,6 +412,28 @@ describe("resolveExecutable", () => {
     },
   );
 
+  it.runIf(process.platform === "win32")(
+    "prefers the earlier PATH directory over a .cmd shim in a later one",
+    async () => {
+      await withMockedPlatform("win32", async () => {
+        await withTestDir({ prefix: "openclaw-exec-precedence-" }, async (base) => {
+          const firstDir = path.join(base, "first");
+          const laterDir = path.join(base, "later");
+          await fs.mkdir(firstDir, { recursive: true });
+          await fs.mkdir(laterDir, { recursive: true });
+          await fs.writeFile(path.join(firstDir, "gcloud.exe"), "fixture\n", "utf8");
+          await fs.writeFile(path.join(laterDir, "gcloud.cmd"), "fixture\n", "utf8");
+
+          // PATH order selects the installation, so the chosen .exe must win even
+          // though a .cmd shim exists further down PATH.
+          withEnv({ PATH: `${firstDir};${laterDir}`, PATHEXT: ".EXE;.CMD;.BAT;.COM" }, () => {
+            expect(resolveExecutable("gcloud")).toBe(path.join(firstDir, "gcloud.exe"));
+          });
+        });
+      });
+    },
+  );
+
   it("returns original cmd when no PATH match exists on Windows", () => {
     withMockedPlatform("win32", () => {
       expect(resolveExecutable("gog")).toBe("gog");
