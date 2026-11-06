@@ -127,6 +127,14 @@ describe("check-changelog-attributions", () => {
     ]);
   });
 
+  it("allows maintainer authorship before an external Thanks clause", () => {
+    const text = "- Fix. Authored by @steipete. Thanks @external-contributor.";
+    expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
+    expect(
+      findForbiddenChangelogThanks("- Fix. Thanks @external-contributor and @tideclaw-bot."),
+    ).toHaveLength(1);
+  });
+
   it("allows external contributor thanks attributions", () => {
     expect(
       findForbiddenChangelogThanks(

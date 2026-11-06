@@ -23,6 +23,7 @@ type Workflow = {
   jobs: Record<
     string,
     {
+      env?: Record<string, string>;
       if?: string;
       needs?: string[];
       steps: Array<Record<string, unknown>>;
@@ -588,4 +589,23 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
   ])("supplies $job with its evidence and cancellation contract", ({ job, name, env }) => {
     expect(step(job, name).env).toMatchObject(env);
   });
+});
+
+it("scans with publisher tooling while the plugin npm preflight child runs", () => {
+  const job = workflow.jobs.prepare_plugin_npm;
+  const names = job?.steps.map((entry) => entry.name) ?? [];
+  const from = names.indexOf("Dispatch exact plugin npm artifact preflight") + 1;
+  const scan = job?.steps.slice(
+    from,
+    names.indexOf("Resolve and seal exact plugin npm artifact descriptor"),
+  );
+  expect(scan?.map((entry) => entry.if)).toEqual(
+    Array(5).fill(
+      "env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'",
+    ),
+  );
+  expect(job?.env?.PUBLISHER_SHA).toContain(".qualificationAdmission.workflowSha");
+  expect(scan?.at(-1)?.run).toMatch(
+    /tsx \.release-tooling\/scripts\/plugin-npm-release-plan\.ts[\s\S]*tsx \.release-tooling\/scripts\/check-plugin-npm-security-scan\.mts \\\n\s+--tooling-root \.release-tooling/u,
+  );
 });

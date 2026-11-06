@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { scanWithPublisherTooling } from "../../scripts/check-plugin-npm-security-scan.mts";
 import { scanPluginNpmArtifactSecurity } from "../../scripts/plugin-npm-security-scan.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
   const bytes = Buffer.from(value, "utf8");
@@ -153,4 +158,30 @@ describe("plugin npm artifact security scan", () => {
       }),
     ).toThrow("unreviewed critical findings in exact npm artifact");
   });
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("rejects publisher-built packs whose reviewed finding bytes drifted", async () => {
+  // Stand-in publisher packer; the scan uses the real reviewed inventory.
+  const tooling = tempDirs.make("publisher-tooling-");
+  mkdirSync(join(tooling, "scripts"));
+  const packer = `cp "${tooling}/$(basename "$4").tgz" "$OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR/"`;
+  writeFileSync(join(tooling, "scripts/plugin-npm-publish.sh"), packer);
+  const name = "@openclaw/imessage";
+  const files = { "dist/.setup/sanitize-outbound-AbCd1234.mjs": SPAWN_SOURCE };
+  writeFileSync(join(tooling, "imessage.tgz"), packageTarball(name, files));
+  const sha256 = createHash("sha256").update(SPAWN_SOURCE).digest("hex");
+  const plan = [name, "@openclaw/brave"].map((packageName) => ({
+    packageDir: packageName.includes("imessage") ? "imessage" : "brave",
+    packageName,
+    version: "1.0.0",
+  }));
+  // brave has no reviewed finding and no pack, so packing it would fail.
+  await expect(scanWithPublisherTooling(tooling, plan)).rejects.toThrow(
+    new RegExp(
+      `of 1 [\\s\\S]*${name}: unreviewed.*${sha256}.*sanitize-outbound-<hash>[\\s\\S]*new hash`,
+      "u",
+    ),
+  );
 });

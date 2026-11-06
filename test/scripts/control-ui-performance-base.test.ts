@@ -102,6 +102,8 @@ async function createComparisonRepo(
     "check-control-ui-performance.mts",
     "check-control-ui-precompressed-assets.mts",
     "lib/check-limits.mts",
+    "lib/release-context.mjs",
+    "lib/release-version.mjs",
     "lib/control-ui-i18n-config.json",
     "lib/control-ui-i18n-config.ts",
     "lib/repo-root.mjs",

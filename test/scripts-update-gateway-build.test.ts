@@ -63,7 +63,31 @@ describe("source update build output transaction", () => {
     fs.readFileSync(path.join(workdir, output, "marker"), "utf8");
   const backups = () =>
     fs.readdirSync(workdir).filter((name) => name.startsWith(".update-build-backup."));
-  beforeEach(() => fs.mkdirSync(workdir));
+  beforeEach(() => {
+    fs.mkdirSync(workdir);
+    fs.mkdirSync(path.join(workdir, ".git"));
+  });
+  it("keeps standalone checkout ownership separate from an enclosing checkout", async () => {
+    fs.mkdirSync(path.join(scratch, ".git"));
+    const enclosingLock = path.join(scratch, ".artifacts/dist-artifacts.lock");
+    fs.mkdirSync(enclosingLock, { recursive: true });
+    const retainedOwner = JSON.stringify({ pid: 0 });
+    fs.writeFileSync(path.join(enclosingLock, "owner.json"), retainedOwner);
+    const checkoutLock = path.join(workdir, ".artifacts/dist-artifacts.lock");
+
+    await expect(
+      runTransaction("stop", "restart", {
+        root: workdir,
+        build: async () => {
+          expect(fs.existsSync(path.join(checkoutLock, "owner.json"))).toBe(true);
+          return { exitCode: 0 };
+        },
+        lifecycle: async () => 0,
+      }),
+    ).resolves.toBe(0);
+    expect(fs.existsSync(path.join(checkoutLock, "owner.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(enclosingLock, "owner.json"), "utf8")).toBe(retainedOwner);
+  });
 
   it("refuses publication when a shared consumer starts during candidate import", async () => {
     const command = nativeExec.runCommandWithTimeout;

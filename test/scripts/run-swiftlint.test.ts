@@ -47,7 +47,7 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
     );
   });
 
-  function run(report: unknown, { github = true, exit = 2, raw = false } = {}) {
+  function run(report: unknown, { github = true, exit = 2, raw = false, release = false } = {}) {
     invocation += 1;
     const summary = path.join(fixtureDir, `summary-${invocation}.md`);
     const args = path.join(fixtureDir, `args-${invocation}.json`);
@@ -62,6 +62,7 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
           PATH: `${fixtureDir}${path.delimiter}${process.env.PATH}`,
           CI: "true",
           GITHUB_ACTIONS: github ? "true" : undefined,
+          OPENCLAW_RELEASE_CONTEXT_REF: release ? "release/2026.11.4" : "main",
           GITHUB_STEP_SUMMARY: summary,
           SWIFTLINT_TEST_ARGS: args,
           SWIFTLINT_TEST_REPORT: raw ? String(report) : JSON.stringify(report),
@@ -77,6 +78,15 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
     };
   }
 
+  it("disables release line limits but retains correctness and complexity errors", () => {
+    const size = ["file_length", "line_length", "function_body_length", "type_body_length"].map(
+      (rule) => violation(rule),
+    );
+    expect(run(size, { github: false, release: true })).toMatchObject({ status: 0, summary: "" });
+    for (const rule of ["force_try", "cyclomatic_complexity"]) {
+      expect(run([...size, violation(rule)], { github: false, release: true }).status).toBe(2);
+    }
+  });
   it("keeps local strict lint failures unchanged, even when a local tool sets CI", () => {
     const result = run([violation("line_length")], { github: false });
     expect(result.status).toBe(2);

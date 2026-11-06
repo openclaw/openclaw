@@ -70,12 +70,14 @@ state suppresses repeated attempt, candidate-observation, and terminal events;
 a later rerun or newly observed tip is reported. Losing the local notification
 state can repeat notifications, but cannot authorize a retry or publication.
 
-`rerun --child` waits for one failed child, sends exactly one retry request,
-confirms the new attempt has no duplicate jobs, and
-records an audit line. It refuses children past `--max-attempts` (default 2,
-which allows one rerun). When a failed consumer is bound to a green producer's
-run attempt, it reruns that producer and its dependents instead. It returns
-after the new attempt starts; `continue --failed` still owns the final reseal.
+`rerun --child` waits for one failed child, sends exactly one retry request for
+its single blocking failed job (`mode: single-job`), confirms the new attempt has
+no duplicate jobs, and records an audit line. It refuses children past
+`--max-attempts` (default 2, which allows one rerun), passed children, and artifact
+producers (use `continue --failed`). Multiple blocking failed jobs require a fresh
+all-group FRV; the command does not rerun green producers, dependent job groups,
+or the whole child. It returns after the new attempt starts; `continue --failed`
+still owns the final reseal.
 
 When every workload passed and only **Seal child receipt** failed, the preview
 reports `mode: receipt`. The same bounded `rerun --child` command selects that
@@ -84,11 +86,16 @@ their accepted attempts, seals the new receipt against the exact child attempt,
 and still requires `continue --failed` plus strict verification before reporting
 qualification accepted. A metadata retry starting is not qualification success.
 
-`continue --failed` reruns each failed child's jobs as soon as that child is
-terminal, while sibling children and the original parent may still run. It
-adopts active attempts without duplicating them and leaves green child
-workflows untouched. After the resulting child evidence is green and the
-original parent finishes, it reruns the parent once. The original Decision and
+`continue --failed` applies the same exact-job restriction to each failed child
+and failed artifact producer as soon as it is terminal, while sibling children
+and the original parent may still run. It refuses multi-job recovery and directs
+the operator to a fresh all-group FRV. It adopts active attempts without
+duplicating them and leaves green child
+workflows untouched. Each invocation reruns a child once; if that rerun fails
+again, it exits at once with the failed attempt and remaining rerun budget rather
+than waiting for siblings. A duplicate-job (ghost) attempt is unsealable: start
+a fresh all-group FRV instead of rerunning again. After the resulting child
+evidence is green and the original parent finishes, it reruns the parent once. The original Decision and
 Drain may disagree after an early retry; the final parent attempt restores the
 same immutable execution plan and seals the updated evidence. Existing plan
 and attempt-binding checks remain mandatory.

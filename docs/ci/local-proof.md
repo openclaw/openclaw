@@ -267,6 +267,7 @@ pre-commit run zizmor --all-files
 
 ## Surface ratchets
 
+Release branches skip line limits and line-count ratchets, except explicit pruning.
 Size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:

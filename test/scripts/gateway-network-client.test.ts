@@ -9,6 +9,7 @@ import {
   assertReadySuspensionResponse,
   assertSuspendedProbes,
   prepareReadySuspension,
+  readGatewayAdminResponse,
   runGatewayNetworkClient,
   runGatewaySuspensionPostRestartClient,
   runGatewaySuspensionPreRestartClient,
@@ -544,4 +545,43 @@ describe("gateway network client", () => {
       }),
     ).toThrow("identify gateway-draining");
   });
+});
+
+it("retries suspension preparation while database admission is starting", async () => {
+  const signal = AbortSignal.timeout(5_000);
+  const rpc = vi
+    .fn()
+    .mockImplementationOnce((method: string) =>
+      readGatewayAdminResponse(
+        new Response("Agent database is starting. Please retry.", {
+          status: 503,
+          headers: { "Retry-After": "1" },
+        }),
+        method,
+        signal,
+      ),
+    )
+    .mockResolvedValueOnce({
+      status: 200,
+      body: {
+        ok: true,
+        payload: {
+          status: "ready",
+          suspensionId: "lease-1",
+          expiresAtMs: Date.now() + 10_000,
+          activeCount: 0,
+          blockers: [],
+        },
+      },
+    });
+  const delayImpl = vi.fn(async () => undefined);
+
+  await expect(
+    prepareReadySuspension(
+      { deadline: Date.now() + 5_000, requestId: "request-admission", rpc },
+      { delayImpl },
+    ),
+  ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-1" });
+  expect(rpc).toHaveBeenCalledTimes(2);
+  expect(delayImpl).toHaveBeenCalledWith(1_000);
 });

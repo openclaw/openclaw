@@ -105,6 +105,7 @@ export async function withShimFixture<T>(
     mkdirSync(path.dirname(wrapperPath), { recursive: true });
     mkdirSync(path.join(checkoutRoot, "scripts", "lib"), { recursive: true });
     copyFileSync(wrapper, wrapperPath);
+    mkdirSync(path.join(checkoutRoot, ".git"), { recursive: true });
     for (const source of [
       "scripts/tsx.mjs",
       "scripts/windows-cmd-helpers.mjs",

@@ -672,6 +672,15 @@ describe("plugin-clawhub-publish.sh", () => {
     const binDir = join(repoDir, "bin");
     const markerPath = join(repoDir, "clawhub-invoked");
     writeClawHubPackStub(binDir, markerPath);
+    writeFileSync(join(repoDir, "stale-record-coerce.ts"), "export {};\n");
+    writeFileSync(
+      join(repoDir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          paths: { "@openclaw/normalization-core/record-coerce": ["./stale-record-coerce.ts"] },
+        },
+      }),
+    );
 
     execFileSync(
       "bash",

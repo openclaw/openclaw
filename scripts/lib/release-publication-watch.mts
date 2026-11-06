@@ -1,20 +1,29 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "./record-shared.mjs";
-import {
-  ReleaseRefusal,
-  shellCommand,
-  type ReleaseContext,
-  type ReleaseState,
-} from "./release-stable-state.mts";
+import { ReleaseRefusal, type ReleaseRunner } from "./release-stable-state.mts";
 import { parseJson, positiveInteger } from "./release-stable-workflows.mts";
 
 const PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
-const CHILD_WORKFLOWS = new Set([
-  ".github/workflows/openclaw-npm-release.yml",
-  ".github/workflows/plugin-npm-release.yml",
+const PLUGIN_NPM_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
+const BOOTSTRAP_WORKFLOW = ".github/workflows/plugin-clawhub-new.yml";
+const PUBLICATION_CHILD_WORKFLOWS = [
+  PLUGIN_NPM_WORKFLOW,
   ".github/workflows/plugin-clawhub-release.yml",
-  ".github/workflows/plugin-clawhub-new.yml",
+  BOOTSTRAP_WORKFLOW,
+  ".github/workflows/openclaw-npm-release.yml",
+] as const;
+const PUBLISH_TOOLING_TAG = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
+// A completed job with one of these conclusions needs an operator, even when
+// continue-on-error keeps its run green (for example the Windows notify job).
+const FAILED_JOB_CONCLUSIONS = new Set([
+  "failure",
+  "timed_out",
+  "cancelled",
+  "startup_failure",
+  "action_required",
 ]);
+const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1_000;
+const MAX_JOB_PAGES = 10;
 class PublicationSnapshotChanged extends Error {}
 class PublicationDeadlineExceeded extends Error {}
 
@@ -28,6 +37,29 @@ function readOptions(deadlineAt: number | undefined): { timeoutMs?: number } {
   }
   return { timeoutMs };
 }
+
+/**
+ * The publish parent to observe. Retained release state supplies its tooling and
+ * source identity; a bare `--run` derives tooling identity from the parent itself.
+ */
+export type PublicationWatchTarget = {
+  repo: string;
+  parentRunId: string;
+  label: string;
+  rerunCommand: string;
+  tag?: string;
+  toolingTag?: string;
+  toolingSha?: string;
+  releaseSha?: string;
+  dispatchedAt?: string;
+};
+
+type ParentIdentity = {
+  toolingTag: string;
+  toolingSha: string;
+  dispatchedAt: string;
+  completedAt?: number;
+};
 
 type RunObservation = {
   id: string;
@@ -46,6 +78,15 @@ type ApprovalObservation = {
   canApprove: boolean | null;
 };
 
+type JobObservation = {
+  runId: string;
+  workflow: string;
+  jobId: string;
+  name: string;
+  conclusion: string;
+  url: string;
+};
+
 export type PublicationWatchSnapshot = {
   contractVersion: 1;
   observedAt: string;
@@ -56,6 +97,7 @@ export type PublicationWatchSnapshot = {
   children: RunObservation[];
   pendingApprovals: ApprovalObservation[];
   failedRuns: RunObservation[];
+  failedJobs: JobObservation[];
 };
 
 type WatchOptions = {
@@ -92,47 +134,74 @@ function runObservation(run: Record<string, unknown>, expectedId?: string): RunO
   };
 }
 
+async function readJson(
+  run: ReleaseRunner,
+  endpoint: string,
+  label: string,
+  deadlineAt?: number,
+): Promise<unknown> {
+  const result = await run("gh", ["api", endpoint], readOptions(deadlineAt));
+  return parseJson(result.stdout, label);
+}
+
 async function readRun(
-  ctx: ReleaseContext,
+  run: ReleaseRunner,
+  repo: string,
   id: string,
   deadlineAt?: number,
 ): Promise<Record<string, unknown>> {
-  const result = await ctx.run(
-    "gh",
-    ["api", `repos/${ctx.state.repo}/actions/runs/${id}`],
-    readOptions(deadlineAt),
-  );
-  const run = parseJson(result.stdout, `run ${id}`);
-  if (!isRecord(run)) {
+  const value = await readJson(run, `repos/${repo}/actions/runs/${id}`, `run ${id}`, deadlineAt);
+  if (!isRecord(value)) {
     throw new Error(`Invalid Actions run ${id}.`);
   }
-  runObservation(run, id);
-  return run;
+  runObservation(value, id);
+  return value;
 }
 
-function requireParentIdentity(state: ReleaseState, run: Record<string, unknown>): void {
+function requireParentIdentity(
+  target: PublicationWatchTarget,
+  run: Record<string, unknown>,
+): ParentIdentity {
+  const toolingTag = typeof run.head_branch === "string" ? run.head_branch : "";
+  const toolingSha = typeof run.head_sha === "string" ? run.head_sha : "";
+  const dispatchedAt = target.dispatchedAt ?? run.created_at;
   if (
     workflowPath(run) !== PUBLISH_WORKFLOW ||
-    run.head_branch !== state.validate.toolingTag ||
-    run.head_sha !== state.validate.toolingSha ||
+    run.event !== "workflow_dispatch" ||
     !isRecord(run.repository) ||
-    run.repository.full_name !== state.repo
+    run.repository.full_name !== target.repo ||
+    PUBLISH_TOOLING_TAG.exec(toolingTag)?.[1] !== toolingSha.slice(0, 12) ||
+    !/^[a-f0-9]{40}$/u.test(toolingSha) ||
+    (target.toolingTag !== undefined && toolingTag !== target.toolingTag) ||
+    (target.toolingSha !== undefined && toolingSha !== target.toolingSha) ||
+    typeof dispatchedAt !== "string" ||
+    !Number.isFinite(Date.parse(dispatchedAt))
   ) {
     throw new Error(
-      `Publish parent ${state.publish.publishRunId} identity does not match retained release state.`,
+      `Run ${target.parentRunId} is not an OpenClaw Release Publish parent on a protected release-publish tag${target.toolingTag ? " matching retained release state" : ""}.`,
     );
   }
+  // A completed parent dispatched nothing later; this keeps a resumed parent's
+  // plugin npm run, which shares tooling and source, out of an earlier parent.
+  const completedAt =
+    run.status === "completed" && typeof run.updated_at === "string"
+      ? Date.parse(run.updated_at)
+      : undefined;
+  return { toolingTag, toolingSha, dispatchedAt, completedAt };
 }
 
+// Each child's run-name records the exact parent run and attempt that dispatched
+// it; plugin npm predates that tuple and is bound by tooling and source identity.
 function isOwnedChild(
-  state: ReleaseState,
+  target: PublicationWatchTarget,
+  identity: ParentIdentity,
   parent: RunObservation,
   run: Record<string, unknown>,
 ): boolean {
   const path = workflowPath(run);
   if (
     !path ||
-    !CHILD_WORKFLOWS.has(path) ||
+    !(PUBLICATION_CHILD_WORKFLOWS as readonly string[]).includes(path) ||
     run.event !== "workflow_dispatch" ||
     !isRecord(run.actor) ||
     run.actor.login !== "github-actions[bot]" ||
@@ -140,48 +209,56 @@ function isOwnedChild(
   ) {
     return false;
   }
-  const filename = path.split("/").at(-1);
   const title = typeof run.display_title === "string" ? run.display_title : "";
-  if (path === ".github/workflows/plugin-npm-release.yml") {
+  const tooling = run.head_branch === identity.toolingTag && run.head_sha === identity.toolingSha;
+  if (path === PLUGIN_NPM_WORKFLOW) {
+    const match = /^Plugin NPM Release \[(?:default|extended-stable)\] ([a-f0-9]{40})$/u.exec(
+      title,
+    );
     return (
-      run.head_branch === state.validate.toolingTag &&
-      run.head_sha === state.validate.toolingSha &&
-      title === `Plugin NPM Release [default] ${state.cut.releaseSha}`
+      tooling &&
+      match !== null &&
+      (target.releaseSha === undefined || match[1] === target.releaseSha)
     );
   }
+  const match = /^(\S+) \[(v[^\]\s]+)\] publish parent=([1-9][0-9]*)\/([1-9][0-9]*)$/u.exec(title);
   const parentTitle =
-    title === `${filename} [${state.tag}] publish parent=${parent.id}/${parent.attempt}`;
-  if (path === ".github/workflows/plugin-clawhub-new.yml") {
-    // Bootstrap publication uses the independently admitted bootstrap ref/SHA.
-    return parentTitle;
+    match !== null &&
+    match[1] === path.split("/").at(-1) &&
+    match[3] === parent.id &&
+    match[4] === String(parent.attempt) &&
+    (target.tag === undefined || match[2] === target.tag);
+  // Bootstrap publication uses the independently admitted bootstrap ref/SHA.
+  return path === BOOTSTRAP_WORKFLOW ? parentTitle : parentTitle && tooling;
+}
+
+function createdAt(run: Record<string, unknown>): number {
+  const time = typeof run.created_at === "string" ? Date.parse(run.created_at) : Number.NaN;
+  if (!Number.isFinite(time)) {
+    throw new Error("Publication child has an invalid creation time.");
   }
-  return (
-    parentTitle &&
-    run.head_branch === state.validate.toolingTag &&
-    run.head_sha === state.validate.toolingSha
-  );
+  return time;
 }
 
 function selectOwnedChildren(
-  state: ReleaseState,
+  target: PublicationWatchTarget,
+  identity: ParentIdentity,
   parent: RunObservation,
   values: unknown[],
 ): Record<string, unknown>[] {
-  const owned = values.filter(isRecord).filter((run) => isOwnedChild(state, parent, run));
+  const owned = values
+    .filter(isRecord)
+    .filter((run) => isOwnedChild(target, identity, parent, run));
   const pluginNpm = owned
-    .filter((run) => workflowPath(run) === ".github/workflows/plugin-npm-release.yml")
-    .toSorted((a, b) => {
-      const aTime = typeof a.created_at === "string" ? Date.parse(a.created_at) : Number.NaN;
-      const bTime = typeof b.created_at === "string" ? Date.parse(b.created_at) : Number.NaN;
-      if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) {
-        throw new Error("Publication child has an invalid creation time.");
-      }
-      return bTime - aTime;
-    })
-    .slice(0, 1);
-  const explicit = owned.filter(
-    (run) => workflowPath(run) !== ".github/workflows/plugin-npm-release.yml",
-  );
+    .filter((run) => workflowPath(run) === PLUGIN_NPM_WORKFLOW)
+    .filter((run) => identity.completedAt === undefined || createdAt(run) <= identity.completedAt)
+    .toSorted((a, b) => createdAt(b) - createdAt(a));
+  if (new Set(pluginNpm.map((run) => run.display_title)).size > 1) {
+    throw new Error(
+      "Plugin npm publication is ambiguous: several release sources share this tooling tag.",
+    );
+  }
+  const explicit = owned.filter((run) => workflowPath(run) !== PLUGIN_NPM_WORKFLOW);
   for (const path of new Set(explicit.map(workflowPath))) {
     if (explicit.filter((run) => workflowPath(run) === path).length > 1) {
       throw new Error(`Publication child identity is ambiguous for ${path}.`);
@@ -189,48 +266,48 @@ function selectOwnedChildren(
   }
   // Plugin npm titles predate parent tuples. The publisher serializes that lane,
   // so the newest exact source/tooling match supersedes terminal failed attempts.
-  return [...pluginNpm, ...explicit];
+  return [...pluginNpm.slice(0, 1), ...explicit];
 }
 
 async function listOwnedChildren(
-  ctx: ReleaseContext,
-  state: ReleaseState,
+  run: ReleaseRunner,
+  target: PublicationWatchTarget,
+  identity: ParentIdentity,
   parent: RunObservation,
-  dispatchedAt: string,
   deadlineAt?: number,
 ): Promise<Record<string, unknown>[]> {
-  const result = await ctx.run(
-    "gh",
-    [
-      "api",
-      `repos/${state.repo}/actions/runs?event=workflow_dispatch&per_page=100&created=>=${dispatchedAt}`,
-    ],
-    readOptions(deadlineAt),
-  );
-  const listed = parseJson(result.stdout, "publication child runs");
-  if (
-    !isRecord(listed) ||
-    !Array.isArray(listed.workflow_runs) ||
-    listed.workflow_runs.length >= 100
-  ) {
-    throw new Error("Publication child inventory is invalid or truncated.");
+  const listed: unknown[] = [];
+  // Per-workflow inventories stay bounded while unrelated dispatches run.
+  for (const path of PUBLICATION_CHILD_WORKFLOWS) {
+    const file = path.split("/").at(-1);
+    const page = await readJson(
+      run,
+      `repos/${target.repo}/actions/workflows/${file}/runs?event=workflow_dispatch&per_page=100&created=>=${identity.dispatchedAt}`,
+      `${file} child runs`,
+      deadlineAt,
+    );
+    if (!isRecord(page) || !Array.isArray(page.workflow_runs) || page.workflow_runs.length >= 100) {
+      throw new Error(`Publication child inventory for ${file} is invalid or truncated.`);
+    }
+    listed.push(...page.workflow_runs);
   }
-  return selectOwnedChildren(state, parent, listed.workflow_runs);
+  return selectOwnedChildren(target, identity, parent, listed);
 }
 
 async function readPendingApprovals(
-  ctx: ReleaseContext,
-  run: RunObservation,
+  run: ReleaseRunner,
+  repo: string,
+  observed: RunObservation,
   deadlineAt?: number,
 ): Promise<ApprovalObservation[]> {
-  const result = await ctx.run(
-    "gh",
-    ["api", `repos/${ctx.state.repo}/actions/runs/${run.id}/pending_deployments`],
-    readOptions(deadlineAt),
+  const pending = await readJson(
+    run,
+    `repos/${repo}/actions/runs/${observed.id}/pending_deployments`,
+    `pending deployments for ${observed.id}`,
+    deadlineAt,
   );
-  const pending = parseJson(result.stdout, `pending deployments for ${run.id}`);
   if (!Array.isArray(pending)) {
-    throw new Error(`Invalid pending deployments for ${run.id}.`);
+    throw new Error(`Invalid pending deployments for ${observed.id}.`);
   }
   return pending.map((value) => {
     if (
@@ -241,11 +318,11 @@ async function readPendingApprovals(
       (typeof value.current_user_can_approve !== "boolean" &&
         value.current_user_can_approve !== null)
     ) {
-      throw new Error(`Invalid pending deployment for ${run.id}.`);
+      throw new Error(`Invalid pending deployment for ${observed.id}.`);
     }
     return {
-      runId: run.id,
-      workflow: run.workflow,
+      runId: observed.id,
+      workflow: observed.workflow,
       environmentId: value.environment.id,
       environment: value.environment.name,
       canApprove: value.current_user_can_approve,
@@ -253,52 +330,129 @@ async function readPendingApprovals(
   });
 }
 
+async function readJobObservations(
+  run: ReleaseRunner,
+  repo: string,
+  observed: RunObservation,
+  deadlineAt?: number,
+): Promise<{ failedJobs: JobObservation[]; dockerOnly: boolean }> {
+  const jobs: unknown[] = [];
+  // Matrix children such as ClawHub publish hundreds of jobs; page to the bounded total.
+  for (let page = 1; page <= MAX_JOB_PAGES; page++) {
+    const listed = await readJson(
+      run,
+      `repos/${repo}/actions/runs/${observed.id}/attempts/${observed.attempt}/jobs?per_page=100&page=${page}`,
+      `jobs for ${observed.id}`,
+      deadlineAt,
+    );
+    if (
+      !isRecord(listed) ||
+      !Array.isArray(listed.jobs) ||
+      !Number.isSafeInteger(listed.total_count)
+    ) {
+      throw new Error(`Job inventory for ${observed.id} is invalid.`);
+    }
+    jobs.push(...listed.jobs);
+    if (jobs.length >= Number(listed.total_count) || listed.jobs.length === 0) {
+      if (jobs.length !== listed.total_count) {
+        throw new Error(`Job inventory for ${observed.id} changed while paging.`);
+      }
+      break;
+    }
+    if (page === MAX_JOB_PAGES) {
+      throw new Error(`Job inventory for ${observed.id} exceeds ${MAX_JOB_PAGES * 100} jobs.`);
+    }
+  }
+  const failedJobs = jobs.flatMap((job) => {
+    if (
+      !isRecord(job) ||
+      !positiveInteger(job.id) ||
+      typeof job.name !== "string" ||
+      typeof job.html_url !== "string"
+    ) {
+      throw new Error(`Invalid job for ${observed.id}.`);
+    }
+    return job.status === "completed" &&
+      typeof job.conclusion === "string" &&
+      FAILED_JOB_CONCLUSIONS.has(job.conclusion)
+      ? [
+          {
+            runId: observed.id,
+            workflow: observed.workflow,
+            jobId: String(job.id),
+            name: job.name,
+            conclusion: job.conclusion,
+            url: job.html_url,
+          },
+        ]
+      : [];
+  });
+  // These jobs come from the authenticated parent's exact attempt. Only the
+  // Docker-only route skips plugin publication and verifies an existing package.
+  const hasConclusion = (name: string, conclusion: string) =>
+    jobs.some(
+      (job) =>
+        isRecord(job) &&
+        job.name === name &&
+        job.status === "completed" &&
+        job.conclusion === conclusion,
+    );
+  return {
+    failedJobs,
+    dockerOnly:
+      hasConclusion("Publish plugins, then OpenClaw", "skipped") &&
+      hasConclusion("Verify already-published core npm package", "success"),
+  };
+}
+
 async function observePublication(
-  ctx: ReleaseContext,
+  run: ReleaseRunner,
+  target: PublicationWatchTarget,
   deadlineAt?: number,
 ): Promise<PublicationWatchSnapshot> {
-  const { state } = ctx;
-  const parentId = state.publish.publishRunId;
-  const dispatchedAt = state.publish.dispatchedAt;
-  if (!parentId || !dispatchedAt || !state.validate.toolingTag || !state.validate.toolingSha) {
-    throw new ReleaseRefusal("Retained state has no dispatched publication to watch.", [
-      shellCommand("pnpm", ["release:stable", state.release, "--status"]),
-    ]);
-  }
-  const parentRun = await readRun(ctx, parentId, deadlineAt);
-  requireParentIdentity(state, parentRun);
+  const parentId = target.parentRunId;
+  const parentRun = await readRun(run, target.repo, parentId, deadlineAt);
+  const identity = requireParentIdentity(target, parentRun);
   const parent = runObservation(parentRun, parentId);
-  const candidates = await listOwnedChildren(ctx, state, parent, dispatchedAt, deadlineAt);
+  const candidates = await listOwnedChildren(run, target, identity, parent, deadlineAt);
   const children: RunObservation[] = [];
   for (const candidate of candidates) {
     const candidateId = String(candidate.id);
-    const child = await readRun(ctx, candidateId, deadlineAt);
-    if (!isOwnedChild(state, parent, child)) {
+    const child = await readRun(run, target.repo, candidateId, deadlineAt);
+    if (!isOwnedChild(target, identity, parent, child)) {
       throw new Error(`Publication child ${candidateId} identity changed while observing it.`);
     }
     children.push(runObservation(child, candidateId));
   }
   children.sort((a, b) => Number(a.id) - Number(b.id));
-  if (parent.status === "completed" && parent.conclusion === "success") {
-    const hasPluginNpm = children.some(
-      (run) => run.workflow === ".github/workflows/plugin-npm-release.yml",
-    );
-    if (!hasPluginNpm) {
-      throw new Error("Completed publish parent has no observable plugin npm child.");
+  const pendingApprovals: ApprovalObservation[] = [];
+  const failedJobs: JobObservation[] = [];
+  let dockerOnly = false;
+  for (const observed of [parent, ...children]) {
+    pendingApprovals.push(...(await readPendingApprovals(run, target.repo, observed, deadlineAt)));
+    const jobs = await readJobObservations(run, target.repo, observed, deadlineAt);
+    failedJobs.push(...jobs.failedJobs);
+    if (observed === parent) {
+      dockerOnly = jobs.dockerOnly;
     }
   }
-  const pendingApprovals: ApprovalObservation[] = [];
-  for (const run of [parent, ...children]) {
-    pendingApprovals.push(...(await readPendingApprovals(ctx, run, deadlineAt)));
-  }
-  const finalCandidates = await listOwnedChildren(ctx, state, parent, dispatchedAt, deadlineAt);
   if (
-    finalCandidates.map((run) => run.id).join(",") !== candidates.map((run) => run.id).join(",")
+    parent.status === "completed" &&
+    parent.conclusion === "success" &&
+    !dockerOnly &&
+    !children.some((child) => child.workflow === PLUGIN_NPM_WORKFLOW)
+  ) {
+    throw new Error("Completed publish parent has no observable plugin npm child.");
+  }
+  const finalCandidates = await listOwnedChildren(run, target, identity, parent, deadlineAt);
+  if (
+    finalCandidates.map((entry) => entry.id).join(",") !==
+    candidates.map((entry) => entry.id).join(",")
   ) {
     throw new PublicationSnapshotChanged("Publication child inventory changed while observing it.");
   }
-  const finalParentRun = await readRun(ctx, parentId, deadlineAt);
-  requireParentIdentity(state, finalParentRun);
+  const finalParentRun = await readRun(run, target.repo, parentId, deadlineAt);
+  requireParentIdentity(target, finalParentRun);
   const finalParent = runObservation(finalParentRun, parentId);
   if (
     finalParent.attempt !== parent.attempt ||
@@ -310,24 +464,28 @@ async function observePublication(
     );
   }
   const failedRuns = [parent, ...children].filter(
-    (run) => run.status === "completed" && run.conclusion !== null && run.conclusion !== "success",
+    (observed) =>
+      observed.status === "completed" &&
+      observed.conclusion !== null &&
+      observed.conclusion !== "success",
   );
-  const attention = pendingApprovals.length > 0 || failedRuns.length > 0;
+  const attention = pendingApprovals.length > 0 || failedRuns.length > 0 || failedJobs.length > 0;
   const success =
     !attention &&
     parent.status === "completed" &&
     parent.conclusion === "success" &&
-    children.every((run) => run.status === "completed" && run.conclusion === "success");
+    children.every((child) => child.status === "completed" && child.conclusion === "success");
   return {
     contractVersion: 1,
     observedAt: new Date().toISOString(),
-    release: state.release,
-    repository: state.repo,
+    release: target.label,
+    repository: target.repo,
     state: attention ? "attention" : success ? "success" : "active",
     parent,
     children,
     pendingApprovals,
     failedRuns,
+    failedJobs,
   };
 }
 
@@ -337,7 +495,7 @@ function printSnapshot(snapshot: PublicationWatchSnapshot, json: boolean): void 
     return;
   }
   console.log(
-    `[release-watch] ${snapshot.release}: ${snapshot.state}; parent=${snapshot.parent.status}/${snapshot.parent.conclusion ?? "none"}; children=${snapshot.children.length}; approvals=${snapshot.pendingApprovals.length}; failures=${snapshot.failedRuns.length}`,
+    `[release-watch] ${snapshot.release}: ${snapshot.state}; parent=${snapshot.parent.status}/${snapshot.parent.conclusion ?? "none"}; children=${snapshot.children.length}; approvals=${snapshot.pendingApprovals.length}; failures=${snapshot.failedRuns.length}; failedJobs=${snapshot.failedJobs.length}`,
   );
   for (const approval of snapshot.pendingApprovals) {
     console.log(
@@ -349,32 +507,37 @@ function printSnapshot(snapshot: PublicationWatchSnapshot, json: boolean): void 
       `failed publication run: ${run.workflow} run=${run.id} conclusion=${run.conclusion} ${run.url}`,
     );
   }
+  for (const job of snapshot.failedJobs) {
+    console.log(
+      `failed publication job: ${job.workflow} run=${job.runId} job=${JSON.stringify(job.name)} conclusion=${job.conclusion} ${job.url}`,
+    );
+  }
+}
+
+function isRateLimited(error: unknown): boolean {
+  return error instanceof Error && /rate limit|HTTP 429/iu.test(error.message);
 }
 
 export async function watchPublication(
-  ctx: ReleaseContext,
+  run: ReleaseRunner,
+  target: PublicationWatchTarget,
   options: WatchOptions,
 ): Promise<PublicationWatchSnapshot> {
   const deadline = Date.now() + options.timeoutSeconds * 1_000;
   const timeout = () =>
     new ReleaseRefusal("Publication watcher timed out while the release was still active.", [
-      shellCommand("pnpm", [
-        "release:stable",
-        ctx.state.release,
-        "--watch",
-        "--state-dir",
-        ctx.options.stateDir,
-      ]),
+      target.rerunCommand,
     ]);
-  const waitForNextRead = async () => {
+  const waitForNextRead = async (ms = options.pollSeconds * 1_000) => {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       throw timeout();
     }
-    await delay(Math.min(options.pollSeconds * 1_000, remaining));
+    await delay(Math.min(ms, remaining));
   };
   let previous = "";
   let first = true;
+  let rateLimitBackoffMs = 0;
   while (true) {
     if (!first && Date.now() >= deadline) {
       throw timeout();
@@ -382,12 +545,28 @@ export async function watchPublication(
     first = false;
     let snapshot: PublicationWatchSnapshot;
     try {
-      snapshot = await observePublication(ctx, deadline);
+      snapshot = await observePublication(run, target, deadline);
+      rateLimitBackoffMs = 0;
     } catch (error) {
       if (error instanceof PublicationDeadlineExceeded) {
         throw timeout();
       }
-      if (!(error instanceof PublicationSnapshotChanged) || options.once) {
+      if (options.once) {
+        throw error;
+      }
+      if (isRateLimited(error)) {
+        // Back off past the poll interval instead of spending the remaining quota.
+        rateLimitBackoffMs = Math.min(
+          MAX_RATE_LIMIT_BACKOFF_MS,
+          Math.max(options.pollSeconds * 2_000, rateLimitBackoffMs * 2),
+        );
+        console.error(
+          `[release-watch] GitHub rate limit reached; retrying in ${Math.round(rateLimitBackoffMs / 1_000)}s.`,
+        );
+        await waitForNextRead(rateLimitBackoffMs);
+        continue;
+      }
+      if (!(error instanceof PublicationSnapshotChanged)) {
         throw error;
       }
       await waitForNextRead();
@@ -399,6 +578,7 @@ export async function watchPublication(
       children: snapshot.children,
       pendingApprovals: snapshot.pendingApprovals,
       failedRuns: snapshot.failedRuns,
+      failedJobs: snapshot.failedJobs,
     });
     if (options.once || snapshot.state !== "active") {
       printSnapshot(snapshot, options.json);

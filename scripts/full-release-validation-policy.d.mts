@@ -1,6 +1,7 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
 export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
+export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
   comparison: unknown,
@@ -94,8 +95,8 @@ export function planReleaseChildRerun(input: {
   childKey: string;
   jobs: ReleaseRecord[];
 }):
-  | { failed: string[]; mode: "failed-jobs" }
-  | { failed: string[]; mode: "producer" | "receipt"; producer: string };
+  | { failed: string[]; jobName: string; mode: "single-job" }
+  | { failed: string[]; mode: "receipt"; producer: string };
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,

@@ -417,10 +417,12 @@ it("prints an executable resume command that preserves all inputs without shell 
     { cwd: root, env, encoding: "utf8" },
   );
   expect(printed.status, printed.stderr).toBe(0);
+  expect(printed.stdout).toContain("Release recovery command:\n");
   const command = readFileSync(summary, "utf8").match(/```bash\n([\s\S]+?)\n```/u)?.[1];
   if (!command) {
     throw new Error("Release summary did not contain a resume command.");
   }
+  expect(printed.stdout).toContain(command);
   const resumed = spawnSync(
     "bash",
     ["-c", `gh() { printf '%s\\n' "$@" > args; cat > inputs.json; }; ${command}`],

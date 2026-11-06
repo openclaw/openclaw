@@ -10,9 +10,9 @@ import {
   truncateSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createSocketInode } from "../helpers/socket-inode.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.resolve("scripts/release-telegram-candidate-archive.py");
@@ -296,22 +296,10 @@ describe("release Telegram candidate archive guard", () => {
     expectFailure(["validate-tree", root], "dangling symlink");
   });
 
-  it("rejects a socket entry", async () => {
-    // Keep the socket path below macOS's 104-byte sockaddr_un buffer.
-    const root = tempDirs.make("sock-");
-    const socketPath = path.join(root, "candidate.sock");
-    const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
-      expectFailure(["validate-tree", root], "unsupported special entry");
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+  it("rejects a socket entry even under a long temporary path", () => {
+    const root = tempDirs.make(`socket-${"nested-".repeat(20)}`);
+    createSocketInode(root, "candidate.sock");
+    expectFailure(["validate-tree", root], "unsupported special entry");
   });
 
   it("uses apparent size when rejecting a sparse file", () => {
@@ -447,7 +435,12 @@ describe("release Telegram candidate archive guard", () => {
 
   it("rejects compressed archives over the member-count cap and cleans up", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
+    // Count real members independently of the host tar's optional PAX headers.
+    const archive = makeTarArchive(
+      root,
+      "members",
+      '\n    archive.addfile(tarfile.TarInfo("candidate/payload.bin"))\n',
+    );
     const destination = path.join(root, "member-limit");
 
     expectFailure(

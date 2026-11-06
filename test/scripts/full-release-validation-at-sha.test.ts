@@ -458,6 +458,8 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(() => parseArgs(["-f", "rerun_group=qa"])).toThrow("rerun_group must be one of");
     expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+    const qualified = parseArgs(["-f", "rerun_group=qualified-package"]);
+    expect(qualified.inputs.rerun_group).toBe("qualified-package");
     expect(parseArgs(["-f", "rerun_group=windows-node"]).inputs.rerun_group).toBe("windows-node");
   });
 
@@ -582,7 +584,7 @@ describe("full-release-validation-at-sha", () => {
       "is not reachable from release branch",
     );
     expect(() => verify("release/2026.7.1", "2026.6.9")).toThrow(
-      "does not belong to release branch",
+      "does not belong to release branch release/2026.7.1; expected 2026.7.1 or a beta prerelease of it. Update package.json on release/2026.7.1 to the intended release version, commit and push the release branch, then rerun with the new candidate SHA.",
     );
     for (const version of ["2026.6.33", "2026.6.34", "2026.6.35"]) {
       expect(verify("extended-stable/2026.6.33", version)).toBe("extended-stable/2026.6.33");
@@ -597,7 +599,7 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(() => verify("v2026.7.1-beta.5", "2026.7.1-beta.5")).toThrow("does not resolve");
     expect(() => verify("v2026.7.1-beta.5", "2026.7.1-beta.4", candidateSha)).toThrow(
-      "does not match release tag",
+      "does not match release tag v2026.7.1-beta.5. Prepare the candidate from a commit whose package.json version matches v2026.7.1-beta.5, push that tag, then rerun with its candidate SHA.",
     );
   });
 
@@ -1600,6 +1602,23 @@ describe("full-release-validation-at-sha", () => {
     expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
     expect(fixture.refs()).toHaveLength(1);
   });
+
+  it.each(["failure", "cancelled"])(
+    "keeps terminal %s authoritative over retained diagnostic-pending evidence",
+    (conclusion) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [
+          { conclusion, status: "completed", decisionState: "blocked_diagnostics_running" },
+        ],
+      });
+      const result = fixture.run();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`Full Release Validation concluded ${conclusion}`);
+      expect(result.stdout).not.toContain("remains active");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(fixture.refs()).toHaveLength(1);
+    },
+  );
 
   it("does not redownload a validated decision or adopt a newer parent attempt", () => {
     const fixture = createDispatchFixture({

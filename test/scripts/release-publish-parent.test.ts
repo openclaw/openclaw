@@ -575,3 +575,13 @@ append_release_proof_to_github_release() { :; }
     },
   );
 });
+
+it("rejects a recorded ClawHub child's gate before cancelling during cleanup", () => {
+  const result = fixture({ children: [child()] }).run(`${source}cleanup_clawhub_children`, {
+    CHILD_PLUGIN_CLAWHUB_RUN_ID: "91",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  const rejection = result.calls.findIndex((call) => call.args.includes("state=rejected"));
+  expect(rejection).toBeGreaterThanOrEqual(0);
+  expect(rejection).toBeLessThan(result.calls.findIndex(isCancel));
+});

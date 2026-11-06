@@ -193,6 +193,11 @@ describe("release:prepush", () => {
     expect(status).toBe(0);
     expect(refreshMain).toHaveBeenCalledOnce();
     expect(currentBranch).toHaveBeenCalledTimes(2);
+    expect(
+      runCommand.mock.calls.every(
+        ([command]) => command.env?.OPENCLAW_RELEASE_CONTEXT_REF === "release/2026.10.6",
+      ),
+    ).toBe(true);
     expect(runCommand.mock.calls[0]?.[0].args).toEqual(["diff", "--check", RELEASE_SHA, HEAD_SHA]);
     expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });

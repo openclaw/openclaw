@@ -560,8 +560,8 @@ describe("retained publication admission", () => {
   });
 
   it.each([
-    ["2026-09-13T14:05:00.000Z", true],
-    ["2026-09-13T14:05:00.001Z", false],
+    ["2026-09-13T14:05:01.000Z", true],
+    ["2026-09-13T14:05:01.001Z", false],
     ["2026-09-13T13:59:59.999Z", false],
   ])("checks actual post-upload admission time %s (accepted=%s)", (time, accepted) => {
     const { source, observations, descriptor } = registryEvidence();
@@ -1694,4 +1694,19 @@ describe("full release artifact contract", () => {
       ).toThrow("size limit");
     },
   );
+});
+
+it("keeps collection and post-upload admission in separate bounded windows", () => {
+  const { source, observations, descriptor } = registryEvidence();
+  observations.collectionCompletedAt = "2026-09-13T14:05:00.000Z";
+  const admission = createPublicationAdmission(
+    source,
+    observations,
+    descriptor,
+    "2026-09-13T14:10:00.000Z",
+  );
+  expect(admission.binding.admittedAt).toBe("2026-09-13T14:10:00.000Z");
+  expect(() =>
+    createPublicationAdmission(source, observations, descriptor, "2026-09-13T14:10:00.001Z"),
+  ).toThrow(/freshness/u);
 });

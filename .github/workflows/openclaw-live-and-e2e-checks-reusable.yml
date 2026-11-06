@@ -1799,10 +1799,10 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      # Hosted Ubuntu images ship ~14 GB free; two checkouts, the pnpm store and the
-      # loaded Docker images exhausted it (runner "No space left on device").
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
       - name: Reclaim hosted runner disk
-        if: (contains(matrix.profiles, inputs.release_test_profile)) && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        if: contains(matrix.profiles, inputs.release_test_profile) && runner.environment == 'github-hosted' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -2219,8 +2219,8 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      # Hosted Ubuntu images ship ~14 GB free; two checkouts, the pnpm store and the
-      # loaded Docker images exhausted it (runner "No space left on device").
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
       - name: Reclaim hosted runner disk
         if: runner.environment == 'github-hosted' && runner.os == 'Linux'
         shell: bash
@@ -4689,10 +4689,10 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         run: echo "run=true" >> "$GITHUB_OUTPUT"
 
-      # Hosted Ubuntu images ship ~14 GB free; two checkouts, the pnpm store and the
-      # loaded Docker images exhausted it (runner "No space left on device").
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
       - name: Reclaim hosted runner disk
-        if: (contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))) && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        if: steps.selection.outputs.run == 'true' && runner.environment == 'github-hosted' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -4897,10 +4897,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # Hosted Ubuntu images ship ~14 GB free; two checkouts, the pnpm store and the
-      # loaded Docker images exhausted it (runner "No space left on device").
+      # Hosted release workers have exhausted disk during dependency/image setup.
+      # Reclaim unused toolchains before the checkouts and installs grow further.
       - name: Reclaim hosted runner disk
-        if: (contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)) && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && runner.environment == 'github-hosted' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail

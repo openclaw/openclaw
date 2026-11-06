@@ -71,7 +71,9 @@ describe("scripts/check-file-utils listRepoFilesSync", () => {
   });
 
   it("filters tracked source files and bounds the git lookup", () => {
-    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
+    execFileSyncMock
+      .mockReturnValueOnce("")
+      .mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
 
     expect(
       listRepoFilesSync("/fake/repo", {
@@ -93,7 +95,7 @@ describe("scripts/check-file-utils listRepoFilesSync", () => {
     const error: NodeJS.ErrnoException & { signal?: string } = new Error("Command timed out");
     error.code = "ETIMEDOUT";
     error.signal = "SIGKILL";
-    execFileSyncMock.mockImplementation(() => {
+    execFileSyncMock.mockReturnValueOnce("").mockImplementation(() => {
       throw error;
     });
     const rootDir = createTempDir("openclaw-check-file-utils-fallback-");

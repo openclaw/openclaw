@@ -1856,6 +1856,36 @@ fs.readFileSync = (file, ...args) => {
       "already-current",
       1,
     ],
+    [
+      "failed recovery cleanup",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+          { name: "recovery-artifact-cleanup", exitCode: 1 },
+        ],
+      },
+      "already-current",
+      1,
+    ],
+    [
+      "successful recovery cleanup",
+      {
+        steps: [
+          {
+            name: "package-install",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+          { name: "recovery-artifact-cleanup", exitCode: 0 },
+        ],
+      },
+      "already-current",
+      0,
+    ],
     ["skipped first upgrade", {}, "applied", 1],
   ])("validates explicit installer outcome: %s", (_label, overrides, outcome, expectedExit) => {
     const url = "http://candidate.invalid/openclaw.tgz";

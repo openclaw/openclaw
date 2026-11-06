@@ -69,13 +69,7 @@ export type FrvConcreteClient = FrvClient & {
 } & Required<
     Pick<
       FrvClient,
-      | "cancelRun"
-      | "rerunFailed"
-      | "rerunJob"
-      | "rerunParent"
-      | "listRuns"
-      | "verify"
-      | "verifySeal"
+      "cancelRun" | "rerunJob" | "rerunParent" | "rerunRun" | "listRuns" | "verify" | "verifySeal"
     >
   >;
 
@@ -165,7 +159,19 @@ export function continueFailed(
   options?: Record<string, unknown>,
 ): Promise<{
   action: string;
+  continueCommand?: string;
   finalRunId?: string;
+  nextCommand?: string;
+  receipt?: {
+    acceptedRunAttempt: number;
+    child: string;
+    jobId: number;
+    jobName: string;
+    parentRunId: string;
+    runAttempt: number;
+    runId: string;
+    sourceRunAttempt: number;
+  };
   reruns?: Record<string, unknown>[];
   status: FrvContinuationStatus;
 }>;

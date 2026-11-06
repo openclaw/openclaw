@@ -229,7 +229,7 @@ describe("release candidate checklist", () => {
           tag: string;
           targetSha: string;
         }) => resolvePath(targetRoot, resolveReleaseCandidateOutputDir(params)),
-        assertReleaseCandidateTag: () => {},
+        assertReleaseCandidateTag: () => false,
         fetchTrustedWorkflowSha: () => toolingSha,
         validateTrustedToolingPin,
         validateCandidateCheckout,
@@ -365,24 +365,59 @@ describe("release candidate checklist", () => {
     }
   });
 
-  it.each([
-    {
-      flags: [
-        "--tag",
-        "v2026.9.1",
-        "--workflow-sha",
-        "b".repeat(40),
-        "--publish-workflow-ref",
-        publishWorkflowRef,
+  it.each<[string[], string]>([
+    [
+      ["--workflow-sha", "b".repeat(40), "--publish-workflow-ref", publishWorkflowRef],
+      "--workflow-sha and --publish-workflow-ref are mutually exclusive",
+    ],
+    [["--workflow-sha", "b".repeat(12)], "--workflow-sha must be a full lowercase commit SHA"],
+    [["--target-sha", "not-a-sha"], "--target-sha must be a full lowercase commit SHA"],
+    [["--publish-workflow-ref", "main"], "protected release-publish tag"],
+    [
+      ["--run-parallels", "--skip-parallels"],
+      "--run-parallels and --skip-parallels cannot be combined",
+    ],
+    [["--skip-dispatch"], "--skip-dispatch requires --full-release-validation-run-id"],
+    [["--full-release-validation-run-id", "111", "--full-release-run", "222"], "do not combine"],
+    [["--workflow-ref", "release/2026.5.14"], "--workflow-ref must be main"],
+    [["--tag", "v2026.7.1-alpha.3"], "Alpha releases are retired;"],
+    [
+      ["--tag", "v2026.5.14-beta.4", "--tag", "v2026.5.14-beta.3"],
+      "--tag was provided more than once",
+    ],
+    [["--plugin-sdk-api-acknowledgement", "ABC"], "8-character lowercase digest"],
+    [
+      ["--windows-node-tag", "latest"],
+      "--windows-node-tag must be an explicit version tag, not latest",
+    ],
+    [["--plugin-publish-scope", "selected"], "--plugin-publish-scope selected requires --plugins"],
+    [
+      ["--plugin-publish-scope", "selected", "--plugins", "@openclaw/diffs"],
+      "release candidates publish OpenClaw with --plugin-publish-scope all-publishable",
+    ],
+  ])("rejects invalid candidate options %j: %s", (flags, message) => {
+    expect(() =>
+      parseArgs(flags.includes("--tag") ? flags : ["--tag", "v2026.5.14-beta.3", ...flags]),
+    ).toThrow(message);
+  });
+
+  it("keeps help short-circuiting before deprecated alias conflict checks", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/release-candidate-checklist.mts",
+        "--help",
+        "--full-release-validation-run-id",
+        "111",
+        "--full-release-run",
+        "222",
       ],
-      message: "--workflow-sha and --publish-workflow-ref are mutually exclusive",
-    },
-    {
-      flags: ["--tag", "v2026.9.1", "--workflow-sha", "b".repeat(12)],
-      message: "--workflow-sha must be a full lowercase commit SHA",
-    },
-  ])("rejects invalid tooling SHA selection: $message", ({ flags, message }) => {
-    expect(() => parseArgs(flags)).toThrow(message);
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Usage: pnpm release:candidate");
   });
 
   it("requires an explicit prepared route and preserves historical normal state semantics", () => {
@@ -467,6 +502,7 @@ describe("release candidate checklist", () => {
     sdkAcknowledgement?: string;
     sdkReport?: boolean;
     generatedFailure?: boolean;
+    unpinnedTooling?: boolean;
   };
 
   it.each<QualificationCase>([
@@ -475,6 +511,7 @@ describe("release candidate checklist", () => {
       sdkReport: sdkAcknowledgement === "",
     })),
     { launch: "npm-only", generatedFailure: true },
+    { unpinnedTooling: true },
     { workflowSha: "b".repeat(40), savedToolingTag: "release-publish/bbbbbbbbbbbb-100" },
     ...[false, true].map<QualificationCase>((retainedHelperRequest) => ({
       workflowSha: "b".repeat(40),
@@ -588,6 +625,7 @@ describe("release candidate checklist", () => {
       sdkAcknowledgement,
       sdkReport,
       generatedFailure,
+      unpinnedTooling,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
@@ -614,9 +652,11 @@ describe("release candidate checklist", () => {
         "--skip-parallels",
         "--skip-telegram",
         "--skip-local-generated-check",
-        ...(workflowSha
-          ? ["--workflow-sha", workflowSha]
-          : ["--publish-workflow-ref", publishWorkflowRef]),
+        ...(unpinnedTooling
+          ? []
+          : workflowSha
+            ? ["--workflow-sha", workflowSha]
+            : ["--publish-workflow-ref", publishWorkflowRef]),
         ...(sdkAcknowledgement ? ["--plugin-sdk-api-acknowledgement", sdkAcknowledgement] : []),
         "--output-dir",
         `${targetRoot}/evidence 'quoted' $(literal)`,
@@ -648,8 +688,7 @@ describe("release candidate checklist", () => {
       const statePlanning =
         source.match(/^function canUpdateReleaseCandidateState\([\s\S]*?^\}/mu)?.[0] ?? "";
       const sdkAcknowledgementFailure =
-        source.match(/^function formatPluginSdkApiAcknowledgementFailure\([\s\S]*?^\}/mu)?.[0] ??
-        "";
+        source.match(/^function formatRequiredCandidateFlagsFailure\([\s\S]*?^\}/mu)?.[0] ?? "";
       const shellQuote = source.match(/^function shellQuote\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
       const stages: string[] = [];
@@ -779,7 +818,7 @@ describe("release candidate checklist", () => {
       const dispatches: string[][] = [];
       const completion = runInNewContext(
         stripNodeTypeScriptTypes(
-          `${android}\n${selectPublication}\n${statePlanning}\n${savedTagReader}\n${helperDispatch}\n${shellQuote}\n${sdkAcknowledgementFailure}\n${main}\nmain();`,
+          `${android}\n${selectPublication}\n${statePlanning}\n${savedTagReader}\n${helperDispatch}\n${shellQuote}\n${sdkAcknowledgementFailure}\n${source.match(/^function pluginSdkApiAcknowledgementFlag\([\s\S]*?^\}/mu)?.[0]}\n${main}\nmain();`,
         ),
         {
           process: {
@@ -812,7 +851,7 @@ describe("release candidate checklist", () => {
             workflowSha: toolingSha,
           }),
           gitTrackedStatus: () => "",
-          assertReleaseCandidateTag: () => {},
+          assertReleaseCandidateTag: () => false,
           validateTrustedToolingPin,
           validateCandidateCheckout,
           validateReleaseScenarioCatalogCompatibility: () => ({
@@ -861,7 +900,14 @@ describe("release candidate checklist", () => {
             releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
           }),
           runLocalGeneratedCheckIfNeeded: generatedChecks,
-          runEarlyPluginSdkApiReview: () => {},
+          runEarlyPluginSdkApiReview: () =>
+            unpinnedTooling
+              ? {
+                  flag: "--plugin-sdk-api-acknowledgement",
+                  value: "f4b495f3",
+                  reason: "Plugin SDK API changes require acknowledgement digest f4b495f3",
+                }
+              : undefined,
           releaseBranchForTag,
           readFileSync: (file: string) =>
             file.endsWith("plugin-sdk-api-release-diff.md")
@@ -952,6 +998,30 @@ describe("release candidate checklist", () => {
           writeFileSync,
         },
       );
+      const decodeRerunCommand = (message: string) => {
+        const decoded = execFileSync(
+          "bash",
+          ["-c", `pnpm() { printf '%s\\0' "$@"; }\n${message.split("\n").at(-1)}`],
+          { encoding: "utf8", timeout: 10_000 },
+        )
+          .split("\0")
+          .filter(Boolean);
+        expect(decoded.slice(0, 2)).toEqual(["release:candidate", "--"]);
+        return parseArgs(decoded.slice(2));
+      };
+      if (unpinnedTooling) {
+        // Every missing flag is reported once, before waiting on validation.
+        const error = await completion.catch((cause: Error) => cause);
+        expect(error.message).toContain("acknowledgement digest f4b495f3");
+        expect(decodeRerunCommand(error.message)).toEqual({
+          ...parseArgs(candidateArgv),
+          workflowSha: toolingSha,
+          pluginSdkApiAcknowledgement: "f4b495f3",
+        });
+        expect(waitedRuns).toEqual([]);
+        expect(preflight).not.toHaveBeenCalled();
+        return;
+      }
       if (generatedFailure) {
         await expect(completion).rejects.toThrow("fixture generated-check failure");
         expect(generatedChecks).toHaveBeenCalledOnce();
@@ -2487,7 +2557,7 @@ describe("release candidate checklist", () => {
 
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
-      "--skip-dispatch requires --full-release-run",
+      "--skip-dispatch requires --full-release-validation-run-id",
     );
   });
 
@@ -2826,7 +2896,7 @@ describe("release candidate checklist", () => {
         "latest",
         "--publish-workflow-ref",
         preparedWorkflowRef,
-        "--full-release-run",
+        "--full-release-validation-run-id",
         "111",
         "--npm-preflight-run",
         "222",

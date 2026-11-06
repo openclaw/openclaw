@@ -854,3 +854,26 @@ describe("package source preflight", () => {
     expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(build));
   });
 });
+
+it("materializes release source blobs before source metadata validation", () => {
+  const workflow = readWorkflow(".github/workflows/openclaw-release-checks.yml");
+  const steps = workflow.jobs.prepare_release_package!.steps;
+  const materialize = workflowStep(
+    workflow,
+    "prepare_release_package",
+    "Materialize release package source",
+  );
+  const preflight = workflowStep(
+    workflow,
+    "prepare_release_package",
+    "Validate release package source metadata",
+  );
+  expect(steps.indexOf(materialize)).toBeLessThan(steps.indexOf(preflight));
+  expect(materialize).toMatchObject({
+    if: "needs.resolve_target.outputs.package_mode == 'source'",
+    env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
+    run: expect.stringContaining(
+      "git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter",
+    ),
+  });
+});

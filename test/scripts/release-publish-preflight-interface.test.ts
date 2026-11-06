@@ -148,3 +148,19 @@ describe("release publish preflight operator interface", () => {
     expect(text).not.toContain("gh workflow run");
   });
 });
+
+it("accepts the legacy full release run alias without allowing ambiguous selectors", () => {
+  const flags = ["--tag", "v2026.9.5", "--workflow-ref", "release-publish/aaaaaaaaaaaa-123"];
+  expect(parsePublishPreflightArgs([...flags, "--full-release-run", "123"])?.options).toMatchObject(
+    { fullReleaseValidationRunId: "123" },
+  );
+  expect(() =>
+    parsePublishPreflightArgs([
+      ...flags,
+      "--full-release-validation-run-id",
+      "123",
+      "--full-release-run",
+      "456",
+    ]),
+  ).toThrow("do not combine");
+});

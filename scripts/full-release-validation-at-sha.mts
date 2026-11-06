@@ -83,6 +83,9 @@ const ADMISSION_WORKFLOW = "openclaw-release-prepare.yml";
 const WITNESS_KIND = "openclaw.full-release-dispatch-inputs/v1";
 const WITNESS_FILE = "dispatch-inputs.json";
 const MAX_WITNESS_ARCHIVE_BYTES = 256 * 1024;
+// Extended-stable candidates trail main by tens of thousands of paths; the
+// tooling-lag diff alone exceeds execFileSync's 1 MiB default.
+const MAX_LOCAL_COMMAND_OUTPUT_BYTES = 256 * 1024 * 1024;
 const RUN_PAGE_SIZE = 20;
 const MAX_RUN_PAGES = 5;
 const GH_READ_OPTIONS = {
@@ -102,6 +105,7 @@ const RERUN_GROUPS = new Set([
   "windows-node",
   "live-e2e",
   "package",
+  "qualified-package",
   "qa-parity",
   "qa-live",
   "npm-telegram",
@@ -243,6 +247,7 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
   }
   const output = execFileSync(command, args, {
     encoding: "utf8",
+    maxBuffer: MAX_LOCAL_COMMAND_OUTPUT_BYTES,
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
   });
   return typeof output === "string" ? output.trim() : "";
@@ -622,7 +627,19 @@ export function verifyTargetRef(
   if (!targetRef) {
     return targetSha;
   }
-  const identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  let identity: ReturnType<typeof resolveReleaseContextIdentity>;
+  try {
+    identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  } catch (error) {
+    const context = parseReleaseContextRef(targetRef);
+    const preparation =
+      context?.kind === "release tag"
+        ? `Prepare the candidate from a commit whose package.json version matches ${context.ref}, push that tag, then rerun with its candidate SHA.`
+        : `Update package.json on ${targetRef} to the intended release version, commit and push the release branch, then rerun with the new candidate SHA.`;
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${preparation}`, {
+      cause: error,
+    });
+  }
   if (!identity) {
     throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
   }
@@ -1796,7 +1813,20 @@ function waitForWorkflowRun(
       }
       if (decision.state === "ready") {
         const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
-        if (releaseDecision?.state === "blocked_diagnostics_running") {
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status === "completed" &&
+          stringValue(suite.conclusion) &&
+          suite.conclusion !== "success"
+        ) {
+          throw new Error(
+            `Full Release Validation concluded ${stringValue(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status !== "completed"
+        ) {
           console.log(formatReleaseStateOutcome(releaseDecision));
           console.log(
             `Full Release Validation remains active: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,

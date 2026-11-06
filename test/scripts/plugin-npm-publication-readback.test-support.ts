@@ -313,7 +313,10 @@ export async function createNpmPublicationReadbackFixture(
   };
   const runGh = (args: string[]) => {
     const endpoint = expectDefined(args[1], "GitHub fixture endpoint");
-    const response = respondGh(endpoint);
+    const body = respondGh(endpoint);
+    const response = args.includes("--include")
+      ? `HTTP/2 200 OK\r\nx-ratelimit-remaining: 100\r\n\r\n${body}`
+      : body;
     ghResponses[endpoint] = response;
     return response;
   };

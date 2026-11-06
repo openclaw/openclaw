@@ -16,7 +16,19 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
 const tempDirs = createTempDirTracker();
-beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  // CI release targets must not override the branch owned by each fixture.
+  for (const key of [
+    "OPENCLAW_RELEASE_CONTEXT_REF",
+    "GITHUB_BASE_REF",
+    "GITHUB_REF",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+});
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
@@ -242,4 +254,23 @@ describe("check-max-lines-ratchet", () => {
 
     expect(main(root)).toBe(1);
   });
+});
+
+it("ignores release size-baseline drift without allowing blanket lint disables", () => {
+  const root = tempDirs.make("release-max-lines-");
+  fs.mkdirSync(path.join(root, "config"));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/stale.ts\n");
+  fs.writeFileSync(path.join(root, "src/stale.ts"), "// eslint-disable-next-line max-lines\n");
+  commitFixture(root);
+  fs.rmSync(path.join(root, "src/stale.ts"));
+  fs.writeFileSync(path.join(root, "src/new.ts"), "// eslint-disable-next-line max-lines\n");
+  git(root, ["branch", "-m", "release/2026.11.4"]);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(path.join(root, "src/new.ts"), "/* oxlint-disable */\n");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining("All-rule lint disables are forbidden"),
+  );
 });

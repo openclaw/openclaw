@@ -91,6 +91,8 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   );
   for (const file of [
     "check-limits.mts",
+    "release-context.mjs",
+    "release-version.mjs",
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "record-shared.mjs",

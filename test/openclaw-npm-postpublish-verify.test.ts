@@ -335,9 +335,7 @@ describe("npm registry provenance verification", () => {
         async () => {
           attempts += 1;
           if (attempts === 1) {
-            throw new Error(
-              "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
-            );
+            throw new Error("npm registry request failed (503)");
           }
           if (attempts === 2) {
             throw new Error(
@@ -915,3 +913,19 @@ describe("runtime dependency ownership build contract", () => {
     },
   );
 });
+
+it.each(["npm registry signature verification timed out after an integrity mismatch."])(
+  "does not retry permanent provenance or integrity mismatch: %s",
+  async (message) => {
+    const read = vi.fn<() => Promise<string>>().mockRejectedValue(new Error(message));
+    await expect(
+      retryNpmRegistryProvenanceRead(read, {
+        attempts: 3,
+        delay: async () => {
+          throw new Error("unexpected retry");
+        },
+      }),
+    ).rejects.toThrow(message);
+    expect(read).toHaveBeenCalledOnce();
+  },
+);

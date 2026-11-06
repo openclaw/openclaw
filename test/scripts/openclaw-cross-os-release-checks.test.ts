@@ -415,7 +415,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',
@@ -595,8 +595,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it.each([
-    [800_000, 1200, 2_520_000],
-    [Number.NaN, 600, 1_320_000],
+    [357_000, 1200, 2_520_000],
+    [1_000_000, 1500, 3_120_000],
+    [1_500_000, 1800, 3_720_000],
+    [Number.NaN, 1200, 2_520_000],
   ])(
     "sizes Windows upgrade budgets from a %d ms baseline install",
     (durationMs, stepTimeoutSeconds, wrapperTimeoutMs) => {

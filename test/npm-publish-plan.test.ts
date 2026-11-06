@@ -696,3 +696,18 @@ describe("extended-stable npm publish override", () => {
     expect(() => resolveNpmPublishPlan(version, undefined, override)).toThrow();
   });
 });
+
+it("retries a request write EPIPE before any registry response", async () => {
+  const packument = { versions: {} };
+  const fetchImpl = vi
+    .fn<typeof fetch>()
+    .mockRejectedValueOnce(new TypeError("fetch failed", { cause: { code: "EPIPE" } }))
+    .mockResolvedValueOnce(registryResponse({ body: JSON.stringify(packument) }));
+  const result = await fetchNpmRegistryPackumentWithRetry({
+    packageName: "fixture",
+    packageUrl: "https://registry.npmjs.org/fixture",
+    fetchImpl,
+    sleep: async () => {},
+  });
+  expect([result, fetchImpl.mock.calls.length]).toEqual([{ status: 200, ok: true, packument }, 2]);
+});

@@ -6,7 +6,19 @@ import { main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  // CI release targets must not override the branch owned by each fixture.
+  for (const key of [
+    "OPENCLAW_RELEASE_CONTEXT_REF",
+    "GITHUB_BASE_REF",
+    "GITHUB_REF",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -167,4 +179,13 @@ describe("line-cap growth ratchet", () => {
     );
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
   });
+});
+
+it("skips line-cap growth on release branches but not main", () => {
+  const root = fixture();
+  fs.writeFileSync(path.join(root, "src/file.ts"), source(6));
+  git(root, "branch", "-m", "release/2026.11.4");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  git(root, "branch", "-m", "main");
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
 });
