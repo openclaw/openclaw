@@ -79,7 +79,6 @@ type EnglishCatalog = TranslationMap & {
         Record<
           | "automationAttention"
           | "automationEmpty"
-          | "automationEnabled"
           | "automationError"
           | "automationLoading"
           | "automationMore"
@@ -225,17 +224,13 @@ type EnglishCatalog = TranslationMap & {
   sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap } & Record<
       | "ariaLabel"
       | "linkedChannel"
-      | "moreParticipants"
       | "moreParticipantsLabel"
       | "projectLabel"
       | "workspaceLabel"
       | "branchLabel"
       | "runsOn"
       | "machineCpu"
-      | "machineMemory"
-      | "more"
-      | "changedFile"
-      | "changedFiles",
+      | "machineMemory",
       string
     >;
   filePreview: TranslationMap;
@@ -384,11 +379,9 @@ const startupEnglish = {
   common: {
     showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
-    health: "Health",
     ok: "OK",
     yes: "Yes",
     no: "No",
-    default: "Default",
     active: "Active",
     loading: "Loading…",
     gatewayStarting: "Gateway starting…",
@@ -435,7 +428,6 @@ const startupEnglish = {
     failed: "Failed",
     none: "none",
     na: "n/a",
-    never: "never",
     justNow: "just now",
     now: "now",
     unknown: "Unknown",
@@ -468,7 +460,6 @@ const startupEnglish = {
     loadConfig: "Load config",
     loadApprovals: "Load approvals",
     settingsSections: "Settings sections",
-    version: "Version",
     docs: "Docs",
     learnMore: "Learn more",
     colorMode: "Color mode",
@@ -513,7 +504,6 @@ const startupEnglish = {
   sessionHovercard: {
     ariaLabel: "Session information",
     linkedChannel: "Linked to {channel}",
-    moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
     workspaceLabel: "Workspace",
@@ -521,9 +511,6 @@ const startupEnglish = {
     runsOn: "Runs on {providerId} · {profileId}",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
-    more: "+{count} more",
-    changedFile: "{count} file",
-    changedFiles: "{count} files",
     states: {},
     checks: {},
   },
@@ -910,7 +897,6 @@ const startupEnglish = {
   nav: {
     gateway: {
       sectionLabel: "Gateway",
-      menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
       configReadOnly: "Gateway configuration is read-only.",
       configReadOnlyHint:
@@ -945,8 +931,6 @@ const startupEnglish = {
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
-    more: "More",
-    home: "Home",
     pages: "Pages",
     pin: "Pin",
     unpin: "Unpin",
@@ -1019,7 +1003,6 @@ const startupEnglish = {
   tabs: {
     device: "This Mac",
     devicePermissions: "Permissions",
-    agentsHome: "Agents",
     agents: "Agents",
     activity: "Activity",
     meetings: "Meetings",
@@ -1180,9 +1163,7 @@ const startupEnglish = {
     decisionAssistance: {},
     codeMode: {},
 
-    swarm: {
-      title: "Swarm",
-    },
+    swarm: {},
     toolSearch: {},
 
     hostDesktop: {},
@@ -1393,17 +1374,13 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      approx: "≈ {value}",
     },
     loading: {
-      title: "Usage overview",
       badge: "Loading usage…",
     },
     metrics: {
       tokens: "Tokens",
       cost: "Cost",
-      session: "session",
-      sessions: "sessions",
     },
     heatmap: {
       title: "Token activity",
@@ -1505,7 +1482,6 @@ const startupEnglish = {
       automationMore: "Load more automations",
       automationAttention: "Needs attention",
       automationPaused: "Paused",
-      automationEnabled: "Enabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
@@ -1594,7 +1570,7 @@ const startupEnglish = {
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     subagentViewOnly: "View-only subagent",
     subagentSessionDisabled: "Continue in {parent}.",
-    processesPanel: { title: "Processes", refresh: "Refresh processes" },
+    processesPanel: { title: "Processes" },
     subagentsPanel: {},
     parentSession: "the parent session",
     openParentSession: "Open parent session",
@@ -1824,7 +1800,6 @@ const startupEnglish = {
       explorePanels: "Explore panels",
       addTab: "Add side panel tab",
       closeNewTab: "Close New tab",
-      closeAll: "Close all",
       closeAllTabs: "Close all tabs",
       closeOtherTabs: "Close other tabs",
       closeFileChanges: "Save changes to {file} before closing?",
@@ -1840,7 +1815,6 @@ const startupEnglish = {
       defaultSaveFailed: "Couldn’t save the dashboard default. Check the connection and try again.",
       defaultSaveError: "Couldn’t save the dashboard default. Try again.",
       swap: "Swap {main} and {side}",
-      layout: "Layout",
       panelPosition: "Panel position",
       dockLeft: "Move side panel left",
       dockRight: "Move side panel right",
