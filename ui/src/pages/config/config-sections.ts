@@ -1,8 +1,7 @@
-import type { JsonSchema } from "../../lib/config-form-utils.ts";
 // Advanced renders without an include list: it shows every section that has no
 // curated home.
 // Each curated page opens at its first section.
-import { asConfigSchema } from "./view-schema.tsx";
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
 
 const CONFIG_PAGES = [
   ["communications", ["messages", "tts", "transcripts"]],
@@ -134,13 +133,4 @@ export function omitCuratedOwnedConfigLeaves(
  */
 export function omitEditorOwnedConfigLeaves(schema: JsonSchema): JsonSchema {
   return omitCuratedOwnedConfigLeaves(schema, "", true);
-}
-
-/** Hide optional feature controls without changing the editable config or unresolved schema. */
-export function visibleConfigSchema(
-  value: unknown,
-  openclawIdEnabled: boolean | undefined,
-): unknown {
-  const schema = asConfigSchema(value);
-  return schema ? omitCuratedOwnedConfigLeaves(schema, "", openclawIdEnabled) : value;
 }
