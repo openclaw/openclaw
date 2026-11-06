@@ -405,9 +405,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Within a subscription, core's block index runs at previewEpoch plus a learned offset.
   // A restarted subscription can reuse an index, so the index alone is not a unique source ID.
   let sourceIndexOffset = 0;
-  const isCurrentSource = (source: number | undefined) => {
+  // Without text from an earlier message there is no old block, so an index behind the epoch
+  // is a restarted subscription, whose first block the current preview covers.
+  let earlierText = false;
+  let epochText = false;
+  const isCurrentSource = (source: number | undefined, text: string) => {
     if (source === undefined) {
       return true;
+    }
+    const current = previewText.slice(previewBlockOffset);
+    if (
+      !earlierText &&
+      source < previewEpoch + sourceIndexOffset &&
+      (current.startsWith(text) || current.trimStart().startsWith(text))
+    ) {
+      sourceIndexOffset = source - previewEpoch;
     }
     sourceIndexOffset = Math.max(sourceIndexOffset, source - previewEpoch);
     return source - sourceIndexOffset === previewEpoch;
@@ -475,6 +487,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       streamText = `${streamText}${nextText}`;
     } else {
       previewText = nextText;
+      epochText = true;
       streamText = `${snapshotBaseText}${continuedPreview(nextText)}`;
     }
     lastPartial = nextText;
@@ -1468,7 +1481,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               // Mirror block text into streamText so onIdle close still sends content.
               const consumedBefore = previewBlockOffset;
               // An earlier block may use this preview only when its earlier copy was accepted.
-              const mode = isCurrentSource(info.assistantMessageIndex) ? "delta" : "append";
+              epochText = true;
+              const mode = isCurrentSource(info.assistantMessageIndex, text) ? "delta" : "append";
               if (mode === "delta" || !consumeEarlierBlock(text, info.assistantMessageIndex)) {
                 queueStreamingUpdate(text, mode);
               }
@@ -1627,6 +1641,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // A close still in flight credited its preview provisionally, and its settlement cannot
             // correct a card opened after this start. Freeze the earlier prose without that credit.
             undoProvisionalCredit?.();
+            earlierText ||= epochText;
+            epochText = false;
             if (closedPreviewText) {
               earlierRests.set(
                 previewEpoch + sourceIndexOffset,
