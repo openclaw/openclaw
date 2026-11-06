@@ -904,10 +904,14 @@ struct CommandSessionsScreen: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(OpenClawType.captionBold)
                             .foregroundStyle(OpenClawBrand.warn)
+                        // Identified for UI tests: the leading sidebar shows the same copy
+                        // without an identifier, so the banner notice carries its own. A
+                        // container identifier here would clobber the Refresh button's.
                         Text(verbatim: partialLoadText)
                             .font(OpenClawType.captionMedium)
                             .foregroundStyle(OpenClawBrand.warn)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("Sessions.PartialLoad.Notice")
                         Button {
                             self.refreshNonce += 1
                         } label: {
@@ -917,7 +921,6 @@ struct CommandSessionsScreen: View {
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("Sessions.PartialLoad.Refresh")
                     }
-                    .accessibilityIdentifier("Sessions.PartialLoad")
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                 }

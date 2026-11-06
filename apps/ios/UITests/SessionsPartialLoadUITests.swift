@@ -38,10 +38,14 @@ final class SessionsPartialLoadUITests: XCTestCase {
             "Header does not count the retained partial roster")
         self.capture("sessions-partial-roster", in: app)
 
-        let notice = app.staticTexts[Self.partialNotice].firstMatch
+        // The leading sidebar shows the same copy without an identifier, so the
+        // banner notice is targeted by its own identifier to prove the Sessions
+        // screen itself renders it.
+        let notice = app.staticTexts["Sessions.PartialLoad.Notice"].firstMatch
         XCTAssertTrue(
             notice.waitForExistence(timeout: 10),
             "Partial roster was presented as complete: no incomplete-load notice")
+        XCTAssertEqual(notice.label, Self.partialNotice)
         let refresh = app.buttons["Sessions.PartialLoad.Refresh"].firstMatch
         XCTAssertTrue(
             refresh.waitForExistence(timeout: 5),
