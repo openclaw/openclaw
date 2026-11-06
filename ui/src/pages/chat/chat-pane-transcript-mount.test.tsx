@@ -48,7 +48,6 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
-      commentAttachments: [],
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
     });
     chat.transcript.start();
