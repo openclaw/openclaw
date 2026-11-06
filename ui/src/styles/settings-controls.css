@@ -349,9 +349,10 @@ select.settings-select {
     min-height: var(--settings-control-height);
   }
 
-  :root .btn:is(.cron-job-menu__trigger, .secrets-store__menu-trigger),
+  :root .cron-job-menu__trigger,
+  :root .btn.secrets-store__menu-trigger,
   :root .plugin-editor__menu .btn.btn--icon,
-  :root openclaw-sessions-page td .icon-btn[aria-haspopup="menu"] {
+  :root openclaw-sessions-page td .session-row-menu-trigger {
     width: var(--row-action-size);
     min-width: var(--row-action-size);
     height: var(--row-action-size);

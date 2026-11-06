@@ -1,9 +1,10 @@
 /* Shared icon-only action. The component owns the box, glyph and every state;
-   a surface class may only place it (margins, position, reveal). */
+   a surface class may only place it (margins, position, reveal). A surface whose
+   whole bar shares one glyph or ink may set the --icon-button-* context tokens. */
 .oc-icon-button {
   --oc-icon-button-size: 32px;
-  --oc-icon-button-glyph: var(--chrome-icon-size);
-  --oc-icon-button-stroke: var(--chrome-icon-stroke);
+  --oc-icon-button-glyph: var(--icon-button-glyph, var(--chrome-icon-size));
+  --oc-icon-button-stroke: var(--icon-button-stroke, var(--chrome-icon-stroke));
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
@@ -17,7 +18,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-button-color, var(--muted));
   font: inherit;
   line-height: 0;
   transition:
@@ -55,9 +56,14 @@
   color: var(--text);
 }
 
+/* On state follows the app's selected-control tokens. */
 .oc-icon-button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--text) 11%, transparent);
-  color: var(--text);
+  background: var(--surface-selected);
+  color: var(--icon-active, var(--text));
+}
+
+.oc-icon-button[aria-pressed="true"]:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--surface-selected-hover);
 }
 
 .oc-icon-button:focus-visible {
