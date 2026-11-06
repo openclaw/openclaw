@@ -144,7 +144,7 @@ export function SessionsView(props: SessionsProps) {
             </Show>
             <TranscriptSearchForm {...props} phoneLayout={phoneLayout()} />
             <RefreshButton
-              class="btn--xs sessions-toolbar__icon sessions-toolbar__refresh"
+              class="sessions-toolbar__icon sessions-toolbar__refresh"
               label={t("common.refresh")}
               busy={props.refreshing}
               disabled={props.refreshDisabled}
