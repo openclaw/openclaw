@@ -9,8 +9,8 @@ import {
   Show,
   type Accessor,
 } from "solid-js";
-import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import "../../components/modal-dialog.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
