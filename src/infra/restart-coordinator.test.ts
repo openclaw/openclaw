@@ -7,6 +7,7 @@ import * as cronJobs from "../cron/active-jobs.js";
 import * as cronTasks from "../cron/service/active-run-cancellation.js";
 import * as queue from "../process/command-queue.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import { beginSessionEffect, runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import * as sessionRuns from "../sessions/session-controller.queries.js";
 import * as agentRuns from "./agent-run-registry.js";
 import {
@@ -82,6 +83,45 @@ it("counts an admitted spawn handoff while excluding the preflight request", asy
     handoff?.release();
   }
 });
+
+it.each(["admission", "mutation"] as const)(
+  "reports session-only %s work until release",
+  async (kind) => {
+    const target = { scope: "restart-preflight.sqlite", identities: [kind] };
+    const check = async () => {
+      const result = scheduleSafeGatewayRestart();
+      expect(result.status).toBe("deferred");
+      expect(result.preflight).toMatchObject({
+        safe: false,
+        counts: {
+          sessionAdmissions: kind === "admission" ? 1 : 0,
+          sessionMutations: kind === "mutation" ? 1 : 0,
+          totalActive: 1,
+        },
+        blockers: [
+          { kind: kind === "admission" ? "session-admission" : "session-mutation", count: 1 },
+        ],
+      });
+      expect(result.preflight.summary).toContain("restart deferred:");
+    };
+    if (kind === "admission") {
+      const admission = await beginSessionEffect(target);
+      try {
+        await check();
+      } finally {
+        admission.release();
+      }
+    } else {
+      await runSessionMutation({ ...target, policy: "wait", run: check });
+    }
+    expect(createSafeGatewayRestartPreflight()).toMatchObject({
+      safe: true,
+      counts: { sessionAdmissions: 0, sessionMutations: 0, totalActive: 0 },
+      blockers: [],
+      summary: "safe to restart now",
+    });
+  },
+);
 
 it.each([
   { status: "deferred", active: 1, skipDeferral: false, coalesced: false },
