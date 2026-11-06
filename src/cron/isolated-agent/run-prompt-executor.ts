@@ -45,10 +45,10 @@ import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
-import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import {
   assertCronCandidateSandboxPlacement,
   assertCronRuntimeAuthorityCandidate,
+  resolveCliChildAbortSignal,
   resolveCronSandboxPlacement,
   type CronSandboxPlacement,
 } from "./run-admission.js";
@@ -78,18 +78,6 @@ type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
-
-// A CLI child in its parent's workspace runs native tools no tool check sees, so
-// its process also ends when the parent resets.
-function resolveCliChildAbortSignal(
-  runSignal: AbortSignal | undefined,
-  parentSignal: AbortSignal | undefined,
-): AbortSignal | undefined {
-  if (!parentSignal) {
-    return runSignal;
-  }
-  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
-}
 
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
@@ -173,6 +161,7 @@ export function createCronPromptExecutor(
   let sandboxPlacement: CronSandboxPlacement | undefined;
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
+    let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
@@ -314,6 +303,7 @@ export function createCronPromptExecutor(
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
+        currentContextSnapshot = undefined;
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
@@ -456,6 +446,7 @@ export function createCronPromptExecutor(
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
+            inputProvenance: params.inputProvenance,
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
@@ -494,7 +485,7 @@ export function createCronPromptExecutor(
             userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
-          }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
+          }) satisfies Partial<Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0]>;
         if (cliExecution) {
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
@@ -565,8 +556,6 @@ export function createCronPromptExecutor(
                     : undefined;
                 const candidateResult = await runCliAgent({
                   ...buildCommonRunParams(),
-                  // The CLI backend marks internal provenance as non-user input.
-                  inputProvenance: params.inputProvenance,
                   diagnosticOwner,
                   sessionEntry: params.cronSession.sessionEntry,
                   contextWindow: params.cronSession.sessionEntry.contextWindow,
@@ -641,19 +630,11 @@ export function createCronPromptExecutor(
             await deferredLifecycle.complete();
           }
         }
-        const { runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
-        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
-          job: params.job,
-          agentId: params.agentId,
-          agentSessionKey: params.agentSessionKey,
-          provider: providerOverride,
-          model: modelOverride,
-        });
+        const { runCronEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
-        const result = await runEmbeddedAgent({
+        const embeddedRunParams: Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0] = {
           ...buildCommonRunParams(),
-          promptCacheKey,
           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession,
           allowGatewaySubagentBinding: true,
           messageTo: params.resolvedDelivery.to,
@@ -701,6 +682,9 @@ export function createCronPromptExecutor(
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
+        };
+        const result = await runCronEmbeddedAgent(embeddedRunParams, params, (snapshot) => {
+          currentContextSnapshot = snapshot;
         });
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
@@ -738,6 +722,7 @@ export function createCronPromptExecutor(
     });
     const completed = {
       runResult: fallbackResult.result,
+      currentContextSnapshot,
       fallbackProvider: fallbackResult.provider,
       fallbackModel: fallbackResult.model,
       runStartedAt,

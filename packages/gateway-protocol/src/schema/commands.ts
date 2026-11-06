@@ -85,6 +85,8 @@ export const CommandEntrySchema = closedObject({
 export const CommandsListParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Registered project selected before session creation; an existing session owns its own project. */
+  projectId: Type.Optional(NonEmptyString),
   provider: Type.Optional(NonEmptyString),
   scope: Type.Optional(CommandScopeSchema),
   includeArgs: Type.Optional(Type.Boolean()),

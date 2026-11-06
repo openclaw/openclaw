@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { constants, PerformanceObserver } from "node:perf_hooks";
@@ -19,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { SessionTranscriptProjectionReceipt } from "../../src/config/sessions/session-transcript-projection-facts.types.js";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -57,22 +57,10 @@ const ownerUrl = new URL(
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
-        ownerLoaded = true;
-        const loaded = nextLoad(sourceUrl.href, context);
-        return { format: loaded.format, source: loaded.source, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { readSessionTranscriptProjectionReceipt: read, withSessionTranscriptProjectionReceipt } =
   await import("../../src/config/sessions/session-transcript-projection-facts-scope.js");
-assert(!values["owner-file"] || ownerLoaded, "Baseline owner substitution was not loaded");
+assert(!values["owner-file"] || wasOwnerReplaced(), "Baseline owner substitution was not loaded");
 const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
   await import("../../src/state/openclaw-agent-db.js");
 const { readSqliteDatabaseScopedWriteToken, sqliteSessionIdWriteScope } =
@@ -228,7 +216,7 @@ try {
       node: process.version,
       mode: values.mode,
       ownerSha256: hash("sha256", readFileSync(sourceUrl)),
-      ownerReplacement: ownerLoaded,
+      ownerReplacement: wasOwnerReplaced(),
       iterations,
       rowCount,
       shape: rowCount ? "metadata-capacity" : "compact",

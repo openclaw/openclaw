@@ -331,7 +331,7 @@ export class Client {
   }
 
   private async fetchCachedEntity<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const now = Date.now();
+    const now = performance.now();
     // SAFETY: Each private cache key has one entity type, fixed by its fetch caller.
     const cached = this.entityEntries.get(key) as CacheEntry<T> | undefined;
     if (cached && cached.expiresAt > now) {
@@ -467,7 +467,7 @@ export class Client {
   ): Promise<unknown> {
     const rest = this.rest;
     const timeoutMs = rest.options.timeout;
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     try {
       return method === "get" || body === undefined
         ? await rest[method](path)
@@ -484,7 +484,7 @@ export class Client {
         Object.assign(error, {
           deployRestMethod: method,
           deployRestPath: path,
-          deployRequestMs: Date.now() - startedAt,
+          deployRequestMs: performance.now() - startedAt,
           ...(Number.isFinite(timeoutMs) ? { deployTimeoutMs: timeoutMs } : {}),
         });
       }
@@ -515,10 +515,10 @@ export class Client {
         }
         const listenerName = listener.constructor.name || "AnonymousListener";
         const release = await queue.permits.acquire();
-        const startedAt = Date.now();
+        const startedAt = performance.now();
         try {
           await listener.handle(data, this);
-          const durationMs = Date.now() - startedAt;
+          const durationMs = performance.now() - startedAt;
           if (durationMs < 30_000) {
             return;
           }

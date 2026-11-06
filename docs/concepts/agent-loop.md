@@ -339,6 +339,10 @@ replace that explanation or restart an already-final timed-out turn.
 This includes a timeout during tool execution when no final payload or accepted
 continuation remains. A compaction failure label does not turn that unfinished
 tool timeout into a paused run; completed tool results remain in the transcript.
+Tool execution deadlines retain `timeoutPhase: "tool_execution"` through terminal
+settlement. The error identifies the outcome as unknown: inspect current state
+before repeating the operation. Continuing is an ordinary new input, not an
+automatic replay of the timed-out tool.
 Earlier tool warnings and reasoning output do not count as a completed reply.
 Quiet or collect-mode children do not suppress a timeout unless another
 continuation owns the reply; accepting a child alone does not promise delivery.
@@ -369,6 +373,10 @@ Harness cleanup flushes trajectory events accepted before foreground work ended,
 including during restart cancellation. It cannot accept new events after that
 lifetime ends, or flush through a closed host, revoked admission, replaced run,
 or replaced recorder.
+
+Completed and aborted built-in attempts release their session transcript listeners
+even if transcript-owner cleanup fails. The cleanup error remains visible, while
+the global listener registry no longer retains the completed session's history.
 
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for

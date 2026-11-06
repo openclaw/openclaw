@@ -119,26 +119,15 @@ export function parseOcPath(input: string): OcPath {
     fail(`oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${inputBytes})`, "OC_PATH_TOO_LONG");
   }
 
-  // NFC normalization keeps cross-platform equality (macOS HFS+ NFD vs
-  // Unix/Windows NFC). NFC can grow the string, so re-check the cap.
-  let normalized = input.startsWith(BOM) ? input.slice(BOM.length) : input;
-  normalized = normalized.normalize("NFC");
-
-  const normalizedBytes = Buffer.byteLength(normalized, "utf8");
-  if (normalizedBytes > MAX_PATH_LENGTH) {
-    fail(
-      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalizedBytes})`,
-      "OC_PATH_TOO_LONG",
-    );
-  }
-  if (!normalized.startsWith(OC_SCHEME)) {
+  const withoutBom = input.startsWith(BOM) ? input.slice(BOM.length) : input;
+  if (!withoutBom.startsWith(OC_SCHEME)) {
     fail(`Missing oc:// scheme: ${printable(input)}`, "OC_PATH_MISSING_SCHEME");
   }
-  if (hasControlChar(normalized)) {
+  if (hasControlChar(withoutBom)) {
     fail(`Control character in oc:// path: ${printable(input)}`, "OC_PATH_CONTROL_CHAR");
   }
 
-  const afterScheme = normalized.slice(OC_SCHEME.length);
+  const afterScheme = withoutBom.slice(OC_SCHEME.length);
   // Top-level split skips quoted keys so `"foo?bar"` isn't broken.
   const queryIndex = indexOfTopLevel(afterScheme, "?");
   const pathPart = queryIndex === -1 ? afterScheme : afterScheme.slice(0, queryIndex);

@@ -490,7 +490,7 @@ verify_prep_branch_matches_prepared_head() {
 prepare_init() {
   local pr="$1" observation="${2:-}" review_mode="${3:-ready}"
   local incoming_json_oid=""
-  # Validate the exact reviewed head before taking the lock past its reversible phase.
+  # Review validation leaves this shell in the admitted worktree before side effects.
   case "$review_mode" in
     ready) review_validate_artifacts "$pr" true || return 1 ;;
     correction)
@@ -501,7 +501,6 @@ prepare_init() {
     *) echo "Unknown preparation review mode: $review_mode" >&2; return 1 ;;
   esac
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
 

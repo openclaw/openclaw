@@ -3,7 +3,25 @@ import { compareAscii } from "./canonical-json.mjs";
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {{ targetVersion: string, childRole: string, jobName: string, reason: string }[]} */
-export const RELEASE_VALIDATION_WAIVERS = [];
+export const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.11.1",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Operator-authorized 2026.11.1-only leniency: Kova CPU and RSS thresholds exceeded " +
+      "(FRV 41800680256 run kova-261104-084310-8bd049); crash, correctness, isolation, " +
+      "data-integrity, and install/update failures stay blocking and are checked in the report.",
+  },
+  {
+    targetVersion: "2026.11.1",
+    childRole: "releaseChecksIndependent",
+    jobName: "Run repo/live E2E validation / validate_release_live_cache",
+    reason:
+      "OpenRouter returned HTTP 402 for the release key (FRV 41881174354 job on C 3a4983e15f96); " +
+      "billing failure at the last provider, tracked in the 2026.11.1 release handoff.",
+  },
+];
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 const RELEASE_CHECK_ROLES = new Set([
@@ -58,8 +76,13 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
+const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
+
 function aggregateCauses(waiver) {
   if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
+    return [];
+  }
+  if (waiver.childRole === "productPerformance" && waiver.jobName === KOVA_PERFORMANCE_JOB) {
     return [];
   }
   if (RELEASE_CHECK_ROLES.has(waiver.childRole)) {
@@ -156,11 +179,15 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
 
 // Aggregates also enforce integrity and dispatch identity. A waived test must
 // not excuse a second failure in that same aggregate job.
+export class ReleaseAggregateValidationError extends Error {}
+
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
     if (matches.length !== 1 || matches[0].status !== "completed") {
-      throw new Error(`Required release aggregate is missing or incomplete: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Required release aggregate is missing or incomplete: ${aggregate.jobName}`,
+      );
     }
     const job = matches[0];
     if (job.conclusion === "success") {
@@ -174,7 +201,9 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       failedSteps?.length !== 1 ||
       failedSteps[0].name !== aggregate.stepName
     ) {
-      throw new Error(`Release aggregate has a non-policy failure: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Release aggregate has a non-policy failure: ${aggregate.jobName}`,
+      );
     }
     const log = String(await getJobLog(job.id));
     const causes = log
@@ -185,7 +214,9 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
         return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
       });
     if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
-      throw new Error(`Release aggregate has an unwaived failure: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
+      );
     }
   }
 }

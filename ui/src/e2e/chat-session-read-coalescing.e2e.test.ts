@@ -140,17 +140,22 @@ suite.define(() => {
           lastRunId: runId,
         },
       });
-      // The swarm owner connects after 250 ms; its initial read must settle too.
+      // The roster starts independently of the branch query scheduled after transcript paint.
       await expect
         .poll(async () => {
           await page.clock.runFor(20);
           return count("sessions.list", { spawnedBy: key });
         })
         .toBeGreaterThan(0);
-      await settle();
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await expect
+        .poll(async () => {
+          await page.clock.runFor(20);
+          return count("sessions.branches.list", { sessionKey: key });
+        })
+        .toBeGreaterThan(0);
+      await settle();
       expect(await count("board.get")).toBeGreaterThan(0);
-      expect(await count("sessions.branches.list", { sessionKey: key })).toBeGreaterThan(0);
       expect(await count("sessions.describe", { key: "agent:main:main" })).toBeGreaterThan(0);
       const describes = () => count("sessions.describe", { key });
       const before = await describes();

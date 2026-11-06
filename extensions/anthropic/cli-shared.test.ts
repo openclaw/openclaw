@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
@@ -182,13 +183,47 @@ it.each([
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it.each([
-    [undefined, true],
-    [{ security: "allowlist", ask: "always" }, false],
-  ] as const)("derives bypass from default or legacy exec policy %j", (exec, bypass) => {
-    expect(executionArgs({ config: { tools: { exec } } }).includes("bypassPermissions")).toBe(
-      bypass,
-    );
+  it.each([false, true])("layers exec policy before selecting bypass (resume=%s)", (useResume) => {
+    type Exec = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
+    const cases: [Exec | undefined, Exec | undefined, boolean][] = [
+      [undefined, undefined, true],
+      [undefined, {}, true],
+      [undefined, { ask: "always" }, false],
+      [undefined, { mode: "full" }, true],
+      [undefined, { mode: "deny" }, false],
+      [{ mode: "full" }, undefined, true],
+      [{ mode: "full" }, {}, true],
+      [{ mode: "full" }, { ask: "always" }, false],
+      [{ mode: "full" }, { security: "deny" }, false],
+      [{ mode: "full" }, { mode: "deny" }, false],
+      [{ mode: "deny" }, { ask: "off" }, false],
+      [{ mode: "deny" }, undefined, false],
+      [{ mode: "deny" }, {}, false],
+      [{ mode: "deny" }, { mode: "full" }, true],
+      [{ mode: "deny" }, { security: "full", ask: "off" }, true],
+      [{ security: "deny", ask: "off" }, undefined, false],
+      [{ security: "deny", ask: "off" }, { host: "gateway" }, false],
+      [{ security: "deny", ask: "off" }, { ask: "off" }, false],
+      [{ security: "deny", ask: "off" }, { mode: "full" }, true],
+      [{ security: "deny", ask: "off" }, { security: "full", ask: "off" }, true],
+      [{ security: "full", ask: "always" }, { security: "full" }, false],
+      [{ mode: "ask" }, { ask: "off" }, false],
+      [{ security: "allowlist", ask: "always" }, undefined, false],
+    ];
+    for (const [globalExec, agentExec, bypass] of cases) {
+      const args = executionArgs({
+        agentId: "worker",
+        useResume,
+        baseArgs: (useResume ? backend.config.resumeArgs : backend.config.args) ?? [],
+        config: {
+          tools: { exec: globalExec },
+          agents: { entries: { worker: { tools: { exec: agentExec } } } },
+        },
+      });
+      expect
+        .soft(args.includes("bypassPermissions"), JSON.stringify({ globalExec, agentExec }))
+        .toBe(bypass);
+    }
   });
 
   it("keeps per-agent exec policy for normal runs and omits only the injected mode for compaction", () => {

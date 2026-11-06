@@ -27,6 +27,8 @@ import {
 import { testing } from "../../../sessions/session-controller.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
+import { withSessionPlacementForcedTerminalSettlement } from "../../session-placement-forced-terminal-settlement.js";
 import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
 import { createEmbeddedRunHandle } from "../runs.test-support.js";
 import { outsideExecutionCapacity } from "./execution-capacity.js";
@@ -269,32 +271,41 @@ describe("controller-owned execution guard", () => {
     }
   });
 
-  it("keeps a borrowed outer turn active when its nested caller cancels", async () => {
+  it("keeps the outer turn active and preserves cancellation after nested placement cleanup", async () => {
     const operation = replyOperation();
     const caller = new AbortController();
-    const state = create("nested", {
+    const placement = new AbortController();
+    const releaseProvider = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed() {},
+      executeLocalTurn: async (_claim, task) => task(),
+      executeTurn: async (_claim, _params, task) =>
+        withSessionPlacementForcedTerminalSettlement(
+          async () => {},
+          () => placement.signal.throwIfAborted(),
+          task,
+        ),
+    });
+    const state = create("cancelled-placement", {
       replyOperation: operation,
       abortSignal: caller.signal,
     });
-    const { controller, getParams } = state;
-    const { entered, finish, run: nested } = pauseSession(state);
-    const reason = new Error("nested caller cancelled");
-    const rejected = expect(nested).rejects.toBe(reason);
+    const paused = pauseGlobal(state);
+    const run = state.controller.enqueueSession(paused.task);
+    const reason = new Error("Reply operation stalled");
+    const rejected = expect(run).rejects.toBe(reason);
     try {
-      await entered;
+      await paused.entered;
       caller.abort(reason);
-      expect(getParams().abortSignal?.reason).toBe(reason);
-      expect(controller.abortSignal.reason).toBe(reason);
       expect(operation.abortSignal.aborted).toBe(false);
-      expect(operation.result).toBeNull();
-      expect(operation.watchdog.snapshot().phase).not.toBe("terminal");
-      finish();
+      placement.abort(new Error("session placement turn settlement is closed"));
+      paused.raw.resolve();
       await rejected;
       expect(getSessionControllerOperation(key)).toBe(operation);
       expect(operation.result).toBeNull();
     } finally {
-      finish();
-      await nested.catch(() => {});
+      paused.raw.resolve();
+      await run.catch(() => {});
+      releaseProvider();
       operation.complete();
     }
   });

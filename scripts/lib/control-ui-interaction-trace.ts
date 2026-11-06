@@ -19,7 +19,11 @@ const scriptEvents = new Set([
   "v8.execute",
 ]);
 const styleEvents = new Set(["UpdateLayoutTree", "RecalculateStyles"]);
-const taskEvents = new Set(["RunTask", "ThreadControllerImpl::RunTask"]);
+const taskEvents = new Set([
+  "RunTask",
+  "ThreadControllerImpl::RunTask",
+  "BlinkScheduler_PerformMicrotaskCheckpoint",
+]);
 
 function union(intervals: readonly Interval[]): Interval[] {
   const result: Interval[] = [];

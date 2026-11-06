@@ -3,7 +3,12 @@ import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
-import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import {
+  canShareSqliteDatabaseAdmissions,
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -15,24 +20,41 @@ import {
 } from "../infra/worker-request-diagnostics.js";
 import { getChildLogger } from "../logging/logger.js";
 import { runStoreWriterAcquisitions } from "../shared/store-writer-acquisitions.js";
-import {
-  isActiveStoreWriter,
-  runQueuedStoreWrite,
-  type StoreWriterTiming,
-} from "../shared/store-writer-queue.js";
+import { isActiveStoreWriter, runQueuedStoreWrite } from "../shared/store-writer-queue.js";
 import { shortenHomePath } from "../utils.js";
-import { isAgentDatabaseStartupReadReady } from "./agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
+import {
+  agentDatabaseWriteAdmissionState as admission,
+  type AgentDatabaseWriteTiming,
+} from "./openclaw-agent-write-admission-state.js";
 
-type ReservationTiming = NonNullable<
-  NonNullable<ReturnType<typeof admission.queues.get>>["holder"]
-> & {
+type ReservationTiming = AgentDatabaseWriteTiming & {
   blockingOperation?: string;
   blockingCaller?: string;
   blockingWorker?: SqliteWorkerReservationObservation;
 };
+
+function observeBlockingWriter(storePath: string, observed: ReservationTiming): void {
+  const holder = admission.queues.get(storePath)?.holder;
+  // Retain only attribution, not the holder's timing or its own blocking chain.
+  observed.blockingOperation = holder?.operation;
+  observed.blockingCaller = holder?.caller;
+  observed.blockingWorker = holder?.worker;
+  if (holder?.startedAt !== undefined) {
+    const active = holder.worker?.active;
+    observed.holderAtEnqueue = {
+      operation:
+        active?.requestClass ??
+        holder.operationLabel ??
+        holder.caller ??
+        holder.operation ??
+        "unlabeled",
+      threadId: active ? active.threadId : threadId,
+      heldMs: Math.max(0, Math.round(performance.now() - (active?.startedAt ?? holder.startedAt))),
+    };
+  }
+}
 
 const reservationDiagnostics = channel("openclaw.agent-database.reservation");
 type WorkerReservationCaller = "session-reclamation.close";
@@ -45,7 +67,7 @@ type DirectReservationCaller =
 
 function observeWriteAdmission<T>(
   operation: "direct" | "worker" | "ordered-read",
-  timing: StoreWriterTiming | undefined,
+  timing: AgentDatabaseWriteTiming | undefined,
   run: (timing: ReservationTiming) => Promise<T>,
   caller?: DirectReservationCaller | WorkerReservationCaller,
   worker?: SqliteWorkerReservationObservation,
@@ -81,6 +103,7 @@ function observeWriteAdmission<T>(
               : {}),
           }
         : {}),
+      ...(observed.holderAtEnqueue ? { holderAtEnqueue: observed.holderAtEnqueue } : {}),
       ...(observed.blockingOperation ? { blockingOperation: observed.blockingOperation } : {}),
       ...(observed.blockingCaller ? { blockingCaller: observed.blockingCaller } : {}),
       ...(observed.blockingWorker
@@ -127,7 +150,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   options: OpenClawAgentDatabaseOptions,
   run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
-  timing?: StoreWriterTiming,
+  timing?: AgentDatabaseWriteTiming,
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
@@ -144,19 +167,30 @@ export function runOpenClawAgentWriteAdmission<T>(
 }
 
 /** A captured physical actor needs no logical agent or ambient path resolution. */
-export function runOpenClawAgentPathWriteAdmission<T>(
+export async function runOpenClawAgentPathWriteAdmission<T>(
   pathname: string,
   run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
-  timing?: StoreWriterTiming,
+  timing?: AgentDatabaseWriteTiming,
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
-  const identity = readDatabasePathIdentitySync(pathname);
+  const admitted = getSqliteDatabaseAdmissionIdentityForPath(pathname);
+  const retained =
+    canShareSqliteDatabaseAdmissions() &&
+    admitted &&
+    hasSqliteDatabaseSchemaAdmissionForIdentity(admitted)
+      ? retainSqliteDatabaseAdmissionForPath(pathname)
+      : undefined;
+  const identity = retained?.identity ?? readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
   const assertCurrent = () => {
-    if (identity.key.startsWith("file:")) {
+    if (retained) {
+      if (!retained.isCurrent()) {
+        throw new Error("Agent database target changed before write admission");
+      }
+    } else if (identity.key.startsWith("file:")) {
       try {
         assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
       } catch (cause) {
@@ -166,54 +200,54 @@ export function runOpenClawAgentPathWriteAdmission<T>(
       throw new Error("Agent database target changed before write admission");
     }
   };
-  return observeWriteAdmission(
-    "direct",
-    timing,
-    (observed) => {
-      const holder = admission.queues.get(storePath)?.holder;
-      // Retain only attribution, not the holder's timing or its own blocking chain.
-      observed.blockingOperation = holder?.operation;
-      observed.blockingCaller = holder?.caller;
-      observed.blockingWorker = holder?.worker;
-      // Cold tasks may need a host write before releasing their admission turn.
-      return runWithSqliteDatabaseAdmissionTurn(
-        [pathname],
-        () =>
-          runQueuedStoreWrite({
-            queues: admission.queues,
-            storePath,
-            label: "agent database write admission",
-            keys: concurrentBoardReads ? ["transcript"] : undefined,
-            // Worker callbacks inherit their parent's async context, but not its native
-            // writer lock. Their foreground writes must queue, never reenter that owner.
-            reentrant: reentrant && !admission.queues.get(storePath)?.holder?.worker,
-            fn: async () => {
-              assertCurrent();
-              const queue = admission.queues.get(storePath)!;
-              const previousHolder = queue.holder;
-              queue.holder = observed;
-              try {
-                return await run(identity, assertCurrent);
-              } finally {
-                queue.holder = previousHolder;
-              }
-            },
-            timing: observed,
-            signal,
-          }),
-        [],
-        signal,
-      );
-    },
-    caller,
-  );
+  try {
+    return await observeWriteAdmission(
+      "direct",
+      timing,
+      (observed) => {
+        observeBlockingWriter(storePath, observed);
+        // Cold tasks may need a host write before releasing their admission turn.
+        return runWithSqliteDatabaseAdmissionTurn(
+          [pathname],
+          () =>
+            runQueuedStoreWrite({
+              queues: admission.queues,
+              storePath,
+              label: "agent database write admission",
+              keys: concurrentBoardReads ? ["transcript"] : undefined,
+              // Worker callbacks inherit their parent's async context, but not its native
+              // writer lock. Their foreground writes must queue, never reenter that owner.
+              reentrant: reentrant && !admission.queues.get(storePath)?.holder?.worker,
+              fn: async () => {
+                assertCurrent();
+                const queue = admission.queues.get(storePath)!;
+                const previousHolder = queue.holder;
+                queue.holder = observed;
+                try {
+                  return await run(identity, assertCurrent);
+                } finally {
+                  queue.holder = previousHolder;
+                }
+              },
+              timing: observed,
+              signal,
+            }),
+          [],
+          signal,
+        );
+      },
+      caller,
+    );
+  } finally {
+    retained?.release();
+  }
 }
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
 export async function runOpenClawAgentWorkerWrite<T>(
   options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
-  timing?: StoreWriterTiming,
+  timing?: AgentDatabaseWriteTiming,
   signal?: AbortSignal,
   priority?: "background",
   caller?: WorkerReservationCaller,
@@ -255,12 +289,12 @@ export function runOpenClawAgentBoardReadAdmission<T>(
   run: () => Promise<T>,
   snapshotOnly = false,
 ): Promise<T> {
-  const pathname = resolveOpenClawAgentSqlitePath(options);
-  // Display snapshots need no write ordering while startup refuses all board mutations.
-  // Authority-consumer callbacks retain the FIFO even during startup.
-  if (snapshotOnly && isAgentDatabaseStartupReadReady(pathname, { env: options.env })) {
+  // Display snapshots read committed rows; document and capability consumers
+  // retain the FIFO and check current grants at their own effect boundary.
+  if (snapshotOnly) {
     return run();
   }
+  const pathname = resolveOpenClawAgentSqlitePath(options);
   const storePath = readDatabasePathIdentitySync(pathname).canonicalPath;
   return runWithSqliteDatabaseAdmissionTurn([pathname], () =>
     runQueuedStoreWrite({
@@ -351,6 +385,7 @@ export async function runOpenClawAgentWriteAdmissions<T>(
               if (option.readIdentity.canonicalPath !== pathname) {
                 throw new Error("Prepared session read lost its physical FIFO target");
               }
+              observeBlockingWriter(pathname, timing);
               return runQueuedStoreWrite({
                 queues: admission.queues,
                 storePath: pathname,

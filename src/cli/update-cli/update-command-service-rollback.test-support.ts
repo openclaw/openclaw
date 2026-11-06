@@ -32,8 +32,8 @@ import type { InstallRootTransitionFixture } from "./update-command-service-fixt
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service.js";
 
 const readText = (file: string) => fs.readFile(file, "utf8");
-const gatewayArgs = (root: string, ...args: string[]) => [
-  process.execPath,
+const gatewayArgs = (nodeRunner: string, root: string, ...args: string[]) => [
+  nodeRunner,
   path.join(root, "dist", "index.js"),
   "gateway",
   ...args,
@@ -66,7 +66,7 @@ export function registerPackageRootRollbackTests(
     "backup edited",
     "backup unverified",
   ] as const)("rolls back a pnpm generation with %s service ownership", async (scenario) => {
-    const { root, run, mocks } = getFixture();
+    const { root, run, mocks, serviceNodeRunner } = getFixture();
     const backupScenario = scenario.startsWith("backup ");
     const installationDrift = scenario === "backup restored from another install";
     const backupRestored = scenario === "backup restored" || installationDrift;
@@ -92,7 +92,7 @@ export function registerPackageRootRollbackTests(
     const definitionPath = systemdFiles.resolveSystemdUnitPath(run.env);
     const readDefinition = () => readText(definitionPath);
     const command = {
-      programArguments: gatewayArgs(serviceRoot, "--port", "19305"),
+      programArguments: gatewayArgs(serviceNodeRunner, serviceRoot, "--port", "19305"),
       environment: { HOME: root },
       sourcePath: definitionPath,
       definitionPaths: [definitionPath],
@@ -193,11 +193,14 @@ export function registerPackageRootRollbackTests(
     const currentCommand = backupScenario
       ? {
           ...command,
-          programArguments: gatewayArgs(candidateRoot, "--port", "19305"),
+          programArguments: gatewayArgs(serviceNodeRunner, candidateRoot, "--port", "19305"),
         }
       : command;
     const foreignRoot = path.join(root, "foreign");
-    const foreignCommand = { ...command, programArguments: gatewayArgs(foreignRoot) };
+    const foreignCommand = {
+      ...command,
+      programArguments: gatewayArgs(serviceNodeRunner, foreignRoot),
+    };
     if (scenario === "foreign command" || scenario === "foreign command after restore") {
       await writePackageRoot(foreignRoot, VERSION);
     }
@@ -304,7 +307,7 @@ export function registerPackageRootRollbackTests(
       opts: { json: true, run },
       preManagedServiceStop: before,
       timeoutMs: 1000,
-      nodeRunner: process.execPath,
+      nodeRunner: serviceNodeRunner,
       definitionRecovery,
     });
     const expectEvents = (event: string, count: number) =>

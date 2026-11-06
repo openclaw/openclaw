@@ -9,6 +9,7 @@ import {
   Show,
   type Accessor,
 } from "solid-js";
+import "../../components/modal-dialog.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
@@ -97,7 +98,7 @@ function TemplateReviewDialog(props: {
       // Closing or leaving releases presentation; the owner still records the write outcome.
       yield Promise.race([pending, retired]);
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   });
   async function publish() {

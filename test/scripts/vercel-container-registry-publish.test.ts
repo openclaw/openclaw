@@ -714,18 +714,18 @@ describe("Vercel Container Registry publishing", () => {
       readFileSync("scripts/materialize-vercel-cli.sh", "utf8") +
       readFileSync("scripts/lib/materialize-pinned-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.9.0", vercel: "64.4.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.11.1", vercel: "65.2.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-7MePR4liAcnMGLmlsP5DbBu1vIimakgNfzEqGTWOsBGIMk4gZ4qwRIPDandTecJM5fF7cgTtwHv+ev4gHxHSHg==",
-      version: "64.4.0",
+        "sha512-IPalObt3xnaY9Njbwb3wbQR7ht0gyL3XYt4z1wjFui3r5pkJPKSAGaGSD4B5AX5B4tOXxSbnXpWnKx+RJgdKrg==",
+      version: "65.2.0",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
       integrity:
-        "sha512-IAK/mosn92E9yZzvzcDQ1z9eMEMMKzidGlb6FrwBBF3uMDbaWCsdtpRmb9DcOX8+VvCuMhPx7j5fpSmH1cM3Cg==",
-      version: "4.9.0",
+        "sha512-TRjMwPjn7lKQculAXJ9rmv73jQ+9+5Hr2L5KMm1HfQiDhDXgO0pZACiy5ExtSzRW6mZgTGniWmWslhOu77DQdA==",
+      version: "4.11.1",
     });
     expect(packageLock.packages?.["node_modules/fast-uri"]?.version).toBe("3.1.9");
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");

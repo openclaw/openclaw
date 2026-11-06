@@ -53,48 +53,35 @@ async function runBuiltSourceVerifiers(env: NodeJS.ProcessEnv = process.env): Pr
   const run = async (check: (typeof checks)[number]) => {
     const logPath = path.join(runnerTemp, `${check.name}.log`);
     const log = fs.openSync(logPath, "w");
-    const completion = Promise.withResolvers<number>();
-    let borrower: Promise<number> | undefined;
     try {
-      const code = await runManagedCommand({
-        bin: process.execPath,
-        args: [
-          fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
-          workers.descriptor.directory,
-          "scripts/run-vitest.mjs",
-          "run",
-          "--config",
-          check.config,
-        ],
-        env: {
-          ...check.env,
-          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
-            runnerTemp,
-            "vitest-module-cache",
-            check.name,
-          ),
-        },
-        stdio: ["inherit", log, log, "ipc"],
-        onReady(child) {
-          borrower = workers.borrow(child, completion.promise);
-        },
-        onSignal,
-        requireProcessTreeExit: true,
-        waitForCleanupRelease: true,
-      });
-      completion.resolve(code);
-      return code;
-    } catch (error) {
-      if (borrower) {
-        completion.reject(error);
-      }
-      throw error;
+      return await workers.withBorrower((onReady) =>
+        runManagedCommand({
+          bin: process.execPath,
+          args: [
+            fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
+            workers.descriptor.directory,
+            "scripts/run-vitest.mjs",
+            "run",
+            "--config",
+            check.config,
+          ],
+          env: {
+            ...check.env,
+            OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+              runnerTemp,
+              "vitest-module-cache",
+              check.name,
+            ),
+          },
+          stdio: ["inherit", log, log, "ipc"],
+          onReady,
+          onSignal,
+          requireProcessTreeExit: true,
+          waitForCleanupRelease: true,
+        }),
+      );
     } finally {
-      try {
-        await borrower;
-      } finally {
-        fs.closeSync(log);
-      }
+      fs.closeSync(log);
     }
   };
 

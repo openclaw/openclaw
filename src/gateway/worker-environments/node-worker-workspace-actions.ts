@@ -187,11 +187,12 @@ export function createNodeWorkerWorkspaceActions(params: {
       throw new Error("Repository checkpoint source is required");
     }
     const { authorize, markPhase } = request.source;
+    const transferBaseRef = request.source.acceptedManifestRef ?? request.baseManifestRef;
     const resultVersion = (await params.supportsGitResults?.()) ? 2 : undefined;
     authorize?.();
     const token = params.workspaceTransfer.prepareUpload(
       params.environmentId,
-      request.baseManifestRef,
+      transferBaseRef,
       authorize,
       resultVersion,
     );
@@ -203,16 +204,13 @@ export function createNodeWorkerWorkspaceActions(params: {
           direction: "upload",
           token,
           ...(resultVersion ? { resultVersion } : {}),
-          baseManifestRef: request.baseManifestRef,
+          baseManifestRef: transferBaseRef,
           referenceManifestRef: request.source.referenceManifestRef,
         },
         "Node repository checkpoint upload failed",
         { assertCurrent: authorize },
       );
-      const uploaded = params.workspaceTransfer.takeUpload(
-        params.environmentId,
-        request.baseManifestRef,
-      );
+      const uploaded = params.workspaceTransfer.takeUpload(params.environmentId, transferBaseRef);
       try {
         const verifyStable = async () => {
           markPhase?.("repositoryVerification");
@@ -243,7 +241,6 @@ export function createNodeWorkerWorkspaceActions(params: {
             }
           }
         };
-        await verifyStable();
         if (!uploaded.base.baseCommit) {
           throw new Error("Repository checkpoint has no pinned Git base");
         }
@@ -294,9 +291,8 @@ export function createNodeWorkerWorkspaceActions(params: {
               await params.workspaceTransfer.discardUpload(params.environmentId, publicationToken);
             }
           }
-          // Publication restrictions never own recovery acceptance. Its remote
-          // stability, live owner and final quiescence fences still run below.
-          await verifyStable();
+          // The caller renews quiescence and verifies remote stability before
+          // acceptance. Earlier scans cannot replace that final check.
           authorize?.();
           markPhase?.("repositoryCheckpointStage");
           const prepared = await request.source.prepareCheckpoint({
@@ -662,11 +658,11 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         throw error;
       }
     },
-    quiesceWorkspace: (remoteWorkspaceDir: string) => {
+    quiesceWorkspace: (remoteWorkspaceDir: string, authorize?: () => void) => {
       if (deviceFolder !== undefined) {
         return Promise.reject(new Error("Device folders do not support workspace quiescence"));
       }
-      return quiesceWorkspace(remoteWorkspaceDir);
+      return quiesceWorkspace(remoteWorkspaceDir, authorize);
     },
     reconcileWorkspace,
   };

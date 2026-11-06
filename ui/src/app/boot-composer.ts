@@ -1,4 +1,5 @@
 import { listen } from "../lib/reactive/listener.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
 /**
  * A chat link's static boot frame ships a real composer, so typing starts before
@@ -15,12 +16,15 @@ export type BootComposerDraft = {
   submit: boolean;
   focused: boolean;
   selection: readonly [start: number, end: number, direction: "forward" | "backward" | "none"];
+  scroll: readonly [left: number, top: number];
 };
 
 const BOOT_COMPOSER_ID = "openclaw-boot-composer";
 
 let element: HTMLTextAreaElement | null = null;
+let scroll: readonly [left: number, top: number] = [0, 0];
 let stopHistory: (() => void) | undefined;
+let stopReloadGuard: (() => void) | undefined;
 
 /** Takes the static element before the first app commit replaces the boot frame. */
 export function adoptBootComposer(applicationRoute: boolean): void {
@@ -33,6 +37,22 @@ export function adoptBootComposer(applicationRoute: boolean): void {
     return;
   }
   element = candidate;
+  scroll = [candidate.scrollLeft, candidate.scrollTop];
+  // Until the chat pane takes this element, its text has no durable draft owner.
+  const releaseGuard = registerControlUiReloadGuard(
+    () => candidate.value.length === 0,
+    () => candidate.focus({ preventScroll: true }),
+  );
+  const stopBeforeUnload = listen(window, "beforeunload", (event) => {
+    if (candidate.value.length > 0) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+  stopReloadGuard = () => {
+    releaseGuard();
+    stopBeforeUnload();
+  };
   // History navigation leaves the linked session; its unsent text must not follow.
   stopHistory = listen(globalThis, "popstate", retireBootComposer);
 }
@@ -40,6 +60,13 @@ export function adoptBootComposer(applicationRoute: boolean): void {
 /** The live element for a chat loading frame, or null once taken or retired. */
 export function bootComposerElement(): HTMLTextAreaElement | null {
   return element;
+}
+
+/** Capture before a frame moves or removes the editor; scroll events may still be pending. */
+export function snapshotBootComposerScroll(): void {
+  if (element?.isConnected) {
+    scroll = [element.scrollLeft, element.scrollTop];
+  }
 }
 
 /** Loading frames call this after inserting the element; a DOM move drops native focus. */
@@ -50,6 +77,7 @@ export function settleBootComposer(): void {
     document.activeElement !== element
   ) {
     element.focus({ preventScroll: true });
+    [element.scrollLeft, element.scrollTop] = scroll;
   }
 }
 
@@ -64,6 +92,7 @@ export function takeBootComposer(): BootComposerDraft | null {
     submit: textarea.hasAttribute("data-submit-queued"),
     focused: textarea.hasAttribute("data-focused"),
     selection: [textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection],
+    scroll: textarea.isConnected ? [textarea.scrollLeft, textarea.scrollTop] : scroll,
   };
   retireBootComposer();
   return draft;
@@ -71,8 +100,11 @@ export function takeBootComposer(): BootComposerDraft | null {
 
 /** Leaving the linked session discards the boot composer before any pane can take it. */
 export function retireBootComposer(): void {
+  stopReloadGuard?.();
+  stopReloadGuard = undefined;
   stopHistory?.();
   stopHistory = undefined;
   element?.remove();
   element = null;
+  scroll = [0, 0];
 }

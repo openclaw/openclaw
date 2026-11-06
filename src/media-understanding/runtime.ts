@@ -3,7 +3,12 @@
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import {
+  findDecisionReason,
+  normalizeDecisionReason,
+} from "../../packages/media-understanding-common/src/format.js";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -20,11 +25,7 @@ import {
   normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
-import {
-  findDecisionReason,
-  normalizeDecisionReason,
-  type MediaRequestOverrides,
-} from "./runner.entries.js";
+import type { MediaRequestOverrides } from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -272,11 +273,13 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
   const image = await optimizeImageDescriptionInput({
     ...params.image,
     maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    agentDir,
-    workspaceDir: params.workspaceDir,
+    modelPolicy: await resolveImageCompressionModelPolicy({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    }),
   });
   return await describeImage({
     buffer: image.buffer,

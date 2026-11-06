@@ -16,6 +16,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.
   - `agentId` is optional; omit it to read the default agent workspace.
+  - `projectId` is optional and only valid without `sessionKey`. It previews
+    the skills of a registered project selected before a session exists. The
+    Gateway reads that project's `skills/` and `.agents/skills/` only when the
+    client could create a session there for the agent, including sandbox
+    containment; otherwise the agent catalog is returned unchanged.
   - `scope` controls which surface the primary `name` targets: `text` returns
     the primary text command token without the leading `/`; `native` and the
     default `both` path return provider-aware native names when available.
@@ -30,6 +35,11 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+
+  Plugin discovery yields between registrations so other Gateway requests can
+  progress while the catalog loads. An individual synchronous plugin callback
+  still blocks for its own duration.
+
 - `tools.effective` (`operator.read`) fetches a prospective tool preview for a
   session.
   - `sessionKey` is required.
@@ -41,6 +51,8 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     authority, credentials, discovery, and final run policy can change which
     tools are offered. Absence from this preview does not establish that a tool
     is disabled, and inclusion does not guarantee execution access.
+    See [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn)
+    for supported checks and their limits.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
   - Managed sessions using an OpenClaw tool runtime can include the GitHub
@@ -76,6 +88,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
     owner/admin identity (`operator.admin`) even though `tools.invoke` itself
     is `operator.write`.
+  - Configured MCP tools are invocable by their `<server>__<tool>` name on a
+    private per-call MCP runtime, with `source="mcp"` in the response; see
+    [Configured MCP tools](/gateway/tools-invoke-http-api#configured-mcp-tools).
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional
     `output`, and typed `error` fields. Approval or policy refusals return
     `ok:false` in the payload rather than bypassing the gateway tool policy

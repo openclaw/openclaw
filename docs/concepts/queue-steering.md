@@ -16,7 +16,7 @@ An older followup does not disable steering for later input. OpenClaw tries each
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
+Ordinary steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
@@ -27,11 +27,29 @@ Steering does not interrupt a tool call that is already running. An assistant me
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+In the Control UI, a waiting steer has a small **Send now** link below its normal
+user bubble. A session writer can use it to interrupt supported running tools
+without aborting the run. Each interrupted tool records that the user interrupted
+it; the steer then reaches the next model decision after those results. Repeated
+clicks do not reinject the message or interrupt later work. When a running tool
+cannot safely stop, or the runtime does not support tool-only interruption, the
+UI explains the wait instead of offering the link.
+
+Foreground local `exec` waits for process cleanup before delivery. Interrupting a
+`process` poll only stops that wait; its independently owned background command
+keeps running, and the tool result tells the model how to poll or stop it. Node,
+durable, and explicitly backgrounded execution do not offer this shortcut.
+Code Mode aggregate tools and native or remote backends do not support tool-only
+interruption. Their pending steers keep waiting for the runtime boundary, with
+the same quiet explanation in the UI.
+
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
+
+If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
 
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
@@ -135,6 +153,17 @@ Authorized cross-transport continuation also retains the active execution's task
 This continuation rule applies to ordinary human guidance. It does not change questions, approvals, cancellation, or explicit cross-session `sessions_send` authorization. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
 
 This also applies when a subagent completion resumes the conversation: compatible guidance from the same person joins that completion without changing its capabilities, rather than waiting for a separate turn.
+
+An authenticated Gateway owner with `operator.admin` can steer an active automation,
+loop, or visible subagent turn in the same authorized session, even when collaborative
+steering is disabled. The incoming message keeps the owner's provenance and live
+authorization; the running turn keeps its existing permissions and tool bindings.
+This guidance does not answer pending questions under the automation's authority.
+The owner-guidance exception does not apply to system-authored direct commands in
+a parent conversation, including subagent completion reports. Those commands keep
+normal requester-compatibility checks, so a browser correction to a system-owned
+direct command stays a followup. A child's active execution is distinct from its
+completion report to the parent.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester, or for an explicitly selected authenticated participant on a tool that supports `user`. Native delegation retains the original requester. A delegation may intentionally use a more capable agent; selecting a participant does not establish that person’s intent or approval. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 

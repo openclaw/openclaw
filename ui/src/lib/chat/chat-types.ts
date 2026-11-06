@@ -271,6 +271,7 @@ export type ChatItem =
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
       replyToMessage?: MessageGroup["replyToMessage"];
+      replyPreviousMessageId?: string;
       runId?: string;
       boundaryId?: string;
     }
@@ -366,6 +367,8 @@ export type MessageGroup = {
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
   replyToMessage?: { message: unknown; key: string };
+  /** Last visible message before this group, even when search hides that row. */
+  replyPreviousMessageId?: string;
   /** Reply context: more than one person speaks in the conversation. */
   replyShared?: true;
   /** Assistant reply context: the user prompt that opened this turn. */
@@ -446,7 +449,12 @@ export type MessageContentItem =
   | {
       type: "attachment_error";
       attachment: {
-        code: "file-not-found" | "unsupported-format" | "delivery-failed" | "invalid-reference";
+        code:
+          | "file-not-found"
+          | "unsupported-format"
+          | "file-too-large"
+          | "delivery-failed"
+          | "invalid-reference";
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;

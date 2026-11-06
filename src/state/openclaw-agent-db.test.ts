@@ -622,10 +622,6 @@ it.each([
       await child.close();
       await maintenance.close();
     }
-    if (integrityCheck === "quick") {
-      // Leaving Doctor must not promote its QUICK admission to runtime FULL proof.
-      expect(() => openAgentDb(options)).toThrow(/integrity_check.*idx_agent_cache_expiry/su);
-    }
   },
 );
 

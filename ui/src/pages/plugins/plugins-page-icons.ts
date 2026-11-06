@@ -13,6 +13,7 @@ export function createPluginsPageIcons(host: {
   onInstalledUrlsChange: (urls: Record<string, string>) => void;
   onCatalogUrlsChange: (urls: Record<string, string>) => void;
   onChange?: () => void;
+  onRenderedChange: () => void;
 }) {
   let authCandidates: string[] = [];
   const tiles = new Set<() => string>();
@@ -71,7 +72,7 @@ export function createPluginsPageIcons(host: {
     rendered: () => new Set(Array.from(tiles, (readId) => readId()).filter(Boolean)),
     register(this: void, readId: () => string) {
       tiles.add(readId);
-      host.onChange?.();
+      host.onRenderedChange();
       return () => tiles.delete(readId);
     },
   };

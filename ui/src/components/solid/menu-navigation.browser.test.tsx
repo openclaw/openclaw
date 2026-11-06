@@ -1,6 +1,6 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, Show } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import {
   item,
@@ -676,6 +676,36 @@ it.each([
   } else {
     await expect.poll(() => selections).toEqual(selected);
   }
+});
+
+it.each([
+  { initial: "alpha", focused: "beta" },
+  { initial: "beta", focused: "gamma" },
+])(
+  "keeps queued navigation after refocusing the cold $initial row",
+  async ({ initial, focused }) => {
+    const { handle, panel } = mountColdMenu();
+    expect(handle.open()).toBe(true);
+    const row = panel.querySelector<HTMLElement>(`[data-value="${initial}"]`)!;
+    row.focus();
+    expect(coldKey(row, "ArrowDown").defaultPrevented).toBe(true);
+    // Stay synchronous so the real navigation import cannot settle before this focus refresh.
+    row.blur();
+    row.focus();
+    await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe(focused);
+  },
+);
+
+it("preserves a newer focused row after queued cold navigation", async () => {
+  const { handle, panel } = mountColdMenu();
+  expect(handle.open()).toBe(true);
+  const first = panel.querySelector<HTMLElement>('[data-value="alpha"]')!;
+  expect(coldKey(first, "ArrowDown").defaultPrevented).toBe(true);
+  const latest = panel.querySelector<HTMLElement>('[data-value="gamma"]')!;
+  latest.focus();
+  await vi.dynamicImportSettled();
+  await expect.poll(() => document.activeElement).toBe(latest);
+  await expect.poll(() => latest.tabIndex).toBe(0);
 });
 
 it.each(["Enter", " "])(

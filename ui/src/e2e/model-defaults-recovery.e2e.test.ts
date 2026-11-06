@@ -58,9 +58,7 @@ suite.define(() => {
         const agentPicker = page.locator(".settings-sidebar openclaw-agent-select");
         if (switchAgent) {
           await agentPicker.locator(".agent-select__trigger").click();
-          await agentPicker
-            .getByRole("menuitemradio", { name: "QA Research", exact: true })
-            .click();
+          await agentPicker.getByRole("option", { name: "QA Research", exact: true }).click();
           await expect
             .poll(() => agentPicker.locator(".agent-select__label").textContent())
             .toContain("QA Research");

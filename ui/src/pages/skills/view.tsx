@@ -4,10 +4,11 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
@@ -17,6 +18,7 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -29,12 +31,7 @@ import {
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
-import {
-  SkillStateStatus,
-  SkillStatusChips,
-  verdictForSkill,
-  verdictStatus,
-} from "./skill-status.tsx";
+import { SkillRowStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
@@ -80,7 +77,11 @@ export function Skills(props: SkillsProps) {
   const emptyMessage = () =>
     !props.state.connected && !props.state.skillsReport
       ? t("skillsPage.disconnected")
-      : t("skillsPage.empty");
+      : props.state.skillsFilter.trim()
+        ? t("skillsPage.noMatches")
+        : skills().length > 0
+          ? t("skillsPage.noFilteredSkills")
+          : t("skillsPage.empty");
   const statusCounts = createMemo(() => {
     const counts: Record<SkillsStatusFilter, number> = {
       all: skills().length,
@@ -98,12 +99,12 @@ export function Skills(props: SkillsProps) {
       props.state.skillsStatusFilter === "all"
         ? items
         : items.filter((skill) => skillStatus(skill) === props.state.skillsStatusFilter);
-    const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter);
+    const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter).normalize("NFC");
     return filter
       ? afterStatus.filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter),
+          normalizeLowercaseStringOrEmpty([skill.name, skill.description, skill.source].join(" "))
+            .normalize("NFC")
+            .includes(filter),
         )
       : afterStatus;
   };
@@ -123,12 +124,7 @@ export function Skills(props: SkillsProps) {
             <>
               {props.library}
               <Show when={props.showInventory !== false}>
-                <SkillsToolbar
-                  view={props}
-                  statusCounts={statusCounts()}
-                  shownCount={acceptedFiltered().length}
-                  readInventory={read}
-                />
+                <SkillsToolbar view={props} statusCounts={statusCounts()} readInventory={read} />
               </Show>
               <Errored
                 fallback={(error) => (
@@ -148,9 +144,7 @@ export function Skills(props: SkillsProps) {
                   when={acceptedFiltered().length > 0}
                   fallback={<SettingsEmpty message={emptyMessage()} />}
                 >
-                  <For each={groups()} keyed={(group) => group.id}>
-                    {(group) => <SkillGroupView group={group()} view={props} />}
-                  </For>
+                  <SkillsInventory groups={groups()} view={props} />
                 </Show>
               </Show>
             </>
@@ -168,9 +162,48 @@ export function Skills(props: SkillsProps) {
   );
 }
 
-function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
+function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
+  const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
+  const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
+  const groups = createMemo(() => {
+    let remaining = visible.items().length;
+    // Reveal one grouped prefix so adding earlier rows never moves a later heading.
+    return props.groups.flatMap((group) => {
+      const count = Math.min(remaining, group.skills.length);
+      remaining -= count;
+      return count > 0
+        ? [
+            {
+              group,
+              skills: count === group.skills.length ? group.skills : group.skills.slice(0, count),
+            },
+          ]
+        : [];
+    });
+  });
   return (
-    <details class="settings-section skills-group" open>
+    <For each={groups()} keyed={(entry) => entry.group.id}>
+      {(entry) => (
+        <SkillGroupView
+          group={entry().group}
+          skills={entry().skills}
+          busy={visible.pending()}
+          view={props.view}
+        />
+      )}
+    </For>
+  );
+}
+
+function SkillGroupView(props: {
+  group: SkillGroup;
+  skills: SkillStatusEntry[];
+  busy: boolean;
+  view: SkillsProps;
+}) {
+  const skills = createMemo(() => props.skills);
+  return (
+    <details class="settings-section skills-group" aria-busy={props.busy ? "true" : "false"} open>
       <summary class="settings-section__header skills-group__summary">
         <h2 class="settings-section__heading">
           {props.group.label} <span class="settings-count">{props.group.skills.length}</span>
@@ -180,7 +213,7 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
         </span>
       </summary>
       <div class="settings-group">
-        <For each={props.group.skills} keyed={(skill) => skill.skillKey}>
+        <For each={skills()} keyed={(skill) => skill.skillKey}>
           {(skill) => <SkillRow skill={skill()} view={props.view} />}
         </For>
       </div>
@@ -191,25 +224,11 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
 function SkillsToolbar(props: {
   view: SkillsProps;
   statusCounts: Record<SkillsStatusFilter, number>;
-  shownCount: number;
   readInventory: () => unknown;
 }) {
   return (
     <div class="plugins-toolbar plugins-toolbar--fields">
-      <SettingsSegmented<SkillsStatusFilter>
-        value={props.view.state.skillsStatusFilter}
-        ariaLabel={t("skillsPage.title")}
-        options={STATUS_TABS.map((tab) => ({
-          value: tab.id,
-          label: (
-            <>
-              {t(tab.labelKey)} <span class="settings-count">{props.statusCounts[tab.id]}</span>
-            </>
-          ),
-        }))}
-        onChange={props.view.onStatusFilterChange}
-      />
-      <label class="plugins-field skills-toolbar__search">
+      <label class="skills-toolbar__search">
         <span>{t("common.search")}</span>
         <input
           class="settings-input"
@@ -220,37 +239,40 @@ function SkillsToolbar(props: {
           name="skills-filter"
         />
       </label>
-      <span class="plugins-toolbar__hint">
-        {t("skillsPage.shown", { count: String(props.shownCount) })}
-      </span>
+      <SettingsSelect
+        class="skills-toolbar__status"
+        value={props.view.state.skillsStatusFilter}
+        aria-label={t("skillsPage.title")}
+        options={STATUS_TABS.map((tab) => ({
+          value: tab.id,
+          label: `${t(tab.labelKey)} ${props.statusCounts[tab.id]}`,
+        }))}
+        onChange={(event) => {
+          const next = STATUS_TABS.find((tab) => tab.id === event.currentTarget.value);
+          if (next) {
+            props.view.onStatusFilterChange(next.id);
+          }
+        }}
+      />
       <Loading
         fallback={
-          <button type="button" class="btn" disabled>
-            {t("common.loading")}
-          </button>
+          <RefreshButton label={t("common.refresh")} busy onClick={() => props.view.onRefresh()} />
         }
       >
-        <button
-          type="button"
-          class="btn"
-          disabled={
-            isPending(props.readInventory) ||
-            skillControlsLocked(props.view) ||
-            !props.view.state.connected
-          }
+        <RefreshButton
+          label={t("common.refresh")}
+          busy={isPending(props.readInventory) || props.view.loading}
+          disabled={skillControlsLocked(props.view) || !props.view.state.connected}
           onClick={() => props.view.onRefresh()}
-        >
-          {isPending(props.readInventory) || props.view.loading
-            ? t("common.loading")
-            : t("common.refresh")}
-        </button>
+        />
       </Loading>
+      {props.view.pageMenu?.()}
     </div>
   );
 }
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
-  const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
+  const verdict = () => verdictForSkill(props.skill, props.view.state.clawhubVerdicts);
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));
@@ -276,7 +298,7 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         <span class="settings-row__desc">{clampText(props.skill.description, 140)}</span>
       </button>
       <div class="settings-row__control">
-        <SkillStateStatus skill={props.skill} verdict={verdict()} />
+        <SkillRowStatus skill={props.skill} verdict={verdict()} />
         <Show
           when={props.skill.clawhub?.status === "linked"}
           fallback={
@@ -332,26 +354,16 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
     <SkillReaderDialog
       label={props.skill.name}
       onClose={() => props.view.onDetailClose()}
+      width="720px"
       title={
-        <div
-          class="exec-approval-title"
-          style={{ display: "flex", "align-items": "center", gap: "8px" }}
-        >
-          <span
-            class={[
-              "statusDot",
-              props.skill.disabled ? "muted" : isSkillAvailable(props.skill) ? "ok" : "warn",
-            ]}
-          />
-          <Show when={props.skill.emoji}>
-            {(emoji) => <span style={{ "font-size": "18px" }}>{emoji()}</span>}
-          </Show>
+        <span class="exec-approval-title">
+          <Show when={props.skill.emoji}>{(emoji) => <span>{emoji()}</span>}</Show>
           <span>{props.skill.name}</span>
-        </div>
+        </span>
       }
       footer={
         <Show when={installOption() || props.skill.primaryEnv}>
-          <openclaw-modal-actions class="skill-reader-dialog__actions">
+          <openclaw-modal-actions class="oc-dialog__footer skill-reader-dialog__actions">
             <Show when={installOption()}>
               {(option) => (
                 <button
@@ -378,15 +390,14 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         </Show>
       }
     >
-      <div class="skill-reader-dialog__body" style={{ display: "grid", gap: "var(--space-4)" }}>
-        <div>
-          <div style={{ "font-size": "14px", "line-height": "1.5", color: "var(--text)" }}>
-            {props.skill.description}
-          </div>
-          <SkillStatusChips
-            skill={props.skill}
-            showBundledBadge={props.skill.bundled && props.skill.source !== "openclaw-bundled"}
-          />
+      <div class="oc-dialog__body skill-reader-dialog__body">
+        <div class="skill-detail__description">
+          <p>{props.skill.description}</p>
+          <Show when={!props.skill.primaryEnv && homepageHref()}>
+            <a href={homepageHref()!} target="_blank" rel="noopener noreferrer">
+              {props.skill.homepage}
+            </a>
+          </Show>
         </div>
         <Show when={hasTabs()}>
           <HubTabs
@@ -402,12 +413,15 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
               ariaLabel: props.skill.name,
               panelId: "skill-detail-panel",
               variant: "sub",
+              carapace: true,
+              class: "plugins-settings-tabs",
               onSelect: props.view.onDetailTabChange,
             }}
           />
         </Show>
         <div
           id="skill-detail-panel"
+          class="skill-detail__panel"
           role={hasTabs() ? "tabpanel" : undefined}
           aria-labelledby={hasTabs() ? `skill-detail-tab-${detailTab()}` : undefined}
         >
@@ -419,40 +433,54 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           </Show>
         </div>
         <Show when={missing().length > 0}>
-          <div
-            class="callout"
-            style={{
-              "border-color": "var(--warn-subtle)",
-              background: "var(--warn-subtle)",
-              color: "var(--warn)",
-            }}
-          >
-            <div style={{ "font-weight": "600", "margin-bottom": "4px" }}>
-              {t("skillsPage.missingRequirements")}
-            </div>
+          <div class="callout warn">
+            <div class="skill-detail__warning-title">{t("skillsPage.missingRequirements")}</div>
             <div>{missing().join(", ")}</div>
           </div>
         </Show>
         <Show when={reasons().length > 0}>
-          <div class="muted" style={{ "font-size": "13px" }}>
+          <div class="skill-detail__note">
             {t("skillsPage.reason", { reasons: reasons().join(", ") })}
           </div>
         </Show>
-        <div style={{ display: "flex", "align-items": "center", gap: "12px" }}>
-          <SettingsToggle
-            checked={!props.skill.disabled}
-            saving={toggleSaving()}
-            disabled={
-              !props.view.canUpdate ||
-              (props.view.toggleDisabled ?? props.view.loading) ||
-              (!toggleSaving() && skillControlsLocked(props.view))
-            }
-            ariaLabel={props.skill.name}
-            onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
-          />
-          <span style={{ "font-size": "13px", "font-weight": "500" }}>
-            {props.skill.disabled ? t("skillsPage.disabled") : t("skillsPage.enabled")}
-          </span>
+        <div class="oc-dialog__rows">
+          <div class="oc-dialog__row">
+            <SettingsStatus
+              kind={props.skill.disabled ? "muted" : isSkillAvailable(props.skill) ? "ok" : "warn"}
+              label={t(
+                props.skill.disabled
+                  ? "skillsPage.tabs.disabled"
+                  : isSkillAvailable(props.skill)
+                    ? "skillsPage.tabs.ready"
+                    : "skillsPage.tabs.needsSetup",
+              )}
+            />
+            <SettingsToggle
+              checked={!props.skill.disabled}
+              saving={toggleSaving()}
+              disabled={
+                !props.view.canUpdate ||
+                (props.view.toggleDisabled ?? props.view.loading) ||
+                (!toggleSaving() && skillControlsLocked(props.view))
+              }
+              ariaLabel={props.skill.name}
+              onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
+            />
+          </div>
+          <Show when={!props.view.canUpdate}>
+            <span class="oc-dialog__row-note">{t("skillsPage.updateRequiresAdmin")}</span>
+          </Show>
+          <div class="oc-dialog__row">
+            <span class="oc-dialog__row-label">{t("skillsPage.source")}</span>
+            <span>
+              {props.skill.source}
+              <Show when={props.skill.bundled && props.skill.source !== "openclaw-bundled"}>
+                {" · "}
+                {t("skillStatus.bundled")}
+              </Show>
+            </span>
+          </div>
+          <span class="oc-dialog__row-note skill-detail__path">{props.skill.filePath}</span>
         </div>
         <Show when={message()}>
           {(value) => (
@@ -465,13 +493,10 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           )}
         </Show>
         <Show when={props.skill.primaryEnv}>
-          <div style={{ display: "grid", gap: "8px" }}>
+          <div class="skill-detail__key">
             <label class="field">
               <span>
-                {t("skillsPage.apiKey")}{" "}
-                <span class="muted" style={{ "font-weight": "normal", "font-size": "0.88em" }}>
-                  ({props.skill.primaryEnv})
-                </span>
+                {t("skillsPage.apiKey")} <span class="muted">({props.skill.primaryEnv})</span>
               </span>
               <input
                 type="password"
@@ -485,7 +510,7 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
             </label>
             <Show when={homepageHref()}>
               {(href) => (
-                <div class="muted" style={{ "font-size": "13px" }}>
+                <div class="skill-detail__note">
                   {t("skillsPage.getKey")}{" "}
                   <a href={href()} target="_blank" rel="noopener noreferrer">
                     {props.skill.homepage}
@@ -495,33 +520,6 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
             </Show>
           </div>
         </Show>
-        <div
-          style={{
-            "border-top": "1px solid var(--border)",
-            "padding-top": "12px",
-            display: "grid",
-            gap: "6px",
-            "font-size": "12px",
-            color: "var(--muted)",
-          }}
-        >
-          <div>
-            <span style={{ "font-weight": "600" }}>{t("skillsPage.source")}</span>{" "}
-            {props.skill.source}
-          </div>
-          <div style={{ "font-family": "var(--mono)", "word-break": "break-all" }}>
-            {props.skill.filePath}
-          </div>
-          <Show when={homepageHref()}>
-            {(href) => (
-              <div>
-                <a href={href()} target="_blank" rel="noopener noreferrer">
-                  {props.skill.homepage}
-                </a>
-              </div>
-            )}
-          </Show>
-        </div>
       </div>
     </SkillReaderDialog>
   );
@@ -566,73 +564,55 @@ function InstalledClawHubOverview(props: {
           when={current().status !== "invalid"}
           fallback={
             <div class="callout danger">
-              <div style={{ "font-weight": "600", "margin-bottom": "4px" }}>
-                {t("skillsPage.invalidLink")}
-              </div>
+              <div class="skill-detail__warning-title">{t("skillsPage.invalidLink")}</div>
               <div>{formatUiExternalText(invalidReason() ?? "")}</div>
             </div>
           }
         >
-          <div
-            class="callout"
-            style={{
-              display: "grid",
-              gap: "8px",
-              "border-color": "var(--border)",
-              background: "var(--panel-strong)",
-            }}
-          >
-            <div
-              style={{ display: "flex", "align-items": "center", gap: "8px", "flex-wrap": "wrap" }}
-            >
+          <div class="oc-dialog__rows">
+            <div class="oc-dialog__row">
+              <span class="oc-dialog__row-label">{t("skillsPage.package")}</span>
+              <span>{installedRef()}</span>
+            </div>
+            <div class="oc-dialog__row">
+              <span class="oc-dialog__row-label">{t("skillsPage.securityCheck")}</span>
               <Errored
                 fallback={() => (
-                  <Loading fallback={<span class="chip">{t("skillsPage.refreshing")}</span>}>
-                    <span class="chip chip-warn">
-                      {isPending(props.view.readClawHubVerdicts)
-                        ? t("skillsPage.refreshing")
-                        : t("skillsPage.verdict.unavailable")}
-                    </span>
+                  <Loading fallback={<SettingsStatus {...verdictStatus(null, true)} />}>
+                    <SettingsStatus
+                      {...verdictStatus(null, isPending(props.view.readClawHubVerdicts))}
+                    />
                   </Loading>
                 )}
               >
-                <Loading fallback={<span class="chip">{t("skillsPage.refreshing")}</span>}>
-                  <span class={["chip", status().chipClass]}>{status().label}</span>
+                <Loading fallback={<SettingsStatus {...verdictStatus(null, true)} />}>
+                  <Show
+                    when={props.verdict && isPending(props.view.readClawHubVerdicts)}
+                    fallback={<SettingsStatus {...status()} />}
+                  >
+                    <SettingsStatus kind="muted" label={t("skillsPage.refreshing")} />
+                  </Show>
                 </Loading>
               </Errored>
-              <span class="muted" style={{ "font-size": "12px" }}>
-                {installedRef()}
-              </span>
-              <Loading fallback={<span class="muted">{t("skillsPage.refreshing")}</span>}>
-                <Show when={props.verdict && isPending(props.view.readClawHubVerdicts)}>
-                  <span class="muted">{t("skillsPage.refreshing")}</span>
-                </Show>
-              </Loading>
             </div>
             <Errored
               fallback={(error) => (
                 <Loading>
                   <Show when={!isPending(props.view.readClawHubVerdicts)}>
-                    <div class="muted" style={{ "font-size": "13px" }}>
-                      {formatUiError(error())}
-                    </div>
+                    <div class="skill-detail__note">{formatUiError(error())}</div>
                   </Show>
                 </Loading>
               )}
             >
               <Loading>
                 <Show when={feedback()}>
-                  {(value) => (
-                    <div class="muted" style={{ "font-size": "13px" }}>
-                      {value()}
-                    </div>
-                  )}
+                  {(value) => <div class="skill-detail__note">{value()}</div>}
                 </Show>
               </Loading>
             </Errored>
             <Show when={auditHref()}>
               {(href) => (
-                <div style={{ "font-size": "13px" }}>
+                <div class="skill-detail__note">
                   <a href={href()} target="_blank" rel="noopener noreferrer">
                     {t("skillsPage.fullSecurityReport")}
                   </a>

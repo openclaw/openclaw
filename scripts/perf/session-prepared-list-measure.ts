@@ -5,11 +5,15 @@
 // Shape mode seeds --sessions rows across --agents (default 8); mixed keeps the filter/page mix.
 // --reuse-fixture reopens a completed shape run; keep sessions/agents/list-shape unchanged.
 // Reused directories are serial-only. Compare revisions with separate timing/allocation passes.
+// --list-shape runtime-search exercises cold runtime-label rejection; --acp-rows gives one
+// third of rows persisted ACP ownership. --source-ref pins runtime owners to a Git revision.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -48,12 +52,40 @@ const { values } = parseArgs({
     "search-profile": { type: "boolean", default: false },
     "list-shape": { type: "string" },
     "reuse-fixture": { type: "boolean", default: false },
+    "acp-rows": { type: "boolean", default: false },
+    "source-ref": { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
 assert(values.mode === "timing" || values.mode === "allocation" || values.mode === "verify");
 assert(!values["cpu-profile"] || values.mode === "timing", "Separate CPU and heap sampling");
 assert(global.gc, "Run with --expose-gc");
+// Pin only the runtime projection owners; fixture, transport, and measurement stay identical.
+if (values["source-ref"]) {
+  const sources = new Map(
+    [
+      "src/agents/agent-runtime-metadata.ts",
+      "src/gateway/session-utils-projection.ts",
+      "src/gateway/session-utils-model.ts",
+      "src/gateway/session-utils-row.ts",
+      "src/gateway/worker-environments/placement-session-runtime.ts",
+      "src/gateway/session-row-model-facts.ts",
+      "src/gateway/session-row-projection-materialize.ts",
+      "src/gateway/session-utils-list.ts",
+    ].map((file) => [
+      new URL(`../../${file}`, import.meta.url).href,
+      execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" }),
+    ]),
+  );
+  registerHooks({
+    load(url, context, nextLoad) {
+      const source = sources.get(url);
+      return source === undefined
+        ? nextLoad(url, context)
+        : { format: "module-typescript", source, shortCircuit: true };
+    },
+  });
+}
 const integer = (
   name: "sessions" | "agents" | "iterations" | "warmup" | "updates-per-list",
   min = 1,
@@ -77,6 +109,7 @@ if (values["reuse-fixture"]) {
   assert.equal(previous.sessions, sessions);
   assert.equal(previous.agents, agents);
   assert.equal(previous.listShape, values["list-shape"]);
+  assert.equal(previous.acpRows === true, values["acp-rows"]);
   assert(values["list-shape"], "Reuse requires a completed shape workload");
   assert(
     !previous.metadataChurn &&
@@ -331,6 +364,7 @@ if (values["list-shape"] && values["list-shape"] !== "mixed") {
     sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
     full: { source: "sessions-page", limit: 100, archived: "all" },
     search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
+    "runtime-search": { source: "sessions-page", search: "openclaw", limit: 100, archived: "all" },
     agent: { source: "sessions-page", agentId: "reviewer", limit: 100, archived: false },
   };
   const query = shapes[values["list-shape"]];
@@ -438,6 +472,35 @@ function sampledCpu(profile: Profiler.Profile) {
 try {
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
+  if (values["acp-rows"]) {
+    const { writeAcpSessionMetaForMigration } =
+      await import("../../src/acp/runtime/session-meta.js");
+    const { buildAcpDatabaseSessionKey } =
+      await import("../../src/acp/runtime/session-meta-keys.js");
+    const entries = projection.selectEntries().toSorted((a, b) => a.key.localeCompare(b.key));
+    stateDb.runOpenClawStateWriteTransaction((database) => {
+      for (const [index, row] of entries.entries()) {
+        if (index % 3 || !row.entry) {
+          continue;
+        }
+        writeAcpSessionMetaForMigration({
+          database,
+          sessionKey: buildAcpDatabaseSessionKey(row.key, row.agentId),
+          sessionId: row.entry.sessionId,
+          lifecycleRevision: row.entry.lifecycleRevision,
+          meta: {
+            backend: "acpx",
+            agent: row.agentId,
+            runtimeSessionName: row.key,
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: anchor,
+          },
+        });
+      }
+    });
+    await projection.ensureMaterialized();
+  }
   const searchIdentities = values["search-workload"]
     ? await lists.prepareSessionSearchIdentityNames(projection, {}, true)
     : undefined;
@@ -558,8 +621,11 @@ try {
       (total, value) => total + (value.kind === "exact" ? value.calls : 0),
       0,
     );
+  const firstReadStarted = performance.now();
   const initialGolden = await capture();
+  const firstReadMs = performance.now() - firstReadStarted;
   let sequence = 0;
+  const durations: number[] = [];
   let listCpuMicros = 0;
   let updateCpuMicros = 0;
   let returnedRows = 0;
@@ -654,6 +720,7 @@ try {
         });
       }
       before = process.threadCpuUsage();
+      const callStarted = performance.now();
       const query = cases[sequence % cases.length]!;
       const result = await read(sequence++);
       used = process.threadCpuUsage(before);
@@ -677,6 +744,7 @@ try {
       assert(result.totalCount >= result.count);
       responses?.update(canonicalResult(result));
       if (measured) {
+        durations.push(performance.now() - callStarted);
         listCpuMicros += used.user + used.system;
         returnedRows += result.count;
         if (values["search-workload"]) {
@@ -786,6 +854,7 @@ try {
   const runningCandidateSelections =
     candidateSelections(afterSelections) - candidateSelections(beforeSelections);
   const sampled = cpu ? sampledCpu(cpu) : undefined;
+  durations.sort((a, b) => a - b);
   const result = {
     mode: values.mode,
     presentationSourceHash,
@@ -808,6 +877,14 @@ try {
     presentationSelectionsPerCall: presentationSelections / iterations,
     collectorChildrenPerCall: collectorChildren / iterations,
     sessions,
+    acpRows: values["acp-rows"],
+    sourceRef: values["source-ref"] ?? "working-tree",
+    firstReadMs,
+    latencyMs: {
+      median: durations[Math.floor(durations.length * 0.5)],
+      p95: durations[Math.floor(durations.length * 0.95)],
+      max: durations.at(-1),
+    },
     agents: Object.keys(cfg.agents?.entries ?? {}).length,
     iterations,
     warmup,

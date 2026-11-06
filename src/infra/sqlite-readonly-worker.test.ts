@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -26,6 +26,8 @@ import {
 } from "./sqlite-snapshot-source.js";
 import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
+import { waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
+import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -79,9 +81,10 @@ function readQueries(location: string, ...queries: string[]) {
   return queries.map((sql) => snapshot.prepare(sql).get());
 }
 
-it.for([false, true] as const)(
-  "retires an owned snapshot after cancellation during native staging (preserve artifacts: %s)",
-  async (preserveSourceArtifacts, { signal }) => {
+it.for(["caller", "shutdown"] as const)(
+  "retires an owned snapshot after %s cancellation during native staging",
+  { timeout: 10_000 },
+  async (ending, { signal }) => {
     const source = createDatabase();
     const sourceBefore = fs.readFileSync(source);
     const root = tempDirs.make("openclaw-snapshot-cancel-allocation-");
@@ -96,21 +99,17 @@ const hold = () => {
   if (copy && !held) {
     held = true;
     fs.writeFileSync(${JSON.stringify(ready)}, "ready");
-    fs.readSync(0, Buffer.alloc(1), 0, 1, null);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   }
 };
-const create = fs.mkdtempSync;
-fs.mkdtempSync = (...args) => {
-  const directory = create(...args);
-  if (directory.startsWith(${JSON.stringify(`${root}${path.sep}`)})) hold();
-  return directory;
-};
-const chmod = fs.chmodSync;
-fs.chmodSync = (directory, ...args) => {
-  const result = chmod(directory, ...args);
-  if (directory.startsWith(${JSON.stringify(`${root}${path.sep}`)})) hold();
-  return result;
-};
+for (const method of ["mkdtempSync", "chmodSync"]) {
+  const original = fs[method];
+  fs[method] = (target, ...args) => {
+    const result = original(target, ...args);
+    if (String(method === "mkdtempSync" ? result : target).startsWith(${JSON.stringify(`${root}${path.sep}`)})) hold();
+    return result;
+  };
+}
 const open = fs.openSync;
 let sourceOpens = 0;
 fs.openSync = (pathname, ...args) => {
@@ -135,13 +134,14 @@ fs.openSync = (pathname, ...args) => {
         root,
         pathname: source,
         allowLegacyWorker: false,
-        preserveSourceArtifacts,
+        preserveSourceArtifacts: ending === "shutdown",
         deadlineOwnedByCaller: false,
         launch: {
           env: {
             ...env,
-            NODE_OPTIONS:
-              `${env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`.trim(),
+            ...(process.versions.bun
+              ? { BUN_OPTIONS: `--preload=${pathToFileURL(preload).href}` }
+              : { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }),
           },
           cwd,
           transport: { kind: "native" },
@@ -151,24 +151,23 @@ fs.openSync = (pathname, ...args) => {
     );
     const pending = request.result;
     void pending.catch(() => {});
+    let shutdown: Promise<void> | undefined;
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "snapshot worker exited before its staging gate",
-        ),
-        signal,
-      );
-      controller.abort(reason);
-      await expect(pending).rejects.toThrow("snapshot preparation");
+      await withinTest(waitForGate({ entered }, pending), signal);
+      if (ending === "shutdown") {
+        shutdown = closeDefaultRetainedNativeWorkerSource();
+      } else {
+        controller.abort(reason);
+      }
+      await withinTest(expect(pending).rejects.toThrow("snapshot preparation"), signal);
+      await shutdown;
       await request.startClose().result;
       expect(fs.readdirSync(root).toSorted()).toEqual(["hold-allocation.mjs", "ready"]);
       expect(fs.readFileSync(source)).toEqual(sourceBefore);
     } finally {
       watcher.close();
       controller.abort(reason);
-      await Promise.allSettled([pending, request.startClose().result]);
+      await Promise.allSettled([pending, request.startClose().result, shutdown]);
       // Failed-base cleanup touches only the directories minted below this fixture root.
       for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
         if (entry.isDirectory()) {
@@ -180,6 +179,44 @@ fs.openSync = (pathname, ...args) => {
 );
 
 describe("scoped SQLite read-only children", () => {
+  it("preserves selected Node compiler flags in scoped snapshot children", async () => {
+    const source = createDatabase(witnessSql("preserved"));
+    const root = tempDirs.make("openclaw-scoped-compiler-policy-");
+    const observed = path.join(root, "exec-argv.json");
+    const preload = path.join(root, "compiler-policy.mjs");
+    fs.writeFileSync(
+      preload,
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.execArgv));`,
+    );
+    const originalExecArgv = process.execArgv;
+    process.execArgv = [...originalExecArgv, "--no-concurrent-sparkplug"];
+    try {
+      await withWorker(
+        async (worker) => {
+          const location = await worker.run(source, { mode: "sync", stagingRoot: root });
+          if (typeof location !== "string") {
+            throw new Error("Expected a snapshot location");
+          }
+          expect(readQueries(location, "SELECT value FROM witness")).toEqual([
+            { value: "preserved" },
+          ]);
+          expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toContain(
+            "--no-concurrent-sparkplug",
+          );
+        },
+        captureSqliteReadOnlyWorkerLaunch({
+          ...process.env,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
+            .filter(Boolean)
+            .join(" "),
+        }),
+      );
+    } finally {
+      process.execArgv = originalExecArgv;
+    }
+  });
+
   it("forks through retained IPC and joins cleanup after disposal refusal", async () => {
     const source = createDatabase(witnessSql("checkpointed"));
     using writer = openDatabase(source);

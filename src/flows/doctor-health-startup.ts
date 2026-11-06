@@ -7,7 +7,7 @@ import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
-import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -173,6 +173,14 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     // Maintenance still rediscovers current facts after excluding publishers.
     await prepareDoctorDatabasePreflight();
   }
+  if (process.platform === "darwin" && isDefaultInstallIdentity()) {
+    const [{ readSourceConfigBestEffort }, { noteMacGatewayPlatformWarnings }] = await Promise.all([
+      import("../config/io.runtime.js"),
+      import("../commands/doctor-platform-notes.js"),
+    ]);
+    // Schema admission has passed; repair before maintenance captures its service fingerprint.
+    await noteMacGatewayPlatformWarnings(await readSourceConfigBestEffort(), prompter);
+  }
   const accepted = await prompter.confirmRuntimeRepair({
     message:
       "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished.",
@@ -279,7 +287,7 @@ export async function repairDoctorStateDatabase(
     repairOpenClawStateDatabaseIndexesForDoctor,
     repairOpenClawStateDatabaseReadabilityForDoctor,
   ]) {
-    const result = repair({ env: process.env, integrityCheck });
+    const result = await repair({ env: process.env, integrityCheck });
     repairedState ||= result.changes.length > 0;
     if (result.warnings.length > 0) {
       throw new Error(result.warnings.join("\n"));
@@ -300,6 +308,19 @@ export async function prepareDoctorRuntimeChecks(
 ) {
   const measure: DoctorProgressMeasure = (label, run) =>
     withDoctorProgress(formatDoctorProgressPhase(label), run, options.json !== true);
+  const { getOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-maintenance-context.js");
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (maintenance?.ownsSchemaMaintenance) {
+    const { hasUpdateDoctorMigrationCapture } =
+      await import("../infra/update-doctor-migration-attribution.js");
+    const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+    if (hasUpdateDoctorMigrationCapture() && fs.existsSync(resolveOpenClawStateSqlitePath())) {
+      const { openOpenClawStateDatabaseForDoctor } = await import("../state/openclaw-state-db.js");
+      await openOpenClawStateDatabaseForDoctor();
+      maintenance.assertAdmission();
+    }
+  }
   const { repairDoctorAgentDeletionJournal } =
     await import("../commands/doctor-agent-deletion-journal.js");
   const deletionJournal = await measure("Agent deletion journal", () =>

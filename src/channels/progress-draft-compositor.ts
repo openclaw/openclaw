@@ -11,6 +11,7 @@ import {
   createChannelProgressDraftEventHandlers,
   routePreparedProgressItem,
 } from "./progress-draft-events.js";
+import { createChannelProgressDraftGate } from "./progress-draft-gate.js";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createProgressDraftSnapshotState,
@@ -27,7 +28,6 @@ import { createProgressDraftToolRuns } from "./progress-draft-tool-runs.js";
 import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
-  createChannelProgressDraftGate,
   type AgentPlanStep,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftTextForStreaming,

@@ -67,10 +67,14 @@ export async function runWorkspaceManifestProgram(
     ".cache/openclaw/bun",
     ".cache/ms-playwright",
     ".local/share/pnpm/store",
+    "artifacts/task-environment/local/share/pnpm/store",
+    ".openclaw/.pnpm-store",
+    ".openclaw/tools",
     ".artifacts/vitest-workers",
     ".artifacts/vitest-worker-cache",
     ".artifacts/vitest-shard-timings.json",
   ];
+  const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
   const BUILD_CACHE_ROOT_PATHS = [".artifacts/build-all-cache", ".artifacts/build-cache-inputs"];
   function isBuildCacheWorkspacePath(relativePath) {
     return BUILD_CACHE_ROOT_PATHS.some(
@@ -103,7 +107,12 @@ export async function runWorkspaceManifestProgram(
       )
     );
   }
-  function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false) {
+  function isDerivedWorkspacePath(
+    relativePath,
+    retainedInput = false,
+    excludeBuildCaches = false,
+    includeLegacyPnpmStore = false,
+  ) {
     if (isRuntimeOwnedWorkspacePath(relativePath)) {
       return true;
     }
@@ -113,7 +122,9 @@ export async function runWorkspaceManifestProgram(
     if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
     if (
       DERIVED_WORKSPACE_ROOT_PATHS.some(
-        (root) => relativePath === root || relativePath.startsWith(root + "/"),
+        (root) =>
+          (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+          (relativePath === root || relativePath.startsWith(root + "/")),
       )
     ) {
       return true;
@@ -246,6 +257,7 @@ export async function runWorkspaceManifestProgram(
   let inventoryPathBytes = 0;
   let eligibleBytes = 0;
   const usedHashMemo = new Map();
+  const capturedHashMemo = new Map();
   const metrics = {
     contentHashCount: 0,
     memoHitCount: 0,
@@ -273,6 +285,38 @@ export async function runWorkspaceManifestProgram(
     return new Map(entries);
   }
   const hashMemo = readHashMemo();
+  // Snapshot artifacts contain only stat identities and hashes, never file contents.
+  // The node OS/user is trusted, as for worker state; this is not an authenticity
+  // seal against code that can rewrite the node's own files or process memory.
+  // Block-level forks preserve inode/timestamps; a changed device or stat fact misses.
+  // Accept same-size, same-mtime, same-ctime edits, as with the in-process memo.
+  for (const digest of priorManifestDigests) {
+    try {
+      const saved = JSON.parse(
+        readManifestFile(
+          path.join(process.env.HOME, ".openclaw-worker", "manifests", digest + ".memo"),
+        ),
+      );
+      if (
+        !Array.isArray(saved) ||
+        saved.length > MAX_WORKSPACE_INVENTORY_ENTRIES ||
+        saved.some(
+          (entry) =>
+            !Array.isArray(entry) ||
+            entry.length !== 2 ||
+            typeof entry[0] !== "string" ||
+            !/^worker:\d+:\d+:\d+:\d+:\d+$/.test(entry[0]) ||
+            typeof entry[1] !== "string" ||
+            !/^[a-f0-9]{64}$/.test(entry[1]),
+        )
+      )
+        continue;
+      for (const [identity, hash] of saved)
+        if (!hashMemo.has(identity)) hashMemo.set(identity, hash);
+    } catch {
+      // Missing, corrupt or unreadable optional memo: verify by hashing instead.
+    }
+  }
   function canonicalMode(type, mode) {
     if (type === "directory") return 0o700;
     if (type === "symlink") return 0o777;
@@ -643,6 +687,7 @@ export async function runWorkspaceManifestProgram(
           entry.mode = Number(after.mode & 0o777n);
           entry.size = Number(after.size);
           entry.sha256 = sha256;
+          capturedHashMemo.set(identity, sha256);
           if (reusable) usedHashMemo.set(identity, sha256);
         } catch (error) {
           stop(error);
@@ -829,6 +874,22 @@ export async function runWorkspaceManifestProgram(
     const manifest = serializeManifest(requestedBaseCommit, entries);
     assertManifestCurrent();
     const digest = publishManifest(manifestRoot, manifest);
+    // Keep the full bounded inventory locally; transport memos retain their smaller cap.
+    // Record recent hashes too, but the existing ctime safety window still gates reuse.
+    const memoPath = path.join(manifestRoot, digest + ".memo");
+    const temporaryMemo =
+      memoPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
+    try {
+      const saved = JSON.stringify([...capturedHashMemo]);
+      if (Buffer.byteLength(saved) <= MAX_WORKSPACE_MANIFEST_BYTES) {
+        fs.writeFileSync(temporaryMemo, saved, { flag: "wx", mode: 0o600 });
+        fs.renameSync(temporaryMemo, memoPath);
+      }
+    } catch {
+      console.warn("Workspace hash memo could not be saved; future verification will rehash");
+    } finally {
+      fs.rmSync(temporaryMemo, { force: true });
+    }
     const manifestRef = "sha256:" + digest;
     if (memoMode) {
       const memo = selectWorkerWorkspaceHashMemoEntries(

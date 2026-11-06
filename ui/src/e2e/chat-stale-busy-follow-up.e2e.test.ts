@@ -50,7 +50,7 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "settings/appearance");
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
       await pauseVirtualClock(page);
       // Only the next authoritative snapshots change; no terminal event reaches this page.
@@ -70,9 +70,7 @@ suite.define(() => {
       });
       await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await fresh.getByText(reply, { exact: true }).waitFor();
-      expect(
-        await fresh.getByRole("button", { name: "Stop generating", exact: true }).count(),
-      ).toBe(0);
+      expect(await fresh.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
       await suite.closeBrowserContext(freshContext);
 
       await page.locator(".agent-chat__input textarea").fill(followUp);

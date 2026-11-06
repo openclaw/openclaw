@@ -58,6 +58,7 @@ export {
   isChatMessageGetParams,
   isChatToolTitlesParams,
   isChatPendingInputsDismissParams,
+  isChatSteerNowParams,
   isChatPredictParams,
   isChatSendParams,
   isChatAbortParams,

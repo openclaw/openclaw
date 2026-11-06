@@ -48,6 +48,7 @@ import {
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
+import { createOAuthRefreshAuthority } from "./model-auth-availability.oauth-refresh.js";
 import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
@@ -234,9 +235,7 @@ export function createModelAuthAvailabilityResolver(
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
-  // Refresh authority follows exact profiles marked by the external-auth
-  // lifecycle. Provider-wide authority could bless an unrelated stale profile.
-  const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
+  const canRefreshOAuth = createOAuthRefreshAuthority(external, params.canRefreshProviderOAuth);
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider, sourceConfig);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -393,8 +392,7 @@ export function createModelAuthAvailabilityResolver(
       cfg: params.cfg,
       env,
       now,
-      canRefreshOAuth:
-        provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
+      canRefreshOAuth: canRefreshOAuth(provider, profileId),
     });
   };
   const profileInCooldown = (profileId: string, target: AuthTarget) => {
@@ -525,7 +523,7 @@ export function createModelAuthAvailabilityResolver(
       if (!modeAllowed(provider, target, configuredBearerMode)) {
         return withMode(configuredBearerMode, binding.evidence, false);
       }
-      if (hasUsableCustomProviderApiKey(params.cfg, provider, env)) {
+      if (hasUsableCustomProviderApiKey(params.cfg, provider, env, sourceConfig)) {
         return withMode(configuredBearerMode, binding.evidence, true);
       }
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
@@ -712,7 +710,8 @@ export function createModelAuthAvailabilityResolver(
     const configuredAuth = pinned ? undefined : configured?.auth;
     const binding = pinned ? { kind: "none" as const } : providerBinding(provider);
     const markerUsable =
-      binding.kind === "marker" && hasUsableCustomProviderApiKey(params.cfg, provider, env);
+      binding.kind === "marker" &&
+      hasUsableCustomProviderApiKey(params.cfg, provider, env, sourceConfig);
     const hasDirectMaterial = binding.kind === "literal" || markerUsable || apiKeyRef !== null;
     const required =
       configuredAuth === "aws-sdk" ||
@@ -738,13 +737,12 @@ export function createModelAuthAvailabilityResolver(
       authorization:
         evaluation.evidence === "environment" && !hasDirectMaterial ? "ambient" : "declared",
     });
-    const hasDirectFallback = hasDirectMaterial || (!pinned && direct.evidence !== "none");
     return {
       binding,
       direct,
       evaluation,
       hasDirectMaterial,
-      hasDirectFallback,
+      hasDirectFallback: hasDirectMaterial || (!pinned && direct.evidence !== "none"),
       markerUsable,
       required,
     };
@@ -831,7 +829,12 @@ export function createModelAuthAvailabilityResolver(
     const target = prepareAuthTarget(provider, ref);
     const profileLock = ref.requiredProfileId?.trim();
     if (invalidProfilePin(provider, ref)) {
-      return { availability: false, unavailableReason: "auth-failed", evidence: "profile" };
+      return {
+        availability: false,
+        unavailableReason: "auth-failed",
+        selectedProfileId: ref.pinnedProfileId?.trim(),
+        evidence: "profile",
+      };
     }
     const policy = directPolicy(provider, target);
     if (!profileLock && policy.binding.kind === "profile-incompatible") {
@@ -889,21 +892,13 @@ export function createModelAuthAvailabilityResolver(
         ...(available ? { runtimeAuth: { id: "codex", source: "native" } as const } : {}),
       };
     }
-    if (isPluginAuthProvider(provider)) {
+    const pluginAuth = isPluginAuthProvider(provider);
+    if (pluginAuth || provider !== OPENAI_PROVIDER_ID || invalidProfilePin(provider, ref)) {
       return {
         ...resolveProviderEvaluation(provider, ref),
         routeResolution: null,
-        availabilityAuthoritative: true,
+        ...(pluginAuth ? { availabilityAuthoritative: true as const } : {}),
       };
-    }
-    if (provider !== OPENAI_PROVIDER_ID) {
-      return {
-        ...resolveProviderEvaluation(provider, ref),
-        routeResolution: null,
-      };
-    }
-    if (invalidProfilePin(provider, ref)) {
-      return { availability: false, unavailableReason: "auth-failed", routeResolution: null };
     }
     const modelLock = ref.requiredProfileId?.trim();
     const configuredAuthMode = ref.pinnedProfileId

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { augmentChatHistoryWithCanvasBlocks } from "../../../src/gateway/chat-display-projection.canvas.js";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   controlUiSessionUrl,
@@ -63,7 +64,7 @@ suite.define(() => {
         await widget.waitFor();
         const inner = widget.locator("iframe").contentFrame().frameLocator("iframe");
         await inner.getByRole("heading", { name: "Saved conversation preview" }).waitFor();
-        await inner.getByRole("button", { name: "Try the preview" }).click();
+        await clickBoardWidgetControl(page, inner.getByRole("button", { name: "Try the preview" }));
         await expect.poll(() => inner.locator("output").textContent()).toBe("Updated");
         expect((await gateway.getRequests("canvas.document.view"))[0]?.params).toEqual({
           docId,

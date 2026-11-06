@@ -311,6 +311,12 @@ export function setOcPath(
   value: string,
   options: SetOcPathOptions = {},
 ): OcAst {
+  if (options.valueJson === true && (ast.kind === "md" || ast.kind === "yaml")) {
+    throw new OcPathEditError(
+      "not-writable",
+      "--value-json only applies to JSON, JSONC and JSONL; pass a plain <value> without --value-json for Markdown or YAML",
+    );
+  }
   if (isPattern(path)) {
     throw new OcPathEditError(
       "wildcard-not-allowed",
@@ -423,6 +429,13 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
       throw new OcPathEditError("not-writable", "md frontmatter insertion requires +key");
     }
     const key = info.marker.key;
+    // Keep inserted keys addressable by the Markdown frontmatter reader.
+    if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(key)) {
+      throw new OcPathEditError(
+        "not-writable",
+        "md frontmatter keys must start with an ASCII letter or underscore and contain only ASCII letters, digits, underscores, or hyphens",
+      );
+    }
     if (ast.frontmatter.some((e) => e.key === key)) {
       throw new OcPathEditError(
         "type-mismatch",

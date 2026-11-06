@@ -50,7 +50,7 @@ function resolvePluginProviderEnvVars(plugin: {
   return normalizeProviderEnvVars(envVars);
 }
 
-function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
+export function getPluginRegistrationContracts(): PluginRegistrationContractEntry[] {
   if (process.env.VITEST) {
     return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => structuredClone(entry));
   }
@@ -86,8 +86,6 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       ),
     );
 }
-
-export let providerContractLoadError: Error | undefined;
 
 function formatBundledCapabilityPluginLoadError(params: {
   pluginId: string;
@@ -146,7 +144,9 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   });
 }
 
-function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
+export function resolveProviderContractEntriesForPluginId(
+  pluginId: string,
+): ProviderContractEntry[] {
   const publicArtifactEntries = resolveBundledExplicitProviderContractsFromPublicArtifacts({
     onlyPluginIds: [pluginId],
   });
@@ -154,23 +154,17 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
     return publicArtifactEntries;
   }
 
-  try {
-    providerContractLoadError = undefined;
-    return loadScopedCapabilityRuntimeRegistryEntries({
-      pluginId,
-      capabilityLabel: "provider",
-      loadEntries: (registry) =>
-        registry.providers
-          .filter((entry) => entry.pluginId === pluginId)
-          .map((entry) => ({
-            pluginId: entry.pluginId,
-            provider: entry.provider,
-          })),
-    });
-  } catch (error) {
-    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
-    return [];
-  }
+  return loadScopedCapabilityRuntimeRegistryEntries({
+    pluginId,
+    capabilityLabel: "provider",
+    loadEntries: (registry) =>
+      registry.providers
+        .filter((entry) => entry.pluginId === pluginId)
+        .map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        })),
+  });
 }
 
 function resolveWebSearchCredentialValue(provider: WebSearchProviderPlugin): unknown {
@@ -247,37 +241,6 @@ export function resolveWebSearchProviderContractEntriesForPluginId(
   });
 }
 
-function createLazyArrayView<T>(load: () => T[]): T[] {
-  return new Proxy([] as T[], {
-    get(_target, prop) {
-      const actual = load();
-      const value = Reflect.get(actual, prop, actual);
-      return typeof value === "function" ? value.bind(actual) : value;
-    },
-    has(_target, prop) {
-      return Reflect.has(load(), prop);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(load());
-    },
-    getOwnPropertyDescriptor(_target, prop) {
-      const actual = load();
-      const descriptor = Reflect.getOwnPropertyDescriptor(actual, prop);
-      if (descriptor) {
-        return descriptor;
-      }
-      if (Reflect.has(actual, prop)) {
-        return {
-          configurable: true,
-          enumerable: true,
-          writable: false,
-          value: Reflect.get(actual, prop, actual),
-        };
-      }
-      return undefined;
-    },
-  });
-}
 export function resolveProviderContractProvidersForPluginIds(
   pluginIds: readonly string[],
 ): ProviderPlugin[] {
@@ -285,11 +248,9 @@ export function resolveProviderContractProvidersForPluginIds(
   return [
     ...new Map(
       [...allowed]
-        .flatMap(loadProviderContractEntriesForPluginId)
+        .flatMap(resolveProviderContractEntriesForPluginId)
         .filter((entry) => allowed.has(entry.pluginId))
         .map((entry) => [entry.provider.id, entry.provider]),
     ).values(),
   ];
 }
-export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  createLazyArrayView(resolveBundledManifestContracts);

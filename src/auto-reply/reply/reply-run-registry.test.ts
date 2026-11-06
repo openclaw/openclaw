@@ -29,7 +29,10 @@ import {
 import { captureCurrentReplyMessageInjectionTarget as captureInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import * as controllerQueries from "../../sessions/session-controller.queries.js";
 import { waitForReplyRunEndBySessionId } from "../../sessions/session-controller.settlement.js";
-import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state.js";
+import {
+  isReplyRunEvidenceStale,
+  markReplyOperationExecutionStarted,
+} from "../../sessions/session-controller.state.js";
 import {
   supersedeReplyRunByRunId,
   captureCurrentSessionRunInterruptTarget,
@@ -155,6 +158,25 @@ afterEach(() => {
   resetCommandQueueStateForTest();
   resetDiagnosticRunActivityForTest();
   vi.restoreAllMocks();
+});
+
+it("distinguishes queued ownership from started execution, including lane waits", () => {
+  const operation = createTestReplyOperation({ sessionId: "session-queued" });
+  const executing = () =>
+    controllerQueries.resolveActiveSessionRunId(operation.key, undefined, {
+      executionStartedOnly: true,
+    });
+  expect(controllerQueries.resolveActiveSessionRunId(operation.key)).toBe(operation.sessionId);
+  expect(executing()).toBeUndefined();
+  operation.markWaitingForGlobalLane();
+  expect(executing()).toBeUndefined();
+  operation.markGlobalLaneWaitEnded();
+  markReplyOperationExecutionStarted(operation);
+  operation.setPhase("running");
+  operation.markWaitingForGlobalLane();
+  expect(executing()).toBe(operation.sessionId);
+  operation.complete();
+  expect(executing()).toBeUndefined();
 });
 
 it(

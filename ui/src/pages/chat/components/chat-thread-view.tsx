@@ -1,4 +1,4 @@
-import { Show, createMemo, onSettled, useContext } from "solid-js";
+import { Show, createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -25,6 +25,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -37,6 +38,7 @@ import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
@@ -49,7 +51,6 @@ import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { ChatWelcome } from "./chat-welcome.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -82,11 +83,29 @@ export function ChatThread(input: {
   historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
-  let root: HTMLDivElement | undefined;
+  const [root, setRoot] = createSignal<HTMLDivElement>();
   let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
-  onSettled(() => root && registerTranscriptElement(paneId(), root));
+  onSettled(() => {
+    const element = root();
+    const unregister = element && registerTranscriptElement(paneId(), element);
+    const searchState = getTranscriptState(paneId()).search;
+    let query = searchState.snapshot.query.trim();
+    const stopSearch = searchState.subscribe(() => {
+      const nextQuery = searchState.snapshot.query.trim();
+      if (nextQuery && nextQuery !== query) {
+        // A live reply remains below the matches; end-follow must not hide them.
+        input.transcript.scrollToOffset(0);
+      }
+      query = nextQuery;
+    });
+    return () => {
+      stopSearch();
+      unregister?.();
+    };
+  });
+  const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -189,7 +208,7 @@ export function ChatThread(input: {
             )
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <ChatWelcome {...input.props} onModelSetup={undefined} />
+            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
@@ -206,6 +225,12 @@ export function ChatThread(input: {
   });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={isPresented() && root()}>
+        {(element) => {
+          onSettled(() => watchChatSearchHighlight(element(), getTranscriptState(paneId()).search));
+          return null;
+        }}
+      </Show>
       <Show when={input.props.fetchLinkFavicon} keyed>
         {(fetcher) => {
           onSettled(() => retainLinkFaviconCache(fetcher));
@@ -215,7 +240,7 @@ export function ChatThread(input: {
       <div
         ref={[
           elementRef((element: HTMLDivElement) => {
-            root = element;
+            setRoot(element);
             // Retained roots can settle before refs; bind viewport and input together here.
             const releaseViewport = input.bindViewport?.(element);
             const stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
@@ -241,13 +266,13 @@ export function ChatThread(input: {
           },
         ]}
         role="log"
+        data-restoring={input.props.restoring ? "" : undefined}
         aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
         onFocusIn={(event) => current().session.handleFocusIn(event)}
         onFocusOut={(event) => current().session.handleFocusOut(event)}
-        onScroll={(event) => input.props.onChatScroll?.(event)}
         onKeyDown={(event) => {
           if (
             !event.defaultPrevented &&
@@ -306,6 +331,12 @@ export function ChatThread(input: {
         onMouseDown={(event) => {
           stopSelectionGesture?.();
           stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
+        }}
+        onPointerDown={(event) => {
+          // Keep late floating controls from stealing the pressed content's context menu.
+          if (event.button === 2 && event.target instanceof Element) {
+            event.target.setPointerCapture(event.pointerId);
+          }
         }}
         onContextMenu={(event) =>
           handleTranscriptContextMenu(

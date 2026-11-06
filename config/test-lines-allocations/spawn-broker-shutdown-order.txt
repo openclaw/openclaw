@@ -1,0 +1,2 @@
+# Real command outcome/output and service-child extinction after failed Gateway core close.
+61

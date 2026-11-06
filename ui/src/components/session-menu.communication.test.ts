@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createEffect, createRoot, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -19,6 +20,7 @@ import {
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { createSessionMenuSettings } from "./session-menu-settings.ts";
 
 const policy = { send: "never", receive: "ask" } as const;
 const target = (name = "settings") => ({
@@ -60,6 +62,29 @@ function choice(menu: ParentNode, direction: Direction, mode: Mode) {
 }
 
 describe("session communication menu", () => {
+  it("does not notify row consumers when empty settings are closed again", () => {
+    const { settings, read, dispose } = createRoot((disposeRoot) => {
+      const menuSettings = createSessionMenuSettings({
+        context: () => undefined,
+        readState: () => ({ session: { sessionId: null }, selectionCount: 0 }),
+        runAction: () => {},
+      });
+      const readRow = vi.fn(menuSettings.row);
+      createEffect(readRow, () => {});
+      return { settings: menuSettings, read: readRow, dispose: disposeRoot };
+    });
+    try {
+      flush();
+      settings.close();
+      flush();
+      settings.close();
+      flush();
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      dispose();
+    }
+  });
+
   it.each([
     { compact: false, involvingMeContext: false },
     { compact: true, involvingMeContext: false },

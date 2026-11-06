@@ -50,6 +50,7 @@ const verifiedStep = expect.objectContaining({ name: "gateway verification", exi
 export function registerRestartOutcomeTests(
   getFixture: () => {
     root: string;
+    serviceNodeRunner: string;
     run: NonNullable<UpdateCommandOptions["run"]>;
     servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
     mocks: Pick<
@@ -152,7 +153,7 @@ export function registerRestartOutcomeTests(
   it.each(["git-to-npm restart", "failed-update recovery", "revoked recovery"] as const)(
     "revalidates a collected stopped systemd unit during %s",
     async (scenario) => {
-      const { root, run, mocks } = getFixture();
+      const { root, run, mocks, serviceNodeRunner } = getFixture();
       const switchingInstall = scenario === "git-to-npm restart";
       if (switchingInstall) {
         await Promise.all(
@@ -200,7 +201,7 @@ export function registerRestartOutcomeTests(
           expect(command).toBe(beforeInstall);
           command = {
             ...beforeInstall,
-            programArguments: [process.execPath, packageEntry, "gateway", "--port", "19305"],
+            programArguments: [serviceNodeRunner, packageEntry, "gateway", "--port", "19305"],
           };
           mocks.running = true;
           return installed();

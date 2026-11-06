@@ -99,6 +99,11 @@ export type ControlUiMockGateway = GatewayMethods & {
   /** Commit one fixture-owned visibility change without replacing the canonical roster. */
   setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   readonly online: boolean;
+  readonly sessionListResponseFacts: {
+    replies: readonly { child: boolean; rows: number }[];
+    truncated: boolean;
+    unavailableReplies: number;
+  };
   requests: MockGatewayRequest[];
   emit: (event: string, payload?: unknown) => void;
   findRequests: (
