@@ -16,7 +16,7 @@ import {
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
   NodeWorkerPublicationConflictError,
 } from "../worker/node-workspace-transfer-protocol.js";
-import type { WorkspaceTransferOperation } from "./node-worker-transfer-client.js";
+import type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
 
 /** The editing checkout supplies objects only; all indexes, fetches and merges stay private. */
 export async function mergeNodeRepositoryPublication(params: {

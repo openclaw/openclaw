@@ -42,19 +42,19 @@ import {
   nodeWorkspaceTransferPackPath,
   nodeWorkspaceTransferReconcilePath,
   MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
-  type NodeWorkerWorkspaceTransferInput,
   type NodeWorkerWorkspaceTransferStage,
 } from "../worker/node-workspace-transfer-protocol.js";
-import {
-  prepareNodeWorkerWorkspaceOverlay,
-  type NodeWorkerPreparedWorkspaceTransfer,
-} from "./node-worker-prepared-workspace-transfer.js";
+import { prepareNodeWorkerWorkspaceOverlay } from "./node-worker-prepared-workspace-transfer.js";
 import { transferNodeRepositoryPublication } from "./node-worker-publication-merge.js";
 import {
   applyNodeRepositoryCheckpoint,
   readNodeRepositoryCheckpointBase,
   withNodeRepositoryPublication,
 } from "./node-worker-repository-transfers.js";
+import type {
+  WorkspaceTransferContext,
+  WorkspaceTransferOperation,
+} from "./node-worker-transfer-contract.js";
 import {
   requireNodeWorkerTransferOk as requireOk,
   downloadNodeWorkerTransferFile as downloadFile,
@@ -78,6 +78,7 @@ import {
   replaceNodeWorkerDirectory,
 } from "./node-worker-workspace-replacement.js";
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
+export type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
 
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 
@@ -85,33 +86,6 @@ export type NodeWorkerTransferGateway = {
   url: string;
   tlsFingerprint?: string;
   cloudflareAccess?: CloudflareAccessCredentials;
-};
-
-type WorkspaceTransferContext = {
-  seedsRoot?: string;
-  gatewayNamespace?: string;
-  gatewayUrl: string;
-  gatewayTlsFingerprint?: string;
-  gatewayCloudflareAccess?: CloudflareAccessCredentials;
-  environmentId: string;
-  workspaceDir: string;
-  manifestHome: string;
-  transfer: NodeWorkerWorkspaceTransferInput;
-  assertCurrent?: () => void;
-  prepared?: NodeWorkerPreparedWorkspaceTransfer;
-  hashMemo?: WorkspaceHashMemo;
-  signal?: AbortSignal;
-};
-
-export type WorkspaceTransferOperation<
-  Direction extends NodeWorkerWorkspaceTransferInput["direction"],
-> = Omit<WorkspaceTransferContext, "transfer"> & {
-  transfer: Extract<NodeWorkerWorkspaceTransferInput, { direction: Direction }>;
-  request: Pick<
-    NodeWorkerTransferHttpRequest,
-    "gatewayUrl" | "tlsFingerprint" | "cloudflareAccess" | "token" | "signal"
-  >;
-  setStage: (stage: NodeWorkerWorkspaceTransferStage) => void;
 };
 
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
