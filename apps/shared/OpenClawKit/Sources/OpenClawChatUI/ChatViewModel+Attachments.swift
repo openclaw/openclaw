@@ -91,19 +91,11 @@ extension OpenClawChatViewModel {
 
     public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
         attachments.removeAll { $0.id == id }
-        applyDeferredExternalStateIfReady()
-        // Freed budget may admit a retained voice note; this is the recovery
-        // path for a capture the aggregate budget rejected at its handoff.
-        if self.retainedVoiceNote != nil {
-            self.retainedVoiceNoteRetryTask = Task { await self.retryRetainedVoiceNote() }
-        }
+        self.retryRetainedVoiceNote()
+        self.applyDeferredExternalStateIfReady()
     }
 
     func restoreEditorAttachments(_ editorAttachments: [OpenClawChatEditorAttachment]?) {
-        // The retained note belongs to the draft it was recorded in; a restored
-        // draft replaces it. The capture file is removed because nothing can
-        // reach it once the retention is dropped.
-        self.discardRetainedVoiceNote()
         self.attachments = (editorAttachments ?? []).enumerated().compactMap { index, attachment in
             guard let data = Data(base64Encoded: attachment.data),
                   data.count <= Self.maxAttachmentBytes,
@@ -125,6 +117,7 @@ extension OpenClawChatViewModel {
         attachmentOwnerIsActive() ||
             isSendingAttachmentDraft ||
             attachmentStagingCount > 0 ||
+            retainedVoiceNote != nil ||
             !attachments.isEmpty
     }
 
@@ -154,134 +147,91 @@ extension OpenClawChatViewModel {
         applyDeferredExternalStateIfReady()
     }
 
-    /// Stages a recorded m4a voice note. A recording the aggregate budget
-    /// rejects is retained with its file for retry or explicit discard; every
-    /// other outcome removes the temporary file, and a staged note transfers
-    /// its bytes into the attachment.
-    public func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async -> Bool {
+    /// Retains a recording when the draft's remaining budget cannot admit it.
+    public func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
         self.beginAttachmentStaging()
         defer { self.endAttachmentStaging() }
-        return await self.readAndStageVoiceNote(fileURL: fileURL, durationSeconds: durationSeconds)
-    }
-
-    /// Reads a recorded voice note and stages it against the live budget.
-    /// An aggregate-budget rejection retains the capture; any other failure
-    /// removes the file, and a staged note transfers its bytes into the
-    /// attachment. A stale retention generation aborts before staging so a
-    /// discarded or superseded capture cannot reappear.
-    private func readAndStageVoiceNote(
-        fileURL: URL,
-        durationSeconds: Double,
-        retentionGeneration: Int? = nil) async -> Bool
-    {
-        let data: Data
-        do {
-            data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: fileURL)
-            }.value
-        } catch {
-            // A discard or supersede during the read invalidated this attempt;
-            // its failure must not overwrite the user's clean state with a
-            // stale attach error.
-            if retentionGeneration == nil || self.retainedVoiceNoteGeneration == retentionGeneration {
-                errorText = String(
-                    format: String(localized: "Could not attach voice note: %@"),
-                    error.localizedDescription)
-            }
-            try? FileManager.default.removeItem(at: fileURL)
-            return false
-        }
-
-        guard data.count <= Self.maxAttachmentBytes else {
-            errorText = String(localized: "Voice note exceeds the 5 MB attachment limit")
-            // Over the per-note limit no amount of freed budget helps.
-            try? FileManager.default.removeItem(at: fileURL)
-            return false
-        }
-
-        let limits = await self.transport.attachmentLimits() ?? .legacyClientFallback
-        if let retentionGeneration, self.retainedVoiceNoteGeneration != retentionGeneration {
-            return false
-        }
         let normalizedDuration = durationSeconds.isFinite
             ? min(max(0, durationSeconds), OpenClawVoiceNoteRecorder.maximumDurationSeconds)
             : 0
+        await self.readAndStageVoiceNote(
+            OpenClawVoiceNoteRecording(fileURL: fileURL, durationSeconds: normalizedDuration))
+    }
+
+    private func readAndStageVoiceNote(
+        _ recording: OpenClawVoiceNoteRecording,
+        retrying: Bool = false) async
+    {
+        let fileURL = recording.fileURL
+        defer {
+            // Once retained, the draft owns cleanup of this file.
+            if !retrying, self.retainedVoiceNote?.recording != recording {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+        }
+        let read = await Task.detached(priority: .userInitiated) {
+            Result { try Data(contentsOf: fileURL) }
+        }.value
+        guard !retrying || self.retainedVoiceNote?.recording == recording else { return }
+
+        let data: Data
+        do {
+            data = try read.get()
+        } catch {
+            if retrying { self.clearRetainedVoiceNote() }
+            self.errorText = String(
+                format: String(localized: "Could not attach voice note: %@"),
+                error.localizedDescription)
+            return
+        }
+
+        guard data.count <= Self.maxAttachmentBytes else {
+            if retrying { self.clearRetainedVoiceNote() }
+            self.errorText = String(localized: "Voice note exceeds the 5 MB attachment limit")
+            return
+        }
+
+        let limits = await self.transport.attachmentLimits() ?? .legacyClientFallback
+        guard !retrying || self.retainedVoiceNote?.recording == recording else { return }
         let attachment = OpenClawPendingAttachment(
             url: nil,
             data: data,
             fileName: fileURL.lastPathComponent,
             mimeType: "audio/mp4",
             preview: nil,
-            durationSeconds: normalizedDuration)
+            durationSeconds: recording.durationSeconds)
         guard self.stageAttachment(attachment, limits: limits) else {
-            // Aggregate-budget rejection is recoverable: keep the capture and
-            // surface it until space frees or the user discards it.
-            if self.retainedVoiceNoteGeneration == retentionGeneration || retentionGeneration == nil {
-                self.retainVoiceNote(
-                    OpenClawVoiceNoteRecording(fileURL: fileURL, durationSeconds: normalizedDuration),
-                    rejectionMessage: self.errorText)
-            }
-            return false
+            self.retainedVoiceNote = OpenClawRetainedVoiceNote(
+                recording: recording,
+                rejectionMessage: self.errorText)
+            return
         }
-        try? FileManager.default.removeItem(at: fileURL)
-        return true
+        if retrying { self.clearRetainedVoiceNote() }
     }
 
-    /// Retains a budget-rejected capture for retry or explicit discard. A
-    /// newer capture supersedes a retained one; the superseded file becomes
-    /// unreachable once replaced and is removed.
-    private func retainVoiceNote(
-        _ recording: OpenClawVoiceNoteRecording,
-        rejectionMessage: String?)
-    {
-        if let previous = self.retainedVoiceNote, previous.recording.fileURL != recording.fileURL {
-            try? FileManager.default.removeItem(at: previous.recording.fileURL)
-        }
-        self.retainedVoiceNoteGeneration += 1
-        self.retainedVoiceNote = OpenClawRetainedVoiceNote(
-            recording: recording,
-            fileName: recording.fileURL.lastPathComponent)
-        self.retainedVoiceNoteRejectionMessage = rejectionMessage
-    }
-
-    /// Retries staging a retained voice note against the current attachments.
-    /// A successful retry transfers the bytes into the attachment, removes the
-    /// retained file, and retires the rejection message; a still-too-large
-    /// note stays retained, and an unusable capture retires the note.
-    public func retryRetainedVoiceNote() async {
-        guard !self.isRetryingRetainedVoiceNote else { return }
+    func retryRetainedVoiceNote() {
+        guard let retained = self.retainedVoiceNote, !self.isRetryingRetainedVoiceNote else { return }
         self.isRetryingRetainedVoiceNote = true
-        defer { self.isRetryingRetainedVoiceNote = false }
-        guard let retained = self.retainedVoiceNote else { return }
-        let generation = self.retainedVoiceNoteGeneration
-        let fileURL = retained.recording.fileURL
-        let staged = await self.readAndStageVoiceNote(
-            fileURL: fileURL,
-            durationSeconds: retained.recording.durationSeconds,
-            retentionGeneration: generation)
-        guard self.retainedVoiceNoteGeneration == generation else { return }
-        if staged || !FileManager.default.fileExists(atPath: fileURL.path) {
-            // A staged transfer retires the note; a vanished file has nothing
-            // left to retry (the aggregate-failure path re-retains it).
-            let rejectionMessage = self.retainedVoiceNoteRejectionMessage
-            self.retainedVoiceNote = nil
-            self.retainedVoiceNoteRejectionMessage = nil
-            if staged, let rejectionMessage, self.errorText == rejectionMessage {
-                self.errorText = nil
+        self.beginAttachmentStaging()
+        Task {
+            defer {
+                self.isRetryingRetainedVoiceNote = false
+                self.endAttachmentStaging()
             }
+            await self.readAndStageVoiceNote(retained.recording, retrying: true)
         }
     }
 
-    /// Drops a retained voice note and deletes its file. An in-flight retry
-    /// observes the generation bump and abandons its captured bytes.
-    public func discardRetainedVoiceNote() {
+    func discardRetainedVoiceNote() {
+        self.clearRetainedVoiceNote()
+        self.applyDeferredExternalStateIfReady()
+    }
+
+    func clearRetainedVoiceNote() {
         guard let retained = self.retainedVoiceNote else { return }
-        let rejectionMessage = self.retainedVoiceNoteRejectionMessage
         self.retainedVoiceNote = nil
-        self.retainedVoiceNoteRejectionMessage = nil
-        self.retainedVoiceNoteGeneration += 1
         try? FileManager.default.removeItem(at: retained.recording.fileURL)
-        if let rejectionMessage, self.errorText == rejectionMessage {
+        if self.errorText == retained.rejectionMessage {
             self.errorText = nil
         }
     }

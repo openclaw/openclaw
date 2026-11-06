@@ -441,9 +441,7 @@ struct OpenClawChatComposer: View {
         if let retained = self.viewModel.retainedVoiceNote {
             OpenClawVoiceNoteRetainedRow(
                 note: retained,
-                onRetry: {
-                    Task { await self.viewModel.retryRetainedVoiceNote() }
-                },
+                onRetry: { self.viewModel.retryRetainedVoiceNote() },
                 onDiscard: { self.viewModel.discardRetainedVoiceNote() })
         }
 
@@ -592,7 +590,7 @@ struct OpenClawChatComposer: View {
                     OpenClawVoiceNoteButton(
                         control: voiceNoteControl,
                         isComposerEnabled: self.isComposerEnabled,
-                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                        isAttachmentInputEnabled: self.isVoiceNoteInputEnabled)
                 }
             }
         }
@@ -1440,6 +1438,10 @@ extension OpenClawChatComposer {
             && (self.isAttachmentInputEnabled || inputModel.attachments.isEmpty)
     }
 
+    var isVoiceNoteInputEnabled: Bool {
+        self.isAttachmentInputEnabled && self.viewModel.retainedVoiceNote == nil
+    }
+
     private func stageCompletedVoiceNoteIfNeeded() {
         guard let recorder = voiceNoteControl?.recorder,
               let recording = recorder.claimCompletedRecording()
@@ -1449,7 +1451,7 @@ extension OpenClawChatComposer {
         Task {
             // The view model keeps a budget-rejected capture for retry or
             // discard; either way the recorder's staging claim is consumed.
-            _ = await viewModel.addVoiceNoteAttachment(
+            await viewModel.addVoiceNoteAttachment(
                 fileURL: recording.fileURL,
                 durationSeconds: recording.durationSeconds)
             recorder.completeStaging(recording)

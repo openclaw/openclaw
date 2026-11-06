@@ -393,7 +393,7 @@ extension OpenClawChatComposer {
                 isDictationPending: self.dictationTask != nil,
                 isRealtimeTalkActive: self.talkControl?.isEnabled == true,
                 isComposerEnabled: self.isComposerEnabled,
-                isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+                isAttachmentInputEnabled: self.isVoiceNoteInputEnabled,
                 controlSize: self.cleanControlHeight,
                 onCancelDictation: {
                     ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)

@@ -71,6 +71,7 @@ struct OpenClawVoiceNoteRetainedRow: View {
 
             Button(action: self.onRetry) {
                 Text("Retry")
+                    .font(OpenClawChatTypography.caption)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
