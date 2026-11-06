@@ -43,6 +43,10 @@ export class NodeTunnelConnection {
     this.timer.unref();
   }
 
+  pathKind(): string {
+    return this.connected?.pathKind() ?? "none";
+  }
+
   received(): void {
     this.lastReceived = Date.now();
   }
