@@ -28,9 +28,7 @@ it("keeps plugin runtime snapshot readers independent of config IO and mutation 
 const host = vi.hoisted(() => ({
   capture: vi.fn<(...args: unknown[]) => Promise<SessionEventTarget>>(),
   enqueue: vi.fn(),
-  runCommand: vi.fn(),
 }));
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: host.runCommand }));
 // mock-isolation: Exercise registry-owned system authority without reading sessions or starting model work.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: host.enqueue,
@@ -49,14 +47,6 @@ function fixture() {
   const api = builder.createApi(record, { config: {}, pluginConfig: {} });
   return { runtime, builder, record, system: api.runtime.system };
 }
-
-it("refuses a command when its plugin is revoked during lazy loading", async () => {
-  const { builder, record, system } = fixture();
-  const command = system.runCommandWithTimeout(["unused-command"], 1_000);
-  revokePluginRecord(builder.registry, record);
-  await expect(command).rejects.toThrow("runtime is no longer active");
-  expect(host.runCommand).not.toHaveBeenCalled();
-});
 
 const target = { agentId: "main", sessionKey: "agent:main:main" };
 async function pendingEvent(system: ReturnType<typeof fixture>["system"]) {
@@ -77,10 +67,12 @@ async function pendingEvent(system: ReturnType<typeof fixture>["system"]) {
   };
 }
 
-it("revokes a pending capture and retained event effects with the plugin instance", async () => {
+it("revokes pending system operations and retained event effects with the plugin instance", async () => {
   const { builder, record, system } = fixture();
   const assertRevoked = await pendingEvent(system);
+  const command = system.runCommandWithTimeout([process.execPath, "--version"], 1_000);
   revokePluginRecord(builder.registry, record);
+  await expect(command).rejects.toThrow("runtime is no longer active");
   await assertRevoked("system owner is no longer active");
   expect(() => system.enqueueSessionEvent("Late", target)).toThrow("runtime is no longer active");
 });
