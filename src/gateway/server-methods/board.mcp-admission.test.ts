@@ -183,11 +183,14 @@ it.for([
           resolveActiveView: resolveMcpAppActiveView,
           resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
           mintFromTranscript: async ({ descriptor: sourceDescriptor, readOnly, ...options }) => {
+            if (!sharedSecret) {
+              expect(options.requesterId).toBe(clientProfileId);
+            }
             const fetched = await fetchMcpAppView({
               ...options,
               runtime,
               ...sourceDescriptor,
-              requesterId: clientProfileId,
+              ...(sharedSecret ? { requesterId: clientProfileId } : {}),
               toolInput: {},
               toolResult: { content: [] },
               ...(readOnly ? { readOnly: true } : {}),

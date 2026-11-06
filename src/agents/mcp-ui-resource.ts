@@ -15,12 +15,12 @@ import {
   projectMcpAppModelContextInput,
 } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
+import { measureMcpAppViewBytes } from "./mcp-ui-resource-bounds.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
 const MCP_APP_VIEW_MAX_ENTRIES = 32;
-const MCP_APP_VIEW_MAX_BYTES = 6 * 1024 * 1024;
 const MCP_APP_VIEW_STORE_MAX_BYTES = 64 * 1024 * 1024;
 const MCP_APP_VIEW_STORE_KEY = Symbol.for("openclaw.mcpAppViewStore");
 
@@ -135,7 +135,7 @@ export function captureMcpAppSavedDisplay(
   if (!view?.toolCallId || view.hostFile || asRecord(message)?.toolCallId !== view.toolCallId) {
     return undefined;
   }
-  measureViewBytes(view.html, view.toolInput, view.toolResult);
+  measureMcpAppViewBytes(view.html, view.toolInput, view.toolResult);
   return {
     version: 1,
     descriptor: {
@@ -227,15 +227,6 @@ function pruneViewStore(additionalBytes = 0, reserveEntry = false): void {
       deleteView(oldest, evicted);
     }
   }
-}
-
-function measureViewBytes(html: string, toolInput: unknown, toolResult: CallToolResult): number {
-  const toolData = JSON.stringify({ toolInput, toolResult });
-  const byteSize = Buffer.byteLength(html, "utf8") + Buffer.byteLength(toolData, "utf8");
-  if (byteSize > MCP_APP_VIEW_MAX_BYTES) {
-    throw new Error(`MCP App view data exceeds ${MCP_APP_VIEW_MAX_BYTES} bytes`);
-  }
-  return byteSize;
 }
 
 function assertBoundedViewDescriptor(value: {
@@ -387,7 +378,7 @@ export async function fetchMcpAppView(params: {
       throw new Error(`resource must use ${MCP_APP_RESOURCE_MIME_TYPE}`);
     }
     const html = decodeResourceHtml(content);
-    const byteSize = measureViewBytes(html, params.toolInput, params.toolResult);
+    const byteSize = measureMcpAppViewBytes(html, params.toolInput, params.toolResult);
     const { _meta: metadata, meta: deprecatedMetadata } = content;
     const contentUiMeta = asRecord(asRecord(metadata ?? deprecatedMetadata)?.ui);
     const listingUiMeta = contentUiMeta

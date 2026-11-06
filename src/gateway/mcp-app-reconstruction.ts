@@ -145,6 +145,7 @@ export async function mintMcpAppViewFromTranscript(params: {
   agentId?: string;
   sessionKey: string;
   descriptor: BoardMcpAppDescriptor;
+  requesterId?: string;
   allowedAppToolNames: ReadonlySet<string>;
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;

@@ -3,6 +3,7 @@ import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
+import { measureMcpAppViewBytes } from "../agents/mcp-ui-resource-bounds.js";
 import type { McpAppSavedDisplay } from "../agents/mcp-ui-resource.js";
 
 type McpAppDescriptor = BoardMcpAppDescriptor & {
@@ -201,12 +202,17 @@ export function selectMcpAppReconstructionData(
       descriptor.toolCallId !== resolvedResult.descriptor.toolCallId ||
       typeof data.html !== "string" ||
       !asOptionalRecord(data.toolResult) ||
-      (data.requesterId !== undefined && typeof data.requesterId !== "string") ||
-      Buffer.byteLength(JSON.stringify(data), "utf8") > 6 * 1024 * 1024
+      (data.requesterId !== undefined && typeof data.requesterId !== "string")
     ) {
       return;
     }
-    savedDisplay = data as McpAppSavedDisplay;
+    const candidate = data as McpAppSavedDisplay;
+    try {
+      measureMcpAppViewBytes(candidate.html, candidate.toolInput, candidate.toolResult);
+    } catch {
+      return;
+    }
+    savedDisplay = candidate;
   });
   if (resolvedResult.descriptor.resultMetaState === "unavailable" && !savedDisplay) {
     return undefined;

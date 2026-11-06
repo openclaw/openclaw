@@ -54,6 +54,7 @@ import {
   supportsMcpAppInteraction,
   resolveMcpAppActiveView,
   resolveMcpAppAllowedToolNames,
+  resolveMcpAppRequesterId,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -538,6 +539,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           cfg: context.getRuntimeConfig(),
           ...boardSession,
           descriptor: document.descriptor,
+          requesterId: resolveMcpAppRequesterId(invocation.client),
           allowedAppToolNames: new Set(interactive ? document.declaredTools : []),
           ...(authorizeAppInteraction ? { authorizeAppInteraction } : {}),
           readOnly: !interactive,

@@ -92,8 +92,9 @@ describe("saved MCP App display", () => {
       };
       await consume(async () => {
         const callTool = vi.fn();
+        const html = "<main>Saved diagram</main>";
         const readResource = vi.fn(async () => ({
-          contents: [{ mimeType: "text/html;profile=mcp-app", text: "<main>Saved diagram</main>" }],
+          contents: [{ mimeType: "text/html;profile=mcp-app", text: html }],
         }));
         const runtime = staticRuntime({
           ...scope,
@@ -151,7 +152,7 @@ describe("saved MCP App display", () => {
           {
             type: "custom",
             customType: "mcp-app-display",
-            data: { html: "<main>Saved diagram</main>", toolResult },
+            data: { html, toolResult },
           },
         ]);
         const lease = getMcpAppViewLease(descriptor.viewId, runtime);
@@ -163,12 +164,12 @@ describe("saved MCP App display", () => {
           kind: "mcp-app",
           lookup: { viewId: descriptor.viewId },
         });
-        expect(data?.savedDisplay).toMatchObject({
-          html: "<main>Saved diagram</main>",
+        assert(data?.savedDisplay, "live-admitted display must survive durable selection");
+        expect(data.savedDisplay).toMatchObject({
+          html,
           requesterId: "alice",
           toolResult,
         });
-        assert(data?.savedDisplay);
         const restored = await fetchMcpAppView({
           runtime,
           agentId: "main",
@@ -182,7 +183,7 @@ describe("saved MCP App display", () => {
         });
         assert(restored);
         expect(getMcpAppViewLease(restored.viewId, runtime)).toMatchObject({
-          html: "<main>Saved diagram</main>",
+          html,
           toolResult,
           readOnly: true,
           requesterId: "alice",
