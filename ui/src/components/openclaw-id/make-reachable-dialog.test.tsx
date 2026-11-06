@@ -5,11 +5,16 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { showMakeReachableDialog } from "./make-reachable-dialog.tsx";
 
+// Records when the owner device key is stored and announced, relative to the commit.
+const keyEvents = vi.hoisted(() => [] as string[]);
 // Replace browser key custody, not the dialog's linking sequence or publication messages.
 // mock-isolation: key generation and the root ceremony are replaced so the dialog's step flow runs deterministically.
 vi.mock("../../lib/openclaw-id/device-key.ts", () => ({
-  generateOwnerDeviceKey: async () => ({ signer: {}, pair: {} }),
-  saveOwnerDeviceKey: async () => {},
+  ensureOwnerDeviceSigner: async () => {
+    keyEvents.push("stored");
+    return {};
+  },
+  announceOwnerDeviceKey: () => keyEvents.push("announced"),
 }));
 // mock-isolation: key generation and the root ceremony are replaced so the dialog's step flow runs deterministically.
 vi.mock("../../lib/openclaw-id/link.ts", () => ({
@@ -36,6 +41,7 @@ async function click(label: string) {
 describe("Make reachable publication outcome", () => {
   afterEach(() => {
     cleanupSolid();
+    keyEvents.length = 0;
     localStorage.removeItem("openclaw.openclawId.account");
     window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
   });
@@ -66,6 +72,7 @@ describe("Make reachable publication outcome", () => {
           return { code: "synthetic-code" };
         }
         if (params.action === "commit") {
+          keyEvents.push("commit");
           return {
             publication: {
               state: "failed",
@@ -113,6 +120,8 @@ describe("Make reachable publication outcome", () => {
       (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
       await click("Continue");
       await vi.waitFor(() => expect(document.body.textContent).toContain("HTTP 503"));
+      // The admitted device key is stored before the irreversible commit is sent.
+      expect(keyEvents).toEqual(["stored", "commit", "announced"]);
       expect(submitted).toHaveBeenCalledOnce();
       form.removeEventListener("submit", submitted);
       expect(password.value).toBe("");
