@@ -586,7 +586,7 @@ try {
                 ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
                 : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
     order:
-      "Serial network profile and engine order alternates each pair; configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
+      "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
     frameCadence:
@@ -613,7 +613,7 @@ try {
   for (const viewport of viewports) {
     for (const item of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
-        const orderedEngines = pair % 2 ? engines.toReversed() : engines;
+        const orderedEngines = controlUiBenchOrder(engines, pair);
         const slots = controlUiBenchOrder([...servers.entries()], pair);
         const orderedProfiles = pair % 2 ? networkProfiles.toReversed() : networkProfiles;
         for (const { networkProfile, engine } of orderedProfiles.flatMap((selectedProfile) =>
