@@ -21,7 +21,7 @@ import {
 import {
   sourceIdentityFor,
   stoppedSourceState,
-  scopeKey,
+  jobScopeKey,
   stopRequiresSourceRetirement,
   boundedCounter,
 } from "./cron-stream-owner-state.js";
@@ -210,7 +210,7 @@ export class CronStreamJobOwner {
     if (reason === "removed") {
       this.removalRequested = true;
     }
-    this.params.getProcessSupervisor().cancelScope(scopeKey(this.job.id), "manual-cancel");
+    this.params.getProcessSupervisor().cancelScope(jobScopeKey(this.job.id), "manual-cancel");
     const queuedStop = this.enqueue("stop", async () => {
       if (failure) {
         this.restartExhausted = true;
@@ -307,7 +307,7 @@ export class CronStreamJobOwner {
 
   private async awaitBoundedStop(stop: Promise<void>): Promise<void> {
     if (!(await settlesWithin(stop, OWNER_STOP_TIMEOUT_MS))) {
-      this.params.getProcessSupervisor().cancelScope(scopeKey(this.job.id), "manual-cancel");
+      this.params.getProcessSupervisor().cancelScope(jobScopeKey(this.job.id), "manual-cancel");
       throw new Error(`stream owner stop did not settle within ${OWNER_STOP_TIMEOUT_MS}ms`);
     }
   }
@@ -402,12 +402,12 @@ export class CronStreamJobOwner {
         });
       } else {
         const supervisor = this.params.getProcessSupervisor();
-        this.cleanupHostScope ??= supervisor.acquireScopeCleanup(scopeKey(this.job.id), {
+        this.cleanupHostScope ??= supervisor.acquireScopeCleanup(jobScopeKey(this.job.id), {
           processTree: "owned-only",
         });
         run = await supervisor.spawn({
           assertCurrent,
-          scopeKey: scopeKey(this.job.id),
+          scopeKey: jobScopeKey(this.job.id),
           replaceExistingScope: true,
           mode: "child",
           argv: this.job.schedule.command,
@@ -451,7 +451,7 @@ export class CronStreamJobOwner {
     this.run = run;
     this.state = "running";
     this.stableJob = this.scheduler.schedule({
-      id: `${scopeKey(this.job.id)}:${this.sourceIdentity}:stable`,
+      id: `${jobScopeKey(this.job.id)}:${this.sourceIdentity}:stable`,
       delayMs: STABLE_RUN_MS,
       run: () => this.markStable(run),
     });
@@ -599,7 +599,7 @@ export class CronStreamJobOwner {
         if (run) {
           await stopCronStreamRun(run, STOP_SETTLE_TIMEOUT_MS);
         } else {
-          this.params.getProcessSupervisor().cancelScope(scopeKey(this.job.id), "manual-cancel");
+          this.params.getProcessSupervisor().cancelScope(jobScopeKey(this.job.id), "manual-cancel");
         }
         await this.releaseHostScope();
         if (this.run === run) {
@@ -652,7 +652,7 @@ export class CronStreamJobOwner {
       }
       this.restartJob?.cancel();
       this.restartJob = this.scheduler.schedule({
-        id: `${scopeKey(this.job.id)}:${this.sourceIdentity}:restart`,
+        id: `${jobScopeKey(this.job.id)}:${this.sourceIdentity}:restart`,
         delayMs,
         run: () => this.restartAfterBackoff(),
       });

@@ -15,7 +15,7 @@ export function sourceIdentityFor(job: CronStreamJob): string {
 }
 
 /** Names the existing supervisor scope for one stream job. */
-export const scopeKey = (jobId: string): string => `cron-stream:${jobId}`;
+export const jobScopeKey = (jobId: string): string => `cron-stream:${jobId}`;
 
 /** Selects lifecycle stops that also retire the logical source identity. */
 export function stopRequiresSourceRetirement(reason: CronStreamStopReason): boolean {
