@@ -421,7 +421,7 @@ internal fun SessionsScreen(
         val rosterScopeMatches =
           (filter == SessionFilter.Archived) == rosterListedArchived &&
             (filter == SessionFilter.Recent || filter == SessionFilter.Archived)
-        if (rosterHasMore && rosterScopeMatches) {
+        if (rosterHasMore && rosterScopeMatches && searchState.query.isEmpty()) {
           if (rosterLoadFailed) {
             item(key = "sessions-load-more-error") {
               Text(
