@@ -238,7 +238,12 @@ Completed source classifications and durable census counts remain unchanged.
   All11 cases passed before and after, including explicit-disconnect/remount
   siblings; their duplicate retirement remains safe. The separate first-case
   theme-style warning persists. No persistent-process leak is claimed.
-- Batches113–115: causal qualification and repairs remain in progress.
+- Batch113: give the disconnect presence entry its node role and wait for the
+  selected destination to become disabled. The original invalid event passed both
+  rows while catalog reads stayed3→3 and the option stayed enabled; the same
+  invalid event failed both strengthened rows. Restored valid fixtures passed6/6
+  with every destination, draft, reconnect and terminal assertion retained.
+- Batches114–115: causal qualification and repairs remain in progress.
 
 Final scoped checks, removal scans, independent review and hosted gates are pending.
 
