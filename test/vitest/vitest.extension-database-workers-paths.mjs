@@ -251,6 +251,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/inference-proxy.native.test.ts",
   "extensions/codex/src/app-server/native-command-auth.native.test.ts",
   "extensions/codex/src/app-server/reasoning-effort.native.test.ts",
+  "extensions/codex/src/app-server/isolated-completion.native.test.ts",
   "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.assignment-rotation.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native.test.ts",
