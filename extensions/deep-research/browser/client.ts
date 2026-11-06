@@ -1,4 +1,8 @@
-import type { ControlUiHost, ControlUiPanel } from "openclaw/plugin-sdk/control-ui";
+import type {
+  ControlUiHost,
+  ControlUiPanel,
+  ControlUiRecoveryStorageV1,
+} from "openclaw/plugin-sdk/control-ui";
 import type { ResearchList, ResearchView } from "../src/view-contract.js";
 
 export type Scope = Parameters<ControlUiPanel["mount"]>[1]["props"];
@@ -40,13 +44,37 @@ export function createResearchClient(
   let trailing = false;
   let reading: Promise<void> | undefined;
   const listeners = new Set<(value: Snapshot) => void>();
-  const storageKey = `deep-research.pending:${scope.agentId ?? ""}:${scope.sessionKey}`;
+  const storageKey = JSON.stringify(["pending-start.v1", scope.agentId ?? "", scope.sessionKey]);
   let pending: PendingStart | undefined;
   let retainedPending: PendingStart | undefined;
-  try {
-    const saved: unknown = retainStarts
-      ? JSON.parse(sessionStorage.getItem(storageKey) ?? "null")
-      : null;
+  let recoveryStorage: ControlUiRecoveryStorageV1 | undefined;
+  let recoveryLoaded = !retainStarts;
+  // These pre-account keys have no provable owner. Delete them; never migrate their text.
+  if (retainStarts) {
+    try {
+      for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+        const key = sessionStorage.key(index);
+        if (key?.startsWith("deep-research.pending:")) {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch {
+      /* Storage availability is checked before admitting a start. */
+    }
+  }
+  const requireRecoveryStorage = () => {
+    recoveryStorage ??= host.recoveryStorage ?? undefined;
+    if (!recoveryStorage) {
+      throw new Error("Account-bound recovery storage is unavailable. Reconnect and retry.");
+    }
+    recoveryStorage.assertCurrent();
+    return recoveryStorage;
+  };
+  const restorePending = () => {
+    if (recoveryLoaded) {
+      return;
+    }
+    const saved: unknown = JSON.parse(requireRecoveryStorage().getItem(storageKey) ?? "null");
     if (
       saved &&
       typeof saved === "object" &&
@@ -63,28 +91,32 @@ export function createResearchClient(
         incarnation: saved.incarnation,
       };
     }
-  } catch {
-    /* Storage may be disabled. */
-  }
+    recoveryLoaded = true;
+  };
   const savePending = (value?: PendingStart) => {
+    if (retainStarts) {
+      const storage = requireRecoveryStorage();
+      if (value) {
+        storage.setItem(storageKey, JSON.stringify(value));
+      } else {
+        storage.removeItem(storageKey);
+      }
+    }
     pending = value;
     retainedPending = undefined;
-    if (!retainStarts) {
-      return;
-    }
+  };
+  const active = () => !disposed && !signal.aborted;
+  const storageCurrent = () => {
     try {
-      if (value) {
-        sessionStorage.setItem(storageKey, JSON.stringify(value));
-      } else {
-        sessionStorage.removeItem(storageKey);
-      }
+      recoveryStorage?.assertCurrent();
+      return true;
     } catch {
-      /* The mounted view still retains the retry key. */
+      return false;
     }
   };
-  const current = (epoch: number) => !disposed && !signal.aborted && epoch === generation;
+  const current = (epoch: number) => active() && storageCurrent() && epoch === generation;
   const publish = (next: Partial<Snapshot>) => {
-    if (disposed || signal.aborted) {
+    if (!active()) {
       return;
     }
     snapshot = { ...snapshot, ...next, pending, writable: host.connection.canWrite };
@@ -101,7 +133,12 @@ export function createResearchClient(
       retainedPending = pending ?? retainedPending;
       pending = undefined;
     } else {
-      savePending();
+      try {
+        savePending();
+      } catch {
+        pending = undefined;
+        retainedPending = undefined;
+      }
     }
     publish({
       jobs: [],
@@ -141,6 +178,7 @@ export function createResearchClient(
         if (!current(epoch)) {
           return;
         }
+        restorePending();
         if (retainedPending) {
           savePending(
             retainedPending.incarnation === list.incarnation ? retainedPending : undefined,
@@ -234,6 +272,8 @@ export function createResearchClient(
         return;
       }
       try {
+        restorePending();
+        requireRecoveryStorage();
         if (!pending) {
           savePending({
             key: Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
@@ -244,7 +284,7 @@ export function createResearchClient(
           });
         }
       } catch {
-        publish({ actionError: "Could not create a request key. No work was started." });
+        publish({ actionError: "Could not retain a request key. No work was started." });
         return;
       }
       // An uncertain acceptance must be retried with the exact original request.
@@ -262,7 +302,12 @@ export function createResearchClient(
           ? { incarnation, idempotencyKey: pending!.key, request: { question: pending!.question } }
           : { incarnation, jobId },
       );
-      if (disposed || signal.aborted || !host.connection.connected || epoch !== authorityEpoch) {
+      if (
+        !active() ||
+        !storageCurrent() ||
+        !host.connection.connected ||
+        epoch !== authorityEpoch
+      ) {
         return;
       }
       if (reply.incarnation !== incarnation || snapshot.incarnation !== incarnation) {
@@ -277,7 +322,7 @@ export function createResearchClient(
       select(reply.job.jobId);
       publish({ selected: reply.job.jobId, job: reply.job });
     } catch (error) {
-      if (!disposed && !signal.aborted && epoch === authorityEpoch) {
+      if (active() && storageCurrent() && epoch === authorityEpoch) {
         const rejected =
           error &&
           typeof error === "object" &&
@@ -299,7 +344,7 @@ export function createResearchClient(
         });
       }
     } finally {
-      if (!disposed && !signal.aborted) {
+      if (active()) {
         publish({ busy: false });
         await refresh();
       }

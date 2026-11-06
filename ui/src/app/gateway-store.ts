@@ -18,7 +18,6 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
 import { configuredUiDevGateway, isConfiguredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
-import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { resolveSessionKey } from "../lib/sessions/navigation.ts";
@@ -509,7 +508,7 @@ export function createApplicationGateway(
           return;
         }
         updateAvatarContext(nextClient.hello ?? undefined);
-        retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
+        credentials.acceptRecoveryScope(nextConnection.gatewayUrl, nextClient.recoveryScope);
         void deferredIntents.flush();
         setSnapshot({});
       },

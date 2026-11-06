@@ -10,6 +10,7 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../app/operator-access.ts";
+import { createPluginRecoveryStorage } from "../app/plugin-recovery-storage.ts";
 import {
   PLUGIN_PANEL_TOGGLE_EVENT,
   type PluginPanelToggleDetail,
@@ -117,6 +118,16 @@ export function createControlUiPluginHost(
         canAdmin: access.canAdmin,
         assistantAgentId: snapshot.assistantAgentId,
       };
+    },
+    get recoveryStorage() {
+      return createPluginRecoveryStorage(
+        current().gateway,
+        owner.client,
+        owner.descriptor.pluginId,
+        () => {
+          current();
+        },
+      );
     },
     request: (method, params = {}) => call(() => owner.client.request(method, params)),
     onEvent(event, listener) {
