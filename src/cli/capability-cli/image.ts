@@ -115,14 +115,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
                   file.map(async (filePath) => {
                     const resolvedPath = path.resolve(filePath);
                     const { readRegularFile } = await import("../../infra/fs-safe.js");
-                    const { buffer } = await realpath(resolvedPath)
-                      .then((realFilePath) => readRegularFile({ filePath: realFilePath }))
-                      .catch((error: unknown) => {
-                        throw new Error(
-                          `Cannot read image edit input: ${resolvedPath}. Use a readable regular file and retry.`,
-                          { cause: error },
-                        );
-                      });
+                    const { buffer } = await readRegularFile({
+                      filePath: await realpath(resolvedPath),
+                    });
                     return {
                       buffer,
                       fileName: path.basename(resolvedPath),
