@@ -9,6 +9,7 @@
     "test": "node ../scripts/ui.js test"
   },
   "dependencies": {
+    "@1password/save-button": "1.3.0",
     "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.13.1",
     "@codemirror/language-data": "6.5.2",
