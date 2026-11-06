@@ -86,10 +86,9 @@ describe("Hermes regular-file admission", () => {
           });
           expect(found.root).toBe(source);
         } else {
-          const plan = await buildHermesMigrationProvider().plan(
-            makeContext({ source, stateDir, workspaceDir }),
-          );
-          expect(plan).toBeDefined();
+          await expect(
+            buildHermesMigrationProvider().plan(makeContext({ source, stateDir, workspaceDir })),
+          ).rejects.toThrow("path must be a regular file");
         }
       });
     },
