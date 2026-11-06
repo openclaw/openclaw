@@ -357,6 +357,12 @@ translation wave cannot disappear behind an early English render. Use
 One-pair screens only identify candidates: confirm deviations over 20% with ten
 rotated pairs plus `control`, and fixes with twenty pairs within the same configuration.
 
+Every run counts `ResizeObserver loop` errors per observation and summary cell,
+including untraced streaming runs. The report shows error totals and affected
+observations; any browser error fails the observation and command even when its
+completed timing interval remains in the summary. Use `--observer-origins` for a
+separate diagnostic run that records recent observer creation stacks and targets.
+
 Native clipboard measurements use `--steps chat-actions-native-paste-text,chat-actions-native-paste-image`.
 They paste a 256 KiB draft or a synthetic 2048×2048 PNG through the browser's
 clipboard and keyboard shortcut, and require trusted paste events. Evidence

@@ -323,7 +323,7 @@ type Observation = {
   }>;
   error?: string;
   errorEvents?: Array<{ message: string; phase: string }>;
-  resizeErrorCount?: number;
+  resizeErrorCount: number;
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
@@ -574,6 +574,7 @@ try {
               pair,
               position,
               status: "failed",
+              resizeErrorCount: 0,
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
@@ -606,7 +607,12 @@ try {
             const traceAction = values.trace && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
-            page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
+            page.on("pageerror", (error: Error) => {
+              errors.push({ message: error.message, phase });
+              if (error.message.includes("ResizeObserver loop")) {
+                observation.resizeErrorCount++;
+              }
+            });
             let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
@@ -999,7 +1005,6 @@ try {
                   const resizeErrors: unknown[] = await page.evaluate(() =>
                     Reflect.get(window, "__engineResizeErrors"),
                   );
-                  observation.resizeErrorCount = resizeErrors.length;
                   await writeJson(`${artifactPrefix}.resize-errors.json`, resizeErrors);
                 }
                 if (measurement) {
@@ -1044,6 +1049,10 @@ try {
                 if (scenario.memory) {
                   await observationBrowser.close();
                 }
+              }
+              if (errors.length) {
+                observation.status = "failed";
+                observation.error ??= errors.map(({ message }) => message).join("\n");
               }
               // Capture/cleanup can also fail after the scenario assertions pass.
               if (observation.status === "passed" && cpuProfile) {
@@ -1143,6 +1152,8 @@ const summary = [...cells.values()].map((cell) => {
     failed: rows.filter((row) => row.status === "failed").length,
     skipped: rows.filter((row) => row.status === "skipped").length,
     measured: measured.length,
+    resizeErrorCount: rows.reduce((total, row) => total + row.resizeErrorCount, 0),
+    resizeErrorObservations: rows.filter((row) => row.resizeErrorCount > 0).length,
     targets: cell.step.startsWith("page-")
       ? {
           longTaskLimitMs: 50 * cpuThrottle,
@@ -1355,6 +1366,15 @@ await writeFile(
     `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
+    "",
+    "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
+    "",
+    "| Configuration | Viewport | Scenario | Network | Bundle | Engine | ResizeObserver errors | Affected / attempted observations |",
+    "| --- | --- | --- | --- | --- | --- | ---: | ---: |",
+    ...summary.map(
+      (row) =>
+        `| ${row.configuration} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.engine} | ${row.resizeErrorCount} | ${row.resizeErrorObservations} / ${row.passed + row.failed} |`,
+    ),
     "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
