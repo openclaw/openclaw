@@ -17,11 +17,12 @@ export function applyDirectoryQueryAndLimit(
   ids: string[],
   params: { query?: string | null; limit?: number | null },
 ): string[] {
-  const q = normalizeLowercaseStringOrEmpty(params.query);
+  // Canonical forms compare equal here; directory ids keep their original spelling.
+  const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
   const filtered: string[] = [];
   for (const id of ids) {
-    if (q && !normalizeLowercaseStringOrEmpty(id).includes(q)) {
+    if (q && !normalizeLowercaseStringOrEmpty(id).normalize("NFC").includes(q)) {
       continue;
     }
     filtered.push(id);
