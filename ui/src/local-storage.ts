@@ -9,7 +9,7 @@ function isStorage(value: unknown): value is Storage {
 function getSafeStorage(name: "localStorage" | "sessionStorage"): Storage | null {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
 
-  if (import.meta.env?.MODE === "test") {
+  if (import.meta.env?.MODE === "test" && typeof process !== "undefined" && process.env?.VITEST) {
     return descriptor && !descriptor.get && isStorage(descriptor.value) ? descriptor.value : null;
   }
 
