@@ -288,7 +288,6 @@ export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enable
   // source writes stay independent of the selected body FTS table.
   dropMemoryPathFtsTriggers(db);
   db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE}`);
-  db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
 
   if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
     dropMemoryChunkFtsTriggers(db);
@@ -314,10 +313,11 @@ export function rebuildMemoryCjkBigramFts(db: DatabaseSync): number {
       `SELECT chunk_rowid, id, path, source, model, start_line, end_line, text
          FROM ${MEMORY_INDEX_CHUNKS_TABLE}`,
     )
+    // SAFETY: SQLite returns row records conforming to the SELECT projection.
     .all() as MemoryCjkChunkRow[];
   db.exec(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE}`);
   const insert = db.prepare(
-    `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+    `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} ("rowid", text, id, path, source, model, start_line, end_line)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of rows) {
@@ -348,11 +348,11 @@ export function upsertMemoryCjkBigramRow(params: {
   text: string;
 }): void {
   params.db
-    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid = ?`)
+    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`)
     .run(params.chunkRowid);
   params.db
     .prepare(
-      `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+      `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} ("rowid", text, id, path, source, model, start_line, end_line)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
@@ -370,7 +370,7 @@ export function upsertMemoryCjkBigramRow(params: {
 /** Remove the companion rows that belong to a canonical chunk row. */
 export function deleteMemoryCjkBigramRows(params: { db: DatabaseSync; chunkRowid: number }): void {
   params.db
-    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid = ?`)
+    .prepare(`DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`)
     .run(params.chunkRowid);
 }
 
@@ -386,25 +386,35 @@ export function ensureMemoryCjkBigramFtsSchema(params: {
 }): void {
   const { db } = params;
   if (!params.enabled) {
-    db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
+    let tableExists = false;
+    try {
+      db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_CJK_FTS_TABLE} LIMIT 0`).run();
+      tableExists = true;
+    } catch {
+      tableExists = false;
+    }
+    if (tableExists) {
+      db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_CJK_FTS_TABLE}`);
+    }
     return;
   }
-  const tableExists =
-    db
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(MEMORY_INDEX_CJK_FTS_TABLE) !== undefined;
-  const canonicalCount = (
-    db.prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CHUNKS_TABLE}`).get() as {
-      count: number;
-    }
-  ).count;
-  const derivedCount = tableExists
-    ? (
-        db.prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CJK_FTS_TABLE}`).get() as {
-          count: number;
-        }
-      ).count
-    : -1;
+  let tableExists = false;
+  try {
+    db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_CJK_FTS_TABLE} LIMIT 0`).run();
+    tableExists = true;
+  } catch {
+    tableExists = false;
+  }
+  const canonicalRow = db
+    .prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CHUNKS_TABLE}`)
+    .get();
+  // SAFETY: Aggregate count(*) query always returns a numeric count row.
+  const canonicalCount = (canonicalRow as { count: number }).count;
+  const derivedRow = tableExists
+    ? db.prepare(`SELECT count(*) AS count FROM ${MEMORY_INDEX_CJK_FTS_TABLE}`).get()
+    : undefined;
+  // SAFETY: Aggregate count(*) query always returns a numeric count row.
+  const derivedCount = derivedRow ? (derivedRow as { count: number }).count : -1;
   if (tableExists && derivedCount === canonicalCount) {
     return;
   }

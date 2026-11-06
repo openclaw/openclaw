@@ -150,8 +150,8 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
           params.targetDb.exec(params.sourceSchema.cjk);
           params.targetDb.exec(
             `INSERT INTO main.${MEMORY_INDEX_CJK_FTS_TABLE} ` +
-              "(rowid, text, id, path, source, model, start_line, end_line) " +
-              `SELECT rowid, text, id, path, source, model, start_line, end_line ` +
+              '("rowid", text, id, path, source, model, start_line, end_line) ' +
+              `SELECT "rowid", text, id, path, source, model, start_line, end_line ` +
               `FROM ${MEMORY_REINDEX_SCHEMA}.${MEMORY_INDEX_CJK_FTS_TABLE}`,
           );
         }

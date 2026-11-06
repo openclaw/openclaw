@@ -401,7 +401,7 @@ export class MemorySourceIndexKernel {
     }
     this.database
       .prepare(
-        `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid IN (` +
+        `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" IN (` +
           `SELECT chunk_rowid FROM memory_index_chunks WHERE id IN (${ids
             .map(() => "?")
             .join(", ")}))`,
@@ -476,7 +476,7 @@ export class MemorySourceIndexKernel {
     ) {
       this.database
         .prepare(
-          `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid IN (` +
+          `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" IN (` +
             "SELECT chunk_rowid FROM memory_index_chunks WHERE path = ? AND source = ?)",
         )
         .run(pathname, source);

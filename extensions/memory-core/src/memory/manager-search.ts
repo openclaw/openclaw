@@ -367,7 +367,7 @@ export async function searchKeyword(params: {
       const rows = params.db
         .prepare(
           `WITH hits AS (\n` +
-            `  SELECT rowid AS chunk_rowid, rank FROM ${cjkTable}\n` +
+            `  SELECT "rowid" AS chunk_rowid, rank FROM ${cjkTable}\n` +
             `   WHERE ${cjkTable} MATCH ? AND ${cjkTable}.rank MATCH 'bm25()'\n` +
             `)\n` +
             `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text,\n` +
@@ -377,6 +377,7 @@ export async function searchKeyword(params: {
             ` ORDER BY hits.rank ASC\n` +
             ` LIMIT ?`,
         )
+        // SAFETY: SQLite returns row records matching the requested SELECT columns.
         .all(effectivePlan.cjkBigramQuery, ...terms, ...sourceFilter.params, params.limit) as Array<
         MemorySearchRow & { rank: number }
       >;

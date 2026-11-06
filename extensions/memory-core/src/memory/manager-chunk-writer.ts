@@ -14,6 +14,7 @@ import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-en
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type IndexedMemoryChunk = MemoryChunk & {
@@ -188,10 +189,7 @@ function syncMemoryCjkBigramRows(
   if (isPostgresSqlConnection(database)) {
     return;
   }
-  const cjkFtsEnabled =
-    database
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(MEMORY_INDEX_CJK_FTS_TABLE) !== undefined;
+  const cjkFtsEnabled = tableExists(database, MEMORY_INDEX_CJK_FTS_TABLE);
   if (!cjkFtsEnabled) {
     return;
   }
@@ -202,13 +200,14 @@ function syncMemoryCjkBigramRows(
        FROM ${MEMORY_INDEX_CHUNKS_TABLE} WHERE id = ?`,
   );
   const deleteStatement = database.prepare(
-    `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE rowid = ?`,
+    `DELETE FROM ${MEMORY_INDEX_CJK_FTS_TABLE} WHERE "rowid" = ?`,
   );
   const insertStatement = database.prepare(
-    `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+    `INSERT INTO ${MEMORY_INDEX_CJK_FTS_TABLE} ("rowid", text, id, path, source, model, start_line, end_line)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of rows) {
+    // SAFETY: SQLite returns row records conforming to the SELECT projection.
     const chunk = chunkStatement.get(row.id) as
       | {
           chunk_rowid?: number;
