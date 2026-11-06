@@ -301,8 +301,7 @@ a.activity-current-work__row:hover {
   color: var(--text-strong);
 }
 
-.activity-feed__people-count,
-.activity-feed__people-group-label {
+.activity-feed__people-count {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -310,13 +309,6 @@ a.activity-current-work__row:hover {
 .activity-feed__people-count {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-}
-
-.activity-feed__people-group-label {
-  padding: var(--space-1) var(--space-2);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .activity-feed__main {

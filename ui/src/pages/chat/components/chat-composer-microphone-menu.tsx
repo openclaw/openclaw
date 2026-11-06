@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
@@ -38,9 +39,7 @@ export function MicrophoneMenu(props: {
         {
           kind: "content",
           id: "heading",
-          content: (
-            <div class="chat-talk-input-picker__heading">{t("chat.composer.microphoneInput")}</div>
-          ),
+          content: <MenuHeading label={t("chat.composer.microphoneInput")} />,
         },
       ];
       const notice = (id: string, className: string, message: string, role?: "status" | "alert") =>
@@ -115,6 +114,12 @@ export function MicrophoneMenu(props: {
           );
         }
       }
+      // Sections meet at a divider; rows inside a section never draw their own.
+      const separator = (id: string) =>
+        entries.push({ kind: "content", id, content: <div role="separator" /> });
+      if (capabilities.length > 0) {
+        separator("capabilities-separator");
+      }
       for (const capability of capabilities) {
         const detail =
           capability.status === "checking"
@@ -162,6 +167,7 @@ export function MicrophoneMenu(props: {
         });
       }
       if (props.picker.onHoldToDictateChange) {
+        separator("preferences-separator");
         entries.push({
           id: "hold-to-dictate",
           label: t("chat.composer.holdToDictate"),
