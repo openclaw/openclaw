@@ -16,67 +16,28 @@ describe("parseMd — frontmatter", () => {
     [String.raw`"bad\qescape"`, String.raw`bad\qescape`],
     ["ready # operator note", "ready"],
     ["ready\n...", "ready"],
-    ["|-\n  alpha\n  beta", "alpha\nbeta"],
-    ["|\n  alpha\n  beta", "alpha\nbeta\n"],
-    ["|+\n  alpha\n  beta\n", "alpha\nbeta\n\n"],
-    [">-\n  alpha\n  beta", "alpha beta"],
+    ["|-\n  alpha\n  beta", "alpha\nbeta", "fallback"],
+    ["|\n  alpha\n  beta", "alpha\nbeta\n", "fallback"],
+    ["|+\n  alpha\n  beta\n", "alpha\nbeta\n\n", "fallback"],
+    [">-\n  alpha\n  beta", "alpha beta", "fallback"],
     ['"alpha\n  beta"', "alpha beta"],
     ["'alpha\n  beta'", "alpha beta"],
     ["alpha\n  beta", "alpha beta"],
+    ["\n  - alice\n  - bob", "- alice\n- bob", "fallback"],
+    ["\n  nested:\n    a: 1\n    b: 2", "nested:\n  a: 1\n  b: 2", "fallback"],
+    ["\n  - *person", "- *person", "fallback"],
     ...["ready#literal", "00123", "true", "123", "null", "[]", "{}"].map((value) => [value, value]),
-  ])("reads string scalar %s without changing non-string spelling", (encoded, value) => {
-    const raw = `---\nnote: ${encoded}\nfollowing: 'quoted'\n---\n`;
-    const ast = parseMd(raw);
-    expect(ast.frontmatter).toEqual([
-      { key: "note", value, line: 2 },
-      { key: "following", value: "quoted", line: encoded.split("\n").length + 2 },
-    ]);
-    expect(ast.raw).toBe(raw);
-  });
-
-  it("reads block-style structured values instead of an empty string", () => {
-    const raw = "---\nauthors:\n  - alice\n  - bob\nmeta:\n  a: 1\n  b: 2\nflow: {a: 1}\n---\n";
-    const ast = parseMd(raw);
-    expect(ast.frontmatter).toEqual([
-      { key: "authors", value: "- alice\n- bob", line: 2 },
-      { key: "meta", value: "a: 1\nb: 2", line: 5 },
-      { key: "flow", value: "{a: 1}", line: 8 },
-    ]);
-    expect(ast.raw).toBe(raw);
-  });
-
-  it("keeps block values when malformed siblings force the tolerant line reader", () => {
-    const raw =
-      "---\nsummary: |\n  line one\n  line two\nauthors:\n  - alice\nbroken: [unclosed\n---\n";
-    const ast = parseMd(raw);
-    expect(ast.frontmatter).toEqual([
-      { key: "summary", value: "line one\nline two\n", line: 2 },
-      { key: "authors", value: "- alice", line: 5 },
-      { key: "broken", value: "[unclosed", line: 7 },
-    ]);
-    expect(ast.raw).toBe(raw);
-  });
-
-  it("keeps cross-key aliases readable instead of failing the whole file", () => {
-    const raw = "---\nprimary: &person alice\nauthors:\n  - *person\ntitle: keep\n---\n";
-    const ast = parseMd(raw);
-    expect(ast.frontmatter).toEqual([
-      { key: "primary", value: "alice", line: 2 },
-      { key: "authors", value: "- *person", line: 3 },
-      { key: "title", value: "keep", line: 5 },
-    ]);
-    expect(ast.raw).toBe(raw);
-  });
-
-  it("keeps aliases readable when malformed siblings force the tolerant reader", () => {
-    const raw = "---\nprimary: &person alice\nauthors:\n  - *person\nbroken: [unclosed\n---\n";
-    const ast = parseMd(raw);
-    expect(ast.frontmatter).toEqual([
-      { key: "primary", value: "alice", line: 2 },
-      { key: "authors", value: "- *person", line: 3 },
-      { key: "broken", value: "[unclosed", line: 5 },
-    ]);
-    expect(ast.raw).toBe(raw);
+  ])("reads frontmatter %s without changing non-string spelling", (encoded, value, mode = "") => {
+    for (const following of mode === "fallback" ? ["quoted", "[unclosed"] : ["quoted"]) {
+      const raw = `\uFEFF---\nprimary: &person alice\nnote: ${encoded}\nfollowing: ${following === "quoted" ? "'quoted'" : following}\n---\n`;
+      const ast = parseMd(raw);
+      expect(ast.frontmatter).toEqual([
+        { key: "primary", value: "alice", line: 2 },
+        { key: "note", value, line: 3 },
+        { key: "following", value: following, line: encoded.split("\n").length + 3 },
+      ]);
+      expect(ast.raw).toBe(raw);
+    }
   });
 });
 
