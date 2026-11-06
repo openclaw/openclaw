@@ -7,7 +7,10 @@ import * as cronJobs from "../cron/active-jobs.js";
 import * as cronTasks from "../cron/service/active-run-cancellation.js";
 import * as queue from "../process/command-queue.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
-import { beginSessionEffect, runSessionMutation } from "../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import * as sessionRuns from "../sessions/session-controller.queries.js";
 import * as agentRuns from "./agent-run-registry.js";
 import {
