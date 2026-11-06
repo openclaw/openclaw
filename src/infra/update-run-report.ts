@@ -15,6 +15,7 @@ import {
   selectUpdateFailureReportSteps,
   UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
+import { updateRepairRefusalNextAction } from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -166,7 +167,9 @@ export function formatUpdateRunRecovery(
   }
   return code === "gateway-probe-failed"
     ? `recovery check failed (${code})`
-    : `not serving (${code})`;
+    : code === "stopped-free"
+      ? `not serving (${code})`
+      : `readiness unverified (${code})`;
 }
 
 function bounded(text: string, limit: number): string {
@@ -187,6 +190,10 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   }
   if (run.status !== "failed") {
     return [];
+  }
+  const refusalNextAction = updateRepairRefusalNextAction(run.reason);
+  if (refusalNextAction) {
+    return nextAction ? [] : [refusalNextAction];
   }
   if (run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     return [LEGACY_UPDATE_RUN_ADVISORY];
@@ -329,6 +336,11 @@ export function renderUpdateRunReport(
   }
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
+  }
+  const target =
+    run.target && (formatUpdateVersion(run.target) || run.target.tag || run.target.channel);
+  if (target) {
+    lines.push(`Update target: ${bounded(target, 120)}`);
   }
   const admission = run.origin.admission;
   if (admission) {
@@ -562,6 +574,7 @@ export function updateRunReportInputFromResult(
         ? recordedOutcome.reason
         : (result.reason ?? recorded?.reason ?? null),
     origin: recorded?.origin ?? {},
+    target: recorded?.target,
     before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
     after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
     repair: recorded?.repair ?? [],

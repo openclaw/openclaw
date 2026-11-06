@@ -1,8 +1,14 @@
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
+import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
+import { resolveSessionToolPreviewSandboxPolicy } from "../../agents/tools-effective-sandbox-policy.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   prepareSkillCommandsForAgents,
   resolveSkillCommandInvocation,
@@ -79,20 +85,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
   },
 );
 
-function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams["skillCommands"]>) {
-  const lines = ["Usage: /skill <name> [input]"];
-  if (skillCommands.length > 0) {
-    const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
-    lines.push("", `Available: ${names.join(", ")}`);
-    lines.push(
-      `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
-    );
-  } else {
-    lines.push("", "Use /commands to list available skill commands.");
-  }
-  return lines.join("\n");
-}
-
 export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/skill",
@@ -112,7 +104,17 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
       return null;
     }
     const prefix = rawName ? `Unknown skill: ${rawName}\n\n` : "";
-    return commandReply(`${prefix}${buildSkillCommandUsage(skillCommands)}`);
+    const lines = ["Usage: /skill <name> [input]"];
+    if (skillCommands.length > 0) {
+      const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
+      lines.push("", `Available: ${names.join(", ")}`);
+      lines.push(
+        `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
+      );
+    } else {
+      lines.push("", "Use /commands to list available skill commands.");
+    }
+    return commandReply(`${prefix}${lines.join("\n")}`);
   },
 );
 
@@ -136,11 +138,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
-    const effectiveAccountId = resolveChannelAccountId({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      command: params.command,
-    });
+    const effectiveAccountId = resolveChannelAccountId(params);
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
     const threadingContext = buildThreadingToolContext({
@@ -159,9 +157,44 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     await using acquired =
       await acquireEffectiveToolInventoryRuntimeModelContext(inventoryModelContext());
     return await acquired.run(async (runtimeModelContext) => {
+      const gateway = getInProcessGatewayRequestContext(
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx),
+      );
+      const agentRuntime = resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.model,
+        modelApi: runtimeModelContext.modelApi,
+        modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
+        agentScope: { kind: "prepared", agentId: params.agentId },
+        sessionKey: params.sessionKey,
+        sessionEntry: targetSessionEntry,
+      });
+      const githubPublicationAvailable =
+        sessionBound &&
+        gateway &&
+        !gateway.localEmbedded &&
+        agentHarnessExposesOpenClawTools(agentRuntime) &&
+        !(await readAcpSessionMetaForEntryAsync({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          entry: targetSessionEntry,
+        }))
+          ? true
+          : undefined;
       const result = await resolveEffectiveToolInventory({
         ...inventoryModelContext(),
         sessionKey: params.sessionKey,
+        githubPublicationAvailable,
+        agentRuntime,
+        sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionEntry: targetSessionEntry,
+          context: gateway,
+        }),
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
         messageProvider: params.command.channel,
@@ -208,11 +241,7 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
   },
   async (params, normalizedStatusCommand) => {
     if (normalizedStatusCommand === "/status plugins") {
-      const reply = await buildStatusPluginsReply({
-        cfg: params.cfg,
-        command: params.command,
-        workspaceDir: params.workspaceDir,
-      });
+      const reply = await buildStatusPluginsReply(params);
       return commandReply(reply);
     }
     if (normalizedStatusCommand.startsWith("/status ")) {

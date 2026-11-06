@@ -43,14 +43,12 @@ it.each([false, true])(
         }),
       ),
     );
-    let beganUpload = false;
     const request = http.request.bind(http);
     const requestSpy = vi.spyOn(http, "request").mockImplementation(((
       url: string | URL,
       options: RequestOptions,
     ) => {
       if (options.method === "POST") {
-        beganUpload = true;
         if (!rejected) {
           fsSync.writeFileSync(sharedFile, "later workspace edit");
         }
@@ -73,11 +71,8 @@ it.each([false, true])(
       if (rejected) {
         await expect(operation).rejects.toThrow("workspace-transfer-failed: gateway returned 500");
       } else {
-        const result = await operation;
-        expect(result).toBe(uploaded?.currentRef);
+        expect(await operation).toBe(uploaded?.currentRef);
       }
-      expect(beganUpload).toBe(true);
-      expect(uploaded).toBeDefined();
       if (!uploaded) {
         throw new Error("Gateway received no upload snapshot");
       }
@@ -101,11 +96,17 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])("uploads an empty workspace but not a missing one (%s)", async (missing) => {
-  const root = tempDirs.make("worker-upload-empty-");
-  const f = transferFixture(root, "environment-upload-empty");
-  if (!missing) {
+it.each(["empty", "missing", "cancelled"])("handles a %s upload source", async (state) => {
+  const root = tempDirs.make("worker-upload-source-");
+  const f = transferFixture(root, "environment-upload-source");
+  const source = path.join(f.workspaceDir, "source.bin");
+  const controller = new AbortController();
+  if (state !== "missing") {
     await fs.mkdir(f.workspaceDir);
+  }
+  if (state === "cancelled") {
+    await fs.writeFile(source, content);
+    controller.abort(new Error("upload cancelled"));
   }
   const { rawManifest, manifestRef } = manifestFixture();
   await writeManifest(root, rawManifest);
@@ -113,40 +114,22 @@ it.each([false, true])("uploads an empty workspace but not a missing one (%s)", 
   await using gateway = await serveTransfer(
     createServer(
       transferHandler(async (request, response) => {
-        const upload = await readUpload(request);
         received = true;
+        const upload = await readUpload(request);
         expect(upload.body.byteLength).toBe(upload.fileHeader);
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ manifestRef: upload.currentRef }));
       }),
     ),
   );
-  const operation = f.upload(gateway.gatewayUrl, manifestRef);
-  if (missing) {
+  const operation = f.upload(gateway.gatewayUrl, manifestRef, { signal: controller.signal });
+  if (state === "missing") {
     await expect(operation).rejects.toMatchObject({ operation: "upload", stage: "capture" });
+  } else if (state === "cancelled") {
+    await expect(operation).rejects.toThrow("workspace-transfer-failed");
+    await expect(fs.readFile(source)).resolves.toEqual(content);
   } else {
     await expect(operation).resolves.toBe(manifestRef);
   }
-  expect(received).toBe(!missing);
-});
-
-it("does not begin uploading a cancelled snapshot", async () => {
-  const root = tempDirs.make("worker-upload-cancelled-");
-  const f = transferFixture(root, "environment-upload-cancelled");
-  await fs.mkdir(f.workspaceDir);
-  const source = path.join(f.workspaceDir, "source.bin");
-  await fs.writeFile(source, content);
-  const { rawManifest, manifestRef } = manifestFixture();
-  await writeManifest(root, rawManifest);
-  const controller = new AbortController();
-  controller.abort(new Error("upload cancelled"));
-  const request = vi.fn((_request: http.IncomingMessage, response: http.ServerResponse) =>
-    response.end(),
-  );
-  await using gateway = await serveTransfer(createServer(request));
-  await expect(
-    f.upload(gateway.gatewayUrl, manifestRef, { signal: controller.signal }),
-  ).rejects.toThrow("workspace-transfer-failed");
-  expect(request).not.toHaveBeenCalled();
-  await expect(fs.readFile(source)).resolves.toEqual(content);
+  expect(received).toBe(state === "empty");
 });

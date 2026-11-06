@@ -89,8 +89,7 @@ there, grounded in what that platform can actually show it.
 `channels.<channel>.joinIntro: false`, or override a single account with
 `channels.<channel>.accounts.<accountId>.joinIntro`. Resolution order is the
 account value, then the channel value, then the default of `true`. There is no
-per-room switch, because a room is only configurable after the bot has already
-joined it. Only Discord, LINE, Matrix, Slack, and Telegram accept this option; other channels
+per-room introduction switch. Only Discord, LINE, Matrix, Slack, and Telegram accept this option; other channels
 reject it rather than accepting a setting they never read.
 
 **What it reads.** Core requests up to 100 recent messages plus room metadata,
@@ -109,6 +108,9 @@ When history is unavailable or unreadable, the introduction is still posted from
 room metadata alone and says what it can see rather than inventing activity.
 
 **Where it posts.** LINE, Matrix, Slack, and Telegram introduce in the room that was joined.
+Slack excludes direct messages and group DMs, and Enterprise Slack introductions
+retain the listener workspace. Telegram forum introductions use the General topic's
+access policy and configured agent.
 Discord joins a server rather than a channel, so it uses the system channel when
 it can both view and send there, otherwise the first text channel that qualifies;
 if no channel qualifies, it records a skip instead of posting.

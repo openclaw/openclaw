@@ -49,7 +49,7 @@ export async function startClaimedGateway(
 
 type ListenerReservation = {
   listener: ReturnType<typeof createServer>;
-  adopt: () => void;
+  adopted: boolean;
 };
 
 async function createListenerDispatcher() {
@@ -64,7 +64,9 @@ async function createListenerDispatcher() {
       const runtime = await createTransport(
         reservation ? { ...params, testListener: reservation.listener } : params,
       );
-      reservation?.adopt();
+      if (reservation) {
+        reservation.adopted = true;
+      }
       return runtime;
     });
   return { listeners, restore: () => spy.mockRestore() };
@@ -84,9 +86,9 @@ export async function reserveGatewayTestListener(port: number | TestPortClaim = 
     ...(port ? { port } : {}),
     createListener: () => createServer().on("connection", rejectEarlyConnection),
   });
-  let adopted = false;
+  const reservation = { listener, adopted: false };
   const closeUnadopted = async () => {
-    if (!adopted && listener.listening) {
+    if (!reservation.adopted && listener.listening) {
       await releaseListener();
     }
     if (!listener.listening) {
@@ -108,12 +110,7 @@ export async function reserveGatewayTestListener(port: number | TestPortClaim = 
           !dispatcher.listeners.has(claim.port),
           "Reserved Gateway listener is already starting",
         );
-        dispatcher.listeners.set(claim.port, {
-          listener,
-          adopt: () => {
-            adopted = true;
-          },
-        });
+        dispatcher.listeners.set(claim.port, reservation);
         try {
           const result = await run();
           listener.off("connection", rejectEarlyConnection);

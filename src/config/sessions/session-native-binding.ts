@@ -52,7 +52,7 @@ const unresolved = resolveGlobalSingleton(
 export function deleteSessionWithNativeBindingsInWorker(
   plan: SessionNativeBindingDeletion["plan"],
   captured: NativeDeletionCapture,
-  assertCurrent: () => void,
+  assertCurrent: (operation?: RetainedWorkerTransactionAdmission) => void,
   onResult?: (result: SessionNativeBindingCandidate["result"], identity: string) => void,
 ) {
   return runSessionNativeBindingWorkerOperation<
@@ -64,6 +64,7 @@ export function deleteSessionWithNativeBindingsInWorker(
     entries: collectReclamationDeletionEntries(plan),
     captured,
     assertCurrent,
+    assertCandidate: (_candidate, operation) => assertCurrent(operation),
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),

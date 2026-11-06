@@ -1,29 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { refreshInstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
-import {
-  cleanupPluginLoaderFixturesForTest,
-  makePluginLoaderTempDir,
-  resetPluginLoaderTestStateForTest,
-} from "./loader.test-fixtures.js";
+import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { reloadManagedPlugin } from "./management-mutations.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { resolveControlPlaneRegistryParams } from "./plugin-registry-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
@@ -48,11 +41,20 @@ afterEach(() => {
   resetPluginLoaderTestStateForTest();
   closeOpenClawStateDatabaseForTest();
 });
-afterAll(cleanupPluginLoaderFixturesForTest);
+async function createState() {
+  const state = await createOpenClawTestState({ label: "plugin-policy" });
+  onTestFinished(() => state.cleanup());
+  return state;
+}
 
 it("persists offline CLI plugin policy without loading Gateway RPC or heavy plugin services", async () => {
-  const stateDir = makePluginLoaderTempDir();
-  const bundledDir = makePluginLoaderTempDir();
+  const state = await createState();
+  const bundledDir = state.path("bundled");
+  Object.assign(state.envVars, {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+  });
+  state.applyEnv();
   const pluginId = "policy-only";
   const writeBundledPlugin = (id: string, version: string) => {
     const rootDir = path.join(bundledDir, id);
@@ -66,73 +68,51 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
     });
   };
   writeBundledPlugin(pluginId, "1.0.0");
-  await withEnvAsync(
-    {
-      OPENCLAW_HOME: stateDir,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
-    async () => {
-      const readPolicy = async () => {
-        const { snapshot } = await readConfigFileSnapshotForWrite();
-        await using cache = createPluginCache();
-        return withPluginCache(cache, () => {
-          const index = readPersistedInstalledPluginIndexSync();
-          assert(index, "CLI policy mutation did not persist the plugin index");
-          const fresh = refreshInstalledPluginIndex(
-            resolveControlPlaneRegistryParams({
-              config: snapshot.runtimeConfig,
-              env: process.env,
-              installRecords: {},
-              reason: "policy-changed" as const,
-              now: () => new Date(index.generatedAtMs),
-            }),
-          );
-          expect(index).toEqual(fresh);
-          return { config: snapshot.sourceConfig, index };
-        });
-      };
-      const expectPolicy = async (id: string, enabled: boolean, packageVersion?: string) => {
-        const { config, index } = await readPolicy();
-        expect(config.plugins?.entries?.[id]?.enabled).toBe(enabled);
-        const plugin = index.plugins.find((entry) => entry.pluginId === id);
-        expect(plugin).toMatchObject({ enabled, ...(packageVersion ? { packageVersion } : {}) });
-        return plugin;
-      };
-      await writeConfigFile({ plugins: { entries: { [pluginId]: { enabled: false } } } });
-      const { runPluginsEnableCommand, runPluginsDisableCommand } =
-        await import("../cli/plugins-cli.runtime.js");
-      await runPluginsEnableCommand(pluginId);
-      const firstPlugin = await expectPolicy(pluginId, true, "1.0.0");
-      await runPluginsDisableCommand(pluginId);
-      await expectPolicy(pluginId, false);
+  const readPolicy = async () => {
+    const { snapshot } = await readConfigFileSnapshotForWrite();
+    await using cache = createPluginCache();
+    return withPluginCache(cache, () => {
+      const index = readPersistedInstalledPluginIndexSync();
+      assert(index, "CLI policy mutation did not persist the plugin index");
+      return { config: snapshot.sourceConfig, index };
+    });
+  };
+  const expectPolicy = async (id: string, enabled: boolean, packageVersion?: string) => {
+    const { config, index } = await readPolicy();
+    expect(config.plugins?.entries?.[id]?.enabled).toBe(enabled);
+    const plugin = index.plugins.find((entry) => entry.pluginId === id);
+    expect(plugin).toMatchObject({ enabled, ...(packageVersion ? { packageVersion } : {}) });
+    return plugin;
+  };
+  await writeConfigFile({ plugins: { entries: { [pluginId]: { enabled: false } } } });
+  const { runPluginsEnableCommand, runPluginsDisableCommand } =
+    await import("../cli/plugins-cli.runtime.js");
+  await runPluginsEnableCommand(pluginId);
+  const firstPlugin = await expectPolicy(pluginId, true, "1.0.0");
+  await runPluginsDisableCommand(pluginId);
+  await expectPolicy(pluginId, false);
 
-      const addedId = "policy-added";
-      writeBundledPlugin(pluginId, "2.0.0");
-      writeBundledPlugin(addedId, "1.0.0");
-      await runPluginsEnableCommand(addedId);
-      const refreshed = await readPolicy();
-      expect(refreshed.config.plugins?.entries).toMatchObject({
-        [pluginId]: { enabled: false },
-        [addedId]: { enabled: true },
-      });
-      const updated = refreshed.index.plugins.find((plugin) => plugin.pluginId === pluginId);
-      expect(updated).toMatchObject({ enabled: false, packageVersion: "2.0.0" });
-      expect(updated?.manifestHash).not.toBe(firstPlugin?.manifestHash);
-      expect(refreshed.index.plugins.find((plugin) => plugin.pluginId === addedId)).toMatchObject({
-        enabled: true,
-        packageVersion: "1.0.0",
-      });
-    },
-  );
+  const addedId = "policy-added";
+  writeBundledPlugin(pluginId, "2.0.0");
+  writeBundledPlugin(addedId, "1.0.0");
+  await runPluginsEnableCommand(addedId);
+  const refreshed = await readPolicy();
+  expect(refreshed.config.plugins?.entries).toMatchObject({
+    [pluginId]: { enabled: false },
+    [addedId]: { enabled: true },
+  });
+  const updated = refreshed.index.plugins.find((plugin) => plugin.pluginId === pluginId);
+  expect(updated).toMatchObject({ enabled: false, packageVersion: "2.0.0" });
+  expect(updated?.manifestHash).not.toBe(firstPlugin?.manifestHash);
+  expect(refreshed.index.plugins.find((plugin) => plugin.pluginId === addedId)).toMatchObject({
+    enabled: true,
+    packageVersion: "1.0.0",
+  });
 });
 
 describe("reload consent and current install preconditions", () => {
   async function prepareReload(second = false) {
-    const state = await createOpenClawTestState({ label: "reload-consent-record" });
-    onTestFinished(() => state.cleanup());
+    const state = await createState();
     const packages = [
       { id: "reload-proof", root: state.path("plugin"), tool: "proof.read" },
       ...(second

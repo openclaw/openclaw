@@ -48,15 +48,12 @@ export type CommandOperatorKind =
   | "background";
 
 export type CommandOperator = {
-  id: string;
   kind: CommandOperatorKind;
-  text: string;
-  span: SourceSpan;
   fromCommandId: string;
   parentCommandId?: string;
 };
 
-export type CommandRisk = { text: string; span: SourceSpan } & (
+export type CommandRisk = { span: SourceSpan } & (
   | { kind: "inline-eval"; command: string; flag: string }
   | {
       kind: "shell-wrapper";
@@ -64,14 +61,16 @@ export type CommandRisk = { text: string; span: SourceSpan } & (
       flag: string;
       payload: string;
     }
-  | { kind: "shell-wrapper-through-carrier"; command: string }
+  | { kind: "shell-wrapper-through-carrier" }
   | { kind: "command-carrier"; command: string; flag?: string }
   | { kind: "command-substitution" }
   | { kind: "process-substitution" }
   | { kind: "dynamic-executable" }
+  | { kind: "dynamic-assignment" }
   | {
       kind: "dynamic-argument";
       command: string;
+      text: string;
     }
   | { kind: "eval" }
   | { kind: "source"; command: string }
@@ -86,7 +85,6 @@ export type CommandRisk = { text: string; span: SourceSpan } & (
 
 export type CommandExplanation = {
   ok: boolean;
-  source: string;
   shapes: CommandShape[];
   topLevelCommands: CommandStep[];
   nestedCommands: CommandStep[];

@@ -8,23 +8,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 
-type RestartDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-};
-
 // Restart sentinels can resume a channel turn after the gateway comes back.
 // Keep only routable delivery fields plus a normalized thread id so malformed
 // UI/tool payloads do not leak arbitrary data into the sentinel file.
-export function parseRestartRequestParams(params: unknown): {
-  sessionKey: string | undefined;
-  deliveryContext: RestartDeliveryContext | undefined;
-  threadId: string | undefined;
-  note: string | undefined;
-  continuationMessage: string | undefined;
-  restartDelayMs: number | undefined;
-} {
+export function parseRestartRequestParams(params: unknown) {
   const raw = params as Record<string, unknown>;
   const sessionKey = normalizeOptionalString(raw.sessionKey);
   const context = asOptionalRecord(raw.deliveryContext);

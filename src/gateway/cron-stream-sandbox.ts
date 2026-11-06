@@ -11,11 +11,12 @@ import { prepareCronStreamSandboxAuthority } from "./cron-stream-sandbox-authori
 export function createCronStreamSandboxExecutor(params: {
   scheduler: GatewayScheduler;
   storePath: string;
+  storeKey?: string;
   getRuntimeConfig: () => OpenClawConfig;
   getJob: (id: string) => CronStoredJob | undefined;
   assertCurrent: () => void;
 }) {
-  const storeKey = cronStoreKey(params.storePath);
+  const storeKey = params.storeKey ?? cronStoreKey(params.storePath);
   const execution = createSandboxPersistentExecOwner({ scheduler: params.scheduler });
   const spawn: NonNullable<CronStreamOwnerParams["spawnSandboxSource"]> = async (input) => {
     const { job } = input;

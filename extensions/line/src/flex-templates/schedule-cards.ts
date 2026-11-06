@@ -8,19 +8,6 @@ import {
 } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent } from "./types.js";
 
-function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }): FlexComponent[] {
-  const { title, subtitle } = params;
-  const headerContents: FlexComponent[] = [createCardTitle(title)];
-
-  if (subtitle) {
-    headerContents.push(
-      cardText(subtitle, { size: "sm", color: "#888888", margin: "sm", wrap: true }),
-    );
-  }
-
-  return headerContents;
-}
-
 function buildCardHeaderSections(headerContents: FlexComponent[]): FlexComponent[] {
   return [
     cardBox("vertical", headerContents, { paddingBottom: "lg" }),
@@ -202,7 +189,13 @@ export function createAgendaCard(params: {
   footer?: string;
 }): FlexBubble {
   const { title, subtitle, events, footer } = params;
-  const headerContents = buildTitleSubtitleHeader({ title, subtitle });
+  const headerContents: FlexComponent[] = [createCardTitle(title)];
+
+  if (subtitle) {
+    headerContents.push(
+      cardText(subtitle, { size: "sm", color: "#888888", margin: "sm", wrap: true }),
+    );
+  }
   const eventItems: FlexComponent[] = events.slice(0, 6).map((event, index) => {
     const isActive = event.isNow || index === 0;
     const accentColor = isActive ? "#06C755" : "#E5E5E5";

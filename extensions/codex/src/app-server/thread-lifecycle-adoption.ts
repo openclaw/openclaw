@@ -8,6 +8,7 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -268,6 +269,15 @@ export async function prepareCodexThreadResume(
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();
   }
+  // Reuse the lifecycle read so a missing unused thread reaches its recovery owner.
+  if (
+    params.inferenceRoute &&
+    binding.clientId === params.client.getInstanceId() &&
+    !getCodexInferenceThread(params.client, binding.threadId) &&
+    thread.status?.type !== "notLoaded"
+  ) {
+    throw new Error("Codex loaded thread has no owned inference route; reconnect before retrying");
+  }
   // Known supervision keeps its native home; manual adoption's stricter home and catalog
   // checks remain in preparePendingCodexThreadResume, before this common handoff.
   assertCodexSupervisionThreadLineage(binding, thread);
@@ -296,6 +306,13 @@ function isCodexThreadNonRunning(
 ): status is Exclude<NonNullable<CodexThread["status"]>, { type: "active" }> {
   return status?.type === "idle" || status?.type === "notLoaded" || status?.type === "systemError";
 }
+
+/**
+ * Codex emits thread/closed only after the unloaded thread's shutdown_and_wait finishes,
+ * and treats shutdown as slow only after 10s (app-server thread_lifecycle.rs,
+ * unload_thread_without_subscribers). Live teardown with MCP servers takes about 2s.
+ */
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
 
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,
@@ -346,7 +363,7 @@ function observeCodexThreadConfiguration(
       timer ??= setTimeout(() => {
         expired = true;
         onUnload?.();
-      }, 2_000);
+      }, CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
       if (!(requireClosed ? closed : unloaded) && !expired) {
         await new Promise<void>((resolve) => {
           const finish = () => {

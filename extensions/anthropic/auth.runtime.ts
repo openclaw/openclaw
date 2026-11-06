@@ -24,6 +24,45 @@ import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
 const PROVIDER_ID = "anthropic";
 
+/** Collect provider account scope separately from the agent's filesystem workspace. */
+export async function runAnthropicApiKeyAuth(
+  ctx: ProviderAuthContext,
+  runApiKeyAuth: ProviderAuthMethod["run"],
+): Promise<ProviderAuthResult> {
+  const result = await runApiKeyAuth(ctx);
+  const provider = ctx.config.models?.providers?.[PROVIDER_ID];
+  const hasWorkspace = [provider?.headers, provider?.request?.headers].some((headers) =>
+    Object.entries(headers ?? {}).some(
+      ([name, value]) =>
+        name.toLowerCase() === "anthropic-workspace-id" &&
+        (typeof value !== "string" || value.trim().length > 0),
+    ),
+  );
+  if (hasWorkspace) {
+    return result;
+  }
+  await ctx.prompter.note(
+    "API keys that are not scoped to a workspace require an Anthropic workspace ID from the Claude Console. This provider setting applies to all Anthropic API requests, not an agent's local workspace. Leave it blank for a workspace-scoped key.",
+    "Anthropic API workspace",
+  );
+  const workspaceId = (
+    await ctx.prompter.text({
+      message: "Anthropic workspace ID (optional for workspace-scoped keys)",
+      placeholder: "wrkspc_...",
+    })
+  ).trim();
+  return workspaceId
+    ? {
+        ...result,
+        configPatch: {
+          models: {
+            providers: { anthropic: { headers: { "anthropic-workspace-id": workspaceId } } },
+          },
+        },
+      }
+    : result;
+}
+
 type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
   NonNullable<ProviderAuthMethod["validateNonInteractive"]>
 >[0];
@@ -39,7 +78,10 @@ function normalizeAnthropicSetupTokenInput(value: string): string {
   return value.replaceAll(/\s+/g, "");
 }
 
-function resolveAnthropicSetupTokenProfileId(rawProfileId?: unknown): string {
+function resolveAnthropicSetupTokenProfileId(
+  config: ProviderAuthConfig = {},
+  rawProfileId?: unknown,
+): string {
   if (typeof rawProfileId === "string") {
     const trimmed = rawProfileId.trim();
     if (trimmed.length > 0) {
@@ -49,7 +91,22 @@ function resolveAnthropicSetupTokenProfileId(rawProfileId?: unknown): string {
       return buildTokenProfileId({ provider: PROVIDER_ID, name: trimmed });
     }
   }
-  return `${PROVIDER_ID}:default`;
+  let profileId = `${PROVIDER_ID}:default`;
+  for (let suffix = 1; ; suffix += 1) {
+    const configured = config.auth?.profiles?.[profileId];
+    if (
+      !configured ||
+      (configured.provider === PROVIDER_ID &&
+        (configured.mode === "token" || configured.mode === "oauth"))
+    ) {
+      return profileId;
+    }
+    // Profile declarations are global; preserve other agents' API-key profiles.
+    profileId = buildTokenProfileId({
+      provider: PROVIDER_ID,
+      name: suffix === 1 ? "setup-token" : `setup-token-${suffix}`,
+    });
+  }
 }
 
 function resolveAnthropicSetupTokenExpiry(rawExpiresIn?: unknown): number | undefined {
@@ -82,7 +139,7 @@ export async function runAnthropicSetupTokenAuth(
     throw new Error(tokenError);
   }
 
-  const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts?.tokenProfileId);
+  const profileId = resolveAnthropicSetupTokenProfileId(ctx.config, ctx.opts?.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts?.tokenExpiresIn);
 
   return {
@@ -137,7 +194,7 @@ export async function runAnthropicSetupTokenNonInteractive(
 ): Promise<ProviderAuthConfig | null> {
   const rawToken = validateAnthropicSetupTokenNonInteractive(ctx);
 
-  const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts.tokenProfileId);
+  const profileId = resolveAnthropicSetupTokenProfileId(ctx.config, ctx.opts.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
   await upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -156,7 +213,7 @@ export async function runAnthropicSetupTokenNonInteractive(
   const withProfile = applyAuthProfileConfig(ctx.config, {
     profileId,
     provider: PROVIDER_ID,
-    mode: "token",
+    mode: ctx.config.auth?.profiles?.[profileId]?.mode === "oauth" ? "oauth" : "token",
   });
   const existingModelConfig =
     withProfile.agents?.defaults?.model && typeof withProfile.agents.defaults.model === "object"
@@ -223,12 +280,17 @@ export async function runAnthropicCliMigration(
             "Claude CLI is not authenticated on this host.",
             `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
           ]
-        : [
-            authStatus.status === "timeout"
-              ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
-              : "Could not verify the installed Claude CLI login.",
-            `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
-          ];
+        : authStatus.status === "not-installed"
+          ? [
+              "Claude CLI (`claude`) was not found on PATH.",
+              `Install Claude Code or add it to PATH, run ${formatCliCommand("claude auth login")}, then re-run this setup.`,
+            ]
+          : [
+              authStatus.status === "timeout"
+                ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
+                : "Could not verify the installed Claude CLI login.",
+              `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
+            ];
     throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);

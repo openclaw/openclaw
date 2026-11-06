@@ -92,7 +92,6 @@ it.each([
           error: new Error("aborted", { cause: SESSIONS_YIELD_ABORT_REASON }),
           handleMidTurnPrecheckRequest: vi.fn(),
           markYieldAborted: vi.fn(),
-          releaseLeasedSteering: vi.fn(),
           withOwnedTranscriptWrite: async (operation) => await operation(),
           yieldAbortSettled: null,
           yieldDetected: true,

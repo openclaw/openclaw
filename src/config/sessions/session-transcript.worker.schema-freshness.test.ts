@@ -4,7 +4,7 @@ import type { Transferable } from "node:worker_threads";
 import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
@@ -17,7 +17,7 @@ import {
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type { ChatHistoryPageParams } from "./session-history-types.js";
 import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 import type {
@@ -95,7 +95,6 @@ it("sheds isolate-local caches at eighty percent of the actual worker heap limit
       kind: "prewarm" as const,
       database: { agentId: opened.agentId, path: opened.path },
       env: {},
-      history: false,
     };
     try {
       worker.heap = { used_heap_size: 799, heap_size_limit: 1000 };
@@ -174,6 +173,42 @@ it("borrows canonical writer proof without a native reader and still fences fore
   });
 });
 
+it("reads the latest projection status with one SELECT and no transaction envelope", async () => {
+  await withWorker("projection-status", async ({ state, database, scope }) => {
+    appendTranscriptMessageSync(scope, {
+      eventId: "projection-message",
+      message: { role: "assistant", content: [{ type: "text", text: "Synthetic projection" }] },
+    });
+    const request = {
+      kind: "projection-status" as const,
+      database: { agentId: database.agentId, path: database.path },
+      env: state.env,
+      sessionId: scope.sessionId,
+    };
+    await expect(worker.read(request)).resolves.toMatchObject({ ok: true, value: false });
+    const update = database.db.prepare(
+      "UPDATE session_transcript_index_state SET needs_rebuild = ? WHERE session_id = ?",
+    );
+    const native = nodeSqlite.requireNodeSqlite();
+    const observation = observeSqliteReadSql(native.StatementSync.prototype);
+    using reads = { ...observation, [Symbol.dispose]: observation.restore };
+    using exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
+    for (const needsReconcile of [false, true, false]) {
+      update.run(Number(needsReconcile), scope.sessionId);
+      reads.queries.length = 0;
+      exec.mockClear();
+      await expect(worker.read(request)).resolves.toMatchObject({
+        ok: true,
+        value: needsReconcile,
+      });
+      expect(reads.queries).toEqual([expect.stringMatching(/^\s*select\b/i)]);
+      expect(
+        exec.mock.calls.filter(([sql]) => /^\s*(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql)),
+      ).toEqual([]);
+    }
+  });
+});
+
 it.for([
   { offset: 0, maxHistoryBytes: 1024, messageBytes: 200_000 },
   { offset: 1, maxHistoryBytes: 1024, messageBytes: 200_000 },
@@ -190,7 +225,15 @@ it.for([
           message: {
             role: "assistant",
             timestamp: 1_800_000_000_000 + index,
-            content: [{ type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` }],
+            content: [
+              { type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` },
+              {
+                type: "toolCall",
+                id: `tool-${index}`,
+                name: "read",
+                arguments: { path: "synthetic.txt" },
+              },
+            ],
           },
         });
       }
@@ -234,6 +277,13 @@ it.for([
       assert(body);
       expect(body.byteLength).toBeLessThanOrEqual(params.maxHistoryBytes);
       expect(JSON.parse(new TextDecoder().decode(body))).toEqual(expected.messages);
+      const activity = page.encodedResponse?.activity;
+      if (expected.activity) {
+        expect(activity).toBeInstanceOf(Uint8Array);
+        expect(new TextDecoder().decode(activity)).toBe(JSON.stringify(expected.activity));
+      } else {
+        expect(activity).toBeUndefined();
+      }
       expect([page.pagination, page.anchor]).toEqual([undefined, undefined]);
       expect(Object.hasOwn(page, "activeLeafEntryId")).toBe(offset === 0);
       expect(page.encodedResponse?.totalMessages).toBe(2);
@@ -250,6 +300,9 @@ it.for([
       }
       const received = structuredClone(reply, { transfer: worker.transfers(reply) });
       expect(body.byteLength).toBe(0);
+      if (activity) {
+        expect(activity.byteLength).toBe(0);
+      }
       if (deflated) {
         expect(deflated.byteLength).toBe(0);
       }
@@ -306,9 +359,7 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(
-          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
-        ).resolves.toEqual({
+        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

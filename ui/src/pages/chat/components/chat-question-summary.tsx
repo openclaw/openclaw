@@ -1,7 +1,10 @@
 import { For, Show } from "solid-js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import type { QuestionPanelQuestion } from "./chat-question-types.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 export function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion): string {
   if (prompt.status === "cancelled") {

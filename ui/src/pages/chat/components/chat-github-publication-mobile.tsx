@@ -14,7 +14,6 @@ import {
   GitHubPublicationDetails,
   GitHubPublicationMobileRefresh,
 } from "./chat-github-publication.tsx";
-import "../../../styles/chat/github-publication-mobile.css";
 
 export type GitHubPublicationMobileProps = {
   publication: GitHubPublicationView;

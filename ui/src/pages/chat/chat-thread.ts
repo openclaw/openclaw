@@ -18,8 +18,11 @@ import {
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
+import type { ChatItemsFacts } from "./chat-thread-facts.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
+import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -30,10 +33,31 @@ type CachedChatItems = {
     index: number;
     identity: string;
     prefix: string | null;
+    ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
+  /** Facts of the history behind items. */
+  facts?: PrependFacts;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+
+type PrependRuntime = Awaited<ReturnType<typeof importPrependRuntime>>;
+let prependRuntime: PrependRuntime | undefined;
+let prependLoading: Promise<unknown> | undefined;
+
+async function importPrependRuntime() {
+  const { prependOlderChatItems } = await import("./chat-thread-prepend.ts");
+  return { prependOlderChatItems };
+}
+
+/** Older-page reuse stays out of chat boot; prepends take the full build until it loads. */
+function loadedPrependRuntime() {
+  prependLoading ??= importPrependRuntime().then(
+    (loaded) => (prependRuntime = loaded),
+    () => (prependLoading = undefined),
+  );
+  return prependRuntime;
+}
 
 type ToolCardExpansionState = {
   expanded: Map<string, boolean>;
@@ -94,6 +118,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+    previous.replyPreviousMessageId === next.replyPreviousMessageId &&
     previous.replyShared === next.replyShared &&
     sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
@@ -107,7 +132,6 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         candidate !== undefined &&
         entry.key === candidate.key &&
         entry.message === candidate.message &&
-        entry.duplicateCount === candidate.duplicateCount &&
         JSON.stringify(entry.replyTarget) === JSON.stringify(candidate.replyTarget) &&
         entry.hasVisibleContent === candidate.hasVisibleContent
       );
@@ -116,7 +140,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
 }
 
 const CHAT_ITEM_FIELDS = {
-  message: ["message", "duplicateCount"],
+  message: ["message"],
   notice: [
     "text",
     "label",
@@ -125,6 +149,7 @@ const CHAT_ITEM_FIELDS = {
     "boundaryId",
     "timestamp",
     "systemEvent",
+    "repeatCount",
   ],
   divider: [
     "compaction",
@@ -157,7 +182,11 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
     case "message":
       return previous.kind === "message" && sameFields(previous, next, CHAT_ITEM_FIELDS.message);
     case "notice":
-      return previous.kind === "notice" && sameFields(previous, next, CHAT_ITEM_FIELDS.notice);
+      return (
+        previous.kind === "notice" &&
+        sameFields(previous, next, CHAT_ITEM_FIELDS.notice) &&
+        sameFields(previous.modelChange, next.modelChange, ["from", "to"])
+      );
     case "divider":
       return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
     case "stream":
@@ -169,6 +198,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+        previous.replyPreviousMessageId === next.replyPreviousMessageId &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -337,13 +367,16 @@ function sameChatItemsStructuralInput(
     previous.subagentWait?.runId === next.subagentWait?.runId &&
     (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
     previous.questionPrompts === next.questionPrompts &&
-    previous.loading === next.loading &&
+    // Loading only suppresses progress indicators on an initially empty thread.
+    (previous.loading === next.loading || (!next.runWorking && !next.subagentWait)) &&
     sameEntries(previous.replyPeople, next.replyPeople) &&
     previous.replyLocalPerson === next.replyLocalPerson &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.messageRecovery?.messages === next.messageRecovery?.messages &&
     previous.messageRecovery?.revision === next.messageRecovery?.revision &&
+    previous.messageRecovery?.displayFacts === next.messageRecovery?.displayFacts &&
+    previous.messageRecovery?.canFetchFullMessage === next.messageRecovery?.canFetchFullMessage &&
     previous.messageRecovery?.agentId === next.messageRecovery?.agentId
   );
 }
@@ -365,7 +398,11 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
+  const text = stripOwnedCanvasShortcodes(
+    trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix),
+    item.runId,
+    live.ownedCanvas,
+  );
   if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
@@ -429,7 +466,34 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input, projections.inputOrder));
+  const previous = cached.input;
+  const added = previous ? input.messages.length - previous.messages.length : 0;
+  // Only a page in front of retained history loads the reuse runtime.
+  const prepended =
+    previous &&
+    cached.facts &&
+    added > 0 &&
+    added < input.messages.length &&
+    input.messages[added] === previous.messages[0] &&
+    sameChatItemsStructuralInput(previous, { ...input, messages: previous.messages })
+      ? loadedPrependRuntime()?.prependOlderChatItems(
+          { messages: previous.messages, items: cached.items, facts: cached.facts },
+          input,
+          projections.inputOrder,
+          sameChatItem,
+        )
+      : null;
+  const facts: ChatItemsFacts = { firsts: new Map(), indexedDividers: [] };
+  const items = prepended
+    ? [
+        ...stabilizeChatItems(cached.items.slice(0, prepended.retainedFrom), prepended.head),
+        ...cached.items.slice(prepended.retainedFrom),
+      ]
+    : stabilizeChatItems(
+        cached.items,
+        buildChatItems(input, projections.inputOrder, "transcript", facts),
+      );
+  cached.facts = prepended?.facts ?? facts;
   // A rebuild can retain every row and the array. Consumers still need to
   // observe the structural pass; text-only slot replacements do not advance it.
   chatItemsGenerations.set(items, ++cached.generation);
@@ -443,6 +507,7 @@ export function buildCachedChatItems(
           index: liveStreamIndex,
           identity: liveStreamIdentity(input),
           prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+          ownedCanvas: collectOwnedCanvasPreviews(items),
         };
   return items;
 }

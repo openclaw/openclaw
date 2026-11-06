@@ -61,3 +61,8 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
+
+.chat-session-activity__message .chat-bubble:not(.chat-bubble--tool-shell) {
+  --chat-bubble-background: var(--chat-participant-surface);
+  background: var(--chat-bubble-background);
+}

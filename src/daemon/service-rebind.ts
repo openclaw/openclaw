@@ -16,7 +16,6 @@ export type GatewayServiceRebindReceipt = {
 type RebindCapture = {
   before: string;
   runtimePinBefore?: string;
-  active: boolean;
   mutated?: true;
   refresh?: (assertCurrent: () => void) => Promise<void>;
   receipt?: GatewayServiceRebindReceipt;
@@ -57,17 +56,11 @@ export async function withGatewayServiceRebindCapture<T>(
   if (runtimePinBefore !== undefined && !/^[a-f0-9]{64}$/.test(runtimePinBefore)) {
     throw new Error("Invalid original runtime intent binding.");
   }
-  const capture: RebindCapture = { before, runtimePinBefore, active: true };
-  try {
-    return await captures.run(capture, operation);
-  } finally {
-    capture.active = false;
-  }
+  return await captures.run({ before, runtimePinBefore }, operation);
 }
 
 export function currentGatewayServiceRebindReceipt(): GatewayServiceRebindReceipt | undefined {
-  const capture = captures.getStore();
-  return capture?.active ? capture.receipt : undefined;
+  return captures.getStore()?.receipt;
 }
 
 /** Called under the final native operation lock, including the failing-install path. */
@@ -80,9 +73,6 @@ export async function captureGatewayServiceRebind<T>(
   const capture = captures.getStore();
   if (!capture) {
     return await mutate(false);
-  }
-  if (!capture.active || capture.refresh) {
-    throw new Error("Original service rebind interval is closed.");
   }
   const before = await fingerprintGatewayServiceDefinition(await read());
   assertCurrent();
@@ -97,9 +87,6 @@ export async function captureGatewayServiceRebind<T>(
   capture.refresh = async (assertFinalCurrent) => {
     // A failed read must never leave an earlier pre-compensation receipt usable.
     capture.receipt = undefined;
-    if (!capture.active) {
-      throw new Error("Original service rebind interval is closed.");
-    }
     assertFinalCurrent();
     const after = await fingerprintGatewayServiceDefinition(await read());
     assertFinalCurrent();

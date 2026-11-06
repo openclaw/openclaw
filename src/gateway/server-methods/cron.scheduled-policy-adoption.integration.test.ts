@@ -157,8 +157,11 @@ it.each([
   "other account",
   "borrowed capture",
   "no capture",
+  "native owner",
 ] as const)("captures owner authority and preserves manager cap edits: %s", async (caller) => {
   const { storePath, service, context, makeJob } = createFixture();
+  const native = caller === "native owner";
+  const toolsAllow = native ? ["read", "dispatch_action"] : ["calendar_search"];
   const owner = {
     agentId: "main",
     sessionKey:
@@ -176,7 +179,7 @@ it.each([
       payload: {
         kind: "agentTurn",
         message: "Check calendar",
-        toolsAllow: ["read", "calendar_search"],
+        toolsAllow: native ? ["read", "tool_call"] : ["read", "calendar_search"],
       },
       owner,
     }),
@@ -186,7 +189,7 @@ it.each([
         ownerSessionKey: owner.sessionKey,
         ownerAccountId: owner.accountId,
       },
-      captureRuntimeAuthority: () => runtimeAuthority,
+      ...(native ? {} : { captureRuntimeAuthority: () => runtimeAuthority }),
     },
   );
   const before = (await loadCronStore(storePath)).jobs;
@@ -214,9 +217,13 @@ it.each([
       runId: identity.operationalRunInstance.runId,
       agentSessionKey: sessionKey,
       agentAccountId: accountId,
-      creatorToolAllowlist: caller === "known tool" ? ["calendar_search"] : ["read"],
+      creatorToolAllowlist: native
+        ? toolsAllow
+        : caller === "known tool"
+          ? ["calendar_search"]
+          : ["read"],
       resolveCreatorToolAuthority:
-        caller === "no capture"
+        caller === "no capture" || native
           ? undefined
           : async () => ({
               tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
@@ -228,7 +235,7 @@ it.each([
     const update = tool.execute("app-update", {
       action: "update",
       jobId: created.id,
-      job: { payload: { toolsAllow: ["calendar_search"] } },
+      job: { payload: { toolsAllow } },
     });
     if (caller === "no capture") {
       await expect(update).rejects.toThrow(/calendar_search.*[Rr]ecreate/);
@@ -239,6 +246,12 @@ it.each([
   const stored = (await loadCronStore(storePath)).jobs;
   if (caller === "no capture") {
     expect(stored).toEqual(before);
+  } else if (native) {
+    expect(stored[0]).toMatchObject({
+      owner,
+      payload: { toolsAllow },
+      scheduledToolPolicy: accountPolicy,
+    });
   } else {
     const owned = caller === "owner" || caller === "known tool";
     expect(stored[0]).toMatchObject({ owner, payload: { toolsAllow: ["calendar_search"] } });
@@ -246,57 +259,6 @@ it.each([
       owned ? [runtimeAuthority, undefined] : [undefined, true],
     );
   }
-});
-
-it("lets the owner edit tools on a job without app authority from a native turn", async () => {
-  const { storePath, service, context, makeJob } = createFixture();
-  const owner = { agentId: "main", sessionKey, accountId };
-  const created = await service.add(
-    makeJob({
-      payload: { kind: "agentTurn", message: "Sync mail", toolsAllow: ["read", "tool_call"] },
-      owner,
-    }),
-    { scheduledToolPolicy: accountPolicy },
-  );
-  await withAgentManagement(async (identity) => {
-    vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
-      async <T>(method: string, _options: unknown, params: unknown) => {
-        const client = createSyntheticPluginRuntimeClient();
-        client.internal = {
-          ...client.internal,
-          agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
-        };
-        const respond = await callCron(context, method, requireRecord(params, "request"), {
-          client,
-        });
-        const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
-        if (!ok) {
-          throw new Error(error?.message);
-        }
-        return result as T;
-      },
-    );
-    // A native runtime has no app authority resolver to capture.
-    const tool = createCronTool({
-      runId: identity.operationalRunInstance.runId,
-      agentSessionKey: sessionKey,
-      agentAccountId: accountId,
-      creatorToolAllowlist: ["read", "dispatch_action"],
-    });
-    await expect(
-      tool.execute("native-owner-update", {
-        action: "update",
-        jobId: created.id,
-        job: { payload: { toolsAllow: ["read", "dispatch_action"] } },
-      }),
-    ).resolves.toMatchObject({ details: { id: created.id } });
-  }, true);
-  const [stored] = (await loadCronStore(storePath)).jobs;
-  expect(stored).toMatchObject({
-    owner,
-    payload: { toolsAllow: ["read", "dispatch_action"] },
-    scheduledToolPolicy: accountPolicy,
-  });
 });
 it.each([
   { caller: "agent management", definition: "known account", expected: accountPolicy },

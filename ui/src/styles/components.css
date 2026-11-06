@@ -1,3 +1,11 @@
+@import "../components/solid/connect-command.css";
+
+/* These providers wrap the live shell and panes, before hovercard content loads. */
+openclaw-link-reader-hovercard-provider,
+openclaw-session-progress-hovercard-provider {
+  display: contents;
+}
+
 .connect-splash {
   display: flex;
   flex-direction: column;
@@ -18,50 +26,8 @@
   font-size: 14px;
 }
 
-.connect-splash--skeleton,
 .loading-skeleton {
-  /* Several palettes share bg-muted and bg-hover, hiding the default sweep.
-     A translucent text tint stays visible in both light and dark themes. */
-  --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
-  --skeleton-duration: 2s;
-}
-
-.connect-splash--skeleton {
-  position: relative;
-  align-items: stretch;
-}
-
-.connect-splash__layout {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.connect-splash__sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 28px 24px;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-}
-
-.connect-splash__new-session {
-  height: 40px;
-  margin: 16px 0;
-}
-
-.connect-splash--skeleton .connect-splash__status {
-  position: absolute;
-  inset: auto 24px 12px;
-  margin: 0;
-  text-align: center;
-}
-
-.loading-skeleton {
-  box-sizing: border-box;
+  /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -100,6 +66,11 @@
   margin: 24px auto 0;
 }
 
+.loading-skeleton__content {
+  min-height: 0;
+  overflow: auto;
+}
+
 .loading-skeleton__message {
   display: grid;
   gap: 14px;
@@ -121,14 +92,6 @@
 }
 
 @media (max-width: 768px) {
-  .connect-splash__layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .connect-splash__sidebar {
-    display: none;
-  }
-
   .loading-skeleton {
     gap: 24px;
     padding: 20px 20px 40px;
@@ -184,8 +147,34 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .sidebar-recent-session .session-owner-chip--row {
+  width: 18px;
+  height: 18px;
   border: 0;
   box-shadow: none;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.sidebar-recent-session .session-glyph--circular .session-glyph__content {
+  width: 18px;
+  height: 18px;
+}
+
+/* An emoji agent owner sits on the same disc as a photo avatar. */
+.sidebar .identity-avatar--agent.is-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sidebar-recent-session .identity-avatar--agent.is-fallback {
+  font-size: 10px;
+}
+
+.sidebar-recent-session .session-glyph__content:has(> .identity-avatar--agent) {
+  width: 18px;
+  height: 18px;
 }
 
 .session-owner-stack {
@@ -267,9 +256,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .sidebar-recent-session .session-owner-stack::after {
   right: 0;
+  /* Keep the right-hand face opaque underneath its away opacity. */
+  z-index: var(--owner-cutout-z, 0);
+  background:
+    linear-gradient(var(--session-row-bg, transparent) 0 0) padding-box,
+    var(--sidebar-bg, var(--bg));
+  mask: none;
 }
 
 .session-owner-stack--overflow {
+  --owner-cutout-z: 1;
+
   justify-content: flex-start;
 }
 
@@ -322,11 +319,24 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+.session-css-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  background: currentColor;
+  mask: center / contain no-repeat;
+}
+
 .session-glyph__icon,
-.session-glyph__icon svg,
-.session-glyph__icon img {
+.session-glyph__icon > * {
   width: 16px;
   height: 16px;
+}
+
+.sidebar-recent-session .session-glyph__icon .session-css-icon {
+  width: 15px;
+  height: 15px;
 }
 
 .session-glyph__icon img {
@@ -335,17 +345,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .session-glyph__icon {
   display: inline-flex;
-  color: inherit;
+  color: var(--muted);
 }
 
-/* Keep artwork at its resting size inside a consistent 25px circular ring.
+/* Keep artwork at its resting size inside a consistent 24px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
-  inset: -2.5px;
-  box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
+  inset: -2px;
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask-avatar);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -354,6 +364,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
    slot used to draw; a full-size empty circle reads as a missing icon. */
 .session-glyph--bare .session-glyph__ring {
   inset: 4px;
+  mask: var(--spinner-mask);
 }
 
 /* Two identities share one run: the arc traces the union outline of the owner
@@ -365,38 +376,44 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   left: -6px;
   width: 32px;
   height: 22px;
-  overflow: visible;
+  overflow: hidden;
+  /* Keep its animated stroke from rerasterizing the entire sidebar tile. */
+  transform: translateZ(0);
   pointer-events: none;
 }
 
 .session-glyph__trace path {
   fill: none;
-  stroke-width: 1.5;
+  stroke-width: var(--spinner-trace-stroke);
 }
 
 .session-glyph__trace-track {
-  stroke: color-mix(in srgb, var(--accent) 28%, transparent);
+  stroke: var(--accent);
+  opacity: 0.2;
 }
 
-/* The arc covers the same share of its outline as the ring's quarter turn and
-   moves at the ring's linear speed (~45px/s). */
+/* Keep the small arc at 30 painted positions per second without limiting
+   transcript frames. Its average speed still matches the ring (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
-  stroke-dasharray: 25 75;
-  animation: session-run-trace 2s linear infinite;
+  stroke-dasharray: var(--spinner-trace-dash);
+  animation: session-run-trace 2s steps(60, end) infinite;
 }
 
 .session-glyph__badge {
   position: absolute;
   z-index: 1;
-  top: -2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   background: currentColor;
-  box-shadow: 0 0 0 1.5px var(--bg);
+  /* Two equal rings: the row fill over the sidebar, so the cut holds in every state. */
+  box-shadow:
+    0 0 0 1.5px var(--session-row-bg, transparent),
+    0 0 0 1.5px var(--sidebar-bg, var(--bg));
 }
 
 .session-glyph__badge--unread {
@@ -419,558 +436,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .session-link:hover {
   text-decoration: underline;
-}
-
-/* One card, two layouts. data-mode="form": the operator fixes the connection
-   here, so the form leads. data-mode="status": the fix happens on the Gateway
-   host, so the explanation and one command lead and the form folds away. */
-
-.login-gate {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  height: 100dvh;
-  max-height: 100%;
-  overflow-y: auto;
-  background: var(--bg);
-  padding: 24px;
-}
-
-.login-gate__card {
-  width: min(560px, 100%);
-  margin-block: auto;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 24px 32px 28px;
-  box-shadow: var(--shadow-sm);
-  animation: scale-in 0.25s var(--ease-out);
-}
-
-.login-gate__brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 24px;
-  font-size: 13px;
-  line-height: 1;
-}
-
-.login-gate__logo {
-  width: 22px;
-  height: 22px;
-}
-
-.login-gate__brand-name {
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-}
-
-.login-gate__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 20px;
-}
-
-.login-gate__status-icon,
-.gateway-switch__icon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-full);
-}
-
-.login-gate__status-icon {
-  color: var(--login-gate-tone, var(--accent));
-  background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
-}
-
-.login-gate__failure[data-tone="pending"] {
-  --login-gate-tone: var(--accent);
-}
-
-.login-gate__failure[data-tone="warn"] {
-  --login-gate-tone: var(--warn);
-}
-
-.login-gate__failure[data-tone="danger"] {
-  --login-gate-tone: var(--danger);
-}
-
-.login-gate__status-text {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.login-gate__heading,
-.login-gate__failure-title {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  color: var(--text-strong);
-}
-
-.login-gate__lede,
-.login-gate__failure-summary {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-.login-gate__hero {
-  display: grid;
-  gap: 6px;
-}
-
-.login-gate__command {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0 2px;
-  padding: 5px 8px 5px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  cursor: copy;
-}
-
-.login-gate__command:hover {
-  border-color: var(--accent);
-}
-
-.login-gate__command:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.login-gate__command code {
-  flex: 1;
-  margin: 0;
-  padding: 0;
-  background: transparent;
-  border: 0;
-}
-
-.login-gate__command--hero {
-  margin: 0;
-  padding: 12px 10px 12px 14px;
-  border-color: var(--border-strong);
-  background: var(--bg-accent);
-  border-radius: var(--radius-md);
-}
-
-.login-gate__command--hero code {
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-strong);
-  overflow-wrap: anywhere;
-}
-
-/* The prompt glyph is decorative; copying still yields the bare command. */
-.login-gate__command--hero code::before {
-  content: "$ ";
-  color: var(--muted);
-  user-select: none;
-}
-
-.login-gate__command--hero .chat-copy-btn {
-  flex: 0 0 auto;
-  padding: 6px;
-  border-color: transparent;
-  background: transparent;
-}
-
-.login-gate__command--hero:hover .chat-copy-btn {
-  border-color: var(--border);
-  background: var(--card);
-}
-
-/* The copy glyph swap normally ships with chat styles, which the gate renders
-   without; own it here so the check never shows beside the copy icon. */
-.login-gate .chat-copy-btn__icon {
-  position: relative;
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-}
-
-.login-gate .chat-copy-btn__icon-copy,
-.login-gate .chat-copy-btn__icon-check {
-  position: absolute;
-  top: 0;
-  left: 0;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.login-gate .chat-copy-btn__icon-check,
-.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
-  opacity: 0;
-}
-
-.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
-  opacity: 1;
-}
-
-.login-gate__failure-steps {
-  margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--text);
-}
-
-.login-gate__failure-steps li + li {
-  margin-top: 6px;
-}
-
-.login-gate__failure-steps li::marker {
-  color: var(--muted);
-}
-
-.login-gate__failure-steps .login-gate__command {
-  display: inline-flex;
-  box-sizing: border-box;
-  max-width: 100%;
-  margin: 1px 2px;
-  padding: 1px 4px 1px 8px;
-  vertical-align: middle;
-  font-size: 12px;
-}
-
-.login-gate__failure-steps .login-gate__command code {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.login-gate__failure-steps .login-gate__command .chat-copy-btn {
-  padding: 3px 4px;
-  border-color: transparent;
-  background: transparent;
-}
-
-.login-gate__actions {
-  display: flex;
-  gap: 8px;
-}
-
-.login-gate__failure-refresh {
-  justify-self: start;
-}
-
-.login-gate__form {
-  display: grid;
-  gap: 14px;
-}
-
-.login-gate__form .field input[aria-invalid="true"] {
-  border-color: var(--login-gate-tone, var(--danger));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
-}
-
-.login-gate__connect {
-  margin-top: 2px;
-  justify-content: center;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.login-gate__form .login-gate__connect {
-  width: 100%;
-}
-
-.login-gate__connection {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-
-.login-gate__connection > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  list-style: none;
-  font-size: 13px;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.login-gate__connection > summary::-webkit-details-marker {
-  display: none;
-}
-
-.login-gate__connection-target {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  color: var(--text);
-  font-weight: 500;
-}
-
-.login-gate__connection-target span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.login-gate__connection-target svg {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-}
-
-.login-gate__connection-cred {
-  flex: 1;
-  white-space: nowrap;
-}
-
-.login-gate__connection-change {
-  color: var(--accent);
-  font-weight: 500;
-}
-
-.login-gate__connection[open] .login-gate__connection-change {
-  color: var(--muted);
-}
-
-.login-gate__connection[open] > summary {
-  margin-bottom: 14px;
-}
-
-.login-gate__foot {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-}
-
-.login-gate__failure-detail {
-  min-width: 0;
-  flex: 1;
-}
-
-.login-gate__failure-detail summary {
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.login-gate__failure-raw {
-  margin-top: 6px;
-  overflow-wrap: anywhere;
-  color: var(--muted);
-}
-
-.login-gate__failure-docs {
-  flex: 0 0 auto;
-}
-
-.login-gate__recovery {
-  margin-top: var(--space-5);
-  text-align: center;
-}
-
-.login-gate__help {
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-
-.login-gate__help-title {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text);
-}
-
-.login-gate__steps {
-  margin: 10px 0 0;
-  padding-left: 20px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
-.login-gate__steps li {
-  margin-bottom: 6px;
-}
-
-.login-gate__steps li:last-child {
-  margin-bottom: 0;
-}
-
-.login-gate__docs {
-  margin-top: 10px;
-  font-size: 12px;
-}
-
-/* The outer app owns safe areas for the login gate as well as the shell. */
-@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .login-gate {
-    padding: 16px var(--chat-mobile-edge-inset);
-  }
-
-  .login-gate__card {
-    padding: 20px 20px 24px;
-  }
-
-  .login-gate__status-icon {
-    width: 36px;
-    height: 36px;
-  }
-
-  .login-gate__heading,
-  .login-gate__failure-title {
-    font-size: 20px;
-  }
-
-  /* 44px touch targets per platform guidelines. */
-  .login-gate__form .field input {
-    min-height: 44px;
-  }
-
-  /* Inset reveal eye keeps a comfortable coarse-pointer hit area. */
-  .login-gate__form .settings-secret__toggle {
-    width: 32px;
-    height: 32px;
-    right: 6px;
-  }
-
-  .login-gate__connect {
-    min-height: 44px;
-  }
-
-  .login-gate__actions .login-gate__connect {
-    width: 100%;
-  }
-
-  .login-gate__connection-cred {
-    display: none;
-  }
-}
-
-/* A link pointed this browser at another Gateway. Show where it goes and what
-   travels with it; the guard is honest, not alarmed. */
-
-.gateway-switch {
-  display: grid;
-  gap: 18px;
-  width: min(520px, 100%);
-  padding: 22px 24px 24px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-}
-
-.login-gate__status-head,
-.gateway-switch__head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.gateway-switch__icon {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-}
-
-.login-gate__status-icon svg,
-.gateway-switch__icon svg {
-  width: 20px;
-  height: 20px;
-}
-
-.gateway-switch__title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-}
-
-.gateway-switch__summary {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-.gateway-switch__hosts {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-}
-
-.gateway-switch__host {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-}
-
-.gateway-switch__host--next {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-}
-
-.login-gate__hero-label,
-.gateway-switch__label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.gateway-switch__host code {
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-strong);
-  overflow-wrap: anywhere;
-}
-
-.gateway-switch__arrow {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.gateway-switch__arrow svg {
-  width: 18px;
-  height: 18px;
-}
-
-.gateway-switch__note {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text);
-}
-
-@media (max-width: 560px) {
-  .gateway-switch__hosts {
-    grid-template-columns: 1fr;
-  }
-
-  .gateway-switch__arrow {
-    justify-self: center;
-    transform: rotate(90deg);
-  }
 }
 
 .card {
@@ -1074,8 +539,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
-  border-top-color: currentColor;
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }
@@ -1099,7 +564,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   justify-content: center;
   gap: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--btn-bg, var(--bg-elevated));
   padding: 8px 14px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -1115,7 +580,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--bg-hover);
+  background: var(--btn-bg-hover, var(--bg-hover));
   border-color: var(--border-strong);
 }
 
@@ -1129,7 +594,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .btn--icon svg,
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg,
-.session-row-badge svg,
 .session-action svg,
 .chat-queue__leading svg,
 .chat-queue__remove svg,
@@ -1137,7 +601,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .chat-queue__edit-cancel svg,
 .chat-queue__action svg,
 .chat-queue__retry svg,
-.plugins-tile--fallback svg,
 .settings-secret__toggle svg {
   fill: none;
   stroke: currentColor;
@@ -1154,7 +617,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   flex-shrink: 0;
 }
 
-.btn.primary {
+/* The accent means "do this next": a primary that can't be pressed paints like any disabled button. */
+.btn.primary:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -1164,6 +628,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .btn.primary:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--primary-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+.btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-active);
 }
 
 .btn.active {
@@ -1193,226 +661,281 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
-/* Passive notifications stay in the trailing top corner, away from the chat
- * composer and other bottom-docked controls. The host shows one toast at a time
- * (`show()` replaces the active one), so there is no stack to offset against. */
-.app-toast {
+/* Keep the lazy toast renderer's failure and retry surface available offline. */
+openclaw-toast-host[popover] {
   position: fixed;
-  right: calc(20px + var(--safe-area-right));
-  top: calc(20px + var(--safe-area-top));
-  z-index: var(--z-toast);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: max-content;
-  max-width: min(370px, calc(100vw - 32px));
-  padding: 7px 7px 7px 13px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow-md);
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  pointer-events: none;
 }
 
-.shell--chat {
+/* Notifications stay at the top, away from the chat composer and other
+ * bottom-docked controls, in two lanes: the center answers what the operator
+ * just did, the trailing corner holds arrivals. Each lane stacks its toasts. */
+.app-toast {
+  --app-toast-row: 20px;
+  --app-toast-wash: color-mix(in srgb, var(--text-strong) 7%, transparent);
+  --app-toast-wash-hover: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  --app-toast-wash-active: color-mix(in srgb, var(--text-strong) 17%, transparent);
+  --app-toast-edge: 0 0 0 0.5px color-mix(in srgb, var(--text-strong) 14%, transparent);
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  box-sizing: border-box;
+  min-width: min(240px, calc(100vw - 24px));
+  padding: 12px 16px;
+  border: 0;
+  /* One line reads as a pill: a 28px corner on a box under 56px tall clamps to
+   * half its height. Taller toasts keep 28. Square-cornered themes scale it down. */
+  border-radius: min(28px, calc(28px * var(--openclaw-corner-radius-scale)));
+  background: var(--popover);
+  color: var(--text-strong);
+  box-shadow:
+    var(--app-toast-edge),
+    0 1px 2px rgb(30 24 18 / 5%),
+    0 10px 26px -8px rgb(30 24 18 / 18%);
+  font-family: var(--font-body);
+}
+
+.app-toast--action {
+  --app-toast-row: 28px;
+  padding-right: 10px;
+}
+
+.app-toast--avatar {
+  gap: 10px;
+}
+
+/* Other chat-like pages have no session toolbar to clear. */
+.shell--session {
   --app-toast-shell-top: calc(var(--safe-area-top) + var(--rail-header-height) + 12px);
 }
 
-openclaw-toast-host[data-toast-placement="shell"]
-  .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
+.app-toast-lanes {
+  display: contents;
+}
+
+.app-toast-lane {
+  --app-toast-lane-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: auto;
+  position: fixed;
+  top: calc(20px + var(--safe-area-top));
+  z-index: var(--z-toast);
+  display: grid;
+  gap: 8px;
+}
+
+openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane {
   top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
 }
 
-/* Settings outcomes can use the lower corner without covering chat controls.
- * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
-.app-toast--bottom {
-  top: auto;
-  bottom: calc(100% - var(--shell-canvas-height) + 20px + var(--shell-safe-area-bottom));
-  transition:
-    opacity 180ms ease-out,
-    translate 180ms ease-out;
+.app-toast-lane:not(:has(> .app-toast)) {
+  display: none;
 }
 
-@starting-style {
-  .app-toast--bottom {
-    opacity: 0;
-    translate: 0 8px;
-  }
+/* Center hugs the widest toast; an open stack stretches every toast to it. Inside
+ * the shell it centers on the content column, not the window. */
+.app-toast-lane--top-center {
+  left: 50%;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  translate: -50% 0;
 }
 
-.app-toast--anchored {
-  right: auto;
-  left: var(--app-toast-anchor-center);
-  top: var(--app-toast-anchor-top);
-  transform: translateX(-50%);
-  max-width: min(370px, calc(var(--app-toast-anchor-width) - 24px));
-  transition-property: translate, scale, opacity;
+openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
+  left: calc(
+    var(--shell-nav-width, 0px) +
+      (100vw - var(--shell-nav-width, 0px) - var(--shell-dock-reserve-right, 0px)) / 2
+  );
 }
 
-.app-toast--anchored[data-active="true"] {
-  translate: 0 0;
-  scale: 1;
-  opacity: 1;
-  transition-duration: 200ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+.app-toast-lane--top-right {
+  right: calc(20px + var(--safe-area-right));
+  width: min(360px, calc(100vw - 24px));
 }
 
-@starting-style {
-  .app-toast--anchored[data-active="true"] {
-    translate: 0 -100%;
-    scale: 0.95;
-    opacity: 0;
-  }
-}
-
-.app-toast--anchored[data-active="false"] {
-  translate: 0 -100%;
-  scale: 0.95;
-  opacity: 0;
-  pointer-events: none;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
-}
-
-.app-toast__avatar {
-  display: grid;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-}
-
-.app-toast__icon {
-  display: grid;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  color: var(--info);
+/* An action stays beside the text only while the title and description fit one line
+ * next to it. The body's flex basis is its single-line width, so anything longer
+ * wraps the action onto its own row, right aligned. */
+.app-toast__content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 14px;
+  min-width: 0;
 }
 
 /* Recovery copy and rich links remain readable at narrow widths and enlarged
  * text sizes. Do not clamp away the instruction the operator needs next. */
-.app-toast__message {
-  flex: 1 1 auto;
+.app-toast__body {
+  display: flex;
+  flex: 1 1 max-content;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
+  min-height: var(--app-toast-row);
   max-height: min(240px, 40dvh);
   overflow: auto;
   overflow-wrap: anywhere;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: 1.5;
 }
 
-.app-toast__action,
-.app-toast__dismiss {
-  flex: 0 0 auto;
-  border: 0;
-  border-radius: 8px;
+.app-toast__message {
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(20px * var(--control-ui-text-scale));
+  text-wrap: pretty;
 }
 
 .app-toast__action {
-  min-height: 32px;
-  max-width: 35%;
-  padding: 5px 10px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.app-toast__dismiss {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  place-items: center;
-  background: transparent;
-  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  background: var(--app-toast-wash);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(18px * var(--control-ui-text-scale));
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 120ms ease;
 }
 
 .app-toast__action:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--app-toast-wash-hover);
+}
+
+.app-toast__action:active {
+  background: var(--app-toast-wash-active);
+}
+
+/* Dismiss floats on the trailing corner and appears only while the toast is
+ * hovered or holds focus; it stays in the accessibility tree throughout. */
+.app-toast__dismiss {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--popover);
+  color: var(--text);
+  box-shadow:
+    var(--app-toast-edge),
+    0 1px 3px rgb(0 0 0 / 12%);
+  opacity: 0;
+  scale: 0.9;
+  transition:
+    opacity 140ms ease,
+    scale 140ms ease;
+}
+
+.app-toast__dismiss::after {
+  position: absolute;
+  inset: -4px;
+  content: "";
+}
+
+.app-toast:hover > .app-toast__dismiss,
+.app-toast:focus-within > .app-toast__dismiss {
+  opacity: 1;
+  scale: 1;
 }
 
 .app-toast__dismiss:hover {
-  background: var(--bg-muted);
+  color: var(--text-strong);
 }
 
-/* A corner toast spans nearly the whole phone viewport. Keep the owning shell's
- * chrome offset and safe areas, with full-size touch targets in every variant. */
+.app-toast__action:focus-visible,
+.app-toast__dismiss:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--text-strong) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* On a phone both lanes share one column at the top: the center lane, then
+ * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--chat {
+  .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
         20px
     );
   }
 
-  .app-toast {
+  .app-toast-lanes {
+    pointer-events: none;
+    position: fixed;
+    top: calc(20px + var(--safe-area-top));
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
+    z-index: var(--z-toast);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  openclaw-toast-host[data-toast-placement="shell"] .app-toast-lanes {
+    top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
+  }
+
+  /* Top notices (a required refresh and its status) stay readable: the lanes start
+   * 8px under them. Engines without anchor positioning keep the shell offset. */
+  @supports (anchor-name: --a) {
+    .sidebar-update-card--floating .sidebar-update-card {
+      anchor-name: --openclaw-top-notices;
+    }
+
+    openclaw-toast-host[data-toast-placement] .app-toast-lanes {
+      top: max(
+        calc(20px + var(--safe-area-top)),
+        calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
+      );
+    }
+
+    /* Only the shell placement sits under the shell chrome. */
+    openclaw-toast-host[data-toast-placement="shell"] .app-toast-lanes {
+      top: max(
+        var(--app-toast-shell-top, calc(20px + var(--safe-area-top))),
+        calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
+      );
+    }
+  }
+
+  .app-toast-lane,
+  openclaw-toast-host[data-toast-placement] .app-toast-lane {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
     width: auto;
     max-width: none;
+    translate: none;
   }
-
-  .app-toast--anchored {
-    left: var(--app-toast-anchor-center);
-    right: auto;
-    width: max-content;
-    max-width: calc(var(--app-toast-anchor-width) - 24px);
-  }
-
-  .app-toast__action {
-    min-height: 44px;
-    min-width: 44px;
-  }
-
-  .app-toast__dismiss {
-    width: 44px;
-    height: 44px;
-  }
-}
-
-.app-toast--top-center {
-  left: 50%;
-  right: auto;
-  width: max-content;
-  max-width: min(370px, calc(100vw - 32px));
-  transform: translateX(-50%);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-toast--bottom,
-  .app-toast--anchored,
-  .app-toast--anchored[data-active="true"],
-  .app-toast--anchored[data-active="false"] {
+  .app-toast__dismiss,
+  .app-toast__action {
     transition: none;
   }
-}
-
-.app-toast__action:hover,
-.app-toast__action:focus-visible,
-.app-toast__dismiss:hover,
-.app-toast__dismiss:focus-visible {
-  color: var(--text-strong);
-}
-
-.app-toast--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-  background: color-mix(in srgb, var(--danger) 12%, var(--popover));
-  color: var(--danger);
-}
-
-.app-toast--error :is(.app-toast__icon, .app-toast__action, .app-toast__dismiss) {
-  color: inherit;
-}
-
-.app-toast--error .app-toast__action,
-.app-toast--error :is(.app-toast__action, .app-toast__dismiss):is(:hover, :focus-visible) {
-  background: var(--danger-subtle);
-  color: inherit;
 }
 
 .btn--icon {
@@ -1433,342 +956,6 @@ openclaw-toast-host[data-toast-placement="shell"]
   width: 18px;
   height: 18px;
   stroke-width: 1.5px;
-}
-
-openclaw-link-reader-hovercard-provider,
-openclaw-session-progress-hovercard-provider {
-  display: contents;
-}
-
-.session-progress-hovercard {
-  --session-hovercard-shift-x: 0;
-  --session-hovercard-shift-y: 0;
-
-  position: fixed;
-  inset: auto;
-  z-index: 1990;
-  width: min(296px, calc(100vw - 24px));
-  max-height: min(520px, calc(100vh - 24px));
-  padding: 0;
-  margin: 0;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--session-hovercard-surface);
-  box-shadow: var(--shadow-lg);
-  color: var(--text);
-  pointer-events: none;
-  opacity: 0;
-  transform: translate3d(var(--session-hovercard-shift-x), var(--session-hovercard-shift-y), 0)
-    scale(0.99);
-  transition:
-    opacity 100ms var(--ease-out),
-    transform 100ms var(--ease-out);
-}
-
-.session-progress-hovercard[data-side="right"] {
-  --session-hovercard-shift-x: -4px;
-  transform-origin: top left;
-}
-
-.session-progress-hovercard[data-side="left"] {
-  --session-hovercard-shift-x: 4px;
-  transform-origin: top right;
-}
-
-.session-progress-hovercard[data-side="bottom"] {
-  --session-hovercard-shift-y: -4px;
-  transform-origin: top left;
-}
-
-.session-progress-hovercard[data-side="top"] {
-  --session-hovercard-shift-y: 4px;
-  transform-origin: bottom left;
-}
-
-.session-progress-hovercard[data-open="true"] {
-  opacity: 1;
-  transform: translate3d(0, 0, 0) scale(1);
-  transition-duration: 150ms;
-}
-
-.session-progress-hovercard[data-instant="true"][data-open="true"] {
-  transition: none;
-}
-
-@media (hover: hover) {
-  .session-progress-hovercard[data-open="true"] {
-    pointer-events: auto;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-progress-hovercard {
-    transform: none;
-    transition: opacity 80ms linear;
-  }
-
-  .session-progress-hovercard[data-open="true"] {
-    transform: none;
-  }
-}
-
-/* Explicit details remain interactive on touch devices as well as hover pointers. */
-.person-activity-hovercard[data-open="true"] {
-  pointer-events: auto;
-}
-
-.person-activity-hovercard {
-  width: min(304px, calc(100vw - 24px));
-}
-
-.person-activity-card {
-  font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: 1.5;
-}
-
-.person-activity-card__header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 15px 16px 12px;
-}
-
-.gateway-switch__text,
-.person-activity-card__header > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.person-activity-card__header .viewer-avatar--footer {
-  flex-shrink: 0;
-  width: 34.5px;
-  height: 34.5px;
-  font-size: calc(12px * var(--control-ui-text-scale));
-  /* The base ring color assumes the sidebar surface; blend with the popover. */
-  border-color: var(--session-hovercard-surface);
-}
-
-.person-activity-card h2,
-.person-activity-card h3,
-.person-activity-card p {
-  margin: 0;
-}
-
-.person-activity-card h2 {
-  overflow-wrap: anywhere;
-  font-size: calc(14px * var(--control-ui-text-scale));
-  font-weight: 600;
-  line-height: 1;
-}
-
-.person-activity-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
-.person-activity-card__hint {
-  padding: 0 16px 12px;
-}
-
-.person-activity-card__status > span {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--ok);
-}
-
-.person-activity-card__status--idle > span {
-  background: var(--presence-idle);
-}
-
-.person-activity-card__status--unknown > span,
-.person-activity-card__status--offline > span {
-  background: var(--muted);
-}
-
-.person-activity-card__facts {
-  display: grid;
-  gap: 12px;
-  padding: 0 16px 16px;
-  margin: 0;
-}
-
-.person-activity-card__facts > div {
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  gap: 8px;
-}
-
-.person-activity-card__facts dt,
-.person-activity-card h3 {
-  color: var(--muted);
-  font-size: inherit;
-  font-weight: 400;
-}
-
-.person-activity-card__muted,
-.person-activity-card small,
-.person-activity-card__session-age {
-  color: var(--muted);
-}
-
-.person-activity-card__facts dd {
-  display: grid;
-  gap: 3px;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.person-activity-card__facts dd > span {
-  font-weight: 500;
-}
-
-.person-activity-card__facts time,
-.person-activity-card__session-age {
-  font-variant-numeric: tabular-nums;
-}
-
-.person-activity-card small {
-  display: block;
-  font-size: calc(11px * var(--control-ui-text-scale));
-}
-
-.person-activity-card__section,
-.person-activity-card footer {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-}
-
-.person-activity-card h3 {
-  margin-bottom: 6px;
-}
-
-.person-activity-card__sessions {
-  display: grid;
-  gap: 2px;
-}
-
-.person-activity-card__session {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  margin: 0 -6px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-}
-
-.person-activity-card__session-copy {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-width: 0;
-  overflow-wrap: normal;
-}
-
-.person-activity-card__session-name {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 500;
-}
-
-.person-activity-card__session-name--multiline {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow-wrap: anywhere;
-}
-
-.person-activity-card__session-name.hover-marquee {
-  --hover-marquee-fade-width: 18px;
-
-  white-space: nowrap;
-  color: var(--text);
-  text-overflow: clip;
-}
-
-@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
-  .person-activity-card__session-name > .hover-marquee__text {
-    display: inline;
-    white-space: normal;
-    transform: none;
-    transition: none;
-  }
-
-  .person-activity-card__session-name.hover-marquee {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow-wrap: anywhere;
-    white-space: normal;
-    text-indent: 0;
-    transition: none;
-    mask-image: none;
-  }
-}
-
-.person-activity-card__session-age {
-  justify-self: end;
-  font-size: calc(11px * var(--control-ui-text-scale));
-  font-weight: 400;
-  white-space: nowrap;
-}
-
-.person-activity-card__session-icon {
-  flex: none;
-  align-self: flex-start;
-  margin-top: 2px;
-  color: var(--muted);
-}
-
-.person-activity-card svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.person-activity-card footer {
-  padding: 0;
-}
-
-.person-activity-card footer a {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 36px;
-  padding: 8px 16px;
-  color: var(--text);
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.person-activity-card a:hover {
-  background: var(--bg-hover);
-}
-
-.person-activity-card a:focus-visible {
-  border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-@media (pointer: coarse) {
-  .person-activity-card a {
-    min-height: 44px;
-    align-items: center;
-  }
 }
 
 .btn--ghost {
@@ -1804,40 +991,23 @@ openclaw-session-progress-hovercard-provider {
 .field textarea,
 .field select,
 .input {
-  border: 1px solid var(--input);
-  background: var(--card);
-  border-radius: var(--radius-md);
-  padding: 8px 12px;
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
+  border-radius: var(--field-radius);
+  padding: 6px var(--field-padding-inline);
   outline: none;
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
+  font-size: var(--field-font-size);
 }
 
 .field input:not([type="checkbox"]):not([type="radio"]),
 .field select,
 input.input:not([type="checkbox"]):not([type="radio"]),
 select.input {
-  height: 38px;
+  height: var(--settings-control-height);
 }
 
-@media (hover: none) and (pointer: coarse) {
-  .field input,
-  .field textarea,
-  .field select,
-  .input {
-    font-size: 16px;
-  }
-}
-
-.field input:focus-visible,
-.field textarea:focus-visible,
-.field select:focus-visible,
-.input:focus-visible,
 .oc-sensitive-input:focus-within {
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
+  border-color: var(--field-focus-border);
 }
 
 /* Carapace Sensitive Input adapted to the Control UI token contract. */
@@ -1848,10 +1018,9 @@ select.input {
   min-width: 0;
   min-height: 44px;
   align-items: stretch;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out);
@@ -1976,6 +1145,134 @@ select.settings-select:not([multiple]) {
   }
 }
 
+/* Native selects join the Select family where the engine can style their popup. */
+@supports (appearance: base-select) {
+  @media not (forced-colors: active) {
+    .field select:not([multiple], [size]),
+    select.settings-select:not([multiple], [size]) {
+      appearance: base-select;
+      /* The engine's value text ignores text-overflow, so a one-line clamp draws
+         the ellipsis. Breaking anywhere fills the line before it truncates. */
+      display: -webkit-inline-box;
+      overflow: hidden;
+      position: relative;
+      padding-block: 0;
+      padding-right: calc(26px + 0.5em);
+      background-image: none;
+      line-height: calc(var(--settings-control-height) - 2px);
+      white-space: normal;
+      word-break: break-all;
+      vertical-align: middle;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+
+      &::picker-icon {
+        content: "";
+        position: absolute;
+        inset-block-start: calc(50% - 8px);
+        inset-inline-end: 10px;
+        /* Safari's default margin and padding push the icon up and inward. */
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        padding: 0;
+        background: var(--text-tertiary);
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+          center / contain no-repeat;
+        transition: none;
+      }
+
+      &::picker(select) {
+        appearance: base-select;
+        box-sizing: border-box;
+        min-width: anchor-size(width);
+        max-width: min(320px, calc(100dvw - 32px));
+        max-height: min(400px, calc(100dvh - 16px));
+        margin-block: 4px;
+        margin-inline-end: 16px;
+        padding: var(--menu-padding);
+        border: 0;
+        border-radius: var(--menu-radius);
+        background: var(--menu-surface);
+        box-shadow: var(--menu-shadow);
+        backdrop-filter: var(--menu-backdrop);
+        color: var(--text);
+        corner-shape: superellipse(1.5);
+        opacity: 0;
+        scale: 0.95;
+        transition:
+          opacity var(--select-exit-duration) var(--overlay-ease-exit),
+          scale var(--select-exit-duration) var(--overlay-ease-exit),
+          display var(--select-exit-duration) allow-discrete,
+          overlay var(--select-exit-duration) allow-discrete;
+      }
+
+      &:open::picker(select) {
+        opacity: 1;
+        scale: 1;
+        transition-duration: var(--select-enter-duration);
+        transition-timing-function: var(--overlay-ease-enter);
+      }
+
+      & option {
+        /* One 32px line. The floated check keeps its room, so the ellipsis stops short of it. */
+        display: block;
+        overflow: hidden;
+        padding: 0 8px;
+        border-radius: var(--menu-item-radius);
+        corner-shape: superellipse(1.5);
+        font-size: calc(13px * var(--control-ui-text-scale));
+        line-height: 32px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      & option + option {
+        margin-block-start: var(--menu-item-gap);
+      }
+
+      & option:is(:hover, :focus-visible):not(:disabled) {
+        outline: 0;
+        background: var(--menu-hover);
+      }
+
+      & option:checked {
+        background: var(--menu-selected);
+        font-weight: var(--control-ui-font-weight-semibold);
+      }
+
+      & option:checked:is(:hover, :focus-visible):not(:disabled) {
+        background: var(--surface-selected-hover);
+      }
+
+      & option::checkmark {
+        float: inline-end;
+        margin-inline-start: 8px;
+        color: var(--accent);
+      }
+
+      & option:disabled {
+        opacity: 0.5;
+      }
+    }
+
+    @starting-style {
+      .field select:not([multiple], [size]):open::picker(select),
+      select.settings-select:not([multiple], [size]):open::picker(select) {
+        opacity: 0;
+        scale: 0.95;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .field select:not([multiple], [size])::picker(select),
+      select.settings-select:not([multiple], [size])::picker(select) {
+        transition: none;
+      }
+    }
+  }
+}
+
 .field textarea {
   font-family: var(--mono);
   min-height: 160px;
@@ -1985,8 +1282,9 @@ select.settings-select:not([multiple]) {
 }
 
 .field.checkbox {
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
+  overflow-wrap: anywhere;
 }
 
 .config-form .field.checkbox {
@@ -2008,14 +1306,8 @@ select.settings-select:not([multiple]) {
   border-color: var(--danger);
 }
 
-:root[data-theme-mode="light"] .field input,
-:root[data-theme-mode="light"] .field textarea,
-:root[data-theme-mode="light"] .field select {
-  background-color: var(--card);
-  border-color: var(--input);
-}
-
-:root[data-theme-mode="light"] .btn:where(:not(.primary, .danger)) {
+:root[data-theme-mode="light"]
+  .btn:where(:not(.danger, .primary:not(:disabled, [aria-disabled="true"]))) {
   background: var(--bg);
   border-color: var(--input);
 }
@@ -2056,6 +1348,73 @@ select.settings-select:not([multiple]) {
 :root[data-theme-mode="light"] .btn--ghost:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--bg-hover);
   border-color: transparent;
+}
+
+.btn.refresh-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.btn.refresh-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn.refresh-button[aria-busy="true"]:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+.refresh-button[aria-busy="true"] svg {
+  animation: btn-spinner-spin 0.9s linear infinite;
+}
+
+/* At the end of a row, the glyph's ink lines up with the edge of the card below. */
+openclaw-tooltip:last-child > .btn.refresh-button {
+  margin-inline-end: -10px;
+}
+
+/* The box must not grow a section header past its compact height. */
+@media not all and (max-width: 640px) {
+  .settings-section__actions .btn.refresh-button {
+    margin-block: -2px;
+  }
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .btn.refresh-button {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
+  openclaw-tooltip:last-child > .btn.refresh-button {
+    justify-content: flex-end;
+    margin-inline-end: 0;
+  }
+
+  /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
+     touch box keeps the glyph at its desktop distance. */
+  * + openclaw-tooltip:last-child > .btn.refresh-button {
+    justify-content: flex-start;
+    margin-inline: -8px -4px;
+    padding-inline-start: 15px;
+  }
+
+  .settings-section__actions > * + openclaw-tooltip:last-child > .btn.refresh-button {
+    margin-inline-end: -12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refresh-button[aria-busy="true"] svg {
+    animation: none;
+  }
 }
 
 .muted {
@@ -2115,7 +1474,6 @@ select.settings-select:not([multiple]) {
 
 .callout.danger,
 .callout.warn {
-  border-color: color-mix(in srgb, var(--callout-tone) 34%, var(--border));
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 14%, var(--bg-elevated)) 0%,
@@ -2126,7 +1484,6 @@ select.settings-select:not([multiple]) {
 
 .callout.info,
 .callout.success {
-  border-color: color-mix(in srgb, var(--callout-tone) 25%, transparent);
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 8%, transparent) 0%,
@@ -2164,7 +1521,7 @@ select.settings-select:not([multiple]) {
 .lazy-element-loading-modal {
   --openclaw-modal-width: 360px;
   --openclaw-modal-backdrop-filter: none;
-  --openclaw-modal-backdrop-color: color-mix(in srgb, var(--text) 12%, transparent);
+  --openclaw-modal-backdrop-color: var(--overlay-palette-backdrop);
 }
 
 .lazy-element-loading {
@@ -2227,20 +1584,15 @@ select.settings-select:not([multiple]) {
 }
 
 .lazy-view-error__icon {
-  width: 44px;
-  height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: var(--danger-subtle);
   color: var(--danger);
   margin-bottom: 4px;
 }
 
 /* A stale-chunk reload prompt is routine after an update, not a failure. */
 .lazy-view-error--stale .lazy-view-error__icon {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .lazy-view-error__icon svg {
@@ -2306,84 +1658,94 @@ select.settings-select:not([multiple]) {
   background: var(--bg);
 }
 
-:is(.code-block .hljs, .code-block-wrapper pre code.hljs) {
+:is(
+  .code-block .hljs,
+  .code-block-wrapper pre code.hljs,
+  :where(.chat-group.user .chat-text) pre code.hljs
+) {
   color: var(--text);
 }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-comment,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-quote {
-  color: var(--muted);
-  font-style: italic;
-}
+:is(
+  .code-block,
+  .code-block-wrapper pre code.hljs,
+  :where(.chat-group.user .chat-text) pre code.hljs
+) {
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--hljs-comment);
+    font-style: italic;
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-keyword,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-tag,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-subst {
-  color: var(--hljs-keyword);
-}
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-subst {
+    color: var(--hljs-keyword);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-number,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-literal,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-variable,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-template-variable,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-tag .hljs-attr {
-  color: var(--hljs-number);
-}
+  .hljs-number,
+  .hljs-literal,
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-tag .hljs-attr {
+    color: var(--hljs-number);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-string,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-doctag {
-  color: var(--hljs-string);
-}
+  .hljs-string,
+  .hljs-doctag {
+    color: var(--hljs-string);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-title,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-section,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-id,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-function .hljs-title {
-  color: var(--hljs-title);
-}
+  .hljs-title,
+  .hljs-section,
+  .hljs-selector-id,
+  .hljs-function .hljs-title {
+    color: var(--hljs-title);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-type,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-class .hljs-title,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-built_in,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-builtin-name {
-  color: var(--hljs-type);
-}
+  .hljs-type,
+  .hljs-class .hljs-title,
+  .hljs-built_in,
+  .hljs-builtin-name {
+    color: var(--hljs-type);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-attr,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-attribute,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-name,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-class,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-attr,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-pseudo {
-  color: var(--hljs-attribute);
-}
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-name,
+  .hljs-selector-class,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: var(--hljs-attribute);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-symbol,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-bullet,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-link {
-  color: var(--accent-2);
-}
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-link {
+    color: var(--hljs-link);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-meta {
-  color: var(--hljs-meta);
-}
+  .hljs-meta {
+    color: var(--hljs-meta);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
-  color: var(--hljs-deletion);
-  background: var(--danger-subtle);
-}
+  .hljs-deletion {
+    color: var(--hljs-deletion);
+    background: var(--danger-subtle);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
-  color: var(--hljs-addition);
-  background: var(--ok-subtle);
-}
+  .hljs-addition {
+    color: var(--hljs-addition);
+    background: var(--ok-subtle);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
-  font-style: italic;
-}
+  .hljs-emphasis {
+    font-style: italic;
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-strong {
-  font-weight: 600;
+  .hljs-strong {
+    font-weight: 600;
+  }
 }
 
 .markdown-plain-text-fallback {
@@ -2398,13 +1760,12 @@ select.settings-select:not([multiple]) {
 
 .code-block-wrapper {
   position: relative;
-  box-sizing: border-box;
   width: 100%;
   margin-block: 1em;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--inline-code-bg, var(--bg-muted));
 }
 
 .code-block-wrapper pre {
@@ -2490,12 +1851,17 @@ select.settings-select:not([multiple]) {
   height: 28px;
   padding: 6px;
   margin-block: 8px 4px;
-  background: color-mix(in srgb, var(--text) 3%, var(--bg));
+  background:
+    linear-gradient(var(--inline-code-bg, var(--bg-muted)), var(--inline-code-bg, var(--bg-muted))),
+    var(--chat-bubble-background, var(--bg));
 }
 
 .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap):hover,
 .code-block-wrapper--long .code-block-wrap[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--text) 8%, var(--bg));
+  background:
+    linear-gradient(var(--surface-hover), var(--surface-hover)),
+    linear-gradient(var(--inline-code-bg, var(--bg-muted)), var(--inline-code-bg, var(--bg-muted))),
+    var(--chat-bubble-background, var(--bg));
   color: var(--text);
 }
 
@@ -2757,23 +2123,14 @@ select.settings-select:not([multiple]) {
 
 .data-table-search input {
   width: 100%;
-  padding: 6px 10px;
-  font-size: 13px;
+  height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
+  font-size: var(--field-font-size);
   color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
   outline: none;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.data-table-search input:focus-visible {
-  border-color: var(--border-strong);
-  box-shadow: var(--focus-ring);
-}
-
-.data-table-search input::placeholder {
-  color: var(--muted);
 }
 
 .data-table-container {
@@ -2785,6 +2142,19 @@ select.settings-select:not([multiple]) {
 
 .data-table {
   --data-table-checkbox-col-width: 36px;
+  /* Sticky cells and the scrolling row share one opaque card composition. */
+  --data-table-row-bg: var(--card);
+  --data-table-hover-bg: color-mix(in srgb, var(--text) var(--surface-hover-amount), var(--card));
+  --data-table-selected-bg: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-amount),
+    var(--card)
+  );
+  --data-table-selected-hover-bg: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    var(--card)
+  );
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -2909,10 +2279,12 @@ select.settings-select:not([multiple]) {
 }
 
 .data-table tbody tr:hover {
-  background: var(--bg-hover);
+  --data-table-row-bg: var(--data-table-hover-bg);
+
+  background: var(--data-table-row-bg);
 }
 
-.data-table tbody tr:last-child td {
+.data-table tbody:last-child tr:last-child td {
   border-bottom: none;
 }
 
@@ -2920,7 +2292,6 @@ select.settings-select:not([multiple]) {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
   max-width: var(--data-table-checkbox-col-width);
-  box-sizing: border-box;
   padding-left: 12px !important;
   padding-right: 4px !important;
   text-align: center;
@@ -2938,12 +2309,7 @@ select.settings-select:not([multiple]) {
 
 td.data-table-checkbox-col,
 td.data-table-key-col {
-  background: var(--card);
-}
-
-.data-table tbody tr:hover td.data-table-checkbox-col,
-.data-table tbody tr:hover td.data-table-key-col {
-  background: var(--bg-hover);
+  background: var(--data-table-row-bg);
 }
 
 .data-table-checkbox-col input[type="checkbox"] {
@@ -3013,6 +2379,13 @@ td.data-table-key-col {
   cursor: not-allowed;
 }
 
+/* The dense footer keeps the select level with its 30px buttons. */
+select.data-table-pagination__size {
+  --settings-control-height: 30px;
+
+  width: auto;
+}
+
 .shell--chat .chat {
   flex: 1;
 }
@@ -3021,22 +2394,6 @@ td.data-table-key-col {
 .chat-bubble.chat-reading-indicator {
   width: fit-content;
   padding: 10px 16px;
-}
-
-.qr-wrap {
-  margin-top: 16px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-  border: 1px dashed var(--border-strong);
-  padding: 16px;
-  display: inline-flex;
-}
-
-.qr-wrap img {
-  width: 160px;
-  height: 160px;
-  border-radius: var(--radius-sm);
-  image-rendering: pixelated;
 }
 
 .exec-approval-card {
@@ -3049,8 +2406,13 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
   border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: var(--overlay-modal-padding);
   animation: scale-in 0.2s var(--ease-out);
+}
+
+.oc-modal-dialog__body > .exec-approval-card {
+  border: 0;
+  background: var(--overlay-modal-surface);
 }
 
 .exec-approval-modal-stack {
@@ -3061,33 +2423,9 @@ td.data-table-key-col {
   overflow-y: auto;
 }
 
-.exec-approval-card--modal {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.exec-approval-modal-content {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.exec-approval-modal-content > .exec-approval-list {
-  margin-top: 10px;
-}
-
 .exec-approval-card--inline {
   padding: 14px 16px;
   animation: none;
-}
-
-.exec-approval-card--severity-warning {
-  --exec-approval-accent: var(--warn);
-}
-
-.exec-approval-card--severity-danger {
-  --exec-approval-accent: var(--danger);
 }
 
 .exec-approval-header {
@@ -3098,7 +2436,7 @@ td.data-table-key-col {
 }
 
 .exec-approval-title {
-  font-size: 14px;
+  font-size: var(--overlay-modal-title-size);
   font-weight: 600;
 }
 
@@ -3106,27 +2444,6 @@ td.data-table-key-col {
   color: var(--muted);
   font-size: 13px;
   margin-top: 4px;
-}
-
-.exec-approval-queue,
-.exec-approval-chip {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 4px 10px;
-}
-
-.exec-approval-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 6px;
-}
-
-.exec-approval-chip {
-  padding: 2px 8px;
 }
 
 .exec-approval-command {
@@ -3143,75 +2460,25 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
-.exec-approval-command-span {
-  border-radius: 3px;
-  padding: 0 2px;
-  background: color-mix(in srgb, var(--exec-highlight) 34%, transparent);
-  color: var(--text);
-}
-
-.exec-approval-scope {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.exec-approval-meta {
-  margin-top: 12px;
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.exec-approval-meta-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.exec-approval-meta-row span:last-child {
-  min-width: 0;
-  color: var(--text);
-  font-family: var(--mono);
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
-.exec-approval-details {
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.exec-approval-details summary {
-  width: fit-content;
-  cursor: var(--cursor-action);
-}
-
-.exec-approval-details .exec-approval-meta {
-  margin-top: 8px;
-}
-
 .exec-approval-error {
   margin-top: 10px;
   font-size: 13px;
   color: var(--danger);
 }
 
-.input-dialog__field {
-  margin-top: 14px;
+.confirm-dialog .oc-dialog__description {
+  white-space: pre-line;
 }
 
-.exec-approval-warning {
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--warn);
+.confirm-dialog .oc-dialog__body > .exec-approval-command,
+.confirm-dialog .oc-dialog__body > .exec-approval-skip {
+  margin-top: 0;
 }
 
 /* The confirm opt-out is a control, not a continuation of the message copy, so it
    takes the same 12px separation the details block uses and keeps the 16px action
    gap below it. Without the margin it reads as a third line of the paragraph. */
+
 .exec-approval-skip {
   margin-top: 12px;
   column-gap: 10px;
@@ -3229,302 +2496,6 @@ td.data-table-key-col {
   gap: 8px;
 }
 
-.exec-approval-actions .btn {
-  gap: 8px;
-}
-
-/* Opted in by the mobile composer. Width alone must not restyle desktop cards. */
-.exec-approval-card.exec-approval-card--mobile {
-  min-height: 36px;
-  min-width: 0;
-  flex-shrink: 0;
-  padding: 12px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
-  border-color: var(--chat-composer-hairline, var(--border));
-  border-radius: 22px;
-  font-family: var(--font-body);
-}
-
-.exec-approval-card--mobile .exec-approval-header {
-  gap: 8px;
-}
-
-.exec-approval-card--mobile .exec-approval-title {
-  font-weight: 500;
-}
-
-.exec-approval-card--mobile .exec-approval-countdown {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.exec-approval-mobile-disclosure {
-  min-width: 0;
-  flex-shrink: 0;
-  margin-top: 12px;
-  overflow: hidden;
-}
-
-.exec-approval-mobile-summary {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 10px;
-  background: var(--bg-hover);
-  cursor: var(--cursor-action);
-  list-style: none;
-}
-
-.exec-approval-mobile-summary::-webkit-details-marker {
-  display: none;
-}
-
-.exec-approval-mobile-summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.exec-approval-mobile-terminal,
-.exec-approval-mobile-chevron {
-  width: 16px;
-  height: 20px;
-  flex: 0 0 16px;
-  color: var(--muted);
-}
-
-.exec-approval-mobile-disclosure[open] .exec-approval-mobile-chevron {
-  transform: rotate(180deg);
-}
-
-.exec-approval-mobile-summary .exec-approval-command {
-  flex: 1;
-  min-width: 0;
-  max-height: none;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: 12px;
-  line-height: 20px;
-  white-space: nowrap;
-}
-
-.exec-approval-mobile-summary .exec-approval-command[data-scrollable="true"] {
-  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
-}
-
-.exec-approval-mobile-disclosure[open] .exec-approval-command {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  mask-image: none;
-}
-
-.exec-approval-mobile-host {
-  display: contents;
-}
-
-.exec-approval-mobile-metadata .exec-approval-meta {
-  font-weight: 500;
-}
-
-.exec-approval-mobile-metadata .exec-approval-meta-row span:last-child {
-  font-weight: 400;
-}
-
-.exec-approval-mobile-host .exec-approval-meta-row span:last-child {
-  font-family: var(--font-body);
-  font-weight: 500;
-}
-
-.exec-approval-card--mobile .exec-approval-actions:not(openclaw-modal-actions) {
-  flex-direction: row;
-  flex-wrap: nowrap;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.exec-approval-card--mobile .exec-approval-actions .btn {
-  width: auto;
-  min-width: 0;
-  min-height: 36px;
-  padding: 6px 12px;
-  border-radius: var(--radius-full);
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-}
-
-.exec-approval-card--mobile .exec-approval-mobile-action--allow-always {
-  margin-right: auto;
-  border: 1px solid var(--chat-composer-hairline, var(--border));
-  background: transparent;
-  color: var(--text);
-}
-
-.exec-approval-card--mobile .exec-approval-mobile-action--deny {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text);
-}
-
-.exec-approval-list {
-  display: grid;
-  gap: 4px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-}
-
-.exec-approval-list__heading {
-  padding: 2px 4px 6px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.exec-approval-list__item {
-  display: grid;
-  grid-template-columns: minmax(64px, 0.25fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.exec-approval-list__item:hover,
-.exec-approval-list__item:focus-visible {
-  border-color: var(--border);
-  background: var(--secondary);
-}
-
-.exec-approval-list__item:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: 1px;
-}
-
-.exec-approval-list__agent,
-.exec-approval-list__command {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.exec-approval-list__agent {
-  color: var(--muted);
-}
-
-.exec-approval-list__expiry {
-  color: var(--warn);
-  font: 11px/1.2 var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.secret-reveal__value {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  background: var(--secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
-/* The value is shown once, so it wraps in full instead of truncating, and a single
-   tap or click selects all of it for operators without a working clipboard button. */
-.secret-reveal__code {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  user-select: all;
-}
-
-.secret-reveal__hint {
-  margin: 10px 0 0;
-  color: var(--warn);
-  font-size: 12px;
-}
-
-.secret-reveal__header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-/* The compact ok-tone tile makes the settled outcome visible before its copy. */
-.secret-reveal__status {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-  border-radius: var(--radius-md);
-  color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-}
-
-.secret-reveal__status svg {
-  width: 100%;
-  height: 100%;
-}
-
-/* The reassurance carries full text weight, unlike the muted .exec-approval-sub it
-   replaced; this is the zone that should read as settled rather than incidental. */
-.secret-reveal__body {
-  margin-top: 16px;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.secret-reveal__body p {
-  margin: 0;
-}
-
-.secret-reveal__callout {
-  margin-top: 12px;
-  text-wrap: balance;
-}
-
-/* .btn's resting border (--border) sits within ~4/255 of --card in dark
-   (#1e2028 on #161920), so a neutral button reads as unpainted on this surface.
-   --border-strong is the token that separates from a card in both themes; the
-   inherited .btn:hover still supplies the hover surface. */
-.secret-reveal__dismiss {
-  border-color: var(--border-strong);
-}
-
-/* Trailing rationale: readable, but never competing with the outcome above it. */
-.secret-reveal__note {
-  margin: 16px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.app-toast__icon svg,
 .oc-sensitive-toggle svg {
   width: 16px;
   height: 16px;
@@ -3567,7 +2538,7 @@ td.data-table-key-col {
   padding: 4px 8px 2px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -3575,13 +2546,10 @@ td.data-table-key-col {
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 @starting-style {
-  .agent-select__menu.oc-menu:popover-open {
+  .agent-select__menu.oc-menu.oc-overlay:popover-open {
     opacity: 1;
   }
 }
@@ -3591,33 +2559,15 @@ td.data-table-key-col {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
+  min-height: var(--settings-control-height);
+  padding: 0 var(--field-padding-inline);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--field-font-size);
   outline: none;
   text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-:root[data-theme-mode="light"] .agent-select__trigger {
-  background: var(--bg-elevated);
-}
-
-.agent-select__trigger:focus-visible {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-
-.agent-select__trigger:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .agent-select__trigger > .oc-menu-item__label {
@@ -3645,15 +2595,16 @@ td.data-table-key-col {
 
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .agent-select--compact .agent-select__trigger,
 :root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
   width: auto;
   height: 26px;
+  min-height: 0;
   padding: 0 10px;
   border: 0;
   border-radius: var(--radius-full);
@@ -3684,14 +2635,13 @@ td.data-table-key-col {
 
 @media (pointer: coarse) {
   .agent-select--compact .agent-select__trigger {
-    min-height: 44px;
+    min-height: var(--settings-touch-control-height);
   }
 }
 
 .agent-select__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-grid;
+  place-items: center;
   width: 20px;
   height: 20px;
   border-radius: 50%;
@@ -3719,8 +2669,6 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
-  padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -3728,10 +2676,6 @@ td.data-table-key-col {
 
 .agent-select__option > .oc-menu-item__check {
   display: none;
-}
-
-.agent-select__option[data-selected] {
-  background: var(--menu-selected);
 }
 
 .agent-select__option-state {
@@ -3778,91 +2722,8 @@ td.data-table-key-col {
 }
 
 .agent-select__option .agent-select__avatar {
-  width: 24px;
-  height: 24px;
-}
-
-/* Use the same card and ghost close control as Connect machine and confirmations. */
-.exec-approval-card.skill-reader-dialog {
-  --skill-reader-inset: var(--space-5);
-
-  height: fit-content;
-  min-height: 0;
-  max-height: var(--openclaw-modal-height-limit);
-  padding: 0;
-  overflow: hidden;
-}
-
-.skill-reader-dialog .exec-approval-header {
-  flex-shrink: 0;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--skill-reader-inset);
-  border-bottom: 1px solid var(--border);
-}
-
-.skill-reader-dialog .exec-approval-header > .btn--icon {
-  min-width: var(--space-7);
-  height: var(--space-7);
-  padding: 0;
-}
-
-.skill-reader-dialog .exec-approval-header .clawhub-skill-icon {
-  width: var(--space-7);
-  height: var(--space-7);
-  flex-basis: var(--space-7);
-}
-
-.skill-reader-dialog .exec-approval-header > :first-child {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.skill-reader-dialog .btn--icon,
-.skill-reader-dialog .statusDot {
-  flex-shrink: 0;
-}
-
-.skill-reader-dialog__body {
-  flex: 0 1 auto;
-  min-height: 0;
-  align-content: start;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: var(--skill-reader-inset);
-}
-
-.skill-reader-dialog__actions {
-  flex-shrink: 0;
-  margin-top: 0;
-  padding: var(--space-3) var(--skill-reader-inset);
-  border-top: 1px solid var(--border);
-}
-
-.skill-reader-dialog__body > p {
-  margin: 0;
-}
-
-.skill-reader-dialog__error {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  overflow-wrap: anywhere;
-}
-
-.skill-reader-dialog__error > [aria-hidden] {
-  display: flex;
-  flex-shrink: 0;
-}
-
-.skill-reader-dialog__error svg {
-  width: var(--space-5);
-  height: var(--space-5);
-}
-
-@media (max-width: 768px) {
-  .exec-approval-card.skill-reader-dialog {
-    --skill-reader-inset: var(--space-4);
-  }
+  width: 20px;
+  height: 20px;
 }
 
 .code-block-json-node > summary::-webkit-details-marker {
@@ -3875,10 +2736,6 @@ td.data-table-key-col {
   width: 100%;
   max-height: calc(100dvh - min(20dvh, 160px) - 24px);
   overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
 }
 
 .cmd-palette__entry {
@@ -3897,7 +2754,6 @@ td.data-table-key-col {
 
 .cmd-palette__input {
   display: block;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 24px;
@@ -3938,11 +2794,11 @@ td.data-table-key-col {
 
   .cmd-palette__input::-webkit-scrollbar-thumb {
     border-radius: var(--radius-sm);
-    background: var(--muted);
+    background: var(--scrollbar-thumb);
   }
 
-  .cmd-palette__input::-webkit-scrollbar-track {
-    background: var(--bg-muted);
+  .cmd-palette__input::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
   }
 }
 
@@ -4015,49 +2871,7 @@ td.data-table-key-col {
   }
 }
 
-.device-pair-setup {
-  display: flex;
-  max-height: var(--openclaw-modal-height-limit);
-  flex-direction: column;
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--card) 96%, black 4%);
-  box-shadow: var(--shadow-xl);
-}
-
-.device-pair-setup__header {
-  position: relative;
-  flex-shrink: 0;
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-  padding: 28px 52px 18px;
-  text-align: center;
-}
-
-.device-pair-setup__header h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.device-pair-setup__header p {
-  max-width: 390px;
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.device-pair-setup__header p.device-pair-setup__get-apps {
-  margin-top: 2px;
-  font-size: 13px;
-}
-
-.device-pair-setup__get-apps button,
+.device-pair-setup__link,
 .apps-pair-hint button {
   padding: 0;
   border: 0;
@@ -4069,369 +2883,22 @@ td.data-table-key-col {
   text-underline-offset: 2px;
 }
 
-.device-pair-setup__get-apps button:hover,
+.device-pair-setup__link:hover,
 .apps-pair-hint button:hover {
   color: var(--text-strong);
 }
 
-.device-pair-setup__get-apps button:focus-visible,
+.device-pair-setup__link:focus-visible,
 .apps-pair-hint button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: 4px;
 }
 
-.device-pair-setup__phone {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  border-radius: 14px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.device-pair-setup__phone svg {
-  width: 22px;
-  height: 22px;
-  stroke-width: 1.5px;
-}
-
-.device-pair-setup__close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-}
-
-.device-pair-setup__body {
-  display: grid;
-  min-height: 0;
-  overflow-y: auto;
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
-  gap: 15px;
-  padding: 0 28px 24px;
-}
-
-.device-pair-setup__access {
-  display: grid;
-  width: min(440px, 100%);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.device-pair-setup__access legend {
-  margin: 0 auto 8px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.device-pair-setup__access label {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  cursor: var(--cursor-action);
-}
-
-.device-pair-setup__access label:has(input:checked) {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
-  background: var(--accent-subtle);
-}
-
-.device-pair-setup__access:disabled label {
-  cursor: default;
-  opacity: 0.7;
-}
-
-.device-pair-setup__access input {
-  margin-top: 2px;
-}
-
-.device-pair-setup__access span {
-  display: grid;
-  gap: 3px;
-}
-
-.device-pair-setup__access strong {
-  color: var(--text-strong);
-  font-size: 13px;
-}
-
-.device-pair-setup__access small {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.device-pair-setup__loading {
-  display: flex;
-  min-height: 260px;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.device-pair-setup__spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: btn-spinner-spin 0.8s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .device-pair-setup__spinner {
-    animation: none;
-  }
-}
-
-.device-pair-setup__error {
-  width: 100%;
-}
-
-.device-pair-setup__error span {
-  display: block;
-  margin-top: 4px;
-  overflow-wrap: anywhere;
-}
-
-.device-pair-setup__access-warning {
-  width: min(440px, 100%);
-}
-
-.device-pair-setup__access-warning span {
-  display: block;
-  margin-top: 4px;
-}
-
-.device-pair-setup__qr-frame {
-  display: grid;
-  width: min(320px, 100%);
-  aspect-ratio: 1;
-  place-items: center;
-  box-sizing: border-box;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: var(--qr-bg);
-  box-shadow: var(--shadow-lg);
-}
-
-.device-pair-setup__qr {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  user-select: none;
-}
-
-.device-pair-setup__qr-unavailable {
-  max-width: 220px;
-  color: var(--qr-text);
-  font-size: 14px;
-  line-height: 1.5;
-  text-align: center;
-}
-
-.device-pair-setup__command {
-  display: grid;
-  width: min(540px, 100%);
-  min-width: 0;
-  max-width: 100%;
-  gap: 10px;
-}
-
-.device-pair-setup .login-gate__command {
-  min-width: 0;
-}
-
-.device-pair-setup .login-gate__command code {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.device-pair-setup__meta {
-  display: flex;
-  max-width: 100%;
-  align-items: center;
-  gap: 9px;
-}
-
-.device-pair-setup__gateway {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.device-pair-setup__gateways {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.device-pair-setup__fallback {
-  width: min(420px, 100%);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.device-pair-setup__fallback summary {
-  width: fit-content;
-  margin: 0 auto;
-}
-
-.device-pair-setup__fallback code {
-  display: block;
-  max-height: 110px;
-  margin-top: 10px;
-  padding: 10px;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--text);
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.device-pair-setup__pending {
-  width: 100%;
-}
-
-.device-pair-setup__waiting {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-}
-
-.device-pair-setup__state {
-  display: grid;
-  min-height: 250px;
-  align-content: center;
-  justify-items: center;
-  gap: 12px;
-  text-align: center;
-}
-
-.device-pair-setup__state-icon {
-  display: grid;
-  width: 48px;
-  height: 48px;
-  place-items: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 16px;
-  background: var(--bg-elevated);
-  color: var(--muted);
-}
-
-.device-pair-setup__state-icon--success {
-  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
-  background: color-mix(in srgb, var(--ok) 10%, var(--bg-elevated));
-  color: var(--ok);
-}
-
-.device-pair-setup__state-icon svg {
-  width: 24px;
-  height: 24px;
-}
-
-.device-pair-setup__state h3 {
-  margin: 2px 0 0;
-  color: var(--text-strong);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.3;
-  text-wrap: balance;
-}
-
-.device-pair-setup__state p {
-  margin: -6px 0 4px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.device-pair-setup__footer {
-  padding: 14px 20px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 45%, transparent);
-  font-size: 13px;
-}
-
-.device-pair-setup__footer a {
-  display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  gap: 4px;
-  border-radius: 4px;
-  color: var(--muted);
-  text-underline-offset: 2px;
-}
-
-.device-pair-setup__footer a:hover {
-  color: var(--text);
-}
-
-.device-pair-setup__footer a:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  color: var(--text);
-}
-
-.device-pair-setup__external-icon {
-  display: inline-flex;
-}
-
-.app-toast__dismiss svg,
 .data-table-bulk-bar .btn svg,
-.agent-select__option-check svg,
-.device-pair-setup__external-icon svg {
+.agent-select__option-check svg {
   width: 14px;
   height: 14px;
-}
-
-@media (max-width: 640px) {
-  .device-pair-setup__header {
-    padding: 22px 46px 16px;
-  }
-
-  .device-pair-setup__body {
-    padding: 0 18px 20px;
-  }
-
-  .device-pair-setup__qr-frame {
-    width: min(300px, 100%);
-    padding: 14px;
-  }
-
-  .device-pair-setup__access {
-    grid-template-columns: 1fr;
-  }
-
-  .device-pair-setup__footer a {
-    min-height: 44px;
-  }
 }
 
 .md-preview-expand-btn .when-fullscreen,
@@ -4475,14 +2942,9 @@ td.data-table-key-col {
 
 .session-row-draft-indicator {
   display: inline-grid;
-  width: 18px;
-  height: 18px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Unread indicator shared by the sidebar recents list, the chat session
@@ -4495,6 +2957,12 @@ td.data-table-key-col {
   border-radius: var(--radius-full);
   background: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.sidebar-recent-session .session-unread-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
 }
 
 .session-row-aside {
@@ -4512,9 +2980,8 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--session-row-muted, var(--muted));
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  letter-spacing: 0;
   white-space: nowrap;
   transition: opacity var(--duration-fast) ease;
   /* Display-only, and its opacity transition forms a stacking context that
@@ -4524,15 +2991,15 @@ td.data-table-key-col {
 
 .sidebar-session-fork-indicator {
   display: inline-flex;
-  margin-right: 4px;
+  margin-right: 6px;
   color: var(--muted);
   vertical-align: -2px;
 }
 
 .sidebar-session-fork-indicator svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.6px;
+  width: 13px;
+  height: 13px;
+  stroke-width: 2px;
 }
 
 /* Attribute badges (approval, cloud placement):
@@ -4540,19 +3007,26 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
-/* Counts (PRs, outbox) sit beside the 12px glyph as compact metadata,
+/* Counts (outbox) sit beside the 12px glyph as compact metadata,
    not at the row's title size. */
 .session-row-badge {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  color: var(--muted);
-  font-size: 10px;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* Trailing signals stay quieter than secondary text unless their state adds color. */
+.session-row-trail,
+.session-row-badges,
+.sidebar-child-session-toggle {
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
 }
 
 .session-row-badge--attention,
@@ -4560,47 +3034,34 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="open"],
-.session-row-badge--cloud[data-placement-state="active"] {
+/* Later rules win: a placement's failure or warning overrides its healthy color. */
+[data-pull-request-state="open"] {
   color: var(--ok);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="merged"] {
+[data-pull-request-state="merged"] {
   color: var(--pr-merged);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="closed"],
-.session-row-badge--cloud[data-placement-state="failed"],
-.session-row-badge--cloud[data-disk-space-status="critical"] {
-  color: var(--danger);
-}
-
-.session-row-badge--cloud:is(
-  [data-placement-state="requested"],
-  [data-placement-state="provisioning"],
-  [data-placement-state="syncing"],
-  [data-placement-state="starting"],
-  [data-placement-state="draining"],
-  [data-placement-state="reconciling"]
-) {
+[data-placement-state] {
   color: var(--accent);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts],
-.session-row-badge--cloud[data-disk-space-status="warning"] {
-  color: var(--warn);
+[data-pull-request-state="closed"],
+[data-placement-state="failed"],
+[data-disk-space-status="critical"] {
+  color: var(--danger);
 }
 
-.session-row-badge svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 1.6px;
+[data-workspace-conflicts],
+[data-disk-space-status="warning"] {
+  color: var(--warn);
 }
 
 .session-row-actions {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
 }
 
 /* Shared icon-button box; each surface retains positioning, paint, and state. */
@@ -4623,6 +3084,7 @@ td.data-table-key-col {
 
 .session-action {
   background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   opacity: 0;
   pointer-events: none;
   transition:
@@ -4698,13 +3160,13 @@ td.data-table-key-col {
 }
 
 .session-run-spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
 }
 
@@ -4719,6 +3181,53 @@ td.data-table-key-col {
   animation-play-state: paused;
 }
 
+.session-glyph__ring--background,
+.session-glyph__trace--background {
+  opacity: 0.6;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background .session-glyph__trace-run {
+  animation-duration: 3.2s;
+}
+
+/* Forced colors would repaint the background these masks show through. */
+@media (forced-colors: active) {
+  .session-run-spinner,
+  .session-glyph__ring,
+  .btn__spinner,
+  .activity-pill__spinner,
+  .chat-details-processes__spinner,
+  .chat-details-subagents__spinner,
+  .chat-processes__spinner::before,
+  .subagents-desktop__spinner::before,
+  .session-worker-stop__spinner,
+  .approval-page__spinner,
+  .config-loading__spinner,
+  .custodian__history-spinner,
+  .device-pair-setup__spinner,
+  .desktop-spinner,
+  .wizard-sign-in__ring,
+  .wizard-step__spinner {
+    forced-color-adjust: none;
+    color: CanvasText !important;
+  }
+
+  .session-glyph__trace-track,
+  .session-glyph__trace-run {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+
+  .settings-status__dot,
+  .cron-table__state-dot,
+  .activity-pulse__running,
+  .activity-feed__presence-dot {
+    forced-color-adjust: none;
+    background: CanvasText !important;
+  }
+}
+
 @keyframes session-run-trace {
   to {
     stroke-dashoffset: -100;
@@ -4729,7 +3238,6 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--accent);
   }
 
   .session-glyph__trace-run {
@@ -4737,7 +3245,7 @@ td.data-table-key-col {
   }
 
   .session-glyph__trace-track {
-    stroke: var(--accent);
+    opacity: 1;
   }
 }
 
@@ -4764,6 +3272,8 @@ td.data-table-key-col {
   transition: transform 180ms ease-out;
 }
 
+/* Automation titles keep their final fade before overflow observation. */
+.chat-summary__automation-title,
 .hover-marquee--overflowing {
   mask-image: linear-gradient(
     var(--hover-marquee-fade-direction),
@@ -4984,4 +3494,290 @@ td.data-table-key-col {
 .person-activity-avatar-link {
   display: block;
   line-height: 0;
+}
+
+.session-row-trail--snooze {
+  gap: 4px;
+}
+
+/* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
+.session-row-badge,
+.session-row-trail,
+.sidebar-child-session-toggle__count,
+.sidebar-session-group-count,
+.sidebar-agent-roster__unread,
+.sidebar-issues-button__count,
+.viewer-avatar--overflow,
+.sidebar-session-tree__show-more {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.sidebar-child-session-toggle,
+.session-action,
+.sidebar-session-group-actions {
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+}
+
+.sidebar-recent-session .hover-marquee {
+  --hover-marquee-fade-width: 6px;
+}
+
+/* Text on a tag fill keeps its readable tone; only icons take the quieter one. */
+.sidebar-recent-session--colored .session-row-trail {
+  color: var(--session-row-muted, var(--muted));
+}
+
+/* A tighter pair leaves room between its run outline and the title. */
+.sidebar-recent-session .session-owner-stack {
+  width: 26px;
+}
+
+/* Keep zero-specificity leaf selectors flat: a mixed ancestor family makes
+   unrelated elements pay for repeated matching during style resolution. */
+:where(.field) :where(input, textarea, select),
+:where(.settings-input),
+:where(select.settings-select),
+:where(.picker-select__trigger),
+:where(.agent-select__trigger),
+:where(.multi-select),
+:where(.usage-date-input),
+:where(.usage-select),
+:where(.usage-query-input),
+:where(.sessions-sort) :where(select),
+:where(.dashboards-search) :where(input),
+:where(.dashboards-select) :where(select),
+:where(.data-table-search) :where(input),
+:where(.cron-search-box) :where(input),
+:where(.input) {
+  corner-shape: superellipse(1.5);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+:where(.field) :where(input, textarea, select)::placeholder,
+:where(.settings-input)::placeholder,
+:where(select.settings-select)::placeholder,
+:where(.picker-select__trigger)::placeholder,
+:where(.agent-select__trigger)::placeholder,
+:where(.multi-select)::placeholder,
+:where(.usage-date-input)::placeholder,
+:where(.usage-select)::placeholder,
+:where(.usage-query-input)::placeholder,
+:where(.sessions-sort) :where(select)::placeholder,
+:where(.dashboards-search) :where(input)::placeholder,
+:where(.dashboards-select) :where(select)::placeholder,
+:where(.data-table-search) :where(input)::placeholder,
+:where(.cron-search-box) :where(input)::placeholder,
+:where(.input)::placeholder {
+  color: var(--muted);
+}
+:where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+:where(.settings-input):focus-visible:focus-visible,
+:where(select.settings-select):focus-visible:focus-visible,
+:where(.picker-select__trigger):focus-visible:focus-visible,
+:where(.agent-select__trigger):focus-visible:focus-visible,
+:where(.multi-select):focus-visible:focus-visible,
+:where(.usage-date-input):focus-visible:focus-visible,
+:where(.usage-select):focus-visible:focus-visible,
+:where(.usage-query-input):focus-visible:focus-visible,
+:where(.sessions-sort) :where(select):focus-visible:focus-visible,
+:where(.dashboards-search) :where(input):focus-visible:focus-visible,
+:where(.dashboards-select) :where(select):focus-visible:focus-visible,
+:where(.data-table-search) :where(input):focus-visible:focus-visible,
+:where(.cron-search-box) :where(input):focus-visible:focus-visible,
+:where(.input):focus-visible:focus-visible,
+:where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+  border-color: var(--field-focus-border);
+  outline: none;
+}
+@media (forced-colors: active) {
+  :where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+  :where(.settings-input):focus-visible:focus-visible,
+  :where(select.settings-select):focus-visible:focus-visible,
+  :where(.picker-select__trigger):focus-visible:focus-visible,
+  :where(.agent-select__trigger):focus-visible:focus-visible,
+  :where(.multi-select):focus-visible:focus-visible,
+  :where(.usage-date-input):focus-visible:focus-visible,
+  :where(.usage-select):focus-visible:focus-visible,
+  :where(.usage-query-input):focus-visible:focus-visible,
+  :where(.sessions-sort) :where(select):focus-visible:focus-visible,
+  :where(.dashboards-search) :where(input):focus-visible:focus-visible,
+  :where(.dashboards-select) :where(select):focus-visible:focus-visible,
+  :where(.data-table-search) :where(input):focus-visible:focus-visible,
+  :where(.cron-search-box) :where(input):focus-visible:focus-visible,
+  :where(.input):focus-visible:focus-visible,
+  :where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+    outline-offset: 2px;
+    outline: 2px solid selecteditem;
+  }
+}
+@media (hover: hover) {
+  :where(.field)
+    :where(input, textarea, select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.settings-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(select.settings-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.picker-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.agent-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.multi-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-date-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-query-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.sessions-sort)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-select)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.data-table-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.cron-search-box)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ) {
+    border-color: var(--border-strong);
+  }
+}
+:where(.field) :where(input, textarea, select):disabled,
+:where(.settings-input):disabled,
+:where(select.settings-select):disabled,
+:where(.picker-select__trigger):disabled,
+:where(.agent-select__trigger):disabled,
+:where(.multi-select):disabled,
+:where(.usage-date-input):disabled,
+:where(.usage-select):disabled,
+:where(.usage-query-input):disabled,
+:where(.sessions-sort) :where(select):disabled,
+:where(.dashboards-search) :where(input):disabled,
+:where(.dashboards-select) :where(select):disabled,
+:where(.data-table-search) :where(input):disabled,
+:where(.cron-search-box) :where(input):disabled,
+:where(.input):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Ghost triggers have no border to recolor, so focus draws one in the same place. */
+@media not (forced-colors: active) {
+  .agent-select--compact .agent-select__trigger:focus-visible,
+  .sidebar-session-owner-filter .picker-select__trigger:focus-visible,
+  .sidebar-session-filter-panel .picker-select__trigger:focus-visible {
+    outline: 1px solid var(--field-focus-border);
+    outline-offset: -1px;
+  }
 }

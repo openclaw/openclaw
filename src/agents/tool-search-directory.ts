@@ -15,10 +15,12 @@ import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
   type ToolSearchMode,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -196,7 +198,8 @@ function formatToolSearchCatalogDirectory(
   const omittedLabel = " additional tools omitted. ";
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
-  let omitted = deferredEntries.length - lines.length;
+  let omitted =
+    deferredEntries.filter((entry) => entry.source === "openclaw").length - lines.length;
   let guidance: string;
   for (;;) {
     guidance =

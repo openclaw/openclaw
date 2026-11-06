@@ -3,7 +3,6 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { getSlackClient, getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
-import { SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT } from "./reconnect-policy.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
@@ -41,16 +40,13 @@ describe("slack socket reconnect loop", () => {
     controller = new AbortController();
     runtime = createRuntimeSpies();
     setStatus.mockClear();
-    // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
-    // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
+    // Keep ingress/WAL intervals real; runAllTimersAsync must only drain reconnect timeouts.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   });
-
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
-
   it("continues after thirteen consecutive recoverable Slack Web API HTTP failures", async () => {
     failStarts(13, () =>
       Object.assign(new Error("Slack Web API HTTP error"), {
@@ -71,7 +67,6 @@ describe("slack socket reconnect loop", () => {
       lastError: error,
     });
   });
-
   it("includes the configured Socket Mode logger context in start retry diagnostics", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     failStarts(1, () => {
@@ -87,20 +82,19 @@ describe("slack socket reconnect loop", () => {
       ),
     );
   });
-
-  it("publishes blocked before rejecting a non-recoverable socket start failure", async () => {
-    slackTestState.appStartMock.mockRejectedValue(new Error("token_revoked"));
-
-    await expect(start()).rejects.toThrow("token_revoked");
-
+  it.each(["token_revoked", "invalid_auth"])("blocks %s", async (error) => {
+    slackTestState.appStartMock.mockRejectedValue(new Error(error));
+    const rejected = expect(start()).rejects.toThrow(error);
+    await vi.runAllTimersAsync();
+    await rejected;
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(error === "token_revoked" ? 1 : 3);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
       lifecycle: "blocked",
       terminalDisconnect: true,
-      lastError: "token_revoked",
+      lastError: error,
     });
   });
-
   it("re-resolves degraded identity after a recoverable reconnect", async () => {
     getSlackClient().auth.test.mockResolvedValueOnce({
       app_id: "A1",
@@ -110,14 +104,11 @@ describe("slack socket reconnect loop", () => {
     });
     const secondStart = createDeferred<void>();
     failStarts(1, () => new Error("ECONNRESET"), secondStart.resolve);
-
     const run = start();
-
     await vi.runOnlyPendingTimersAsync();
     await secondStart.promise;
     await Promise.resolve();
     await Promise.resolve();
-
     expect(setStatus).toHaveBeenCalledWith({
       running: true,
       connected: true,
@@ -133,36 +124,14 @@ describe("slack socket reconnect loop", () => {
     controller.abort();
     await expect(run).resolves.toBeUndefined();
   });
-
   it("recovers a single invalid_auth start failure without blocking the channel", async () => {
-    let attempts = 0;
-    slackTestState.appStartMock.mockImplementation(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("invalid_auth");
-      }
-      controller.abort();
-    });
-
-    const run = start();
-    await vi.runAllTimersAsync();
-    await expect(run).resolves.toBeUndefined();
+    failStarts(1, () => new Error("invalid_auth"));
+    await finishRetries();
     expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(false);
   });
-
-  it("blocks at the exact consecutive invalid_auth limit", async () => {
-    slackTestState.appStartMock.mockRejectedValue(new Error("invalid_auth"));
-
-    const run = start();
-    await vi.runAllTimersAsync();
-    await expect(run).rejects.toThrow("invalid_auth");
-    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(
-      SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT,
-    );
-    expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(true);
-  });
-
-  it("resets the consecutive invalid_auth count after a successful reconnect", async () => {
+  it("resets auth failures and disconnect episodes after a successful reconnect", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 60_000));
     let attempts = 0;
     slackTestState.appStartMock.mockImplementation(async () => {
       attempts += 1;
@@ -175,15 +144,15 @@ describe("slack socket reconnect loop", () => {
         new Error("invalid_auth"),
       );
     });
-
     const run = start();
     await vi.runAllTimersAsync();
     await expect(run).rejects.toThrow("invalid_auth");
-    // The pre-connect failure must not carry over: terminal only after a fresh
-    // run of SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT consecutive failures.
-    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(
-      SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT + 1,
-    );
-    expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(true);
+    // One failure before connection, then three consecutive failures.
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(4);
+    const [first, ...retries] = setStatus.mock.calls
+      .filter(([patch]) => patch.lifecycle === "recovering")
+      .map(([patch]) => patch.lastDisconnect);
+    expect(retries[0]).not.toEqual(first);
+    expect(retries).toEqual([retries[0], retries[0]]);
   });
 });

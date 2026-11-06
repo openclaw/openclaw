@@ -26,54 +26,49 @@ export function WhatsAppCard(props: {
       ) ?? props.snapshot.accounts[0];
     return typeof value === "boolean" ? value : (account?.configured ?? null);
   };
+  const phone = createMemo(() => {
+    const value = status()?.self?.e164;
+    return value ? props.context.formatPhoneNumber!(value) : null;
+  });
   const booleanFact = (
     field: "configured" | "linked" | "running" | "connected",
     value: boolean | null | undefined,
   ) => ({
+    key: field,
     label: t(`common.${field}`),
-    value: t(value == null ? "common.na" : value ? "common.yes" : "common.no"),
+    value: value == null ? null : t(value ? "common.yes" : "common.no"),
     kind: value === true ? "ok" : "muted",
   });
   const facts = createMemo(() => {
     const value = status();
-    const phone = value?.self?.e164;
     return [
       booleanFact("configured", configured()),
       booleanFact("linked", value?.linked === true),
-      ...(phone
-        ? [
-            {
-              label: t("channels.whatsapp.phoneNumber"),
-              value: props.context.formatPhoneNumber!(phone),
-              kind: undefined,
-            },
-          ]
-        : []),
       booleanFact("running", value?.running === true),
       booleanFact("connected", value?.connected === true),
       {
+        key: "lastConnect",
         label: t("common.lastConnect"),
         value: value?.lastConnectedAt
           ? props.context.formatRelativeTimestamp(value.lastConnectedAt)
-          : t("common.na"),
+          : null,
         kind: undefined,
       },
       {
+        key: "lastMessage",
         label: t("common.lastMessage"),
         value: value?.lastMessageAt
           ? props.context.formatRelativeTimestamp(value.lastMessageAt)
-          : t("common.na"),
+          : null,
         kind: undefined,
       },
       {
+        key: "authAge",
         label: t("common.authAge"),
-        value:
-          value?.authAgeMs != null
-            ? props.context.formatDuration!(value.authAgeMs)
-            : t("common.na"),
+        value: value?.authAgeMs != null ? props.context.formatDuration!(value.authAgeMs) : null,
         kind: undefined,
       },
-    ];
+    ].filter((fact) => fact.value !== null);
   });
   function run(action: () => Promise<void>) {
     const pending = (async () => {
@@ -109,69 +104,59 @@ export function WhatsAppCard(props: {
   }
   let config!: HTMLDivElement;
   onSettled(() => props.context.mountConfig(config));
-  const ErrorRow = (errorProps: { error: unknown }) => (
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__title">
-          <span class="settings-status settings-status--danger">
-            <span class="settings-status__dot" />
-            <span>{t("channels.lastError")}</span>
-          </span>
-        </span>
-        <span class="settings-row__desc">{props.context.formatError(errorProps.error)}</span>
-      </div>
+  const ErrorCallout = (errorProps: { error: unknown }) => (
+    <div class="callout danger" role="alert">
+      {props.context.formatError(errorProps.error)}
     </div>
   );
   return (
-    <section class="settings-section">
-      <div class="settings-section__header">
-        <div class="settings-section__copy">
-          <h2 class="settings-section__heading">
-            {t("channels.whatsapp.title")}
-            <Show when={props.snapshot.accounts.length >= 2}>
-              {" "}
-              <span class="settings-count">{props.snapshot.accounts.length}</span>
-            </Show>
-          </h2>
-          <p class="settings-section__desc">{t("channels.whatsapp.subtitle")}</p>
-        </div>
-      </div>
+    <>
+      <Show
+        when={status()?.lastError}
+        fallback={
+          <Loading on={completion()}>
+            <Errored fallback={(error) => <ErrorCallout error={error()} />}>{completed()}</Errored>
+          </Loading>
+        }
+      >
+        {(error) => <ErrorCallout error={error()} />}
+      </Show>
       <div class="settings-group">
-        <dl class="settings-kv">
-          <For each={facts()}>
-            {(fact) => (
-              <>
-                <dt>{fact.label}</dt>
-                <dd>
-                  <Show when={fact.kind} fallback={fact.value}>
-                    {(kind) => (
-                      <span class={["settings-status", { "settings-status--ok": kind() === "ok" }]}>
-                        <span class="settings-status__dot" />
-                        <span>{fact.value}</span>
-                      </span>
-                    )}
-                  </Show>
-                </dd>
-              </>
-            )}
-          </For>
-        </dl>
-        <Show
-          when={status()?.lastError}
-          fallback={
-            <Loading on={completion()}>
-              <Errored fallback={(error) => <ErrorRow error={error()} />}>{completed()}</Errored>
-            </Loading>
-          }
-        >
-          {(error) => <ErrorRow error={error()} />}
-        </Show>
-        <div
-          style={{ display: "contents" }}
-          ref={(node) => {
-            config = node;
-          }}
-        />
+        <div class="settings-row">
+          <div class="settings-row__text">
+            <span class="settings-row__title">
+              {phone() ? t("channels.whatsapp.phoneNumber") : t("common.linked")}
+            </span>
+            <span class="settings-row__desc">
+              {phone() ?? t(linked() ? "common.yes" : "common.no")}
+            </span>
+          </div>
+          <div class="settings-row__control">
+            <button
+              type="button"
+              class={[
+                "btn",
+                { primary: !linked() && !login()?.qrDataUrl && configured() === true },
+              ]}
+              disabled={login()?.busy}
+              onClick={() => run(() => props.context.login!.start(linked()))}
+            >
+              {linked()
+                ? t("common.relink")
+                : login()?.busy
+                  ? t("common.working")
+                  : t("common.showQr")}
+            </button>
+            <button
+              type="button"
+              class="btn danger"
+              disabled={login()?.busy}
+              onClick={() => run(logout)}
+            >
+              {t("common.logout")}
+            </button>
+          </div>
+        </div>
         <Show when={login()?.message}>
           {(message) => (
             <div class="settings-row" role="status">
@@ -187,51 +172,67 @@ export function WhatsAppCard(props: {
               <div class="qr-wrap">
                 <img src={qr()} alt={t("channels.setup.whatsappQrAlt")} />
               </div>
+              <div class="settings-row__control">
+                <button
+                  type="button"
+                  class="btn primary"
+                  disabled={login()?.busy}
+                  onClick={() => run(() => props.context.login!.wait())}
+                >
+                  {t("common.waitForScan")}
+                </button>
+              </div>
             </div>
           )}
         </Show>
-        <div class="settings-row settings-row--actions">
-          <div class="settings-row__control">
-            <button
-              type="button"
-              class={["btn", { primary: !linked() }]}
-              disabled={login()?.busy}
-              onClick={() => run(() => props.context.login!.start(linked()))}
-            >
-              {linked()
-                ? t("common.relink")
-                : login()?.busy
-                  ? t("common.working")
-                  : t("common.showQr")}
-            </button>
-            <Show when={login()?.qrDataUrl != null}>
-              <button
-                type="button"
-                class="btn"
-                disabled={login()?.busy}
-                onClick={() => run(() => props.context.login!.wait())}
-              >
-                {t("common.waitForScan")}
-              </button>
-            </Show>
-            <button
-              type="button"
-              class="btn danger"
-              disabled={login()?.busy}
-              onClick={() => run(logout)}
-            >
-              {t("common.logout")}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              onClick={() => run(() => props.context.refresh(true))}
-            >
-              {t("common.refresh")}
-            </button>
-          </div>
-        </div>
       </div>
-    </section>
+      <div
+        style={{ display: "contents" }}
+        ref={(node) => {
+          config = node;
+        }}
+      />
+      <details class="settings-group settings-disclosure">
+        <summary class="settings-row settings-row--nav settings-disclosure__summary">
+          <div class="settings-row__text">
+            <span class="settings-row__title">{t("common.details")}</span>
+          </div>
+          <div class="settings-row__control">
+            <span class="settings-row__chevron settings-disclosure__chevron">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m9 18 6-6-6-6" />
+              </svg>
+            </span>
+          </div>
+        </summary>
+        <dl class="settings-kv">
+          <For each={facts()} keyed={(fact) => fact.key}>
+            {(fact) => (
+              <>
+                <dt>{fact().label}</dt>
+                <dd>
+                  <Show when={fact().kind} fallback={fact().value}>
+                    {(kind) => (
+                      <span class={["settings-status", { "settings-status--ok": kind() === "ok" }]}>
+                        <span class="settings-status__dot" />
+                        <span>{fact().value}</span>
+                      </span>
+                    )}
+                  </Show>
+                </dd>
+              </>
+            )}
+          </For>
+        </dl>
+      </details>
+    </>
   );
 }

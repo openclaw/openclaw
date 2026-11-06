@@ -5,6 +5,7 @@ import { reviewDependencyChanges } from "./dependency-guard.mjs";
 import {
   ObsoleteReviewError,
   assertGuardUnchanged,
+  failGuard,
   findMaintainerApproval,
   readGuardReview,
   securityReviewContracts,
@@ -14,6 +15,7 @@ import {
   GitHubNoticePublicationError,
   GitHubRateLimitError,
   GitHubReadTimeoutError,
+  GitHubStatusFailurePublishedError,
   GitHubStatusPublicationError,
   publishGuardStatus,
   withSecurityReviewRecovery,
@@ -41,6 +43,20 @@ function ciRunState(run) {
       return "pending";
     default:
       throw new Error("CI returned an invalid run status.");
+  }
+}
+
+function assertCiRunIdentity(current, expected) {
+  if (
+    current.id !== expected.id ||
+    current.head_sha !== expected.head_sha ||
+    current.head_branch !== expected.head_branch ||
+    current.path !== expected.path ||
+    current.event !== expected.event ||
+    current.repository?.id !== expected.repository?.id ||
+    (expected.event === "workflow_dispatch" && current.display_title !== expected.display_title)
+  ) {
+    throw new Error("The CI run identity changed during security review.");
   }
 }
 
@@ -99,20 +115,22 @@ async function ciState(review) {
   let run;
   for (const candidate of candidates.toSorted((left, right) => right.id - left.id)) {
     if (
-      candidate.event !== "pull_request" ||
-      candidate.status !== "completed" ||
-      candidate.conclusion !== "skipped"
+      candidate.status === "completed" &&
+      (candidate.event !== "pull_request" || candidate.conclusion !== "skipped")
     ) {
       run = candidate;
       break;
     }
-    // Reruns retain their ID; a skipped list entry can already have a new attempt.
+    // Completion events can precede the run-list projection. Refresh the exact
+    // run before waiting; skipped entries can also already have a new attempt.
     const current = await api.request(`${root}/runs/${candidate.id}`);
     const currentState = ciRunState(current);
-    if (current.id !== candidate.id || current.head_sha !== candidate.head_sha) {
-      throw new Error("The CI run identity changed during security review.");
-    }
-    if (currentState !== "completed" || current.conclusion !== "skipped") {
+    assertCiRunIdentity(current, candidate);
+    if (
+      current.event !== "pull_request" ||
+      currentState !== "completed" ||
+      current.conclusion !== "skipped"
+    ) {
       run = current;
       break;
     }
@@ -155,9 +173,7 @@ async function ciState(review) {
   }
   const current = await api.request(`${root}/runs/${run.id}`);
   const currentState = ciRunState(current);
-  if (current.id !== run.id || current.head_sha !== run.head_sha) {
-    throw new Error("The CI run identity changed during security review.");
-  }
+  assertCiRunIdentity(current, run);
   assertCompletedRunObserved(current);
   if (currentState === "pending") {
     return "pending";
@@ -198,6 +214,7 @@ async function main() {
       const errors = [];
       let allowed = true;
       for (const guard of [reviewDependencyChanges, reviewSecuritySensitiveChanges]) {
+        const guardIndex = review.guards.length;
         try {
           if (!(await guard(review, mode === "prepare" ? "prepare" : "enforce"))) {
             allowed = false;
@@ -206,6 +223,11 @@ async function main() {
             return;
           }
         } catch (error) {
+          const failedGuard = review.guards[guardIndex];
+          if (failedGuard) {
+            review.failedGuard = failedGuard;
+            await failGuard(failedGuard, error);
+          }
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
@@ -217,11 +239,18 @@ async function main() {
           ) {
             throw error;
           }
-          errors.push(error instanceof Error ? error.message : String(error));
+          if (error instanceof GitHubReadTimeoutError && errors.length > 0 && failedGuard) {
+            await failGuard(failedGuard, error, { terminal: true });
+          }
+          errors.push(error);
         }
       }
       if (errors.length > 0) {
-        throw new Error(errors.join("\n"));
+        throw new Error(
+          errors
+            .map((error) => (error instanceof Error ? error.message : String(error)))
+            .join("\n"),
+        );
       }
       if (!allowed) {
         await publishGuardStatus(
@@ -261,7 +290,7 @@ async function main() {
       if (guard.requiresApproval && !(await findMaintainerApproval(guard))) {
         await publishGuardStatus(
           guard,
-          "failure",
+          "pending",
           "A maintainer must approve the current PR revision",
         );
         await publishGuardStatus(
@@ -278,6 +307,9 @@ async function main() {
   } catch (error) {
     if (error instanceof GitHubDiffDataError || error instanceof GitHubNoticePublicationError) {
       recoveryReview = review;
+    }
+    if (error instanceof GitHubStatusFailurePublishedError) {
+      throw error;
     }
     if (
       error instanceof GitHubRateLimitError ||
@@ -332,10 +364,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       },
     },
   ).catch(
-    /** @param {unknown} error */ (error) => {
+    /** @param {unknown} error */ async (error) => {
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
+      }
+      if (
+        (error instanceof GitHubReadTimeoutError ||
+          error?.cause instanceof GitHubReadTimeoutError) &&
+        currentReview
+      ) {
+        await failGuard(currentReview, error, { terminal: true });
+        if (currentReview.failedGuard) {
+          await failGuard(currentReview.failedGuard, error, { terminal: true });
+        }
       }
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;

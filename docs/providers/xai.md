@@ -230,6 +230,11 @@ transcription, xAI's Grok Voice Agent WebSocket for Talk realtime sessions,
 and the Responses API for chat, search, and code-execution tools.
 </Note>
 
+For vision input, inline GIFs are sent to xAI as first-frame JPEG images, including
+images retained from `view_image` on later turns. Stored image bytes are unchanged.
+PNG, JPEG, and WebP inputs keep their existing formats. Encoding errors use the
+existing request failure handling.
+
 ### Legacy fast-mode compatibility
 
 `/fast on` or `agents.defaults.models["xai/<model>"].params.fastMode: true`
@@ -374,6 +379,11 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     stored and delivered through the normal channel attachment path. Local
     reference images are converted to data URLs; remote `http(s)` references
     pass through unchanged.
+
+    For an operator-controlled private image endpoint, set `models.providers.xai.baseUrl`
+    and `models.providers.xai.request.allowPrivateNetwork: true`. Private endpoints
+    remain blocked without that opt-in. Returned image URLs and their redirects
+    cannot use this endpoint opt-in to reach other private origins.
 
     Select `xai/grok-imagine-image-2.0` explicitly to use Image 2.0; the default
     remains `xai/grok-imagine-image`. Explicit provider-qualified image model IDs

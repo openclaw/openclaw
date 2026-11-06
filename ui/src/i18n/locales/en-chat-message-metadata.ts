@@ -16,7 +16,7 @@ const enChatMessageMetadata = {
         file: "File",
         selection: "Selection",
         restoreFailed:
-          "Attached context could not be restored. Edit this message to review and resend it without context.",
+          "Couldn’t restore the attached context. Edit this message to review and resend it without context.",
       },
       sourcePreviews: {
         label: "Sources",
@@ -42,7 +42,7 @@ const enChatMessageMetadata = {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
-      addToChat: "Add to chat",
+      addToChat: "Add to message",
       annotationEditor: "Comment",
       annotationComment: "Add an optional comment…",
       saveAnnotation: "Save comment",
@@ -68,6 +68,7 @@ const enChatMessageMetadata = {
       unattributedSender: en.chat.messages.unattributedSender,
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
+      agentName: en.chat.messages.agentName,
       forwardedFrom: "From",
       interSessionUpdateFrom: "1 update from",
       interSessionUpdatesFrom: "{count} updates from",
@@ -76,18 +77,68 @@ const enChatMessageMetadata = {
       forwardedAutomation: "Automation",
       forwardedFromAgent: "Forwarded from {agentId}",
       forwardedMessage: "Forwarded message",
-      fullContentLoadExhausted: "Could not load the full message.",
+      fullContentLoadExhausted: "Couldn’t load the full message. Try again.",
       voiceNote: "Voice note",
       voiceTranscript: "Voice transcript",
       readAloud: "Read aloud",
       stopReading: "Stop reading",
-      duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
+    },
+    systemNotice: {
+      modelChanged: "Model changed from {from} to {to}.",
+      event: "{count} system event",
+      events: "{count} system events",
+      guardian: {
+        approvedSummary: "Guardian approved {action}.",
+        deniedLabel: "Guardian denied",
+        deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
+        warningLabel: "Guardian warning",
+        warningFallback: "Guardian stopped the requested action.",
+        strictReviewRequiredLabel: "Guardian review required",
+        strictReviewRequiredSummary: "Guardian is reviewing this action before it can continue.",
+        requestedAction: "Requested action",
+        unknownRisk: "unknown",
+        noRationale: "No rationale was provided.",
+      },
+      automationRecovery: {
+        label: "System · automation recovery",
+        summary: "Automation failed.",
+      },
+      gatewayRestarted: {
+        label: "System · Gateway restarted",
+      },
+      cliHarnessContext: {
+        label: "System · injected context",
+      },
+      claudeCliTaskNotification: {
+        label: "System · background task",
+      },
+      pluginSteering: {
+        label: "{plugin} guidance",
+      },
     },
   },
 } satisfies TranslationMap;
 
 export const registerChatMessageMetadataEnglish = Object.assign(
-  () => Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages),
+  () => {
+    Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages);
+    const {
+      guardian,
+      automationRecovery,
+      gatewayRestarted,
+      cliHarnessContext,
+      claudeCliTaskNotification,
+      pluginSteering,
+      ...labels
+    } = enChatMessageMetadata.chat.systemNotice;
+    Object.assign(en.chat.systemNotice, labels);
+    Object.assign(en.chat.systemNotice.guardian, guardian);
+    Object.assign(en.chat.systemNotice.automationRecovery, automationRecovery);
+    Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
+    Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);
+    Object.assign(en.chat.systemNotice.claudeCliTaskNotification, claudeCliTaskNotification);
+    Object.assign(en.chat.systemNotice.pluginSteering, pluginSteering);
+  },
   { catalog: enChatMessageMetadata },
 );

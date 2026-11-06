@@ -17,17 +17,29 @@ export type SubagentRoster = {
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /** The optional child read settled unsuccessfully; live parent facts still apply. */
+  subagentSessionsUnavailable?: boolean;
   /** A newly named child is still awaiting a covering read before the wait can count it. */
   subagentSessionsPending?: boolean;
-  /**
-   * True once the pane's own child query answered at least once. Seeded rows
-   * take ancestry from the broad list, which outlives the child-link retention.
-   */
-  subagentSessionsRead?: boolean;
 };
 
+/** A child query can be hydrated before it observes its own parent. */
+export function hasLoadedDetailsSubagents(
+  details: SubagentRoster & { selectedSession?: GatewaySessionRow },
+) {
+  return (
+    details.subagentSessionsHydrated &&
+    details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
+    )
+  );
+}
+
 /** What a launch row needs to show its subagent's session and open it. */
-export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions" | "subagentParentKey"> & {
+export type SubagentRowContext = Pick<
+  SubagentRoster,
+  "subagentSessions" | "subagentParentKey" | "subagentSessionsHydrated" | "subagentSessionsPending"
+> & {
   /** Shows a subagent the Subagents panel lists. */
   onOpenSubagent?: (sessionKey: string) => void;
   /** Opens a session; any other subagent opens this way. */
@@ -49,9 +61,8 @@ function readLaunch(card: LaunchCard) {
   }
   const args = asRecord(card.args);
   // History keeps the result as text; only a live result still carries its details.
-  const childKey =
-    text(asRecord(card.details)?.childSessionKey) ??
-    text(safeParseJsonRecord(card.outputText ?? "")?.childSessionKey);
+  const result = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
+  const childKey = text(result?.childSessionKey);
   return {
     label: text(args?.label),
     childKey,

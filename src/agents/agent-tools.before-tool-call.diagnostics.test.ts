@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -94,4 +94,40 @@ it("attributes colliding physical and virtual Skill reads to their source hosts"
       ctx: { skillsSnapshot },
     }),
   ).toMatchObject({ skillName: "node-guide" });
+});
+
+it("normalizes a requested skill name once while searching the discovery inventory", () => {
+  const requestedName = "  inventory-lookup-target  ";
+  const target = createCanonicalFixtureSkill({
+    name: "inventory-lookup-target",
+    description: "Lookup target",
+    filePath: "/project/skills/target/SKILL.md",
+    baseDir: "/project/skills/target",
+    source: "workspace",
+  });
+  const discoverySkills = [
+    { ...target, disableModelInvocation: true },
+    ...Array.from({ length: 40 }, (_, index) => ({ ...target, name: `other-skill-${index}` })),
+    target,
+  ];
+  let requestedNameTrims = 0;
+  const trimSpy = vi.spyOn(String.prototype, "trim");
+  try {
+    expect(
+      findSkillUsageMatch({
+        toolName: "skills_read",
+        toolParams: { name: requestedName },
+        ctx: { skillsSnapshot: { prompt: "", skills: [], discoverySkills } },
+      }),
+    ).toEqual({
+      skillName: "inventory-lookup-target",
+      skillSource: "workspace",
+      activation: "read",
+      skillFile: "/project/skills/target/SKILL.md",
+    });
+    requestedNameTrims = trimSpy.mock.contexts.filter((value) => value === requestedName).length;
+  } finally {
+    trimSpy.mockRestore();
+  }
+  expect(requestedNameTrims).toBe(1);
 });

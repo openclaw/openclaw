@@ -1,3 +1,4 @@
+import "../../styles/connection-surfaces.css";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   children,
@@ -14,11 +15,14 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { registerConnectionRecoveryEnglish } from "../../i18n/locales/en-connection-recovery.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
 import { LazyViewError } from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
+
+registerEnglishCatalog(registerConnectionRecoveryEnglish);
 
 const ModalDialog = lazy(() => import("../modal-dialog.tsx"), { export: "ModalDialog" });
 
@@ -35,7 +39,9 @@ function renderConfirmation(props: () => ConfirmationProps) {
   const summary = () => t("connection.switchGateway.summary");
   const notes = () =>
     [
-      t("connection.switchGateway.note"),
+      t("connection.switchGateway.note", {
+        host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
+      }),
       props().linkCarriesToken ? t("connection.switchGateway.noteToken") : null,
       // Tokens are origin-scoped: a different origin never receives the saved one.
       props().currentGatewayUrl.trim() &&
@@ -50,31 +56,35 @@ function renderConfirmation(props: () => ConfirmationProps) {
       .join(" ");
   const content = children(() => (
     <ModalDialog label={title()} description={summary()} onModal-cancel={() => props().onCancel()}>
-      <div class="gateway-switch">
-        <div class="gateway-switch__head">
-          <span class="gateway-switch__icon" aria-hidden="true">
-            <Icon name="shieldAlert" />
-          </span>
-          <div class="gateway-switch__text">
-            <h2 class="gateway-switch__title">{title()}</h2>
-            <p class="gateway-switch__summary">{summary()}</p>
+      <div class="oc-dialog gateway-switch">
+        <div class="oc-dialog__header">
+          <h2 class="oc-dialog__title">{title()}</h2>
+          <button
+            type="button"
+            class="oc-dialog__close"
+            aria-label={t("common.close")}
+            onClick={() => props().onCancel()}
+          >
+            <Icon name="x" />
+          </button>
+          <div class="oc-dialog__description">
+            <p>{summary()}</p>
           </div>
         </div>
-        <div class="gateway-switch__hosts">
-          <div class="gateway-switch__host">
-            <span class="gateway-switch__label">{t("connection.switchGateway.current")}</span>
-            <code translate="no">{props().currentGatewayUrl.trim() || t("common.na")}</code>
+        <div class="oc-dialog__body">
+          <div class="gateway-switch__hosts">
+            <div class="gateway-switch__host">
+              <span class="gateway-switch__label">{t("connection.switchGateway.current")}</span>
+              <code translate="no">{props().currentGatewayUrl.trim() || t("common.na")}</code>
+            </div>
+            <div class="gateway-switch__host gateway-switch__host--next">
+              <span class="gateway-switch__label">{t("connection.switchGateway.next")}</span>
+              <code translate="no">{props().pendingGatewayUrl}</code>
+            </div>
           </div>
-          <span class="gateway-switch__arrow" aria-hidden="true">
-            <Icon name="arrowRight" />
-          </span>
-          <div class="gateway-switch__host gateway-switch__host--next">
-            <span class="gateway-switch__label">{t("connection.switchGateway.next")}</span>
-            <code translate="no">{props().pendingGatewayUrl}</code>
-          </div>
+          <p class="gateway-switch__note">{notes()}</p>
         </div>
-        <p class="gateway-switch__note">{notes()}</p>
-        <openclaw-modal-actions class="gateway-switch__actions">
+        <openclaw-modal-actions class="oc-dialog__footer gateway-switch__actions">
           <button type="button" class="btn" onClick={() => props().onCancel()}>
             {t("connection.switchGateway.cancel")}
           </button>

@@ -11,7 +11,7 @@ import {
   Show,
 } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
@@ -20,10 +20,10 @@ import type { TranscriptSearchResult, TranscriptSearchState } from "./transcript
 
 registerSessionOrganizationEnglish();
 
-registerCommandPaletteEnglish();
-
 export type TranscriptSearchProps = TranscriptSearchState & {
   transcriptSearchAvailable: boolean;
+  /** Beside the phone toolbar's search field the trigger needs its own icon. */
+  phoneLayout?: boolean;
   onTranscriptSearchChange: (query: string) => void;
   onTranscriptSearch: () => void;
   onClearTranscriptSearch: () => void;
@@ -70,7 +70,16 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             value={query()}
             onInput={(event) => props.onTranscriptSearchChange(event.currentTarget.value)}
             onKeyDown={(event: KeyboardEvent) => {
-              if (event.key === "Escape") {
+              if (
+                event.key === "Escape" &&
+                !event.defaultPrevented &&
+                !event.isComposing &&
+                event.keyCode !== 229 &&
+                !event.altKey &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.shiftKey
+              ) {
                 event.preventDefault();
                 setExpanded(false);
                 onSettled(() => trigger?.focus({ preventScroll: true }));
@@ -112,7 +121,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
           }
         }}
       >
-        <Icon name="search" />
+        <Icon name={props.phoneLayout ? "textSearch" : "search"} />
       </button>
     </form>
   );
@@ -131,16 +140,14 @@ export function TranscriptSearchResults(props: TranscriptSearchViewProps) {
               <span>
                 {t("sessionsView.transcriptSearchError")}: {formatUiError(error())}
               </span>
-              <button
-                class="btn btn--sm"
+              <RetryAction
                 type="button"
-                onClick={() => {
+                label={t("sessionsView.transcriptSearchRetry")}
+                onRetry={() => {
                   props.onTranscriptSearch();
                   reset();
                 }}
-              >
-                {t("sessionsView.transcriptSearchRetry")}
-              </button>
+              />
             </div>
           </div>
         )}
@@ -173,9 +180,11 @@ function TranscriptSearchContent(props: TranscriptSearchViewProps) {
       <Show when={retryNotice()}>
         <div class="sessions-transcript-search__notice">
           <span>{retryNotice()}</span>
-          <button class="btn btn--sm" type="button" onClick={() => props.onTranscriptSearch()}>
-            {t("sessionsView.transcriptSearchRetry")}
-          </button>
+          <RetryAction
+            type="button"
+            label={t("sessionsView.transcriptSearchRetry")}
+            onRetry={() => props.onTranscriptSearch()}
+          />
         </div>
       </Show>
       {(resultState()?.archivedTranscriptsExcluded ?? 0) > 0 ? (

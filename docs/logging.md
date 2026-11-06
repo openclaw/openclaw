@@ -123,6 +123,18 @@ openclaw doctor
 The Control UI's **Logs** tab tails the same file using `logs.tail`.
 See [Control UI](/web/control-ui) for how to open it.
 
+The tab retains the latest 2,000 lines and renders a window around the current
+scroll position. Filter and Export cover the entire retained history; browser
+Find and native text selection cover the rendered window. Use Filter to find an
+older retained line, or Export to copy all matching lines.
+
+Filter ignores case and matches canonically equivalent composed and decomposed
+Unicode text. This normalization applies only to comparisons; displayed and
+exported log lines retain their original text.
+
+Scroll to the bottom, or focus the log stream and press End, to reach the newest
+line. Turn on Auto-follow to keep following new lines as they arrive.
+
 ### Channel-only logs
 
 To filter channel activity (WhatsApp/Telegram/etc), use:
@@ -279,10 +291,12 @@ that wrap a cancellation error.
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the
-provider, model, available status, code, type, message, error body, and request
-and response IDs. File logs preserve these error fields before transcript
-redaction and clipping; generated response content and request payloads are not
-included. Treat these local logs as sensitive. Log exports retain their existing
+provider, model, error name, available status, code, type, cause name and code,
+and request and response IDs. The provider's error message and response body are
+not logged, because they can echo prompts, tool results, or masked credentials.
+Use the status, `code`, and `type` to tell an unknown model (for example `404
+model_not_found`) from a bad key (`401 invalid_api_key`). Generated response
+content and request payloads are not included. Log exports retain their existing
 redaction policy.
 
 Embedded attempts also log `Assistant attempt failed`, including the saved error
@@ -306,6 +320,15 @@ provider HTTP errors, and network interruptions. Worker inference preserves
 bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
+
+Ordinary OpenAI Responses failures log one `provider-error` warning with available code, type,
+and provider `requestId` metadata. Correlation with the originating model call
+uses `clientRequestId` when the provider supplies its own request ID. Missing
+fields and provider prose, request bodies, and response bodies are omitted.
+Same-model retry scheduling is logged at `debug`; exhausted retries produce an
+explicit error. Generic secret-egress request audit lines, including refusals,
+stay at `debug`. Structured `secret.egress` events still count every outcome,
+and certificate failures retain their actionable warning.
 
 When reply dispatch consumes a thrown error after a partial reply or an adopted
 turn, its terminal `message.dispatch.completed` and `message.processed`
@@ -420,7 +443,9 @@ but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
 
 Embedded model requests attach the raw `sessionKey`, `runId`, numbered
-`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+`requestId`, and `requestNumber` to fetch and transport logs. When a failure
+also includes a provider `requestId`, the local identifier is labeled
+`clientRequestId`. String identifiers
 use lossless JSON escaping so control characters cannot forge log lines; their
 values are not redacted. The request sequence
 continues across same-run retries. Fetch response logs include the HTTP
@@ -469,6 +494,8 @@ one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
 session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
 preparation belong to `preparation`, before the first model request.
+Fast sends retain numeric phase timings without formatting a log message;
+enabled diagnostic phase subscribers still receive their observations.
 
 `detail.*` fields attribute those intervals using the existing reply and agent
 preparation spans, without enabling timeline file logging. They include session
@@ -479,6 +506,73 @@ their difference indicates the writer wait. Parent and child spans overlap and
 must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
+
+Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
+storage preparation, reads, authority preparation, message preparation, and durable
+commit. `detail.persist.transcript.*` covers target selection, owner authority,
+append, and transcript publication; `detail.persist.turn.*` further separates the
+append's preparation, authority, message hook, commit, and completion waits.
+`detail.session.actor.command.queue` measures the physical writer FIFO wait;
+`execute` includes the command's `commit` and `publication` intervals. Commit
+timing includes worker delivery, transaction admission, and durable settlement;
+it is not an isolated fsync measurement. `detail.persist.resolveInput` identifies
+input/media resolution, and `detail.session.inputActor.acquire` times actor acquisition.
+These nested spans use the same request-owned diagnostics without logging input
+bytes or enabling timeline files.
+
+`detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
+and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
+policy admission and revalidation; `baseline_wait` records only the time setup
+blocks on the concurrently captured Git baseline. `mkdir`, `sandbox`, and `roots`
+cover directory creation, sandbox preparation, and permission-root resolution.
+The `sandbox.*` checkpoints further separate session selection, state-owner
+admission, workspace selection, GitHub identity, pruning, workspace/skills layout,
+mounts, registry reads, backend provisioning, browser setup, and finalization.
+`sandbox.layout.*` separates workspace creation, skill imports, remote connections,
+eligibility, and synchronization. These are fixed labels and monotonic elapsed
+times, including failed preparation. Read siblings as consecutive phases and
+parents as inclusive totals; do not add a parent to its children. Prompt-media
+warnings beginning `Native image:` concern image-file access, not container-image
+validation, and occur outside attempt setup.
+
+`detail.attempt.system-prompt.runtime-and-references` covers concurrent runtime
+and reference preparation. `detail.attempt.system-prompt.context` covers concurrent
+tool context, project memory, and TTS preference preparation; its nested
+`tool-context` span covers concurrent memory and watched-session reads. These
+group durations include overlapping work, not separate timings for each read.
+
+Within `detail.attempt.system-prompt.context`, `detail.project-memory.*`
+separates runtime selection, dynamic imports, provider preparation, candidate
+retrieval, authority checks, rendering, provider close, and final publication.
+Legacy memory runtimes instead report `legacy.manager`, `legacy.candidates`, and
+`legacy.render`. The native provider owners further report
+`detail.memory.provider-open.*` (authority preparation, runtime lookup, opening,
+revalidation, failed-open cleanup, and binding) and `detail.memory.provider-call.*` (authority
+preparation, execution, and revalidation). Authority phases include waits for
+pending audience publications; candidate execution includes the provider's own
+storage and filtering work. These fixed labels contain no project keys or memory
+content, and include failed or denied operations. Parent totals overlap their
+children; the same provider phases can also occur during other memory operations.
+
+Fresh managed sandbox projections also record fixed stages beneath
+`sandbox.workspace_selection.prepare.reconcile`: template selection and cloning,
+checkout packing, indexing and materialization, manifest scanning, publication,
+and cleanup. `dependency.install` separates package installation from
+`dependency.retire`, which includes removing the disposable builder before its
+files can be published. A slow reconcile total can therefore reflect container
+removal even after the installer has exited.
+
+`detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
+owner's recorded phase durations, including `templatePrepare`, `templateApply`,
+`templateValidate`, `templateRetire`, `checkout`, `runtimeQuiesce`, `runtimeResume`,
+and `unattributed`. Template retirement includes removing an obsolete generation;
+it is separate from retiring a dependency builder. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
+earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
+Use the matching `detail.worktree.sandbox` total when comparing setup with its
+nested worktree preparation. Recorded worktree summaries appear when their owner
+finishes; a preparation spanning acknowledgement is reported at completion.
 
 ### Embedded attempt preparation
 
@@ -706,6 +800,15 @@ settlement that mutation is actually awaiting. `completionDelayMs` measures
 synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
+
+Subagent-kill mutations also report `subphaseDurationsMs` for awaited caller facts,
+caller Stop hooks, descendant discovery, durable kill intent, admission draining, runtime loading,
+registry settlement and obligation retirement, prefixed with `prepare.` or `run.`.
+These durations include rejected waits and accumulate repeated waits; they exclude
+each operation's synchronous work before returning its promise. Registry settlement
+includes its persistence and session cleanup bookkeeping. The joins for raw source
+settlement and child-command process cleanup occur after the mutation and are not included.
+The subphase totals therefore need not equal the enclosing phase durations.
 
 The tracker preserves outer ownership across reentrant work and retires a
 holder only when its actual callback exits and the owner releases custody. Its
@@ -944,6 +1047,21 @@ Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-restore` (restore a transcript). Their writer warnings carry the same Worker
 identity and numbered admission fields.
 
+### State lease renewal failures
+
+The `state/lease` logger warns on the first non-loss failure of a parent-scheduled
+state lease renewal. It includes the lease scope, key, attempt number, and error
+name and codes, without error messages, stacks, or database paths. Further failures
+are counted until the lease timer closes or expires.
+
+`state lease expired` warnings and the loss error distinguish a renewal still
+pending (with its start time and age), the last renewal failing (with its attempt
+and error classification), and no renewal attempted since the last committed
+expiry (with the age of that successful commit). Each expiry warning includes
+the failure count. A pending request identifies an unsettled actor operation;
+it does not establish which actor phase is blocked. Lease durations, retries,
+and ownership checks are unchanged.
+
 ### SQLite transaction timing
 
 The `sqlite/transaction` warnings `slow SQLite transaction hold`,
@@ -1125,6 +1243,27 @@ no diagnostic flag. Durations include awaited work: `admission.revalidate` is
 nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
 
+Admission subphases separate operator retention (`operator`), lifecycle preparation
+through the session writer barrier (`lifecycle_prepare`), ACP metadata
+(`acp_metadata`), placement preparation and refresh
+(`placement_prepare`, `placement_refresh`), and current session/retry validation
+(`current_session`). Lifecycle preparation includes agent admission checks and
+queue waits; it is not a pure SQLite lock timer. These fields use the
+`detail.admission.` prefix. Sends without restart-safe recovery skip the unused
+transcript lifecycle-header read; current session and caller checks still run.
+Restart-safe admission reuses the request's prepared session entry for ACP metadata.
+Final `current_session` validation stays ordered; a changed lifecycle causes ACP metadata to be prepared
+again before that validation repeats. Durable input custody still completes before
+acknowledgement.
+
+After acknowledgement, `runAdmission` also covers steering into an active turn.
+Its `detail.run_admission.steer_*` subphases separate authority, continuation and
+delivery preparation, ordered admission (`steer_admit`), waiting for the backend
+outcome (`steer_settlement`), and finalization (`steer_finalize`). `steer_prepare`
+encloses preparation through ordered admission. A long `stage=steer` interval
+can therefore be an intentional wait behind older input or for its transcript
+commit, rather than slow startup of a new turn. Nested totals overlap.
+
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
 ```bash
@@ -1165,12 +1304,59 @@ For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower th
 warning thresholds. They are not required to diagnose a multi-second startup
 stall.
 
+`main-thread stall` warnings include `stallStartMs`, `stallEndMs`, and
+`reportedAtMs` as Unix timestamps in milliseconds. Scoped callbacks have measured
+start and end times. Unattributed active-loop stalls use the observed gap between
+20 ms heartbeats; these bounds describe a blocked-loop observation, not an exact
+JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
+the resumed wake instead, without adding idle heartbeats.
+
+On supported Node runtimes, `main-thread stall profile` selects samples only
+inside the longest reported stall's saved interval. `windowStartMs` and
+`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
+The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
+work outside the interval is excluded, even when reporting is delayed. Sample
+counts include idle samples whose frames are omitted from `inclusive`, so a
+single listed stack does not mean that stack occupied the whole interval.
+
+The report also includes `self`, up to ten sampled leaf frames as
+`[frame, samples, sampledMs, nearestAppFrame]`. These identify the work beneath
+shared inclusive callers; `nearestAppFrame` is the nearest OpenClaw frame on
+that sampled stack, or `null` when none is visible. Sampled milliseconds use
+the selected profile time deltas, clipped at the start of the stall; they are
+an attribution estimate, not an exact CPU timer. `deepest` contains up to three
+hot stack tails as `[samples, frames]`, with up to eight frames ordered from
+caller to sampled leaf.
+
+The report payload has a hard 2 KiB limit. `reportTruncated=true` means lower
+priority entries were omitted to fit: inclusive ancestors first, then extra
+stack tails and their outer callers, then lower-ranked self frames. JSON stays
+complete, and sampled leaves take priority. `truncated` separately describes
+limited native profile coverage. Code locations and symbols retain the same
+redaction policy as other diagnostic profiles.
+
+On supported Node runtimes, a worker also reports a continuously blocked main
+thread after 30 seconds, then at most once per minute while the same stall
+continues. `main-thread stall in progress` is written directly to standard error
+(and the service journal), so it does not wait for the main event loop or the
+configured file logger. It uses the existing bounded native recording: an
+inspector interrupt takes the snapshot, and the worker parses, sanitizes, and
+formats it within the same 2 KiB profile budget. `captureMs` measures the native
+snapshot interrupt; no debugger listener or additional sampler is started.
+Native waits that cannot service an inspector interrupt can still prevent a JS
+profile; this mechanism diagnoses JavaScript spins, not every native deadlock.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without
 capturing raw prompt or response content:
 
-- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload.
+  OpenAI and Anthropic Messages transports reuse the serialized body size, after
+  payload hooks and transport adjustments. Other transports measure the payload
+  exposed by their hook; this may differ from the final wire body. Injected
+  Anthropic SDK clients and SDKs without a host fetch also use the hook
+  measurement because they own encoding and network I/O.
 - `responseStreamBytes`: UTF-8 byte size of streamed model response chunk
   payloads. High-frequency text, thinking, and tool-call delta events count
   only the incremental `delta` bytes instead of full `partial` snapshots.

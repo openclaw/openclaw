@@ -89,7 +89,7 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                     fallback={
                       <label class="chat-ci__automation-option">
                         <input
-                          ref={binding.ref}
+                          ref={(element) => binding.ref?.(element)}
                           class="chat-ci__automation-checkbox"
                           type="checkbox"
                           name={entry[0]}
@@ -123,7 +123,8 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                             : entry[1],
                         )}
                         checked={props.options[entry[0]]}
-                        disabled={props.disabled || props.pending[entry[0]] !== undefined}
+                        disabled={props.disabled}
+                        saving={props.pending[entry[0]] !== undefined}
                         onChange={(enabled) => props.onChange(entry[0], enabled)}
                       />
                     </label>

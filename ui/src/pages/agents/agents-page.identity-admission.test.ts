@@ -3,6 +3,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -21,14 +22,7 @@ function admissionFixture() {
   let hash = "hash-1";
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash,
-        valid: true,
-        issues: [],
-      };
+      return sourceConfigSnapshot(config, hash);
     }
     if (method === "config.set") {
       const result = await configWrite.promise;

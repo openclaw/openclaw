@@ -13,6 +13,7 @@ import {
   createComposerContainer,
   createComposerProps,
   disposeComposer,
+  findPrimaryButton,
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
@@ -21,6 +22,7 @@ import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
 import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
@@ -91,6 +93,15 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
   return { owner, state, view, input, enter };
 }
 
+it("rebinds the native composer when its pane presentation changes", () => {
+  const { view, input, owner } = mountOwnedComposer({ paneId: "single" });
+  view.update({ paneId: "plugin-app:agent:main:one" });
+  expect(getChatComposerState("plugin-app:agent:main:one").composerTextarea).toBe(view.textarea());
+  input("Describe this shell.");
+  flush();
+  expect(owner.composerDraft.read().draft).toBe("Describe this shell.");
+});
+
 it("updates edits and history from the draft owner without remounting the input", () => {
   const { owner, state, view } = mountOwnedComposer();
   const textarea = view.textarea();
@@ -141,10 +152,12 @@ it("publishes attachment read progress through the composer owner without a draf
     [new File(["progress"], "progress.txt", { type: "text/plain" })],
     props,
   );
-  await waitForSolid(() => expect(view.query(".chat-attachment-loading > span")).not.toBeNull());
+  await waitForSolid(() =>
+    expect(view.query('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
+  );
   reportProgress?.();
   flush();
-  expect(view.query<HTMLElement>(".chat-attachment-loading > span")?.style.transform).toBe(
+  expect(view.query<HTMLElement>(".chat-attachment-loading__line > span")?.style.transform).toBe(
     "scaleX(0.5)",
   );
   expect(view.textarea().value).toBe("");
@@ -172,6 +185,31 @@ it("publishes submitted and restored drafts without remounting the input", () =>
   flush();
   expect(textarea.value).toBe("A recoverable draft");
   expect(view.textarea()).toBe(textarea);
+});
+
+it("retires submitted command suggestions before a delayed catalog refresh", async () => {
+  const refresh = createDeferred();
+  const onSend = vi.fn(() => {
+    clearSubmittedComposerState(state, state.chatMessage, [], [], null);
+  });
+  const { state, view, input } = mountOwnedComposer({
+    onSend,
+    onSlashIntent: () => refresh.promise,
+  });
+  input("/help");
+  await waitForSolid(() => expect(view.query('[role="listbox"]')).not.toBeNull());
+
+  findPrimaryButton(view.container).click();
+  flush();
+  expect(onSend).toHaveBeenCalledOnce();
+  expect(state.chatMessage).toBe("");
+  expect(view.textarea().value).toBe("");
+  expect(view.query('[role="listbox"]')).toBeNull();
+  expect(view.textarea().hasAttribute("aria-controls")).toBe(false);
+
+  refresh.resolve();
+  await refresh.promise;
+  await waitForSolid(() => expect(view.query('[role="listbox"]')).toBeNull());
 });
 
 it("publishes a restored persisted draft and queue after adopting their revision", () => {
@@ -210,14 +248,14 @@ it("publishes a restored persisted draft and queue after adopting their revision
   expect(view.textarea()).toBe(textarea);
 });
 
-it("restores the conversation draft when a restored goal edit is cancelled", () => {
+it("restores the conversation draft when a restored goal edit is cancelled", async () => {
   const { state, view } = mountOwnedComposer({
     draft: "Edit this objective",
     goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
     onGoalSubmit: vi.fn(async () => false),
   });
+  await waitForSolid(() => expect(view.goal()?.querySelector("button")).toBeTruthy());
   const cancel = view.goal()!.querySelector<HTMLButtonElement>("button")!;
-  expect(cancel).not.toBeNull();
   cancel.click();
   flush();
   expect(state.chatGoalDraftMode).toBeNull();
@@ -233,7 +271,7 @@ it("starts a goal and admits only one same-turn submit", async () => {
   input("/goal start ");
   flush();
   expect(state.chatGoalDraftMode).toEqual({ action: "start" });
-  expect(view.goal()).not.toBeNull();
+  await waitForSolid(() => expect(view.goal()).not.toBeNull());
   expect(view.textarea().value).toBe("");
   input("Keep every literal space  ");
   flush();
@@ -308,7 +346,8 @@ it("updates composer text on a live locale change without disturbing an IME draf
   );
   const textarea = view.textarea();
   const heading = view.query(".chat-controls__permission-heading")!;
-  expect(heading.textContent).toBe("Execution permissions");
+  const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
+  expect(learnMore()).toBe("Learn more");
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -321,7 +360,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
   await i18n.setLocale("de");
   flush();
 
-  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
   expect(view.query(".chat-controls__permission-heading")).toBe(heading);
   expect(view.textarea()).toBe(textarea);

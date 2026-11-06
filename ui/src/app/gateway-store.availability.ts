@@ -15,13 +15,11 @@ const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 type UnavailableDeadlineKey = "restartPending" | "suspensionPhase";
 
-type AvailabilityHost = {
+export function createAvailabilityIndicators(host: {
   isStopped: () => boolean;
   getSnapshot: () => ApplicationGatewaySnapshot;
   applySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
-};
-
-export function createAvailabilityIndicators(host: AvailabilityHost) {
+}) {
   let offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   const unavailableDeadlines: Partial<
     Record<UnavailableDeadlineKey, ReturnType<typeof globalThis.setTimeout>>

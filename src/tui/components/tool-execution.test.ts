@@ -2,6 +2,7 @@ import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { expectText } from "./render.test-support.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 
 const MAX_COLLAPSED_COMPONENT_LINES = 17;
@@ -15,10 +16,6 @@ function codeMode(text: string, status: string, isError = false) {
   component.setResult({ ...content(text), details }, { isError });
   return component;
 }
-function expectText(text: string, present: string[], absent: string[] = []) {
-  present.forEach((value) => expect(text).toContain(value));
-  absent.forEach((value) => expect(text).not.toContain(value));
-}
 
 function renderToolOutput(text: string, width: number) {
   const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
@@ -28,6 +25,35 @@ function renderToolOutput(text: string, width: number) {
 
 describe("ToolExecutionComponent", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each(["ask_user", "tool_call"])("keeps question options visible in %s cards", (name) => {
+    const args = {
+      questions: [
+        {
+          header: "Lunch",
+          question: "What should we eat?",
+          options: [{ label: "Noodles" }, { label: "Rice", description: "With vegetables" }],
+        },
+        { header: "Drink", question: "What should we drink?", options: [{ label: "Water" }] },
+      ],
+    };
+    const component = new ToolExecutionComponent(
+      name,
+      name === "tool_call" ? { id: "openclaw:core:ask_user", args } : args,
+    );
+    for (const completed of [false, true]) {
+      if (completed) {
+        component.setResult(content("Answered"));
+      }
+      expectText(render(component), [
+        "What should we eat?",
+        "1. Noodles",
+        "2. Rice",
+        "What should we drink?",
+        "1. Water",
+      ]);
+    }
+  });
+
   it("preserves literal Code Mode output through activity updates", () => {
     const value = 'START_COMPLETED **stars** "quoted" \\path';
     const literal = "```\n# literal heading\n```";
@@ -97,30 +123,23 @@ describe("ToolExecutionComponent", () => {
     expect(hasPlaceholder()).toBe(false);
   });
 
-  it("retains the complete result when expanding and recollapsing a preview", () => {
-    const text = `START_MARKER ${"x".repeat(16_384)} END_MARKER`;
-    const { component, lines: collapsed } = renderToolOutput(text, 80);
-    expect(collapsed.length).toBeLessThanOrEqual(MAX_COLLAPSED_COMPONENT_LINES);
-    expect(plain(collapsed)).not.toContain("END_MARKER");
-    expect(collapsed.every((line) => visibleWidth(line) <= 80)).toBe(true);
-    component.setExpanded(true);
-    const expanded = component.render(80);
-    expect(expanded.length).toBeGreaterThan(MAX_COLLAPSED_COMPONENT_LINES);
-    expectText(plain(expanded), ["START_MARKER", "END_MARKER"]);
-    component.setExpanded(false);
-    const recollapsed = component.render(80);
-    expect(recollapsed.length).toBeLessThanOrEqual(MAX_COLLAPSED_COMPONENT_LINES);
-    expectText(plain(recollapsed), ["..."], ["END_MARKER"]);
-    expect(recollapsed.every((line) => visibleWidth(line) <= 80)).toBe(true);
-  });
-
-  it("bounds output with more than twelve explicit source lines", () => {
-    const text = Array.from({ length: 30 }, (_, i) => `tool output line ${i + 1}`).join("\n");
-    const { component, lines } = renderToolOutput(text, 80);
-    expect(lines.length).toBeLessThanOrEqual(MAX_COLLAPSED_COMPONENT_LINES);
-    expectText(plain(lines), ["..."], ["tool output line 30"]);
-    component.setExpanded(true);
-    expect(render(component)).toContain("tool output line 30");
+  it.each([
+    `START_MARKER ${"x".repeat(16_384)} END_MARKER`,
+    ["START_MARKER", ...Array.from({ length: 30 }, (_, i) => `line ${i}`), "END_MARKER"].join("\n"),
+  ])("retains long output through expansion and recollapse (%#)", (text) => {
+    const { component } = renderToolOutput(text, 80);
+    for (const expanded of [false, true, false]) {
+      component.setExpanded(expanded);
+      const lines = component.render(80);
+      expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true);
+      if (expanded) {
+        expect(lines.length).toBeGreaterThan(MAX_COLLAPSED_COMPONENT_LINES);
+        expectText(plain(lines), ["START_MARKER", "END_MARKER"]);
+      } else {
+        expect(lines.length).toBeLessThanOrEqual(MAX_COLLAPSED_COMPONENT_LINES);
+        expectText(plain(lines), ["..."], ["END_MARKER"]);
+      }
+    }
   });
 
   it("sanitizes a complete OSC before applying the collapsed preview budget", () => {

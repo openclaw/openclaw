@@ -111,10 +111,10 @@ function beforeToolCall(handler: (...args: unknown[]) => unknown) {
 
 describe("plugin tools MCP server", () => {
   it("rejects a non-agent session identity from the managed bridge", async () => {
+    vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "research-session");
     await expect(
       acquirePluginToolsForMcp({
         config: { plugins: { enabled: true } } as never,
-        agentSessionKey: "research-session",
       }),
     ).rejects.toThrow("must be a canonical agent session key");
   });
@@ -150,10 +150,8 @@ describe("plugin tools MCP server", () => {
         },
       },
     } as never;
-    const acquisition = await acquirePluginToolsForMcp({
-      config,
-      agentSessionKey: "agent:research:acp:session-1",
-    });
+    vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "agent:research:acp:session-1");
+    const acquisition = await acquirePluginToolsForMcp({ config });
     const handlers = createPluginToolsMcpHandlers(acquisition.resolveTools());
 
     try {

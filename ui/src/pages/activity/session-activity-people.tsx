@@ -2,14 +2,19 @@ import { createMemo, For, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import {
   presenceActivityLabel,
   presenceViewerActivity,
   presenceViewerLabel,
+  presenceUserLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import type { SessionActivityFilters } from "./session-activity.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { ACTIVITY_PHONE_QUERY, type SessionActivityFilters } from "./session-activity.ts";
+
+registerEnglishCatalog(registerActivityEnglish);
 
 type ActivityPerson = PresenceViewer & {
   count: number;
@@ -22,14 +27,26 @@ type PeopleView = {
   result?: Pick<SessionsListResult, "peopleIncomplete">;
 };
 
-function isUnresolvedPerson(person: PresenceViewer): boolean {
-  return !person.name && !person.email && presenceViewerLabel(person) === person.id;
+export function isUnresolvedPerson(person: PresenceViewer): boolean {
+  return !presenceUserLabel(person).isSharedOwner && !person.name?.trim();
 }
 
 function compactPersonLabel(person: PresenceViewer): string {
-  return isUnresolvedPerson(person) && person.id.length > 8
+  return isUnresolvedPerson(person) && !person.id.includes("@") && person.id.length > 8
     ? `${person.id.slice(0, 8)}…`
     : presenceViewerLabel(person);
+}
+
+/** Someone with no name or picture: a raw id's first character would say nothing. */
+export function UnknownPersonAvatar() {
+  return (
+    <span
+      class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
+      aria-hidden="true"
+    >
+      <Icon name="users" />
+    </span>
+  );
 }
 
 function PersonAvatar(props: {
@@ -44,17 +61,7 @@ function PersonAvatar(props: {
     return props.person ? presenceViewerActivity(props.person) : "unknown";
   });
   return (
-    <Show
-      when={resolvedPerson()}
-      fallback={
-        <span
-          class="viewer-avatar viewer-avatar--overflow activity-feed__unknown-avatar"
-          aria-hidden="true"
-        >
-          <Icon name="users" />
-        </span>
-      }
-    >
+    <Show when={resolvedPerson()} fallback={<UnknownPersonAvatar />}>
       {(person) => (
         <span class="activity-feed__person-avatar">
           <openclaw-viewer-avatar
@@ -115,8 +122,9 @@ export function PeopleControl(props: {
 }) {
   let anchor!: HTMLButtonElement;
   let popover: PopoverHandle | undefined;
+  const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const selectPerson = (personId: string | null) => {
-    popover?.hide();
+    popover?.overlay.request(false, "return");
     props.view.onFiltersChange({ ...props.view.filters, personId });
   };
   const visible = () => props.people.slice(0, 3);
@@ -131,14 +139,19 @@ export function PeopleControl(props: {
         }}
         id="activity-feed-people-trigger"
         type="button"
-        class="btn btn--sm activity-feed__people-trigger"
+        class={[
+          "btn btn--sm activity-feed__people-trigger",
+          { active: phone() && Boolean(props.selectedPerson) },
+        ]}
         aria-label={t("activityFeed.peopleButtonLabel")}
         aria-haspopup="dialog"
         aria-controls="activity-feed-people-popover"
         aria-expanded="false"
         onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
-        {props.selectedPerson ? (
+        {phone() ? (
+          <Icon name="users" />
+        ) : props.selectedPerson ? (
           <>
             <PersonAvatar
               person={props.selectedPerson}
@@ -172,7 +185,7 @@ export function PeopleControl(props: {
           </span>
         )}
       </button>
-      {props.selectedPerson ? (
+      {props.selectedPerson && !phone() ? (
         <button
           type="button"
           class="btn btn--sm activity-feed__people-clear"

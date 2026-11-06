@@ -13,6 +13,8 @@ const MOONSHOT_ALWAYS_THINKING = {
   "kimi-k2.7-code": "low",
   "kimi-k2.7-code-highspeed": "low",
   "kimi-k3": "max",
+  "kimi-k3.1-pro": "max",
+  "kimi-k3.1-pro-highspeed": "max",
 } as const;
 const FIXED_SAMPLING_FIELDS = "temperature top_p n presence_penalty frequency_penalty".split(" ");
 type MoonshotAlwaysThinkingEffort = "low" | "max";
@@ -55,7 +57,8 @@ function resolveAlwaysThinkingEffort(
   directMoonshotModel: boolean,
 ): MoonshotAlwaysThinkingEffort | undefined {
   const effort = MOONSHOT_ALWAYS_THINKING[modelId as keyof typeof MOONSHOT_ALWAYS_THINKING];
-  return effort && (modelId !== "kimi-k3" || directMoonshotModel) ? effort : undefined;
+  // K3-family max effort is the direct Moonshot API contract; proxies map effort themselves.
+  return effort && (effort !== "max" || directMoonshotModel) ? effort : undefined;
 }
 
 function sanitizeAlwaysThinkingPayload(

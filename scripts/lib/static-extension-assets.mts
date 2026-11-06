@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseDockerSelectedPluginBuildIdFilter } from "./bundled-plugin-build-entries.mjs";
 import { collectTrackedBundledPluginSourceCandidates } from "./bundled-plugin-source-utils.mts";
 import { isRecord } from "./record-shared.mjs";
+import { updateStandaloneSourceModuleUrlChunks } from "./standalone-source-module-urls.mjs";
 
 type StaticExtensionAsset = {
   pluginDir?: string;
@@ -308,6 +309,9 @@ function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runti
       ? (params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl, env: params.env }))
       : discoverStaticExtensionRuntimeOverlayAssets({ ...params, rootDir, fs: fsImpl });
   const warn = params.warn ?? console.warn;
+  const recordModuleUrls =
+    runtimeRoot === undefined && fsImpl.existsSync(path.join(rootDir, "dist/.source-module-urls"));
+  const moduleUrlRewrites: { filename: string; original: Buffer; rewritten: Buffer }[] = [];
   for (const asset of assets) {
     const { src, dest } = asset;
     const normalizedDest = toPosixPath(dest);
@@ -322,6 +326,9 @@ function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runti
         ? path.join(rootDir, dest)
         : path.join(runtimeRoot, normalizedDest.slice("dist/".length));
     if (fsImpl.existsSync(copySourcePath)) {
+      const original =
+        recordModuleUrls && fsImpl.existsSync(destPath) ? fsImpl.readFileSync(destPath) : undefined;
+      const rewritten = original === undefined ? undefined : fsImpl.readFileSync(copySourcePath);
       fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
       // Staging links target the final location, so replace the link instead of
       // following it into the live output while materializing a static asset.
@@ -332,10 +339,23 @@ function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runti
         fsImpl.unlinkSync(destPath);
       }
       fsImpl.copyFileSync(copySourcePath, destPath);
+      if (original !== undefined && rewritten !== undefined) {
+        moduleUrlRewrites.push({
+          filename: destPath,
+          original,
+          rewritten,
+        });
+      }
     } else {
       warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
     }
   }
+  // Static launchers replace named build facades; their compiler body mapping is unchanged.
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: path.join(rootDir, "dist"),
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
 }
 
 /**

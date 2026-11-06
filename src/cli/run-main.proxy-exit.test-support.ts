@@ -38,12 +38,8 @@ export function registerRunMainProxyExitTests({
       const previousExitCode = process.exitCode;
       const handle = makeProxyHandle();
       startProxyMock.mockResolvedValueOnce(handle);
-      let resolveRoute: (value: boolean) => void = () => {};
-      tryRouteCliMock.mockReturnValueOnce(
-        new Promise<boolean>((resolve) => {
-          resolveRoute = resolve;
-        }),
-      );
+      const { promise, resolve: resolveRoute } = createDeferredCore<boolean>();
+      tryRouteCliMock.mockReturnValueOnce(promise);
 
       const processOnceSpy = vi.spyOn(process, "once");
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string) => {
@@ -168,12 +164,8 @@ export function registerRunMainProxyExitTests({
   it("synchronously kills the managed proxy during hard process exit", async () => {
     const handle = makeProxyHandle();
     startProxyMock.mockResolvedValueOnce(handle);
-    let resolveRoute: (value: boolean) => void = () => {};
-    tryRouteCliMock.mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        resolveRoute = resolve;
-      }),
-    );
+    const { promise, resolve: resolveRoute } = createDeferredCore<boolean>();
+    tryRouteCliMock.mockReturnValueOnce(promise);
 
     const processOnceSpy = vi.spyOn(process, "once");
     try {

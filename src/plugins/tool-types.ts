@@ -76,6 +76,12 @@ type OpenClawPluginToolContextBase = {
    * policy; it never grants owner identity.
    */
   inputProvenance?: InputProvenance;
+  /**
+   * Present when this tool runs inside a hidden background fork of another session.
+   * `ownerPluginId` names the plugin that started the fork with
+   * `api.runtime.subagent.runForkedTurn`; it is absent for core-owned forks. Host-stamped.
+   */
+  backgroundRun?: { sourceSessionKey: string; ownerPluginId?: string };
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */
@@ -91,6 +97,9 @@ type OpenClawPluginToolContextBase = {
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    /** Prepared local exec parity; not standalone authority or permission for remote browsers. */
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
   };
   messageChannel?: string;
   agentAccountId?: string;
@@ -114,7 +123,11 @@ type OpenClawPluginToolContextBase = {
   memoryFlush?: { flushId: string };
   /** Rejects a retained audience after any captured session incarnation changes. */
   assertMemoryAudienceCurrent?: () => void;
-  /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
+  /**
+   * Live host-bound authority. Recheck inside the final synchronous effect/write guard.
+   * Resolves the invoking call from the async context it runs in; callbacks from event sources
+   * shared across calls must run it through `AsyncLocalStorage.snapshot()` taken at call start.
+   */
   assertInvocationCurrent?: () => void;
   /**
    * Host-bound client-input policy. Pure synchronous guard for final storage admission;
@@ -164,6 +177,11 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
   /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
   workspaceAccess?: boolean | "execute";
+  /**
+   * System-prompt guidance for these tools. Agent harnesses show it only while one of the
+   * named tools is callable in the run, so a denied tool adds no prompt bytes.
+   */
+  promptGuidance?: string;
 };
 
 export type OpenClawPluginHookOptions = {

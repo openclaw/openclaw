@@ -9,11 +9,9 @@ import {
   createSidebarNarration,
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import "../test-helpers/app-sidebar-tool-activity-cases.ts";
 
-// Mirrors the protocol throttle; asserting through timers keeps the
-// constant unexported (production-only export policy).
+// Assert the protocol throttle through timers without a production-only export.
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 const runKey = "agent:main:run";
 
@@ -55,10 +53,27 @@ const chatSnapshot = (text: string, fields: Record<string, unknown> = {}) =>
 
 const digest = (text: string) => runEvent("session.narration", { text });
 
-function messageSource(subscribe = (key: string) => Promise.resolve({ key, agentId: null })) {
+function sourceWith<
+  T extends NonNullable<SidebarNarrationSyncInput["source"]>["subscribeMessages"],
+>(subscribeMessages: T) {
   return {
-    subscribeMessages: vi.fn(subscribe),
-    unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    subscribeMessages,
+    unsubscribeMessages: vi
+      .fn<SessionCapability["unsubscribeMessages"]>()
+      .mockResolvedValue(undefined),
+  };
+}
+function messageSource(subscribe = (key: string) => Promise.resolve({ key, agentId: null })) {
+  return sourceWith(vi.fn(subscribe));
+}
+function coordinatedSource(
+  request: ConstructorParameters<typeof GatewaySessionMessageSubscriptionCoordinator>[0]["request"],
+) {
+  const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+  return {
+    coordinator,
+    subscribeMessages: vi.fn(coordinator.acquire.bind(coordinator)),
+    unsubscribeMessages: vi.fn(coordinator.release.bind(coordinator)),
   };
 }
 function startNarration(
@@ -77,7 +92,15 @@ function startNarration(
   };
   const narration = createSidebarNarration();
   narration.sync(input);
-  return { narration, input, emit: narration.handleEvent };
+  return {
+    narration,
+    input,
+    emit: narration.handleEvent,
+    run: (event: string, payload: Record<string, unknown>) =>
+      narration.handleEvent(runEvent(event, payload)),
+    line: (expected: string | undefined, key = runKey) =>
+      expect(narration.read().lines.get(key)).toBe(expected),
+  };
 }
 const narrationFixture = () => startNarration(messageSource());
 
@@ -110,7 +133,19 @@ describe("createSidebarNarration", () => {
       startedAt: undefined,
       updatedAt: index,
     }));
-    const { narration, input } = startNarration(source, { rows });
+    const stale = Object.assign(runningRow("agent:main:stale"), {
+      hasActiveRun: false,
+      status: "running" as const,
+      updatedAt: 1_000,
+    });
+    const { narration, input } = startNarration(source, { rows: [...rows, stale] });
+    expect(source.subscribeMessages.mock.calls.map(([key]) => key)).not.toContain(
+      "agent:main:stale",
+    );
+    expect(source.subscribeMessages).toHaveBeenCalledWith(rows[7]!.key, {
+      agentId: undefined,
+      mode: "narration",
+    });
     rows[0]!.updatedAt = 100;
     narration.sync({ ...input, rows: rows.toReversed() });
     expect(source.subscribeMessages).toHaveBeenCalledTimes(6);
@@ -145,7 +180,7 @@ describe("createSidebarNarration", () => {
   });
 
   it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
-    const visibility = browserVisibility();
+    const visibility = browserVisibility("hidden");
     const wireKeys = new Set<string>();
     const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
       if (method === "sessions.messages.subscribe") {
@@ -155,15 +190,8 @@ describe("createSidebarNarration", () => {
       }
       return { key: params.key };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-    const source = {
-      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
-        coordinator.acquire(key, options),
-      ),
-      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
-        coordinator.release(handle),
-      ),
-    };
+    const source = coordinatedSource(request);
+    const { coordinator } = source;
     const selectedPane = await coordinator.acquire("agent:main:open");
     const outbox = await coordinator.acquire("agent:main:background-0");
     const { narration, input, emit } = startNarration(source, {
@@ -183,7 +211,9 @@ describe("createSidebarNarration", () => {
         message: assistant(text),
       });
 
-    const handles = await settleSubscriptions();
+    expect(source.subscribeMessages).not.toHaveBeenCalled();
+    visibility("visible");
+    await settleSubscriptions();
     expect(wireKeys.size).toBe(7);
     emit(snapshot("Before hiding."));
     emit(snapshot("Queued old narration."));
@@ -192,12 +222,10 @@ describe("createSidebarNarration", () => {
     visibility("hidden");
     visibility("hidden");
     narration.sync(input);
-    expect(source.unsubscribeMessages.mock.calls.map(([handle]) => handle)).toEqual(handles);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     expect(vi.getTimerCount()).toBe(0);
     emit(snapshot("Hidden update."));
     expect(narration.read().lines.size).toBe(0);
-    expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
 
     // Rows can settle or change while this tab is hidden.
     narration.sync({
@@ -207,16 +235,18 @@ describe("createSidebarNarration", () => {
     visibility("visible");
     visibility("visible");
     await settleSubscriptions();
-    expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key, "agent:main:new"]);
     emit(snapshot("Back in view."));
     expect(narration.read().lines.get(selectedPane.key)).toBe("Back in view.");
 
+    visibility("hidden");
+    narration.sync({ ...input, enabled: false, connectionIdentity: {} });
+    visibility("visible");
+    expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     narration.disconnect();
     visibility("hidden");
     visibility("visible");
     expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
-    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(9);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     await coordinator.release(selectedPane);
     await coordinator.release(outbox);
@@ -229,15 +259,9 @@ describe("createSidebarNarration", () => {
       const visibility = browserVisibility();
       const first = createDeferred<{ key: string; agentId: null }>();
       const second = createDeferred<{ key: string; agentId: null }>();
-      const source = {
-        subscribeMessages: vi
-          .fn()
-          .mockReturnValueOnce(first.promise)
-          .mockReturnValueOnce(second.promise),
-        unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>(() =>
-          Promise.resolve(),
-        ),
-      };
+      const source = sourceWith(
+        vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
+      );
       const { narration, input } = startNarration(source);
       if (boundary === "visibility") {
         visibility("hidden");
@@ -249,10 +273,7 @@ describe("createSidebarNarration", () => {
         narration.sync({
           ...input,
           rows: [],
-          source: {
-            subscribeMessages: vi.fn(),
-            unsubscribeMessages: vi.fn(() => Promise.resolve()),
-          },
+          source: sourceWith(vi.fn()),
         });
       }
       const current = { key: runKey, agentId: null };
@@ -274,76 +295,31 @@ describe("createSidebarNarration", () => {
     },
   );
 
-  it("defers initial hidden subscriptions and honors disabled intent on return", async () => {
-    const visibility = browserVisibility("hidden");
-    const source = messageSource();
-    const { narration, input } = startNarration(source);
-    expect(source.subscribeMessages).not.toHaveBeenCalled();
-    visibility("visible");
-    await Promise.resolve();
-    expect(source.subscribeMessages).toHaveBeenCalledOnce();
-    visibility("hidden");
-    narration.sync({ ...input, enabled: false, connectionIdentity: {} });
-    visibility("visible");
-    expect(source.subscribeMessages).toHaveBeenCalledOnce();
-    expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
-    narration.disconnect();
-  });
-
-  it("subscribes only to sessions with a projected active run", async () => {
-    const source = messageSource();
-    const { subscribeMessages } = source;
-    const rows: SidebarRecentSession[] = [
-      { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
-      { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
-      runningRow("agent:main:active"),
-    ];
-
-    const { narration } = startNarration(source, { rows });
-    await Promise.resolve();
-
-    expect(subscribeMessages).toHaveBeenCalledTimes(1);
-    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:active", {
-      agentId: undefined,
-      mode: "narration",
-    });
-
-    narration.disconnect();
-  });
-
   it("renders paced digests immediately and keeps the final line after queued tool activity", async () => {
-    const { narration, emit } = narrationFixture();
+    const { narration, emit, line, run } = narrationFixture();
     const tool = () =>
-      runEvent("session.tool", {
-        stream: "tool",
-        data: { phase: "start", name: "read" },
-      });
+      run("session.tool", { stream: "tool", data: { phase: "start", name: "read" } });
 
-    emit(tool());
+    tool();
     emit(digest("**Reading** source."));
-    expect(narration.read().lines.get(runKey)).toBe("Reading source.");
+    line("Reading source.");
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     emit(digest("Earlier.\n\nChecks are **passing**."));
-    expect(narration.read().lines.get(runKey)).toBe("Checks are passing.");
+    line("Checks are passing.");
 
-    emit(tool());
+    tool();
     await vi.advanceTimersByTimeAsync(100);
     emit(digest("Final result."));
-    emit(
-      runEvent("chat", {
-        state: "final",
-        message: assistant("Final result."),
-      }),
-    );
-    expect(narration.read().lines.get(runKey)).toBe("Final result.");
+    emit(chatFrame({ state: "final", message: assistant("Final result.") }));
+    line("Final result.");
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
-    expect(narration.read().lines.get(runKey)).toBe("Final result.");
+    line("Final result.");
     narration.disconnect();
   });
 
   it("scopes digest replacements and retracts hidden content across run boundaries", () => {
-    const { narration, emit } = narrationFixture();
+    const { narration, emit, line, run } = narrationFixture();
 
     emit(digest("Visible progress."));
     emit(
@@ -354,7 +330,7 @@ describe("createSidebarNarration", () => {
       }),
     );
     emit(gatewayEvent("session.narration", { sessionKey: runKey, text: "No run identity." }));
-    expect(narration.read().lines.get(runKey)).toBe("Visible progress.");
+    line("Visible progress.");
 
     for (const text of ["", "HEARTBEAT_OK"]) {
       emit(digest("Visible draft."));
@@ -362,55 +338,38 @@ describe("createSidebarNarration", () => {
       expect(narration.read().lines.has(runKey)).toBe(false);
     }
     emit(digest("Previous run result."));
-    emit(
-      gatewayEvent("agent", {
-        sessionKey: runKey,
-        runId: "run-2",
-        stream: "lifecycle",
-        data: { phase: "start" },
-      }),
-    );
+    run("agent", { runId: "run-2", stream: "lifecycle", data: { phase: "start" } });
     expect(narration.read().lines.has(runKey)).toBe(false);
-    emit(
-      gatewayEvent("session.narration", {
-        sessionKey: runKey,
-        runId: "run-2",
-        text: "New run progress.",
-      }),
-    );
-    expect(narration.read().lines.get(runKey)).toBe("New run progress.");
+    run("session.narration", { runId: "run-2", text: "New run progress." });
+    line("New run progress.");
     narration.disconnect();
   });
 
   it.each(["final", "aborted", "error"])(
     "settles queued full-owner narration immediately on %s",
     (state) => {
-      const { narration, emit } = narrationFixture();
+      const { narration, emit, line, run } = narrationFixture();
       emit(chatDelta("Initial work."));
       emit(chatDelta("Last visible result."));
-      expect(narration.read().lines.get(runKey)).toBe("Initial work.");
+      line("Initial work.");
 
-      emit(
-        runEvent("chat", {
-          state,
-          ...(state === "final" ? { message: assistant("Final corrected result.") } : {}),
-        }),
-      );
-      expect(narration.read().lines.get(runKey)).toBe(
-        state === "final" ? "Final corrected result." : "Last visible result.",
-      );
+      run("chat", {
+        state,
+        ...(state === "final" ? { message: assistant("Final corrected result.") } : {}),
+      });
+      line(state === "final" ? "Final corrected result." : "Last visible result.");
       expect(vi.getTimerCount()).toBe(0);
       narration.disconnect();
     },
   );
 
   it("hands subtitle ownership only to a run-identified digest", async () => {
-    const { narration, emit } = narrationFixture();
+    const { narration, emit, line } = narrationFixture();
 
     emit(chatDelta("Reading source"));
     emit(toolEvent("read"));
     expect(narration.read().tools.get(runKey)?.name).toBe("read");
-    expect(narration.read().lines.get(runKey)).toBe("Reading source");
+    line("Reading source");
 
     emit(
       gatewayEvent("session.observer", {
@@ -425,7 +384,7 @@ describe("createSidebarNarration", () => {
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     emit(toolEvent("list"));
     expect(narration.read().tools.get(runKey)?.name).toBe("list");
-    expect(narration.read().lines.get(runKey)).toBe("Reading source");
+    line("Reading source");
 
     emit(observer("Reviewing source"));
     expect(narration.read().lines.has(runKey)).toBe(false);
@@ -443,34 +402,32 @@ describe("createSidebarNarration", () => {
     emit(toolEvent("test", { runId: "run-2" }));
     expect(narration.read().observerDigests.has(runKey)).toBe(false);
     expect(narration.read().tools.get(runKey)?.name).toBe("test");
-    expect(narration.read().lines.get(runKey)).toBeUndefined();
+    line(undefined);
   });
 
   it("rebinds an active global session when the selected agent changes", async () => {
     const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
       Promise.resolve({ key, agentId: options?.agentId ?? null }),
     );
-    const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages };
-    const { narration, input, emit } = startNarration(source, {
+    const source = sourceWith(subscribeMessages);
+    const { narration, input, run, line } = startNarration(source, {
       rows: [runningRow("global")],
     });
     await Promise.resolve();
-    emit(
-      gatewayEvent("chat", {
-        sessionKey: "global",
-        agentId: "main",
-        state: "delta",
-        deltaText: "Old agent work.",
-        message: assistant("Old agent work."),
-      }),
-    );
-    expect(narration.read().lines.get("global")).toBe("Old agent work.");
+    run("chat", {
+      sessionKey: "global",
+      runId: undefined,
+      agentId: "main",
+      state: "delta",
+      deltaText: "Old agent work.",
+      message: assistant("Old agent work."),
+    });
+    line("Old agent work.", "global");
 
     narration.sync({ ...input, agentId: "research" });
     await Promise.resolve();
 
-    expect(unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
+    expect(source.unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
     expect(subscribeMessages).toHaveBeenLastCalledWith("global", {
       agentId: "research",
       mode: "narration",

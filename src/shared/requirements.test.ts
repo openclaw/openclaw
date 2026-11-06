@@ -1,13 +1,14 @@
 import { expect, it } from "vitest";
-import { evaluateRequirementsFromMetadataWithRemote } from "./requirements.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "./entry-status.js";
 
-type EvaluationParams = Parameters<typeof evaluateRequirementsFromMetadataWithRemote>[0];
+type EvaluationParams = Parameters<typeof evaluateEntryRequirementsForCurrentPlatform>[0];
 
 function evaluate(overrides: Partial<EvaluationParams> = {}) {
-  return evaluateRequirementsFromMetadataWithRemote({
+  return evaluateEntryRequirementsForCurrentPlatform({
     always: false,
+    entry: {},
     hasLocalBin: () => false,
-    localPlatform: "linux",
+    platform: "linux",
     isEnvSatisfied: () => false,
     isConfigSatisfied: () => false,
     ...overrides,
@@ -17,19 +18,19 @@ function evaluate(overrides: Partial<EvaluationParams> = {}) {
 it("requires at least one any-bin locally or remotely", () => {
   const metadata = { requires: { anyBins: ["a", "b"] } };
 
-  expect(evaluate({ metadata }).missing.anyBins).toEqual(["a", "b"]);
-  expect(evaluate({ metadata, hasLocalBin: (bin) => bin === "b" }).missing.anyBins).toStrictEqual(
-    [],
-  );
+  expect(evaluate({ entry: { metadata } }).missing.anyBins).toEqual(["a", "b"]);
+  expect(
+    evaluate({ entry: { metadata }, hasLocalBin: (bin) => bin === "b" }).missing.anyBins,
+  ).toStrictEqual([]);
   const remote = { hasAnyBin: (bins: string[]) => bins.includes("b") };
-  expect(evaluate({ metadata, remote }).missing.anyBins).toStrictEqual([]);
+  expect(evaluate({ entry: { metadata }, remote }).missing.anyBins).toStrictEqual([]);
 });
 
 it("normalizes macos and accepts local or remote platforms", () => {
   const missingOs = (os: string, overrides: Partial<EvaluationParams> = {}) =>
-    evaluate({ metadata: { os: [os] }, ...overrides }).missing.os;
+    evaluate({ entry: { metadata: { os: [os] } }, ...overrides }).missing.os;
   expect(missingOs("linux")).toStrictEqual([]);
-  expect(missingOs("macos", { localPlatform: "darwin" })).toStrictEqual([]);
+  expect(missingOs("macos", { platform: "darwin" })).toStrictEqual([]);
   expect(missingOs("macos", { remote: { platforms: ["darwin"] } })).toStrictEqual([]);
   expect(missingOs("darwin")).toEqual(["darwin"]);
 });
@@ -44,7 +45,7 @@ it("reports every missing category through the public wrapper", () => {
   };
   const { os, ...requires } = required;
   const result = evaluate({
-    metadata: { requires, os },
+    entry: { metadata: { requires, os } },
     remote: {
       hasBin: (bin) => bin === "node",
       hasAnyBin: () => false,
@@ -67,7 +68,7 @@ it("reports every missing category through the public wrapper", () => {
       { path: "browser.enabled", satisfied: false },
       { path: "gateway.enabled", satisfied: true },
     ],
-    eligible: false,
+    requirementsSatisfied: false,
   });
 });
 
@@ -78,10 +79,10 @@ it.each(["linux", "darwin"])("always bypasses runtime requirements but respects 
     env: ["OPENAI_API_KEY"],
     config: ["browser.enabled"],
   };
-  expect(evaluate({ always: true, metadata: { requires, os: [os] } })).toEqual({
+  expect(evaluate({ always: true, entry: { metadata: { requires, os: [os] } } })).toEqual({
     required: { ...requires, os: [os] },
     missing: { bins: [], anyBins: [], env: [], config: [], os: os === "linux" ? [] : [os] },
     configChecks: [{ path: "browser.enabled", satisfied: false }],
-    eligible: os === "linux",
+    requirementsSatisfied: os === "linux",
   });
 });

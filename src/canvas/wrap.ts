@@ -3,6 +3,14 @@ import { escapeHtml } from "../shared/html-escape.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
+const WIDGET_BODY_HEIGHT =
+  "Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height))";
+// The existing post-render chat-host message confirms geometry in saved documents, too.
+export const WIDGET_SIZE_CONFIRMATION_HTML =
+  "<script>(()=>{const parent=window.parent;const post=parent.postMessage.bind(parent);" +
+  'addEventListener("message",event=>{if(event.source!==parent||event.data?.type!=="openclaw:widget-chat-host"||event.data.measure!==true)return;' +
+  `const b=document.body;if(b){const height=${WIDGET_BODY_HEIGHT};if(height)post({type:"openclaw:widget-size",height},"*");}});})();</script>`;
+
 // Baked palettes mirror the host claw theme (ui/src/styles/base.css) so
 // fallback renders match Control UI renders, where the theme bridge pushes the
 // same host values. Contrast tradeoffs in these pairings are owned by the host
@@ -82,7 +90,7 @@ export function buildWidgetDocument(
     // documentElement.scrollHeight reports the viewport for short content, so
     // measure the body box, which tracks the actual widget height.
     "let last=0;const report=()=>{const b=document.body;if(!b)return;" +
-    "const h=Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height));" +
+    `const h=${WIDGET_BODY_HEIGHT};` +
     'if(h&&h!==last){last=h;post({type:"openclaw:widget-size",height:h},"*");}};' +
     "listen('load',report);new ResizeObserver(report).observe(document.body);" +
     "setTimeout(report,50);setTimeout(report,500);})();</script>";
@@ -106,11 +114,14 @@ export function buildWidgetDocument(
     "const listen=window.addEventListener.bind(window);const path=Event.prototype.composedPath;" +
     "const prevent=Event.prototype.preventDefault;const test=RegExp.prototype.test;" +
     "const later=setTimeout.bind(window);const cancel=clearTimeout.bind(window);" +
+    // Widget code can replace MessageEvent.prototype.data to receive these
+    // private ports as `this`; reading through the captured getter denies it.
+    'const apply=Reflect.apply;const dataOf=Object.getOwnPropertyDescriptor(MessageEvent.prototype,"data").get;' +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
     "const b=new MessageChannel();const bridgePost=b.port1.postMessage.bind(b.port1);" +
     "const promptWaiting=[];let inlinePromptReady=false;" +
-    'c.port1.addEventListener("message",event=>{if(event.data?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +
+    'c.port1.addEventListener("message",event=>{if(apply(dataOf,event,[])?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +
     "inlinePromptReady=true;while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.inline();}});c.port1.start();" +
     "let act=null;" +
     "try{const ua=navigator.userActivation;" +
@@ -121,7 +132,7 @@ export function buildWidgetDocument(
     "let ticket=null;let controlUiBaseUrl=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
     'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
     'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
-    'b.port1.addEventListener("message",event=>{const data=event.data;' +
+    'b.port1.addEventListener("message",event=>{const data=apply(dataOf,event,[]);' +
     'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
     'const base=data.controlUiBaseUrl;controlUiBaseUrl=typeof base==="string"&&/^https?:\\/\\//.test(base)?base:null;' +
     'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +
@@ -153,7 +164,7 @@ export function buildWidgetDocument(
     'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
     "const api=freeze({host," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
-    'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params}),query:queryName=>request("data.query",{queryName:stringify(queryName)})}),' +
     'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
     'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
     'define(window,"openclaw",{value:api,writable:false,configurable:false});' +

@@ -7,11 +7,15 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
+import {
+  compactAfterSummaryRefusal,
+  isCompactionSummaryRefusal,
+} from "../compaction-summary-refusal.js";
 import {
   calculateContextTokens,
   buildSessionContext,
@@ -139,6 +143,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.assertContextReplacementActive = assertActive;
   }
 
+  override dispose(): void {
+    this.onContextReplaced = undefined;
+    super.dispose();
+  }
+
   /**
    * Manually compact the session context.
    * Aborts current agent operation first.
@@ -235,6 +244,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     outcome: Extract<CompactionWorkOutcome, { status: "completed" }>,
     willRetry: boolean,
   ): void {
+    const details = parseCompactionDetails(outcome.result.details);
     this.emit({
       type: "compaction_end",
       reason,
@@ -244,9 +254,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         tokensBefore: outcome.result.tokensBefore,
         tokensAfter: outcome.tokensAfter,
         willRetry,
-        ...(parseCompactionDetails(outcome.result.details)?.qualityDegraded
-          ? { qualityDegraded: true }
-          : {}),
+        ...(details?.qualityDegraded ? { qualityDegraded: true } : {}),
+        ...(details?.summaryRefused ? { summaryRefused: true } : {}),
       },
     });
   }
@@ -266,6 +275,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     requestState?: "unresolved";
     summaryOutputPolicy: SummaryOutputPolicy;
     requestBudget?: CompactionRequestBudget;
+    requestFromEntryId?: string;
     pendingUserEntryId?: string;
     onSummaryReady?: () => void;
   }): Promise<CompactionWorkOutcome> {
@@ -282,7 +292,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const compactionThinkingLevel =
       this.resolveCompactionThinkingLevel?.(model, this.thinkingLevel) ?? this.thinkingLevel;
 
-    let auth: { apiKey?: string; headers?: Record<string, string> } = {};
+    let auth: { apiKey?: string; headers?: ModelRequestHeaders } = {};
     if (options.summaryOutputPolicy !== "deterministic") {
       try {
         auth = await this.getCompactionRequestAuth(model);
@@ -326,6 +336,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       requestBudget && retention
         ? requestBudget.fixedTokens + requestBudget.pendingTokens + retention.maxTokens
         : undefined;
+    const requestBoundaryEntryId = options.requestFromEntryId ?? pathEntries[pendingEntryIndex]?.id;
     let preparation: CompactionPreparation | undefined;
     if (isManual && !options.requestState && !requestBudget && pendingEntryIndex < 0) {
       const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
@@ -338,10 +349,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         prepareCompaction(
           pathEntries,
           options.settings,
-          options.requestState,
-          requestBudget || pendingEntryIndex >= 0
+          // A queued input not in the transcript yet belongs to the prompt owner;
+          // older history cannot stand in for that request.
+          pendingUserIdempotencyKey && pendingEntryIndex < 0 ? undefined : options.requestState,
+          requestBudget || requestBoundaryEntryId
             ? {
-                preserveFromEntryId: pathEntries[pendingEntryIndex]?.id,
+                ...(requestBoundaryEntryId
+                  ? {
+                      requestBoundary: {
+                        entryId: requestBoundaryEntryId,
+                        preserve: pathEntries[pendingEntryIndex]?.id === requestBoundaryEntryId,
+                      },
+                    }
+                  : {}),
                 ...(requestBudget && retention
                   ? {
                       budget: {
@@ -461,7 +481,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           return { status: "aborted" };
         }
       }
-      compactionResult = unwrapCoreResult(result);
+      compactionResult =
+        !result.ok && isCompactionSummaryRefusal(result.error)
+          ? compactAfterSummaryRefusal(preparation)
+          : unwrapCoreResult(result);
     }
     options.onSummaryReady?.();
 

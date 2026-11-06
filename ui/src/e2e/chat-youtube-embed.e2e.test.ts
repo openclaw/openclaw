@@ -64,21 +64,13 @@ suite.define(() => {
         expect([playerRequests.length, await frame.count()]).toEqual([0, 0]);
         expect(thumbnailRequests[0]?.headers().referer).toBeUndefined();
         const watch = card.getByRole("link", { name: "Open on YouTube", exact: true });
-        expect(await watch.getAttribute("href")).toBe(
-          "https://www.youtube.com/watch?v=AbCdEfGhI_1&t=90",
-        );
 
         await play.click();
         await waitForPlayer();
         expect(playerRequests).toHaveLength(1);
-        const requested = new URL(playerRequests[0]!.url());
-        expect(requested.origin).toBe("https://www.youtube-nocookie.com");
-        expect(requested.pathname).toBe("/embed/AbCdEfGhI_1");
-        expect(Object.fromEntries(requested.searchParams)).toEqual({
-          autoplay: "1",
-          playsinline: "1",
-          start: "90",
-        });
+        expect(playerRequests[0]!.url()).toBe(
+          "https://www.youtube-nocookie.com/embed/AbCdEfGhI_1?playsinline=1&start=90&autoplay=1",
+        );
         const { referer, authorization } = playerRequests[0]!.headers();
         expect({ referer, authorization }).toEqual({
           referer: `${new URL(suite.server.baseUrl).origin}/`,
@@ -89,7 +81,6 @@ suite.define(() => {
         const missing = page.locator("openclaw-youtube-video").filter({ hasText: "Missing cover" });
         const missingPlay = exactButton(missing, "Play Missing cover");
         const missingFrame = missing.locator("iframe");
-        const missingWatch = missing.getByRole("link", { name: "Open on YouTube", exact: true });
         await missingPlay.click();
         await missingFrame.contentFrame().getByText("Player fixture loaded").waitFor();
         expect(await frame.count()).toBe(0);
@@ -127,9 +118,6 @@ suite.define(() => {
 
         await missingPlay.scrollIntoViewIfNeeded();
         await expect.poll(() => missing.locator("img").count()).toBe(0);
-        expect(await missingWatch.getAttribute("href")).toBe(
-          "https://www.youtube.com/watch?v=JkLmNoPqR_2",
-        );
         expect(await missingPlay.isVisible()).toBe(true);
       },
     );

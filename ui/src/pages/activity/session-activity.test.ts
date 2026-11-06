@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
@@ -15,6 +17,19 @@ import {
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
+
+it("discards retained activity after access is revoked and preserves the explicit denial", async () => {
+  const { client, request, controller } = setup();
+  const query = { personId: "person", time: "all" as const, query: "" };
+  await controller.load(client, query);
+  expect(controller.result?.sessions).toHaveLength(1);
+  const message =
+    "Other people's activity is private. You can still open sessions shared with you.";
+  request.mockRejectedValueOnce(new GatewayRequestError({ code: "FORBIDDEN", message }));
+  await controller.load(client, query, "refresh");
+  expect(controller.result).toBeUndefined();
+  expect(controller.error).toBe(message);
+});
 
 it("orders refreshed membership by the activity timestamps actually displayed", () => {
   const provenance = createSessionRowProvenance();
@@ -91,12 +106,9 @@ describe("session activity projection", () => {
   });
 
   it("uses the advertised owner's avatar instead of the creator's avatar", () => {
-    const agents: AgentsListResult = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+    const agents: AgentsListResult = makeBootRoster({
       agents: [{ id: "main", identity: { avatarUrl: "/avatar/main?roster=1" } }],
-    };
+    });
     const row: GatewaySessionRow = {
       key: "agent:main:work",
       kind: "direct",

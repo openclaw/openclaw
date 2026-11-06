@@ -10,6 +10,7 @@ import {
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
@@ -47,24 +48,20 @@ export function gatewaySnapshot(
   connected = true,
   methods: string[] = [],
   scopes = ["operator.read", "operator.pairing"],
+  roleAllowsAdmin?: boolean,
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes },
+      auth: { role: "operator", scopes, roleAllowsAdmin },
       features: { methods },
       snapshot: { presence: [gatewayPresence] },
     },
-  } as ApplicationGatewaySnapshot;
+  }) as ApplicationGatewaySnapshot;
 }
 
 export function gatewayFixture(initial: ApplicationGatewaySnapshot) {
@@ -109,7 +106,7 @@ export function gatewayFixture(initial: ApplicationGatewaySnapshot) {
 export function mountPage(
   fixture: ReturnType<typeof gatewayFixture>,
   initial: Partial<DevicesPageDataState> = {},
-  routeOverride?: Partial<DevicesRouteData>,
+  routeOverride?: Partial<DevicesRouteData> | null,
   runtimeConfig?: ApplicationContext["runtimeConfig"],
 ) {
   const snapshot = fixture.source.snapshot;
@@ -126,7 +123,11 @@ export function mountPage(
     ...routeOverride,
   };
   const [currentGateway, setGateway] = createSignal(fixture.source);
-  const [presentation, setPresentation] = createSignal({ routeData });
+  const [presentation, setPresentation] = createSignal<{ routeData: DevicesRouteData | undefined }>(
+    {
+      routeData: routeOverride === null ? undefined : routeData,
+    },
+  );
   const configListeners = new Set<() => void>();
   const reloadConfig = vi.fn(async () => undefined);
   const router = createRouter({
@@ -143,6 +144,7 @@ export function mountPage(
     router,
     runtimeConfig: runtimeConfig ?? {
       state: { configSnapshot: {}, configForm: {}, configLoading: false, configFormMode: "form" },
+      ensureLoaded: async () => undefined,
       subscribe: (listener: () => void) => {
         configListeners.add(listener);
         return () => configListeners.delete(listener);
@@ -245,19 +247,13 @@ export async function selectEntryAction(
 ) {
   // Let initial native readiness settle before keeping an interactive row reference.
   await waitForSolid(() => expect(container.textContent).toContain(name));
+  const selector = `[data-device-action="${action}"]`;
   const row = [...container.querySelectorAll(".device-entry")].find(
-    (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
+    (entry) =>
+      entry.querySelector(".settings-row__title")?.textContent === name &&
+      entry.querySelector(selector) !== null,
   );
-  const trigger = expectDefined(
-    row?.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
-    "device actions trigger",
-  );
-  trigger.click();
-  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-  expectDefined(
-    row?.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`),
-    `device action ${action}`,
-  ).click();
+  expectDefined(row?.querySelector<HTMLButtonElement>(selector), `device action ${action}`).click();
   await Promise.resolve();
   flush();
 }
@@ -301,7 +297,7 @@ export function setupDevicesPageFixtures() {
   beforeEach(() => {
     dialogs = createModalDialogTestFixture((modal) => {
       const acknowledge = modal.querySelector<HTMLButtonElement>(
-        ".exec-approval-actions button[autofocus]",
+        "openclaw-modal-actions button[autofocus]",
       );
       if (acknowledge) {
         acknowledge.click();

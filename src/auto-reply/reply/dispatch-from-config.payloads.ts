@@ -115,14 +115,14 @@ export async function maybeApplyTtsToReplyPayload(
     return params.payload;
   }
   if (
-    !shouldAttemptTtsPayload({
+    !(await shouldAttemptTtsPayload({
       cfg: params.cfg,
       preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.channel,
       accountId: params.accountId,
-    })
+    }))
   ) {
     return params.payload;
   }

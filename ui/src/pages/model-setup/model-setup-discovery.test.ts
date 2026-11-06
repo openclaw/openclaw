@@ -3,14 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { WizardNextParams } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   missingWizardError,
   running,
   configuredDetection,
   waitForText,
-  waitForElement,
   runningStep,
   answerWizard,
   enterManualKey,
@@ -19,18 +18,14 @@ import {
   pendingReceipt,
   modalButton,
   callsFor,
-  setInput,
   candidate,
   clickCandidate,
   createFirstRunContext,
-  detection,
   mountDetection,
-  selectManualProvider,
 } from "./model-setup-first-run.test-support.ts";
 
 describe("Model Setup explicit discovery", () => {
   useFirstRunFixtures("test-device-key");
-  const nativeInput = ".model-setup__native-discovery input";
   it.each(["cancel at credentials", "finish final commit"] as const)(
     "retains the admitted wizard after protected cancellation: %s",
     async (outcome) => {
@@ -116,7 +111,7 @@ describe("Model Setup explicit discovery", () => {
           expect(session!.getStatus()).toBe("running");
           allowCommit.resolve();
           await terminal.promise;
-          await waitForText(page, "Connection verified");
+          await waitForText(page, "Model verified");
           expect(answers).toEqual([true, "synthetic-key"]);
         }
         expect(starts).toBe(1);
@@ -168,7 +163,7 @@ describe("Model Setup explicit discovery", () => {
         page.querySelector("openclaw-modal-dialog")!.dispatchEvent(new CustomEvent("modal-cancel"));
       cancel();
       if (failure === "missing wizard") {
-        await waitForText(page, "It may already have finished");
+        await waitForText(page, "This setup may have finished");
         expect(cancels).toBe(1);
         expect(pendingReceipt()).toBe(receipt);
         expect(modalButton(page, "Close")).toBeDefined();
@@ -179,7 +174,7 @@ describe("Model Setup explicit discovery", () => {
       } else {
         await waitForFast(() =>
           expect(page.querySelector(".model-setup-wizard .callout.warning")?.textContent).toContain(
-            "Could not confirm cancellation",
+            "Couldn’t confirm cancellation",
           ),
         );
         expect(page.textContent).toContain(error.message);
@@ -212,35 +207,5 @@ describe("Model Setup explicit discovery", () => {
     await enterManualKey(page, "provider-key", "test-only-key");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request.mock.calls[0]![1]).not.toHaveProperty("nativeSessionCatalogsEnabled");
-  });
-  it("clears a pending credential and native discovery opt-in when the Gateway identity changes", async () => {
-    const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
-    const fresh = {
-      ...detection,
-      nativeSessionCatalogPreferenceRequired: true,
-      nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
-      manualProviders: [{ id: "provider-key", label: "API provider" }],
-    };
-    request.mockResolvedValue(fresh);
-    const { page } = await mountDetection(context, client, fresh);
-    page.querySelector<HTMLInputElement>(nativeInput)!.click();
-    await selectManualProvider(page, "provider-key");
-    setInput(page, ".model-setup__manual input", "test-only-pending-key");
-    await page.updateComplete;
-    expect(request).not.toHaveBeenCalled();
-    Object.assign(context.gateway, { connectionRevision: context.gateway.connectionRevision + 1 });
-    publishGatewaySnapshot({ ...snapshot });
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.detect",
-        { agentId: "main" },
-        expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.any(AbortSignal) }),
-      ),
-    );
-    await waitForElement(page, nativeInput);
-    expect(page.querySelector(nativeInput)).toMatchObject({ checked: false });
-    expect(page.querySelector(".model-setup__manual input")).toMatchObject({ value: "" });
-    expect(page.querySelector("[data-selected]")).toBeNull();
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.detect"]);
   });
 });

@@ -116,11 +116,8 @@ it("createPluginCandidatesFromManifestRegistry preserves child identity and owne
   expect(candidate).toMatchObject({ idHint: "example/child", effectivePluginId: "example/child" });
   expect(resolvePluginCandidateInstallOwner(candidate!)).toBe("example");
   expect(
-    Object.getOwnPropertyDescriptor(childRecord, Symbol.for("openclaw.pluginManifestInstallOwner")),
-  ).toMatchObject({ configurable: false, enumerable: true, writable: false });
-  expect(
-    Object.getOwnPropertyDescriptor(candidate, Symbol.for("openclaw.pluginCandidateInstallOwner")),
-  ).toMatchObject({ configurable: true, enumerable: true, writable: false });
+    Reflect.set(candidate!, Symbol.for("openclaw.pluginCandidateInstallOwner"), "replacement"),
+  ).toBe(false);
   expect(resolvePluginCandidateInstallOwner({ ...candidate })).toBe("example");
   expect(() => recordPluginManifestInstallOwner(childRecord, "replacement")).toThrow(TypeError);
 });

@@ -65,7 +65,7 @@ const MAC_FORM_FACTOR_NAMES = [
   [/\bmac\s*studio\b/i, "studio"],
 ] as const;
 
-export function resolveMacFormFactor(identifier?: string): MacFormFactor | undefined {
+function resolveMacFormFactor(identifier?: string): MacFormFactor | undefined {
   const model = identifier?.trim();
   if (!model) {
     return undefined;

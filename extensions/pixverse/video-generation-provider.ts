@@ -58,14 +58,6 @@ type PixVerseEnvelope<T> = {
   Resp?: T;
 };
 
-type PixVerseUploadImageResponse = {
-  img_id?: unknown;
-};
-
-type PixVerseVideoCreateResponse = {
-  video_id?: unknown;
-};
-
 type PixVerseVideoResultResponse = {
   status?: unknown;
   url?: unknown;
@@ -263,7 +255,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          const uploaded = await readPixVerseJson<PixVerseUploadImageResponse>(
+          const uploaded = await readPixVerseJson<{ img_id?: unknown }>(
             upload.response,
             "PixVerse image upload failed",
           );
@@ -331,9 +323,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       }
 
       const endpoint = imageId === undefined ? "/video/text/generate" : "/video/img/generate";
-      const submittedEnvelope = await postJsonResponse<
-        PixVerseEnvelope<PixVerseVideoCreateResponse>
-      >({
+      const submittedEnvelope = await postJsonResponse<PixVerseEnvelope<{ video_id?: unknown }>>({
         url: `${baseUrl}${endpoint}`,
         errorLabel: "PixVerse video generation failed",
         headers: buildPixVerseHeaders(headers, "application/json"),

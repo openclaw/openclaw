@@ -253,7 +253,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
         return;
       }
       const command = splitCommandArgv(params.bargeInInputCommand ?? [], "audio bridge command");
-      const bargeInGate = createSpeechThresholdGate({
+      const gate = createSpeechThresholdGate({
         rmsThreshold: params.bargeInRmsThreshold,
         peakThreshold: params.bargeInPeakThreshold,
         cooldownMs: params.bargeInCooldownMs,
@@ -267,7 +267,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
           return;
         }
         const stats = readPcm16AudioStats(audio);
-        if (!bargeInGate.accept(stats, { nowMs: Date.now(), onTrigger: () => onBargeIn(audio) })) {
+        if (!gate.accept(stats, { nowMs: performance.now(), onTrigger: () => onBargeIn(audio) })) {
           return;
         }
         params.logger.debug?.(

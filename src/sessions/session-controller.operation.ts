@@ -8,7 +8,6 @@ import {
 } from "../agents/run-termination.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type * as replyRunSettle from "../auto-reply/reply/reply-run-finalization-lease.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { markDiagnosticRunProgress } from "../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic-runtime.js";
@@ -87,6 +86,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let sourceReplyDelivered = false;
+  const sourceReplyListeners = new Set<() => void>();
   // A recorded yield ends the turn's work before settlement records it as the result.
   const ended = () => state.result !== null || state.phase === "yielded";
   const settledResult = (): ReplyOperationResult =>
@@ -287,9 +287,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
   };
 
   const abortInternally = (reason?: unknown) => {
-    if (!controller.signal.aborted) {
-      controller.abort(reason);
-    }
+    controller.abort(reason);
   };
 
   const watchdog = createSessionControllerWatchdog({
@@ -298,6 +296,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     isCurrent: () => installed && !ownerSettled,
     readPhase: () =>
       ownerSettled ? "settled" : ended() ? "terminal" : state.abortFrozen ? "finishing" : "active",
+    readBackend: () => getAttachedBackend(operation),
     requestStop: (effect) => expireOwner(effect, false),
     expireCleanup: (effect) => expireOwner(effect, true),
     onWarning: (decision) =>
@@ -470,7 +469,14 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       sourceReplyDelivered = false;
     },
     markSourceReplyDelivered() {
-      sourceReplyDelivered = true;
+      if (!sourceReplyDelivered) {
+        sourceReplyDelivered = true;
+        sourceReplyListeners.forEach((listener) => listener());
+      }
+    },
+    onSourceReplyDelivered(listener) {
+      sourceReplyListeners.add(listener);
+      return () => sourceReplyListeners.delete(listener);
     },
     bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
     bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
@@ -640,15 +646,13 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         return false;
       }
       const backend = getAttachedBackend(operation);
-      staleExpiryReason ??= "no_activity";
+      // Read before aborting: the abort closes the retry wait that explains the stop.
+      const stop = watchdog.describeStop();
+      staleExpiryReason ??= stop.staleReason;
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });
       detachUpstreamAbort();
-      abortInternally(
-        Object.assign(createAbortError("Reply operation stalled"), {
-          code: "OPENCLAW_SESSION_WATCHDOG",
-        }),
-      );
+      abortInternally(stop.error);
       try {
         backend?.cancel("superseded");
       } finally {

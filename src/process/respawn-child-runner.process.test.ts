@@ -87,3 +87,46 @@ it.runIf(process.platform !== "win32").each([
     );
   },
 );
+
+it.runIf(process.platform !== "win32").each([
+  { owner: "entry", command: "update", closed: [143, null] },
+  { owner: "launcher", command: "--update", closed: [143, null] },
+  { owner: "entry", command: "status", closed: [null, "SIGKILL"] },
+  { owner: "launcher", command: "status", closed: [null, "SIGKILL"] },
+] as const)(
+  "$owner launcher lets only update ($command) outlast the generic signal escalation",
+  { timeout: 20_000 },
+  async ({ owner, command, closed }) => {
+    // Like the update signal handler, the child needs longer than the generic 2s backstop.
+    const child =
+      "process.on('SIGTERM', () => setTimeout(() => process.exit(143), 2_500));" +
+      "process.stdout.write('ready'); setInterval(() => {}, 1000);";
+    const [module, run]: [string, string] =
+      owner === "entry"
+        ? ["./respawn-child-runner.ts", "runRespawnChildWithSignalBridge"]
+        : ["../../node-runtime-recovery.mjs", "runRespawnedChild"];
+    const source = `
+      import { ${run} as run } from ${moduleUrl(module)};
+      process.argv = ${JSON.stringify(["node", "openclaw", "--profile", "e2e", command])};
+      ${owner === "entry" ? "process.exitCode = " : ""}await run({
+        command: process.execPath, args: ['-e', ${JSON.stringify(child)}], env: {},
+        ${owner === "entry" ? "onError: console.error" : ""}
+      });`;
+    const launcher = spawn(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), ...moduleArgs, source],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    const exited = once(launcher, "close");
+    try {
+      await once(launcher.stdout, "data");
+      launcher.kill("SIGTERM");
+      expect(await exited).toEqual(closed);
+    } finally {
+      if (launcher.exitCode === null && launcher.signalCode === null) {
+        launcher.kill("SIGKILL");
+      }
+      await exited;
+    }
+  },
+);

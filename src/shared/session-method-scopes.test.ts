@@ -8,10 +8,6 @@ const patchScope = (patch: Record<string, unknown>) =>
 const batchScope = (patch: Record<string, unknown>, extraTarget = {}) =>
   scope("sessions.patchMany", { targets: [{ ...target, ...extraTarget }], patch });
 
-it("keeps explicit restart recovery at write scope", () => {
-  expect(scope("sessions.recover")).toBe("operator.write");
-});
-
 it("requires admin to create a full-access session", () => {
   expect(scope("sessions.create", { permissionMode: "full" })).toBe("operator.admin");
 });
@@ -57,6 +53,7 @@ it("scopes sessions.patchMany from the shared patch only", () => {
     unread: false,
     model: "openai/gpt-5.6-luna",
     thinkingLevel: "high",
+    cyberAccessProgram: "daybreak_blue",
     fastMode: "auto",
   };
   const targetEnvelope = {
@@ -65,7 +62,9 @@ it("scopes sessions.patchMany from the shared patch only", () => {
     expectedLifecycleRevision: "revision-1",
   };
   expect(batchScope(patch, targetEnvelope)).toBe("operator.write");
-  expect(batchScope({ model: null, thinkingLevel: null, fastMode: null })).toBe("operator.write");
+  expect(
+    batchScope({ model: null, thinkingLevel: null, cyberAccessProgram: null, fastMode: null }),
+  ).toBe("operator.write");
   for (const adminPatch of [
     { statusNote: "Working" },
     { thinkingLevel: "high", contextWindow: "extended" },

@@ -8,6 +8,7 @@ import {
   moveLegacyMigrationFileNoReplace,
   recoverLegacyMigrationLinkedMove,
 } from "./state-migrations.no-replace-move.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 /** The stable source identity every doctor-owned import verifies before cleanup. */
 export type LegacyMigrationSourceSnapshot = {
@@ -219,14 +220,15 @@ export async function claimLegacyMigrationSourceClaims<
   TSnapshot extends LegacyMigrationSourceIdentity,
 >(
   claims: readonly { claim: LegacyMigrationSourceClaim<TSnapshot>; snapshot: TSnapshot }[],
-  params: { beforeClaim?: () => void; mismatchMessage: string },
+  beforeClaim?: () => void,
 ): Promise<void> {
-  params.beforeClaim?.();
+  beforeClaim?.();
+  const mismatchMessage = "legacy Web Push source changed before doctor could claim it";
   const claimed: LegacyMigrationSourceClaim<TSnapshot>[] = [];
   try {
     for (const { claim, snapshot } of claims) {
       claimed.push(claim);
-      await claim.claim({ snapshot, mismatchMessage: params.mismatchMessage });
+      await claim.claim({ snapshot, mismatchMessage });
     }
   } catch (error) {
     const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
@@ -278,7 +280,13 @@ export async function readLegacyMigrationSourceSnapshot(params: {
     resolveLegacyMigrationRelativePath(params.stateDir, params.sourcePath, params.label),
     { hardlinks: "reject", maxBytes: params.maxBytes, symlinks: "reject" },
   );
-  const raw = opened.buffer.toString("utf8");
+  // Recovery compares text fingerprints before domain parsing can validate the bytes.
+  const raw = params.hashDecodedText
+    ? decodeUtf8Input(
+        opened.buffer,
+        `Back up legacy ${params.label} source ${params.sourcePath}, replace it with a corrected copy, and retry Doctor; the input`,
+      )
+    : opened.buffer.toString("utf8");
   return {
     buffer: opened.buffer,
     dev: opened.exactIdentity.dev,

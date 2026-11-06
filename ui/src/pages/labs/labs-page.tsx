@@ -11,6 +11,7 @@ import {
   onSettled,
 } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -20,38 +21,34 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
 import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
-import {
-  labFeatureMergePatch,
-  labFeatureResetPatch,
-  LAB_FEATURES,
-  resolveLabFeatureState,
-  type LabFeature,
-} from "./labs-registry.ts";
+import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts";
+import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
+
+registerEnglishCatalog(registerLabsEnglish);
 
 export function LabsPage() {
   const context = useApplication();
   const config = projectRuntimeConfig(context.runtimeConfig);
   type ExpectedSetting = { featureId: string; value: boolean | string };
-  let admitted = false;
+  let admittedFeatureId: string | null = null;
   let lifetime = Promise.withResolvers<void>();
   const [receipt, setReceipt] = createSignal({ completion: Promise.resolve() });
   const page = useGatewayPage({
     getGateway: () => latest(() => context.gateway),
     invalidateRequests: () => {
-      admitted = false;
+      admittedFeatureId = null;
       lifetime.resolve();
       lifetime = Promise.withResolvers<void>();
       setReceipt({ completion: Promise.resolve() });
@@ -66,6 +63,12 @@ export function LabsPage() {
     return { epoch, gateway, runtimeConfig, expected, setExpected, saving, setSaving };
   });
   const currentPending = () => presentation().expected();
+  const savingFeatureId = () => {
+    const expected = currentPending();
+    // The receipt publishes synchronous admission before the optimistic action starts.
+    receipt();
+    return admittedFeatureId ?? expected?.featureId ?? null;
+  };
   onSettled(() => {
     void context.runtimeConfig.ensureLoaded();
     const stopRoute = context.router.subscribe(() => {
@@ -95,11 +98,12 @@ export function LabsPage() {
       editableConfig() !== null
     );
   }
-  function canToggle(): boolean {
+  function toggleAvailable(): boolean {
     const state = config.read().state;
-    return Boolean(
-      state.connected && state.configSnapshot?.hash && !state.configLoading && !admitted,
-    );
+    return Boolean(state.connected && state.configSnapshot?.hash && !state.configLoading);
+  }
+  function canToggle(): boolean {
+    return toggleAvailable() && admittedFeatureId === null;
   }
   const presentSave = action(function* (
     view: ReturnType<typeof presentation>,
@@ -131,7 +135,7 @@ export function LabsPage() {
       page.isCurrent(scope) &&
       context.gateway === gateway &&
       context.runtimeConfig === runtimeConfig;
-    admitted = true;
+    admittedFeatureId = featureId;
     const retired = lifetime.promise;
     const work = (async () => {
       try {
@@ -141,7 +145,7 @@ export function LabsPage() {
         }
       } finally {
         if (isCurrent()) {
-          admitted = false;
+          admittedFeatureId = null;
         }
       }
     })();
@@ -259,8 +263,7 @@ export function LabsPage() {
             title={props.feature.title()}
             description={
               <>
-                {props.feature.description()}
-                <br />
+                {props.feature.description()}{" "}
                 <span role="status">
                   {t(
                     config.read().state.configLoading
@@ -268,21 +271,27 @@ export function LabsPage() {
                       : "labsPage.decisionAssistance.unavailable",
                   )}
                 </span>
-                <button
-                  class="btn btn--sm"
-                  disabled={!config.read().state.connected || config.read().state.configLoading}
-                  onClick={() => void context.runtimeConfig.refresh()}
-                >
-                  {t("labsPage.decisionAssistance.refresh")}
-                </button>
               </>
+            }
+            control={
+              <button
+                class="btn btn--sm"
+                disabled={!config.read().state.connected || config.read().state.configLoading}
+                onClick={() => void context.runtimeConfig.refresh()}
+              >
+                {t("labsPage.decisionAssistance.refresh")}
+              </button>
             }
           />
         ) : (
           <SettingsToggleRow
             title={props.feature.title()}
             checked={checked()}
-            disabled={presentation().saving() || !canToggle()}
+            disabled={
+              !toggleAvailable() ||
+              (savingFeatureId() !== null && savingFeatureId() !== props.feature.id)
+            }
+            saving={savingFeatureId() === props.feature.id}
             onChange={(enabled) => setFeatureEnabled(props.feature, enabled)}
             actions={
               props.feature.settingsPluginId ? (
@@ -299,23 +308,6 @@ export function LabsPage() {
                   <>
                     <br />
                     {t("labsPage.decisionAssistance.optedIn")}
-                  </>
-                ) : null}{" "}
-                <a
-                  href={props.feature.docsUrl}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                >
-                  {t("labsPage.documentation")}
-                </a>
-                {featureState().overridden ? (
-                  <>
-                    <br />
-                    {t("configForm.defaultValue", {
-                      value: featureState().defaultEnabled
-                        ? t("common.enabled")
-                        : t("common.disabled"),
-                    })}
                   </>
                 ) : null}
               </>
@@ -364,24 +356,22 @@ export function LabsPage() {
         title={t("tabs.labs")}
         subtitle={
           <>
-            {t("labsPage.intro")}{" "}
+            {t("subtitles.labs")}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/experimental-features" />
           </>
         }
       />
       <SettingsWorkspace>
         <SettingsPage>
-          <SettingsSection
-            title={t("labsPage.sectionTitle")}
-            description={t("labsPage.sectionDescription")}
-          >
+          <SettingsSection description={t("labsPage.sectionDescription")}>
             <For each={LAB_FEATURES}>{(feature) => <FeatureRow feature={feature} />}</For>
             <Loading on={receipt()}>
               <Errored
                 fallback={(error) => (
                   <SettingsRow
+                    role="alert"
                     title={t("labsPage.saveErrorTitle")}
-                    description={<span role="alert">{formatUiError(error())}</span>}
+                    description={<ErrorDetails error={error()} />}
                   />
                 )}
               >

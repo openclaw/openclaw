@@ -115,7 +115,6 @@ export function createChatMachinePresentation(props: ChatPanePlacementProps) {
       machineIcon,
       label,
       exceptionState,
-      hasFacts,
       providerId,
       profileId,
       environmentId,

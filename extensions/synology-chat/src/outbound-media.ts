@@ -132,8 +132,7 @@ function holdServingLeaseUntilResponseDone(
       res.destroy();
     }
     release();
-  }, SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS);
-  timeout.unref?.();
+  }, SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS).unref();
   res.once("finish", release);
   res.once("close", release);
   return { isActive: () => !released, release };

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as historyWorkerRuntime from "./session-history-worker-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -13,18 +13,18 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
   fixture: { storePath(): string };
   sessionId: string;
   sessionKey: string;
-  createFixtureTranscriptScope: () => {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  };
+  createFixtureTranscriptScope: () => Record<
+    "agentId" | "sessionId" | "sessionKey" | "storePath",
+    string
+  >;
   writeTranscriptStore: () => Promise<void>;
 }) {
   const { fixture, createFixtureTranscriptScope: scope, writeTranscriptStore } = params;
   const read = (
     options: Omit<Parameters<typeof readRecent>[0], "agentId" | "sessionKey" | "storePath"> = {},
   ) => readRecent({ ...scope(), ...options });
+  const persist = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
+    persistSessionTranscriptTurn(scope(), { updateMode: "none", messages });
   it("restores only confirmed final message-tool replies when requested", async () => {
     await writeTranscriptStore();
     const mirrors = [
@@ -51,20 +51,21 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
 
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
-    const target = scope();
-    await persistSessionTranscriptTurn(target, {
-      updateMode: "none",
-      messages: (
-        [
-          ["root-user", null, "user", "keep this branch", 1_000],
-          ["active-reply", "root-user", "assistant", "active answer", 2_000],
-          ["abandoned-reply", "root-user", "assistant", "abandoned answer", 3_000],
-        ] as const
-      ).map(([id, parentId, role, content, timestamp]) =>
-        transcriptMessage(id, parentId, { role, content, timestamp }),
+    const expected = [
+      { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
+      { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
+    ];
+    await persist([
+      ...expected.map(({ id, role, text: content, timestamp }, index) =>
+        transcriptMessage(id, index ? "root-user" : null, { role, content, timestamp }),
       ),
-    });
-    await appendTranscriptEvent(target, {
+      transcriptMessage("abandoned-reply", "root-user", {
+        role: "assistant",
+        content: "abandoned answer",
+        timestamp: 3_000,
+      }),
+    ]);
+    await appendTranscriptEvent(scope(), {
       type: "leaf",
       id: "active-leaf",
       parentId: "abandoned-reply",
@@ -76,60 +77,46 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
     }).path;
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
 
-    const expected = [
-      { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
-      { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
-    ];
     await expect(read()).resolves.toEqual(expected);
 
-    const futureMessages = Array.from({ length: 260 }, (_, index) => ({
-      eventId: `future-${index}`,
-      parentId: index === 0 ? "active-reply" : `future-${index - 1}`,
-      message: { role: "user" as const, content: `future ${index}`, timestamp: 10_000 + index },
-    }));
-    await persistSessionTranscriptTurn(target, { updateMode: "none", messages: futureMessages });
+    await persist(
+      Array.from({ length: 260 }, (_, index) => ({
+        eventId: `future-${index}`,
+        parentId: index === 0 ? "active-reply" : `future-${index - 1}`,
+        message: { role: "user" as const, content: `future ${index}`, timestamp: 10_000 + index },
+      })),
+    );
     await expect(read({ beforeTimestampMs: 2_500, limit: 2 })).resolves.toEqual(expected);
   });
 
   it("keeps recent user context on one snapshot while a reply is appended", async () => {
     await writeTranscriptStore();
-    const transcriptScope = scope();
-    await persistSessionTranscriptTurn(transcriptScope, {
-      updateMode: "none",
-      messages: Array.from({ length: 300 }, (_, index) =>
+    await persist(
+      Array.from({ length: 300 }, (_, index) =>
         transcriptMessage(`snapshot-${index}`, index === 0 ? null : `snapshot-${index - 1}`, {
           role: index === 0 || index === 50 ? "user" : "assistant",
           content: `context ${index}`,
         }),
       ),
-    });
+    );
     const readPage = historyWorkerRuntime.readSessionHistoryPageInWorker;
     let appended = false;
     const reader = vi.spyOn(historyWorkerRuntime, "readSessionHistoryPageInWorker");
+    onTestFinished(() => reader.mockRestore());
     reader.mockImplementation(async (request, signal) => {
       const page = await readPage(request, signal);
       if (!appended) {
         appended = true;
-        await persistSessionTranscriptTurn(transcriptScope, {
-          updateMode: "none",
-          messages: [
-            transcriptMessage("appended-reply", "snapshot-299", {
-              role: "assistant",
-              content: "reply appended after the read snapshot",
-            }),
-          ],
-        });
+        await persist([
+          transcriptMessage("reply", "snapshot-299", { role: "assistant", content: "new" }),
+        ]);
       }
       return page;
     });
-    try {
-      await expect(read({ role: "user", limit: 2 })).resolves.toEqual([
-        { id: "snapshot-0", role: "user", text: "context 0" },
-        { id: "snapshot-50", role: "user", text: "context 50" },
-      ]);
-      expect(appended).toBe(true);
-    } finally {
-      reader.mockRestore();
-    }
+    await expect(read({ role: "user", limit: 2 })).resolves.toEqual([
+      { id: "snapshot-0", role: "user", text: "context 0" },
+      { id: "snapshot-50", role: "user", text: "context 50" },
+    ]);
+    expect(appended).toBe(true);
   });
 }

@@ -15,6 +15,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
@@ -31,6 +32,7 @@ const MODULE_IMPORT_ERROR_PATTERN =
 
 type StaleChunkReloadDeps = {
   buildId?: string;
+  reloadOnce?: boolean;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
@@ -62,7 +64,7 @@ export async function retryControlUiImport<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   try {
-    return await load();
+    return await trackForegroundActivity(Promise.resolve(load()));
   } catch (error) {
     if (!isStaleChunkImportError(error)) {
       throw error;
@@ -84,7 +86,7 @@ export async function retryControlUiImport<T>(
     // Chromium can retain the first failed import in its module map. A persistent
     // failure now reaches the route error surface and its guarded reload owner.
     try {
-      return await load();
+      return await trackForegroundActivity(Promise.resolve(load()));
     } catch (retryError) {
       if (isStaleChunkImportError(retryError)) {
         routeImportErrors.add(retryError);
@@ -171,6 +173,15 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   let guardDelayMs = 0;
   try {
     const guard = JSON.parse(storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? "null");
+    // Rejected handshakes must settle on visible recovery guidance, not a timer
+    // that keeps replacing an incompatible bundle. Also bound alternating builds.
+    if (
+      deps.reloadOnce &&
+      (guard?.buildId === buildId ||
+        (typeof guard?.at === "number" && Date.now() - guard.at < 60_000))
+    ) {
+      return false;
+    }
     if (guard?.buildId === buildId && typeof guard.at === "number") {
       guardDelayMs = Math.max(0, guard.at + RELOAD_GUARD_WINDOW_MS - Date.now());
     }
@@ -297,12 +308,12 @@ async function waitForReachableControlUiDocument(
   isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  const deadline = performance.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
@@ -318,7 +329,7 @@ async function waitForReachableControlUiDocument(
     if (reachable) {
       return true;
     }
-    const remainingWait = deadline - Date.now();
+    const remainingWait = deadline - performance.now();
     if (remainingWait <= 0) {
       return false;
     }

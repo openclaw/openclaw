@@ -1,11 +1,9 @@
 import fs from "node:fs";
-import { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import * as deviceTokens from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
@@ -31,6 +29,10 @@ import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
+
+function profileRequest(token: string, method = "PUT", headers: Record<string, string> = {}) {
+  return { path: "/profile", method, authorization: `Bearer ${token}`, headers };
+}
 
 async function pairBrowser(scopes: string[], auth = AUTH_TOKEN, controlUi = true) {
   const identity = { deviceId: "browser", role: "operator", scopes };
@@ -108,21 +110,16 @@ it.each(["operator.admin", "operator.read"])(
             ? ["operator.admin", "operator.read", "operator.write"]
             : ["operator.read"];
           for (const method of ["PUT", "POST"]) {
-            const response = await sendRequest(server, {
-              path: "/profile",
-              method,
-              authorization: `Bearer ${token}`,
-              headers: { "x-openclaw-scopes": "operator.admin" },
-            });
+            const response = await sendRequest(
+              server,
+              profileRequest(token, method, { "x-openclaw-scopes": "operator.admin" }),
+            );
             expect(response.res.statusCode).toBe(isAdmin ? 200 : 403);
             expect(JSON.parse(response.getBody())).toEqual({ scopes: expectedScopes });
           }
-          const pending = createRequest({
-            path: "/profile",
-            method: "PUT",
-            authorization: `Bearer ${token}`,
-            headers: { "content-type": "application/json" },
-          });
+          const pending = createRequest(
+            profileRequest(token, "PUT", { "content-type": "application/json" }),
+          );
           const response = createResponse();
           Object.defineProperty(response.res, "writableEnded", {
             get: () => response.res.writableFinished,
@@ -137,11 +134,7 @@ it.each(["operator.admin", "operator.read"])(
           expectUnauthorized(response);
           expect(effects).toBe(previousEffects);
           for (const credential of [token, "wrong-token"]) {
-            const rejected = await sendRequest(server, {
-              path: "/profile",
-              method: "PUT",
-              authorization: `Bearer ${credential}`,
-            });
+            const rejected = await sendRequest(server, profileRequest(credential));
             expectUnauthorized(rejected);
           }
         },
@@ -201,8 +194,7 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
       join(root, "index.html"),
       "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
     );
-    const auth = { mode: "token" as const, token: "synthetic-shared-token", allowTailscale: false };
-    const token = await pairBrowser(["operator.read"], auth);
+    const token = await pairBrowser(["operator.read"]);
     const verify = deviceTokens.verifyDeviceToken;
     vi.spyOn(deviceTokens, "verifyDeviceToken").mockImplementationOnce(async (params) => {
       const result = await verify(params);
@@ -210,18 +202,17 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
       return result;
     });
 
-    const req = new IncomingMessage(new Socket());
-    req.url = "/control/chat/main/topic";
-    req.method = "GET";
-    req.headers = { authorization: `Bearer ${token}` };
+    const req = createRequest({
+      path: "/control/chat/main/topic",
+      authorization: `Bearer ${token}`,
+    });
     const response = makeMockHttpResponse();
-    const config: OpenClawConfig = {};
     await handleControlUiHttpRequest(req, response.res, {
       basePath: "/control",
       root: { kind: "resolved", path: root },
-      config,
-      getRuntimeConfig: () => config,
-      auth,
+      config: {},
+      getRuntimeConfig: () => ({}),
+      auth: AUTH_TOKEN,
       sessionEntryPath: req.url,
       isSessionEntryCurrent: () => true,
     });

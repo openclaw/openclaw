@@ -1,10 +1,13 @@
 import { Errored, Loading, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 const SVG_PREVIEW_MAX_BYTES = 256 * 1024;
 const SVG_PREVIEW_FETCH_TIMEOUT_MS = 10_000;

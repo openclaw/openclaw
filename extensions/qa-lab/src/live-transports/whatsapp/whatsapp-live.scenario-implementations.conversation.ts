@@ -111,7 +111,6 @@ export const whatsappConversationScenarios = {
               (message) => message.text.includes(secondMarker),
             ],
             observedAfter: context.requestStartedAt,
-            timeoutMs: 60_000,
           });
           return "broadcast fanout produced main and qa-second replies";
         },
