@@ -84,6 +84,7 @@ function keepMcpResponseAlive(res: ServerResponse, contentType: string, frame: s
 
 let closeActiveMcpLoopbackServer: (() => Promise<void>) | undefined;
 let activeMcpLoopbackServerPromise: Promise<void> | null = null;
+const retiringMcpLoopbackDrains = new Set<Promise<void>>();
 
 function parseMcpJsonBody(body: string): unknown {
   try {
@@ -526,13 +527,22 @@ async function startMcpLoopbackServer(
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
-  return async () => {
-    // Stop admitting this runtime's child grants before draining accepted
-    // requests. A delayed old-server close cannot revoke a successor runtime.
+  let cleanupDone = false;
+  const cleanup = () => {
+    if (cleanupDone) {
+      return;
+    }
+    cleanupDone = true;
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
     revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
     unregisterGrantRevocation();
     toolCache.clear();
+  };
+
+  const close = async () => {
+    // Stop admitting this runtime's child grants before draining accepted
+    // requests. A delayed old-server close cannot revoke a successor runtime.
+    cleanup();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
@@ -542,6 +552,21 @@ async function startMcpLoopbackServer(
       await work.drain();
     }
   };
+  const handleUnexpectedClose = () => {
+    cleanup();
+    if (closeActiveMcpLoopbackServer === close) {
+      closeActiveMcpLoopbackServer = undefined;
+      logWarn("mcp-loopback: listener closed unexpectedly; the next run will restart it");
+      // Retain settlement for shutdown without blocking a successor listener.
+      const drain = work.drain().catch((error: unknown) => {
+        logWarn(`mcp-loopback: unexpected server close drain failed: ${String(error)}`);
+      });
+      retiringMcpLoopbackDrains.add(drain);
+      void drain.then(() => retiringMcpLoopbackDrains.delete(drain));
+    }
+  };
+  httpServer.once("close", handleUnexpectedClose);
+  return close;
 }
 
 /** Waits for the process-owned MCP loopback server, starting one if needed. */
@@ -580,8 +605,8 @@ export async function closeMcpLoopbackServer(): Promise<void> {
     await activeMcpLoopbackServerPromise;
   }
   // Claim after startup so concurrent shutdown waiters cannot close the same
-  // listener twice. A later call owns only the then-current server, not drains.
+  // listener twice. Also join accepted work from unexpectedly retired listeners.
   const close = closeActiveMcpLoopbackServer;
   closeActiveMcpLoopbackServer = undefined;
-  await close?.();
+  await Promise.all([close?.(), ...retiringMcpLoopbackDrains]);
 }

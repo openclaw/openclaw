@@ -491,6 +491,9 @@ when the response ends; long-running tool responses and SSE notification streams
 remain open until completion or shutdown. Each later request opens a new loopback
 TCP connection.
 
+If the listener closes unexpectedly, its grants are retired and the next CLI run
+starts a replacement. A warning records the closure in the Gateway log.
+
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
 unavailable, and each turn still needs its own active context grant.

@@ -1,3 +1,6 @@
+import { once } from "node:events";
+import type { Server } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -6,7 +9,22 @@ import {
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 
-const { execute, resolveTools } = vi.hoisted(() => ({ execute: vi.fn(), resolveTools: vi.fn() }));
+const { execute, resolveTools, createdServers } = vi.hoisted(() => ({
+  execute: vi.fn(),
+  resolveTools: vi.fn(),
+  createdServers: [] as Server[],
+}));
+vi.mock("node:http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:http")>();
+  return {
+    ...actual,
+    createServer: (...args: Parameters<typeof actual.createServer>) => {
+      const server = actual.createServer(...args);
+      createdServers.push(server);
+      return server;
+    },
+  };
+});
 vi.mock("../config/io.js", () => {
   const config = {};
   return { getRuntimeConfig: () => config };
@@ -28,6 +46,7 @@ const executionScopes: Array<AbortSignal | undefined> = [];
 const constructionScopes: Array<AbortSignal | undefined> = [];
 
 beforeEach(() => {
+  createdServers.length = 0;
   executionScopes.length = 0;
   constructionScopes.length = 0;
   execute.mockReset().mockImplementation(() => {
@@ -135,6 +154,61 @@ describe("MCP HTTP work ownership", () => {
       }
       await closeMcpLoopbackServer();
       expect(constructionScopes[0]?.aborted).toBe(true);
+    },
+  );
+
+  it.each([false, true])(
+    "joins unexpectedly retired listener cleanup on shutdown (successor=%s)",
+    async (successor) => {
+      const releaseCleanup = createDeferred();
+      const cleanupStarted = createDeferred();
+      let cleanup: Promise<unknown> | undefined;
+      let closing: Promise<void> | undefined;
+      execute.mockImplementationOnce(() => {
+        cleanup = trackAsyncWork(async () => {
+          cleanupStarted.resolve();
+          await releaseCleanup.promise;
+          return trackAsyncWork(() => completed);
+        });
+        return completed;
+      });
+      try {
+        await ensureMcpLoopbackServer();
+        expect(await callTool()).toMatchObject({ result: { isError: false } });
+        await cleanupStarted.promise;
+        const oldServer = expectDefined(createdServers[0], "old MCP server");
+        const retired = once(oldServer, "close");
+        oldServer.close();
+        await retired;
+        expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+
+        if (successor) {
+          await ensureMcpLoopbackServer();
+          expect(await callTool()).toMatchObject({ result: { isError: false } });
+        }
+        let closed = false;
+        const successorClosed = successor
+          ? once(expectDefined(createdServers[1], "successor MCP server"), "close")
+          : undefined;
+        closing = closeMcpLoopbackServer().then(() => {
+          closed = true;
+        });
+        await successorClosed;
+        // Allow shutdown's settled I/O and promise continuations to run. The
+        // accepted cleanup is still held by our gate, not a timing delay.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed).toBe(false);
+        releaseCleanup.resolve();
+        await closing;
+        await expect(cleanup).resolves.toEqual(completed);
+        expect(closed).toBe(true);
+      } finally {
+        releaseCleanup.resolve();
+        await cleanup;
+        await closing;
+      }
     },
   );
 
