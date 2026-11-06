@@ -1621,7 +1621,7 @@ const additionalChecks = [
 const sharedSdkDeclarations =
   workflowEventName === "pull_request" &&
   isCanonicalRepository &&
-  runnerProfile === "hybrid" &&
+  usesHostedRunnerProfile &&
   runCheckPlan &&
   runNodeFull &&
   !releaseFastLane &&

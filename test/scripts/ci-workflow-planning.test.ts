@@ -6634,9 +6634,11 @@ describe("ci workflow guards", () => {
       expect(result.status, result.output).toBe(0);
     }
     expect(forkPrevious.outputs.shared_sdk_declarations).toBe("false");
-    expect(forkShared.outputs.shared_sdk_declarations).toBe("false");
+    expect(forkShared.outputs.shared_sdk_declarations).toBe("true");
     const forkRows = JSON.parse(forkPrevious.outputs.check_additional_matrix!).include;
-    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(forkRows);
+    expect(JSON.parse(forkShared.outputs.check_additional_matrix!).include).toEqual(
+      forkRows.filter((row: { group: string }) => row.group !== "extension-package-boundary"),
+    );
     for (const authorAssociation of ["OWNER", "NONE"]) {
       for (const runAttempt of [1, 2]) {
         expect(
@@ -6649,6 +6651,16 @@ describe("ci workflow guards", () => {
         ).toBe(runAttempt === 1 ? "blacksmith-16vcpu-ubuntu-2404" : "ubuntu-24.04");
       }
     }
+    for (const [profile, timeout] of [
+      ["hybrid", 30],
+      ["github", 40],
+    ] as const) {
+      expect(
+        evaluateWorkflow(producer["timeout-minutes"], {
+          preflightOutputs: { runner_profile: profile },
+        }),
+      ).toBe(timeout);
+    }
     expect(producer.needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-additional-shard"].needs).toEqual(["preflight"]);
     expect(workflow.jobs["check-test-types-hosted-core-shard"].needs).toEqual([
@@ -6660,6 +6672,34 @@ describe("ci workflow guards", () => {
       "check-plan",
       "check-extension-package-boundary",
     ]);
+    const coreLint = workflow.jobs["check-lint-hosted-core-shard"];
+    expect(coreLint.needs).toEqual(["preflight", "check-plan", "check-extension-package-boundary"]);
+    const coreRestores = coreLint.steps.filter(
+      (step: WorkflowStep) =>
+        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
+        String(step.with?.mode).startsWith("restore"),
+    );
+    for (const shared of ["true", "false"]) {
+      for (const needsSdk of [true, false]) {
+        const selected = coreRestores.filter((step: WorkflowStep) =>
+          evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: { requires_sdk_declarations: needsSdk },
+            preflightOutputs: {
+              shared_sdk_declarations: shared,
+              runner_profile: "github",
+              cache_mode: "read",
+            },
+          }),
+        );
+        expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
+          shared === "true" && needsSdk ? "restore-run" : "restore-main",
+        ]);
+        expect(selected[0]?.["continue-on-error"]).not.toBe(true);
+      }
+    }
     const steps = producer.steps as WorkflowStep[];
     expect(
       requiredWorkflowStep(steps, "Check selected package boundaries")?.env?.OPENCLAW_CI_SHARED_SDK,

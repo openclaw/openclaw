@@ -132,6 +132,8 @@ it.each([
   ["hybrid", "none"],
   ["hybrid", "full"],
   ["github", "full"],
+  ["github", "affected"],
+  ["github", "none"],
   ["blacksmith", "affected"],
 ] as const)("preserves extension scope: %s / %s", async (runnerProfile, mode) => {
   const roots = selectLint(mode);
@@ -151,6 +153,13 @@ it.each([
     ...plan.lint_core_matrix.include.map((row) => row.lint_selection_json),
     ...plan.lint_extension_matrix.include.map((row) => row.lint_selection_json),
   ].flatMap((value) => (value ? [JSON.parse(value)] : []));
+  for (const row of plan.lint_core_matrix.include) {
+    const payload = row.lint_selection_json ? JSON.parse(row.lint_selection_json) : {};
+    const hasExtensions = Boolean(
+      payload.extensionStripes?.length || payload.fullExtensionStripes?.length,
+    );
+    expect(row.requires_sdk_declarations === true).toBe(hasExtensions);
+  }
   const central = JSON.parse(plan.central_lint_selection_json);
   expect(central.fullGroups).toEqual(
     runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
