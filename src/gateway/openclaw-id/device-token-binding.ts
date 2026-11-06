@@ -4,7 +4,9 @@
 // to, is refused and logged as a security event. The bindings are read from the
 // local claw record once at Gateway start, whatever the Labs switch says, so a
 // restart with the switch off keeps refusing tunnel-issued tokens on ordinary
-// ingress. Without saved bindings no owner is published and nothing here runs.
+// ingress. Without saved bindings no owner is published at start and checks pass;
+// the service publishes one before its tunnel admits a device, and a relayed
+// token cannot be issued while none exists.
 
 /** One recorded binding: the token of (device, role) belongs to `peerKey`. */
 export type DeviceTokenBinding = {
@@ -97,13 +99,18 @@ export async function checkDeviceTokenPeer(params: {
   return { ok: false, reason: "device-token-peer-mismatch" };
 }
 
-/** Records the binding of a token just issued to a relayed connection. */
+/** Records the binding of a token just issued to a relayed connection; no binding, no token. */
 export async function recordDeviceTokenPeer(params: {
   deviceId: string;
   role: string;
   peerKey: string | undefined;
 }): Promise<void> {
-  if (owner && owner !== "unreadable" && params.peerKey) {
-    await owner.record(params.deviceId, params.role, params.peerKey);
+  if (!params.peerKey) {
+    return;
   }
+  // An unbound relayed token would work on ordinary ingress and survive its device's removal.
+  if (!owner || owner === "unreadable") {
+    throw new Error("OpenClaw ID device-token bindings are unavailable; refusing a relayed token");
+  }
+  await owner.record(params.deviceId, params.role, params.peerKey);
 }

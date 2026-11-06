@@ -19,6 +19,7 @@ import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-p
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import * as profileWrites from "../state/user-profile-writes.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
   setOpenClawIdTunnelPrincipalResolver,
   setOpenClawIdTunnelPrincipalLookup,
@@ -89,9 +90,19 @@ beforeAll(async () => {
   started = await createGatewaySuiteHarness();
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => PRINCIPALS[peerKey]);
   setOpenClawIdTunnelPrincipalLookup((peerKey) => PRINCIPALS[peerKey]);
+  // The service publishes its binding writer before the tunnel admits a device.
+  const bindings = new Map<string, string>();
+  setDeviceTokenBindingOwner({
+    lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
+    record: async (deviceId, role, peerKey) => {
+      bindings.set(`${deviceId}:${role}`, peerKey);
+    },
+    reportMismatch: () => {},
+  });
 });
 
 afterAll(async () => {
+  setDeviceTokenBindingOwner(undefined);
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
   await started?.close();
