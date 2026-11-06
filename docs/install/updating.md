@@ -33,6 +33,11 @@ backup.
 
 ## Update implementation contract
 
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. Probe batching, backup refusal, and rollback safety
+are unchanged. This diagnostic requires the updater performing discovery to
+contain the fix; a candidate cannot change an older installed updater's probe.
+
 Before post-core plugin work, the updater releases its temporary Doctor database
 ownership before rechecking profile-backed requester authority. Service custody
 remains with the updater; the next Doctor acquires its own database ownership.

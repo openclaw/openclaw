@@ -115,7 +115,7 @@ it("bounds worker time/output and fails closed on timeout", () => {
     error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
   });
   expect(() => probeSqliteDatabaseHeaders(["candidate.db"])).toThrow(
-    "Could not determine whether backup files are SQLite databases",
+    "SQLite header probe timed out after 10000 ms while checking 1 backup paths",
   );
   expect(spawn.mock.calls[0]?.[2]).toMatchObject({ timeout: 10_000, maxBuffer: 64 * 1024 * 1024 });
 });
