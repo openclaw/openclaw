@@ -9,7 +9,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-
 type StreamingSessionStub = {
   active: boolean;
   credentials: unknown;
@@ -1102,6 +1101,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence tick", ["```", null, "```python\nx\n```"], ["```", "```python\nx\n```"]],
     ["fence tail", ["A.\n```pytho", null, "A.\n```python\nx"], ["A.\n```pytho", "```python\nx"]],
     ["fence sp", ["  ~~~", null, "  ~~~ py\nx\n~~~"], ["  ~~~", "  ~~~ py\nx\n~~~"]],
+    ["retry", [2, 2, "B.", ["B.", 1], 2, "C.", ["C.", 2]], ["B.\n\nC."]],
+    ["trade", [2, 2, ["A.", 1], ["X.", 1], "X. Y.", ["X.", 1], null, ["Y.", 1]], ["X. Y.", ""]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
