@@ -1,3 +1,4 @@
+import net from "node:net";
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 // Ports are allocated at profile creation and persisted. Callers can pass a
 // derived range for Gateways that use a non-default control port.
@@ -11,17 +12,39 @@ export function isValidProfileName(name: string): boolean {
   return Boolean(name) && name.length <= 64 && PROFILE_NAME_REGEX.test(name);
 }
 
-export function allocateCdpPort(
+/** Binds a temporary loopback listener to verify that a port is actually free. */
+async function isTcpPortBindable(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const probe = net.createServer();
+    probe.once("error", () => resolve(false));
+    probe.once("listening", () => {
+      probe.close(() => resolve(true));
+    });
+    probe.listen(port, "127.0.0.1");
+  });
+}
+
+/**
+ * Walks the allocation range, skipping ports the config already reserves and
+ * ports a live listener already holds: several Gateways share one host, and
+ * each derives an overlapping candidate range from its own control port, so
+ * config-only exclusion cannot see a neighbour's listeners.
+ */
+export async function allocateFreeCdpPort(
   usedPorts: Set<number>,
   range?: { start: number; end: number },
-): number | null {
+  isPortFree: (port: number) => Promise<boolean> = isTcpPortBindable,
+): Promise<number | null> {
   const start = range?.start ?? CDP_PORT_RANGE_START;
   const end = range?.end ?? CDP_PORT_RANGE_END;
   if (!isValidTcpPort(start) || !isValidTcpPort(end) || start > end) {
     return null;
   }
   for (let port = start; port <= end; port++) {
-    if (!usedPorts.has(port)) {
+    if (usedPorts.has(port)) {
+      continue;
+    }
+    if (await isPortFree(port)) {
       return port;
     }
   }

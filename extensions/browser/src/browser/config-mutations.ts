@@ -13,7 +13,7 @@ import {
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
-import { allocateCdpPort, getUsedPorts } from "./profiles.js";
+import { allocateFreeCdpPort, getUsedPorts } from "./profiles.js";
 
 type BrowserControlCredential = {
   kind: "token" | "password";
@@ -87,7 +87,7 @@ export async function createBrowserProfileConfig(params: {
       } else {
         const usedPorts = getUsedPorts(latestProfileSource.profiles);
         const rangeSource = useRebasedPortRange ? latestRootResolved : params.resolved;
-        const cdpPort = allocateCdpPort(usedPorts, {
+        const cdpPort = await allocateFreeCdpPort(usedPorts, {
           start: rangeSource.cdpPortRangeStart,
           end: rangeSource.cdpPortRangeEnd,
         });
