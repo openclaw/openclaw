@@ -1,15 +1,15 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  readWorkflow,
+  readWorkflowOutputs,
+  requiredWorkflowStep,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
 import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
-
-type WorkflowStep = Partial<Record<"id" | "name" | "run", string>> & {
-  env?: Record<string, string>;
-};
 
 type ExtensionMatrixRow = {
   check_name: string;
@@ -22,31 +22,8 @@ type ExtensionMatrixRow = {
   exclusion_configs: { config: string; includePatterns: string[] }[];
 };
 
-export function parseManifestOutputs(output: string): Record<string, string> {
-  return Object.fromEntries(
-    output
-      .trim()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
-}
-
 export function parseExtensionMatrix(matrix: string | undefined): ExtensionMatrixRow[] {
   return JSON.parse(expectDefined(matrix, "extension matrix")).include;
-}
-
-export function readWorkflow(name = "plugin-prerelease") {
-  return parse(readFileSync(`.github/workflows/${name}.yml`, "utf8"));
-}
-
-export function findStep(job: { steps: WorkflowStep[] }, name: string) {
-  return expectDefined(
-    job.steps.find((step) => step.name === name || step.id === name),
-    name,
-  );
 }
 
 export function createPrereleaseFixtures() {
@@ -62,12 +39,15 @@ export function createPrereleaseFixtures() {
     ) {
       const outputPath = join(tempDirs.make("plugin-prerelease-manifest-"), "github-output");
       const run = expectDefined(
-        findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest").run,
+        requiredWorkflowStep(
+          readWorkflow(".github/workflows/plugin-prerelease.yml").jobs.preflight.steps,
+          "Build plugin prerelease manifest",
+        ).run,
         "plugin prerelease manifest script",
       );
-      const result = spawnSync("bash", ["-c", run], {
+      const result = runWorkflowShellScript(run, {
         cwd,
-        encoding: "utf8",
+        linuxWorkflow: true,
         env: {
           PATH: process.env.PATH,
           FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
@@ -77,7 +57,7 @@ export function createPrereleaseFixtures() {
           OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
         },
       });
-      return { result, output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "" };
+      return { result, output: readWorkflowOutputs(outputPath) };
     },
     target(prefix: string, files: Record<string, string>, linkType: "dir" | "junction") {
       const root = tempDirs.make(prefix);
