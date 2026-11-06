@@ -173,7 +173,7 @@ select.settings-select:not([multiple]) {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .settings-segmented__btn[data-compact-label] {
     font-size: 0;
   }
@@ -281,7 +281,7 @@ select.settings-select {
 @media (pointer: coarse), (max-width: 640px) {
   :root {
     --settings-control-height: 38px;
-    --settings-touch-control-height: 44px;
+    --settings-touch-control-height: 38px;
   }
 }
 
@@ -289,7 +289,6 @@ select.settings-select {
    actions share the field height; a row's action is one step down, on the composer's 32px. */
 @media (max-width: 640px) {
   :root {
-    --settings-touch-control-height: var(--settings-control-height);
     --row-action-size: 32px;
   }
 

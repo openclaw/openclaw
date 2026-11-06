@@ -15,6 +15,7 @@ import {
   Show,
 } from "solid-js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
@@ -311,7 +312,11 @@ export function ProfilePage() {
                       <openclaw-viewer-avatar
                         prop:user={{
                           id: profile().id,
-                          name: profile().displayName ?? undefined,
+                          name: userProfileDisplayName(
+                            profile().id,
+                            profile().displayName,
+                            profile().githubIdentity?.login,
+                          ),
                           email: profile().emails[0],
                           avatarUrl: avatarUrl() ?? undefined,
                           watchedSessions: [],
@@ -609,9 +614,11 @@ export function ProfilePage() {
               target={state.modelAccountsTarget}
               personLabel={
                 view().ownProfile
-                  ? view().ownProfile!.displayName?.trim() ||
-                    view().ownProfile!.emails[0] ||
-                    t("profilePage.modelAccounts.currentPerson")
+                  ? userProfileDisplayName(
+                      view().ownProfile!.id,
+                      view().ownProfile!.displayName,
+                      view().ownProfile!.githubIdentity?.login,
+                    ) || t("profilePage.modelAccounts.currentPerson")
                   : null
               }
             />

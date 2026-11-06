@@ -374,12 +374,18 @@ function InventoryEntry(props: {
         </Show>
         <Show when={showRoles()}>
           <DeviceFact label={t("devices.inventory.rolesLabel")}>
-            {formatList(props.entry.roles)}
+            <details>
+              <summary>{t("devices.inventory.showDetails")}</summary>
+              {formatList(props.entry.roles)}
+            </details>
           </DeviceFact>
         </Show>
         <Show when={showScopes()}>
           <DeviceFact label={t("devices.inventory.scopesLabel")}>
-            {formatList(props.entry.scopes)}
+            <details>
+              <summary>{t("devices.inventory.showDetails")}</summary>
+              {formatList(props.entry.scopes)}
+            </details>
           </DeviceFact>
         </Show>
         <Show when={(props.entry.node?.caps ?? []).length > 0}>
@@ -564,17 +570,29 @@ function TokenRow(props: {
         props.tokenSummary.lastUsedAtMs ??
         null,
     );
-    return [
-      props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : "",
-      (props.tokenSummary.scopes ?? []).length > 0 ? formatList(props.tokenSummary.scopes) : "",
-      when,
-    ].filter(Boolean);
+    return [props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : "", when].filter(
+      Boolean,
+    );
   });
   return (
     <div class="device-token">
       <div class="device-token__text">
-        <span class="device-token__role">{props.tokenSummary.role}</span>
+        <span class="device-token__role">
+          {t(
+            props.tokenSummary.role === "node"
+              ? "devices.inventory.deviceToken"
+              : props.tokenSummary.role === "operator"
+                ? "devices.inventory.accessToken"
+                : "devices.inventory.token",
+          )}
+        </span>
         <MetaLine parts={detail()} />
+        <details>
+          <summary>{t("devices.inventory.showDetails")}</summary>
+          <MetaLine
+            parts={[props.tokenSummary.role, formatList(props.tokenSummary.scopes ?? [])]}
+          />
+        </details>
       </div>
       <div class="device-token__actions">
         <button

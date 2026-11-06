@@ -220,11 +220,6 @@
   border-radius: max(var(--field-radius), var(--radius-md));
 }
 
-.plugin-catalog-results__empty {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 .plugin-catalog-chips {
   display: flex;
   flex-wrap: wrap;
@@ -520,18 +515,6 @@
   flex-wrap: wrap;
 }
 
-/* Toolbars mixing labelled fields with buttons share one control-row baseline. */
-.plugins-toolbar--fields {
-  align-items: flex-end;
-}
-
-.plugins-toolbar--fields > .plugins-toolbar__hint {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--settings-control-height);
-}
-
-.plugins-toolbar--fields > .settings-segmented,
 .plugins-toolbar--fields > .btn {
   height: var(--settings-control-height);
 }
@@ -544,27 +527,34 @@
   display: none;
 }
 
-.plugins-toolbar__hint {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-.plugins-field {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.plugins-field > span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-}
-
 .skills-toolbar__search {
   flex: 1 1 220px;
   min-width: 180px;
+}
+
+/* The placeholder names the field; the label stays for assistive technology. */
+:is(.skills-toolbar__search, .skill-library-search > .field) > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skills-toolbar__search > input {
+  width: 100%;
+}
+
+.skill-row-status {
+  display: inline-flex;
+}
+
+/* Selects size to the chosen option; a floor keeps the search edge from moving. */
+.plugins-toolbar > .skills-toolbar__status {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 160px;
 }
 
 .skills-group__summary {
@@ -860,17 +850,6 @@
   color: var(--danger);
 }
 
-/* The inventory header is already inside the padded settings page. Its page
-   owner must override the outer-header inset regardless of lazy stylesheet order. */
-openclaw-plugins-page
-  .settings-page.oc-app-surface:has(> .plugins-settings-content)
-  > .content-header--settings {
-  width: 100%;
-  max-width: none;
-  margin-inline: 0;
-  padding-inline: 0;
-}
-
 .plugins-settings-content {
   display: flex;
   min-width: 0;
@@ -911,6 +890,43 @@ openclaw-plugins-page
 .plugins-settings-row {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 40px;
+}
+
+.plugins-settings-row__status {
+  display: flex;
+}
+
+/* On a phone the description keeps its width; the status reads below it. */
+@media (max-width: 640px) {
+  .settings-row.plugins-settings-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-2);
+    align-items: center;
+  }
+
+  .plugins-settings-row > :first-child {
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+
+  .plugins-settings-row > .settings-row__control {
+    display: contents;
+  }
+
+  .plugins-settings-row > .settings-row__text,
+  .plugins-settings-row__status {
+    grid-column: 2;
+  }
+
+  .plugins-settings-row .settings-row__chevron {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+
+  .plugins-settings-row > .plugins-row-message {
+    grid-column: 1 / -1;
+  }
 }
 
 .plugins-settings-row__link {
@@ -1498,29 +1514,39 @@ openclaw-plugins-page
 }
 
 @media (max-width: 640px) {
-  .settings-page.oc-app-surface:has(> .plugins-settings-content) {
-    padding-top: 0;
-  }
-
   openclaw-skills-page .plugins-toolbar--fields {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: end;
   }
 
-  openclaw-skills-page .plugins-toolbar--fields > :is(.settings-segmented, .plugins-field) {
-    grid-column: 1 / -1;
-    width: 100%;
+  openclaw-skills-page .skills-toolbar__search {
     min-width: 0;
   }
 
-  openclaw-skills-page .plugins-toolbar--fields > .settings-segmented {
-    height: auto;
+  /* Search keeps its room; the status select takes the next line. */
+  openclaw-skills-page .plugins-toolbar > .skills-toolbar__status {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
-  openclaw-skills-page .plugins-toolbar__hint {
-    white-space: normal;
-    overflow-wrap: anywhere;
+  /* Views stay on one line in every theme, however wide its font. */
+  openclaw-skills-page .skill-library-toolbar__views > .settings-segmented {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  openclaw-skills-page .skill-library-toolbar__views > .settings-segmented::-webkit-scrollbar {
+    display: none;
+  }
+
+  openclaw-skills-page
+    .skill-library-toolbar__views
+    > .settings-segmented
+    > .settings-segmented__btn {
+    flex: 0 0 auto;
   }
 
   openclaw-skills-page .plugins-toolbar:has(> .field) {
@@ -1565,16 +1591,6 @@ openclaw-plugins-page
     min-width: 0;
   }
 
-  /* The placeholder names the field; the label stays for assistive technology. */
-  openclaw-skills-page .skill-library-search > .field > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   openclaw-skills-page .skill-library-search input {
     min-width: 0;
     text-overflow: ellipsis;
@@ -1613,10 +1629,6 @@ openclaw-plugins-page
 }
 
 @media (max-width: 560px) {
-  .plugins-toolbar--fields > .settings-segmented {
-    height: auto;
-  }
-
   .plugins-row-message {
     align-items: stretch;
     flex-direction: column;
@@ -1678,17 +1690,17 @@ openclaw-plugins-page
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: rgb(8 8 8);
+  background: var(--bg);
 }
 
-/* The neutral substrate stays fixed. Independent RGB intensity masks retain the
-   original grain and brightness levels while CSS follows the live primary token. */
+/* Transparent artwork leaves the active canvas visible in every theme. The
+   intensity masks retain the grain while a quiet tint follows the live primary. */
 .plugin-recommended-prompts__art {
   position: absolute;
   inset: 0;
   isolation: isolate;
   pointer-events: none;
-  background: url("../assets/plugin-prompts-ember-substrate.png") 38% 50% / cover no-repeat;
+  opacity: 0.18;
 }
 
 .plugin-recommended-prompts__art > span {
@@ -1724,24 +1736,21 @@ openclaw-plugins-page
 }
 
 .plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+  --btn-bg: var(--card);
+  --btn-bg-hover: var(--bg-hover);
+
   gap: 12px;
   width: 100%;
   padding: 12px 16px;
-  color: rgb(255 255 255);
+  color: var(--card-foreground);
   font: inherit;
   text-align: start;
-  background: rgb(17 19 24 / 88%);
-  border: 1px solid rgb(255 255 255 / 10%);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
 }
 
-.plugin-recommended-prompts__list
-  > button.btn.plugin-recommended-prompts__prompt:hover:not(:disabled) {
-  background: rgb(17 19 24 / 96%);
-}
-
 .plugin-recommended-prompts__prompt:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--control-ui-focus-ring);
   outline-offset: 3px;
 }
 
@@ -1776,7 +1785,7 @@ openclaw-plugins-page
 }
 
 .plugin-recommended-prompts__prompt .plugin-prompt-mention {
-  color: color-mix(in srgb, var(--accent) 55%, white);
+  color: var(--link);
 }
 
 .plugin-recommended-prompts__action {
@@ -1785,7 +1794,7 @@ openclaw-plugins-page
   place-items: center;
   width: 30px;
   height: 30px;
-  background: rgb(255 255 255 / 8%);
+  background: var(--surface-hover);
   border-radius: 50%;
 }
 

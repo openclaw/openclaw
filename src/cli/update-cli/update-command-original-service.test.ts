@@ -50,7 +50,7 @@ import type { PreManagedServiceStop } from "./update-command-service-context-typ
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
-// Real update/state/lease owners; simulated native manager, HTTP, and package transport.
+const pid = vi.hoisted(() => Number.MAX_SAFE_INTEGER); // Cannot collide with native PIDs.
 const mocks = vi.hoisted(() => ({
   state: vi.fn<() => Promise<GatewayServiceState>>(),
   stop: vi.fn(),
@@ -69,7 +69,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
-  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
+  inspectServiceProcessMembershipSync: (value: number) => (value === pid ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks-control.js", async (original) => ({
   ...(await original<typeof import("../../daemon/schtasks-control.js")>()),
@@ -140,7 +140,7 @@ const readPackage = (root = rootB) => fs.readFile(path.join(root, "package.json"
 function healthObservation(expectedVersion?: string, expectedBuildId?: string, healthy = true) {
   return {
     healthy,
-    runtime: { status: healthy ? "running" : "stopped", pid: healthy ? 4242 : undefined },
+    runtime: { status: healthy ? "running" : "stopped", pid: healthy ? pid : undefined },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   };
@@ -279,7 +279,7 @@ beforeEach(async () => {
         ),
       ),
     },
-    runtime: { status: "running", pid: 4242, systemd: { managerUid: process.getuid?.() ?? 501 } },
+    runtime: { status: "running", pid, systemd: { managerUid: process.getuid?.() ?? 501 } },
   };
   mocks.state.mockImplementation(async () => ({
     ...serviceState,

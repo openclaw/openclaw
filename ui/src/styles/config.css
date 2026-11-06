@@ -25,6 +25,29 @@
   flex-shrink: 0;
 }
 
+.config-validity-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-validity-warning__icon {
+  flex: none;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+}
+
+.config-validity-warning__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-validity-warning .btn {
+  flex: none;
+}
+
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -40,26 +63,6 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
-}
-
-.config-action-spinner {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-}
-
-.config-action-spinner svg {
-  width: 14px;
-  height: 14px;
-  animation: btn-spinner-spin 0.7s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .config-action-spinner svg {
-    animation: none;
-  }
 }
 
 .config-diff {
@@ -170,6 +173,11 @@
 
 .config-content > .settings-page {
   padding-top: 0;
+}
+
+/* Keep Setup from painting above its final position while form sections append. */
+.config-content > .settings-page[aria-busy="true"] + .settings-page {
+  visibility: hidden;
 }
 
 .config-content-callout .callout {
@@ -733,13 +741,8 @@
 }
 
 .config-loading__spinner {
-  width: 32px;
-  height: 32px;
-  color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
-  border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.7s linear infinite;
+  width: 20px;
+  height: 20px;
 }
 
 .cfg-field__error {
@@ -770,6 +773,127 @@
 .cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
   flex: 1 1 auto;
   width: auto;
+}
+
+/* A list of plain values is one row per value: the field, then its remove button. */
+.cfg-array__item--row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--list-row-padding);
+  padding-inline-start: var(--space-7);
+
+  > .cfg-array__value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  > .cfg-array__value > .settings-row {
+    min-height: 0;
+    padding: 0;
+  }
+
+  /* A list value is required by being in the list. */
+  .settings-row__control > .settings-row__desc[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+/* A collection's head and entry rows hold one small action, which stays beside its text. */
+@media (max-width: 640px) {
+  .cfg-collection-row {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
+      width: auto;
+      max-width: none;
+    }
+  }
+}
+
+/* A number and its step buttons are one control, on the input's own surface. */
+.cfg-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  height: var(--settings-control-height);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+}
+
+.cfg-stepper:focus-within {
+  border-color: var(--ring);
+}
+
+.settings-row .cfg-stepper > .settings-input,
+.settings-row .cfg-stepper > input[type="number"].settings-input {
+  flex: 0 1 72px;
+  width: 72px;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  padding-inline: var(--space-1);
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: textfield;
+}
+
+.cfg-stepper > .settings-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.cfg-stepper > .settings-input::-webkit-inner-spin-button,
+.cfg-stepper > .settings-input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* On a phone a number sits under its label like every other field, at the same width. */
+@media (max-width: 640px) {
+  .cfg-stepper {
+    width: 100%;
+  }
+
+  .settings-row .cfg-stepper > .settings-input,
+  .settings-row .cfg-stepper > input[type="number"].settings-input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
+.cfg-stepper__button {
+  flex: 0 0 auto;
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--field-radius);
+  cursor: var(--cursor-action);
+}
+
+.cfg-stepper__button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.cfg-stepper__button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.cfg-stepper__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .cfg-collection-draft__actions {
@@ -822,13 +946,14 @@
   }
 }
 
-.mcp-page,
 .memory-page__panel {
   display: grid;
   gap: 14px;
 }
 
 .mcp-page {
+  display: grid;
+  gap: var(--space-8);
   margin-top: 12px;
 }
 
@@ -844,82 +969,238 @@
   scrollbar-gutter: stable;
 }
 
-.memory-page__link {
-  color: var(--accent);
-  font-size: 12.5px;
+.memory-page__nav-row {
+  text-decoration: none;
+}
+
+.curated-settings__disclosure svg {
+  transition: transform 140ms ease;
+}
+
+.curated-settings__disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.curated-settings__details {
+  padding-inline-start: var(--space-4);
+}
+
+/* One server: the line says what it is and whether it works; the panel holds the rest. */
+.mcp-server-row__head {
+  display: flex;
+  align-items: center;
+  padding-inline-end: var(--space-4);
+}
+
+.mcp-server-row__head:has(.mcp-server-row__summary:hover) {
+  background: var(--surface-hover);
+}
+
+.mcp-server-row__summary {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "name status chevron"
+    "target target chevron";
+  align-items: center;
+  column-gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.mcp-server-row__summary:focus-visible {
+  outline: 2px solid var(--oc-focus-ring);
+  outline-offset: -2px;
+}
+
+.mcp-server-row__name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  line-height: 1.35;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mcp-command-card__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  width: 100%;
+.mcp-server-row--off .mcp-server-row__name {
+  color: var(--muted);
 }
 
-.mcp-command-card__grid code,
-.mcp-server-row .settings-row__control code {
+.mcp-server-row__status {
+  display: flex;
+  grid-area: status;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.mcp-server-row__target {
+  grid-area: target;
   min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  color: var(--text);
+  overflow: hidden;
+  color: var(--muted);
   font-family: var(--mono);
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.mcp-server-row__launch {
-  font-family: var(--mono);
+.mcp-server-row__chevron {
+  grid-area: chevron;
+  inline-size: var(--list-row-icon-size);
+  block-size: var(--list-row-icon-size);
+  opacity: 0.7;
+  transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
 }
 
-/* Shared inline form stays in config.css because the app-wide stylesheet
- * serves both the MCP settings page and the Plugins inventory. */
-.mcp-server-form {
+.mcp-server-row--open .mcp-server-row__chevron {
+  transform: rotate(180deg);
+}
+
+/* Inset like an open tool in the Agents catalog, so it's clear where a server ends. */
+.mcp-server-row__detail {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(150px, 190px) minmax(0, 1fr) auto;
-  gap: var(--space-2);
-  align-items: end;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  gap: var(--space-3);
+  min-width: 0;
+  padding-block: var(--space-1) var(--space-5);
+  padding-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
 }
 
-.mcp-server-form label {
-  display: grid;
-  gap: 5px;
+.mcp-server-row__detail > :not(.mcp-server-editor) {
+  margin-inline: var(--space-4);
+}
+
+.mcp-server-row__facts:empty {
+  display: none;
+}
+
+.mcp-server-row__note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   min-width: 0;
 }
 
-.mcp-server-form label span {
+.mcp-server-row__note .mcp-server-row__note-error {
+  color: var(--danger);
+}
+
+.mcp-server-row__label {
+  margin: 0 0 var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 580;
 }
 
-div.mcp-server-form__actions {
-  display: flex;
+.mcp-server-tools__list {
+  display: grid;
   gap: var(--space-2);
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
 }
 
-.mcp-server-form > .mcp-server-message {
-  grid-column: 1 / -1;
+.mcp-server-tools__list li {
+  display: grid;
+  min-width: 0;
 }
 
-.mcp-server-message {
-  margin: var(--space-3) var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--ok-subtle);
-  color: var(--ok);
+.mcp-server-tools__list code,
+.mcp-command code {
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
-  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.mcp-server-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+/* The panel is already a surface; its fields sit on it without a second card. */
+.mcp-server-editor .settings-group {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.mcp-server-editor .settings-row__title {
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.mcp-server-editor .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+.mcp-server-row__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* A ghost button's label lines up with the text above it. */
+.mcp-server-row__footer > .btn--ghost {
+  margin-inline-start: calc(var(--space-3) * -1);
+}
+
+.mcp-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.mcp-page .settings-page {
+  padding-block: 0;
+}
+
+/* No description sits under the heading here, so its actions share its line at every width. */
+.mcp-page .mcp-server-list .settings-section__header {
+  flex-direction: row;
+  align-items: center;
+}
+
+.mcp-page .mcp-server-list .settings-section__header .settings-section__actions {
+  align-self: center;
+}
+
+/* The "?" sits at the page edge here, so its touch area stops at the page's padding. */
+.mcp-page .settings-section__help-button::after {
+  inset-inline-end: calc(var(--space-3) * -1);
+}
+
+/* Disclosures closing a page read as one list, not separate sections. */
+.mcp-page .mcp-page__commands {
+  margin-top: calc(var(--space-3) - var(--space-8));
+}
+
+.shell--settings .mcp-page .config-content {
+  padding-block: 0;
+}
+
+/* The shared summary stacks at phone width, which orphans its chevron on a line of its own. */
+.mcp-page .cfg-object__summary.settings-row {
+  flex-wrap: nowrap;
+}
+
+.mcp-page .cfg-object__summary.settings-row > .settings-row__control {
+  width: auto;
 }
 
 .config-accordion-nav {
@@ -963,15 +1244,4 @@ div.mcp-server-form__actions {
 
 .config-accordion-nav .config-accordion-group__item--active .settings-row__title {
   color: var(--text-strong);
-}
-
-@media (max-width: 900px) {
-  .mcp-command-card__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .mcp-server-form {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
-  }
 }

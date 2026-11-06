@@ -10,6 +10,7 @@ import {
   normalizeGitPathForFilesystem,
   quoteGitConfig,
 } from "./git-exec.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import {
   DEV_BRANCH,
   isBetaTag,
@@ -17,7 +18,6 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
-import { compareSemverStrings } from "./update-check.js";
 import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   readGitRefFetchTarget,

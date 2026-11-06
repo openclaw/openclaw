@@ -13,6 +13,7 @@ import type {
   UnixSeconds,
 } from "../statements/types.js";
 import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
  * How a write reached the Gateway.
@@ -37,6 +38,14 @@ export type OwnerDeviceRecord = {
   approved_by: OwnerApprover;
   /** Last tunnel admission of any of its peer keys (or when it was added), unix seconds. */
   last_seen: UnixSeconds;
+  /**
+   * The membership seq at which the device was listed; re-adding it while listed keeps it. A
+   * revocation signed at an earlier seq does not cover it. Absent on records written before
+   * listing seqs existed, which count as listed at 0.
+   */
+  listed_seq?: number;
+  /** Per entry of `cert.body.peer_keys`, the seq at which that key was listed here (absent: 0). */
+  peer_listed_seq?: number[];
 };
 
 /** A member and the browsers (peer keys) they use at this claw. */
@@ -45,6 +54,11 @@ export type MemberRecord = {
   peer_keys: IrohEndpointKey[];
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
   last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
+  /**
+   * Per entry of `peer_keys`, the membership seq at which that browser was listed; re-adding a
+   * listed browser keeps it. Absent entries predate listing seqs and count as listed at 0.
+   */
+  listed_seq?: number[];
 };
 
 /** A registered invite. `proof_key` is hex and never leaves the Gateway. */
@@ -58,6 +72,11 @@ export type InviteRecord = {
     peer_key: IrohEndpointKey;
     requested_at: UnixSeconds;
   } | null;
+  /**
+   * Who registered it: R, or the owner device's fingerprint. Removing that device deletes the
+   * invite while it is still open. Absent on invites registered before this was recorded.
+   */
+  created_by?: OwnerApprover;
 };
 
 /** The Gateway's membership state for one claw. */
@@ -108,6 +127,11 @@ export type AuthorityResult =
       state: AuthorityState;
       events: AuthorityEvent[];
     };
+
+/** Builds an accepted write: the new state and the effects the Gateway must perform. */
+export function applied(state: AuthorityState, events: AuthorityEvent[] = []): AuthorityResult {
+  return { ok: true, status: "applied", state, events };
+}
 
 /** Builds a refusal that changes nothing. */
 export function refuse(
@@ -244,6 +268,10 @@ export function snapshotBody(
         peer_keys: member.peer_keys,
       }))
       .toSorted((a, b) => a.account_id.localeCompare(b.account_id)),
+    protocols: {
+      statement: [...SUPPORTED_STATEMENT_VERSIONS],
+      descriptor: [...SUPPORTED_DESCRIPTOR_VERSIONS],
+    },
     issued_at: now,
   };
 }

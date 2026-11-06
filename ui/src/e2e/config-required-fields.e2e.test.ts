@@ -23,6 +23,7 @@ suite.define(() => {
       },
     };
     await withPage(async ({ page, context }) => {
+      await page.clock.install();
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "config.get": configSnapshot(config, "required-fields", true),
@@ -67,8 +68,9 @@ suite.define(() => {
         },
       });
       await gateway.resolveDeferred("config.set");
+      const indicator = page.locator("openclaw-settings-save-indicator");
       await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
         .toContain("Apply changes");
     });
   });

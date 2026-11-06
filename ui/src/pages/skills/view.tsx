@@ -5,10 +5,10 @@ import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blo
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
@@ -18,6 +18,7 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -30,7 +31,7 @@ import {
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
-import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillRowStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
@@ -76,7 +77,11 @@ export function Skills(props: SkillsProps) {
   const emptyMessage = () =>
     !props.state.connected && !props.state.skillsReport
       ? t("skillsPage.disconnected")
-      : t("skillsPage.empty");
+      : props.state.skillsFilter.trim()
+        ? t("skillsPage.noMatches")
+        : skills().length > 0
+          ? t("skillsPage.noFilteredSkills")
+          : t("skillsPage.empty");
   const statusCounts = createMemo(() => {
     const counts: Record<SkillsStatusFilter, number> = {
       all: skills().length,
@@ -119,12 +124,7 @@ export function Skills(props: SkillsProps) {
             <>
               {props.library}
               <Show when={props.showInventory !== false}>
-                <SkillsToolbar
-                  view={props}
-                  statusCounts={statusCounts()}
-                  shownCount={acceptedFiltered().length}
-                  readInventory={read}
-                />
+                <SkillsToolbar view={props} statusCounts={statusCounts()} readInventory={read} />
               </Show>
               <Errored
                 fallback={(error) => (
@@ -144,9 +144,7 @@ export function Skills(props: SkillsProps) {
                   when={acceptedFiltered().length > 0}
                   fallback={<SettingsEmpty message={emptyMessage()} />}
                 >
-                  <For each={groups()} keyed={(group) => group.id}>
-                    {(group) => <SkillGroupView group={group()} view={props} />}
-                  </For>
+                  <SkillsInventory groups={groups()} view={props} />
                 </Show>
               </Show>
             </>
@@ -164,9 +162,48 @@ export function Skills(props: SkillsProps) {
   );
 }
 
-function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
+function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
+  const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
+  const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
+  const groups = createMemo(() => {
+    let remaining = visible.items().length;
+    // Reveal one grouped prefix so adding earlier rows never moves a later heading.
+    return props.groups.flatMap((group) => {
+      const count = Math.min(remaining, group.skills.length);
+      remaining -= count;
+      return count > 0
+        ? [
+            {
+              group,
+              skills: count === group.skills.length ? group.skills : group.skills.slice(0, count),
+            },
+          ]
+        : [];
+    });
+  });
   return (
-    <details class="settings-section skills-group" open>
+    <For each={groups()} keyed={(entry) => entry.group.id}>
+      {(entry) => (
+        <SkillGroupView
+          group={entry().group}
+          skills={entry().skills}
+          busy={visible.pending()}
+          view={props.view}
+        />
+      )}
+    </For>
+  );
+}
+
+function SkillGroupView(props: {
+  group: SkillGroup;
+  skills: SkillStatusEntry[];
+  busy: boolean;
+  view: SkillsProps;
+}) {
+  const skills = createMemo(() => props.skills);
+  return (
+    <details class="settings-section skills-group" aria-busy={props.busy ? "true" : "false"} open>
       <summary class="settings-section__header skills-group__summary">
         <h2 class="settings-section__heading">
           {props.group.label} <span class="settings-count">{props.group.skills.length}</span>
@@ -176,7 +213,7 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
         </span>
       </summary>
       <div class="settings-group">
-        <For each={props.group.skills} keyed={(skill) => skill.skillKey}>
+        <For each={skills()} keyed={(skill) => skill.skillKey}>
           {(skill) => <SkillRow skill={skill()} view={props.view} />}
         </For>
       </div>
@@ -187,25 +224,11 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
 function SkillsToolbar(props: {
   view: SkillsProps;
   statusCounts: Record<SkillsStatusFilter, number>;
-  shownCount: number;
   readInventory: () => unknown;
 }) {
   return (
     <div class="plugins-toolbar plugins-toolbar--fields">
-      <SettingsSegmented<SkillsStatusFilter>
-        value={props.view.state.skillsStatusFilter}
-        ariaLabel={t("skillsPage.title")}
-        options={STATUS_TABS.map((tab) => ({
-          value: tab.id,
-          label: (
-            <>
-              {t(tab.labelKey)} <span class="settings-count">{props.statusCounts[tab.id]}</span>
-            </>
-          ),
-        }))}
-        onChange={props.view.onStatusFilterChange}
-      />
-      <label class="plugins-field skills-toolbar__search">
+      <label class="skills-toolbar__search">
         <span>{t("common.search")}</span>
         <input
           class="settings-input"
@@ -216,9 +239,21 @@ function SkillsToolbar(props: {
           name="skills-filter"
         />
       </label>
-      <span class="plugins-toolbar__hint">
-        {t("skillsPage.shown", { count: String(props.shownCount) })}
-      </span>
+      <SettingsSelect
+        class="skills-toolbar__status"
+        value={props.view.state.skillsStatusFilter}
+        aria-label={t("skillsPage.title")}
+        options={STATUS_TABS.map((tab) => ({
+          value: tab.id,
+          label: `${t(tab.labelKey)} ${props.statusCounts[tab.id]}`,
+        }))}
+        onChange={(event) => {
+          const next = STATUS_TABS.find((tab) => tab.id === event.currentTarget.value);
+          if (next) {
+            props.view.onStatusFilterChange(next.id);
+          }
+        }}
+      />
       <Loading
         fallback={
           <RefreshButton label={t("common.refresh")} busy onClick={() => props.view.onRefresh()} />
@@ -237,7 +272,7 @@ function SkillsToolbar(props: {
 }
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
-  const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
+  const verdict = () => verdictForSkill(props.skill, props.view.state.clawhubVerdicts);
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));
@@ -263,7 +298,7 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         <span class="settings-row__desc">{clampText(props.skill.description, 140)}</span>
       </button>
       <div class="settings-row__control">
-        <SkillStateStatus skill={props.skill} verdict={verdict()} />
+        <SkillRowStatus skill={props.skill} verdict={verdict()} />
         <Show
           when={props.skill.clawhub?.status === "linked"}
           fallback={

@@ -242,6 +242,7 @@ export async function runCiGitStep(options: {
         performanceFixture = preparePerformanceFixture(root, options.performance);
       }
       env = stepEnvironment(step, {
+        ...(step.name === "Prepare Git owner" ? { CHECKOUT_KIND: "prepare" } : {}),
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
         HEAD_BRANCH: "automation/locale",
@@ -492,7 +493,8 @@ ${run}`;
       }
       if (options.prepare) {
         const prepare = readCiCheckoutStep("security-fast", "Prepare Git owner");
-        const prepareEnv = stepEnvironment(prepare, {});
+        // Policy fixtures need only the supervisor, without a candidate checkout.
+        const prepareEnv = stepEnvironment(prepare, { CHECKOUT_KIND: "prepare" });
         write("prepare.sh", renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;

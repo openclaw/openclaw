@@ -135,6 +135,27 @@ describe("resolveWorkerToolAuthority", () => {
       expect(await authority(overrides)).toEqual(expect.arrayContaining(["exec", "process"]));
     },
   );
+  it("exports the turn model's byProvider exec ceiling to worker exec authority", async () => {
+    const byProvider = (key: string) =>
+      ({
+        config: {
+          tools: {
+            exec: { host: "gateway", mode: "full" },
+            byProvider: { [key]: { exec: { mode: "auto" } } },
+          },
+        },
+      }) as TurnOverrides;
+    expect((await resolvedAuthority(byProvider("openai/gpt-test"))).exec).toMatchObject({
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+    expect((await resolvedAuthority(byProvider("openai/other"))).exec).toMatchObject({
+      mode: "full",
+      security: "full",
+    });
+  });
+
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
     const sessionKey = "agent:main:dashboard:delegated";
     const config = {

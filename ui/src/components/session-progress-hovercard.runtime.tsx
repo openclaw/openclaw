@@ -300,7 +300,6 @@ function createSessionProgressHovercard(
             lastRunError: sidebarRow.lastRunError,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             channelPresentation: sidebarRow.channelPresentation,
-            lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
             participants: sidebarRow.participants,
             expandedParticipants: sidebarRow.expandedParticipants,

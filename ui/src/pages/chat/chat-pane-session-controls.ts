@@ -106,20 +106,28 @@ export function readChatPaneMutationAccess(
       requiredScope: "operator.sessions.write",
       session,
     }),
+    pendingInputSteer: readSessionMethodAccess(snapshot, {
+      method: "chat.steerNow",
+      requiredScope: "operator.write",
+      sessionScope: true,
+      session,
+    }),
   };
 }
 
-export function canDismissChatPendingInputs(
+export function createChatPanePendingInputControls(
   access: ReturnType<typeof readChatPaneMutationAccess>,
   session: Pick<GatewaySessionRow, "sharingRole"> | undefined,
   options: { nativeConversation: boolean; participationBlocked: boolean },
-): boolean {
-  return (
-    access.pendingInputDismiss.allowed &&
+) {
+  const canParticipate =
     session?.sharingRole !== "viewer" &&
     options.nativeConversation &&
-    !options.participationBlocked
-  );
+    !options.participationBlocked;
+  return {
+    canDismissPendingInputs: canParticipate && access.pendingInputDismiss.allowed,
+    canSteerNow: canParticipate && access.pendingInputSteer.allowed,
+  };
 }
 
 export function renderChatPaneComposerControls(params: {
@@ -424,7 +432,10 @@ export function renderChatPaneComposerControls(params: {
             throw new Error("Session capability is unavailable");
           }
           if (patched.listRefreshError && ownsOutcome()) {
-            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed");
+            state.setRecoverableChatError(
+              t("chat.permissionControls.refreshFailed"),
+              patched.listRefreshError,
+            );
           }
         } catch (error) {
           if (!ownsRoute() || !ownsOutcome()) {
@@ -442,9 +453,7 @@ export function renderChatPaneComposerControls(params: {
             change = { ...change, retainWhileCurrent };
             selection.pending = change;
           }
-          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
-            error: String(error),
-          });
+          state.setRecoverableChatError(t("chat.permissionControls.updateFailed"), error);
         } finally {
           if (ownsOutcome()) {
             selection.outcome = undefined;

@@ -1,12 +1,14 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import "../../components/modal-dialog.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
+  SettingsLoadingSkeleton,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
@@ -66,7 +68,9 @@ export function SkillLibrary(props: {
       <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
         <Show
           when={entries().length > 0}
-          fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
+          fallback={
+            <SettingsEmpty message={t(query() ? "skillLibrary.noMatches" : "skillLibrary.empty")} />
+          }
         >
           <For each={entries()} keyed={(entry) => entry.skillId}>
             {(entry) => (
@@ -145,10 +149,7 @@ export function SkillLibrary(props: {
         </div>
         {/* A stable list host keeps async replacement from reparenting the focused search field. */}
         <div>
-          <Loading
-            on={acceptedList() ? null : completion()}
-            fallback={<p role="status">{t("common.loading")}</p>}
-          >
+          <Loading on={acceptedList() ? null : completion()} fallback={<SettingsLoadingSkeleton />}>
             <Errored fallback={() => null}>{readError()}</Errored>
             <Entries />
           </Loading>
@@ -228,6 +229,24 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
   const busy = () => props.library.saving() || current().busy;
   const disabled = () => busy() || !props.library.canEdit() || current().loading;
   const support = () => draft().files.find((file) => file.path === draft().selectedFile);
+  const deleteSelectedFile = async () => {
+    const active = draft();
+    const path = active.selectedFile;
+    const confirmed = await showConfirmDialog({
+      title: t("skillLibrary.deleteFileConfirm", { path }),
+      message: t("skillLibrary.deleteFileBody"),
+      confirmLabel: t("common.remove"),
+      danger: true,
+    });
+    if (!confirmed || draft() !== active) {
+      return;
+    }
+    props.library.edit((state) => {
+      state.draft!.files = state.draft!.files.filter((file) => file.path !== path);
+      state.draft!.selectedFile = "SKILL.md";
+      state.draft!.dirty = true;
+    });
+  };
   const text = createMemo(() =>
     draft().selectedFile === "SKILL.md"
       ? draft().content
@@ -292,7 +311,14 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
                 !draft().content.trim()
               }
             >
-              {busy() ? t("common.loading") : t("skillLibrary.save")}
+              {busy() ? (
+                <>
+                  <span class="btn__spinner" aria-hidden="true" />
+                  {t("common.saving")}
+                </>
+              ) : (
+                t("skillLibrary.save")
+              )}
             </button>
           </openclaw-modal-actions>
         </Show>
@@ -369,17 +395,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
             type="button"
             class="btn"
             disabled={disabled()}
-            onClick={() =>
-              props.library.edit((state) => {
-                const path = state.draft!.selectedFile;
-                if (!window.confirm(t("skillLibrary.deleteFileConfirm", { path }))) {
-                  return;
-                }
-                state.draft!.files = state.draft!.files.filter((file) => file.path !== path);
-                state.draft!.selectedFile = "SKILL.md";
-                state.draft!.dirty = true;
-              })
-            }
+            onClick={() => void deleteSelectedFile()}
           >
             {t("skillLibrary.deleteFile")}
           </button>
@@ -427,13 +443,14 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           />
         </label>
       </Show>
-      <Show when={!disabled()}>
+      <Show when={props.library.canEdit()}>
         <div class="plugins-toolbar">
           <label class="field" style={{ flex: "1", "min-width": "0" }}>
             <span>{t("skillLibrary.newFile")}</span>
             <input
               class="settings-input"
               name="library-file-path"
+              disabled={disabled()}
               value={props.library.local.newFilePath}
               onInput={(event) =>
                 props.library.setLocal((state) => {
@@ -445,7 +462,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           <button
             type="button"
             class="btn"
-            disabled={!props.library.local.newFilePath.trim()}
+            disabled={disabled() || !props.library.local.newFilePath.trim()}
             onClick={() => {
               const path = props.library.local.newFilePath.trim();
               const exists =
@@ -538,7 +555,14 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
                 (!props.library.uploadsEnabled() || current().importSelection.length === 0))
             }
           >
-            {busy() ? t("common.loading") : t("skillLibrary.import")}
+            {busy() ? (
+              <>
+                <span class="btn__spinner" aria-hidden="true" />
+                {t("common.importing")}
+              </>
+            ) : (
+              t("skillLibrary.import")
+            )}
           </button>
         </openclaw-modal-actions>
       }

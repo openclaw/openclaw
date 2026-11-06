@@ -22,13 +22,17 @@ import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
 
-export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
-  const split = createMemo(() =>
-    splitConfigSchemaByTier({
-      schema: props.schema,
-      path: props.path.map(String),
-      hints: props.hints,
-    }),
+export function ConfigTierGroups(
+  props: ConfigTierGroupsProps & { tiers?: ReturnType<typeof splitConfigSchemaByTier> },
+): SolidJSX.Element {
+  const split = createMemo(
+    () =>
+      props.tiers ??
+      splitConfigSchemaByTier({
+        schema: props.schema,
+        path: props.path.map(String),
+        hints: props.hints,
+      }),
   );
   return (
     <div class="config-tier-groups">
@@ -84,6 +88,9 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
     const key = path.at(-1)!;
     const hint = localizedHintForPath(path, hints());
     const sectionMeta = path.length === 1 ? SECTION_META[key] : undefined;
+    if (props.form.sectionTitle) {
+      return { label: props.form.sectionTitle, description: "" };
+    }
     return {
       label:
         sectionMeta?.label ??
@@ -221,6 +228,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
         <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups
+        tiers={tiers()}
         flat={Boolean(curated())}
         schema={props.section.node}
         path={props.section.path}
@@ -251,6 +259,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               contextLabel: contextLabel(),
               sectionRoot: true,
               collapseObjects: curated() ? !revealTarget() : revealTarget() ? false : undefined,
+              progressive: props.form.progressive,
               summarizeObject: curated()?.summarizeObject,
               searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
               revealSensitive: props.form.revealSensitive ?? false,
@@ -373,7 +382,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
 
 function ConfigSections(props: { sections: Section[]; form: ConfigFormProps }): SolidJSX.Element {
   const visible = createProgressiveList(() => props.sections, {
-    initial: 1,
+    initial: 0,
     batch: 7,
     enabled: () => props.form.progressive === true,
   });

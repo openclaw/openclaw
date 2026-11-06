@@ -230,7 +230,7 @@ function AgentSkillsContent(
               onClick={() => params.onClear()}
             />
             <AgentPanelAction
-              label={params.pending ? t("common.loading") : t("common.refresh")}
+              label={params.pending ? t("common.refreshing") : t("common.refresh")}
               disabled={params.pending}
               onClick={params.onRefresh}
             />

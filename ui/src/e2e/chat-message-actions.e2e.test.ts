@@ -268,6 +268,7 @@ suite.define(() => {
         has: page.getByRole("button", { name: "Cancel reply" }),
       });
       await replyText(preview).toBe(fileName);
+      const author = await preview.locator(".chat-reply-attribution__name").textContent();
       await preview.getByRole("button", { name: "Cancel reply" }).click();
       await bubble.click({ button: "right", position: { x: 2, y: 2 } });
       await page
@@ -281,7 +282,7 @@ suite.define(() => {
       const sent = await gateway.waitForRequest("chat.send");
       expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
       const sentPreview = page.locator(".chat-reply-attribution--inline");
-      await pollCount(sentPreview.getByRole("button")).toBe(1);
+      await pollCount(sentPreview.getByRole("button", { name: `Replying to ${author}` })).toBe(1);
       await sentPreview.getByRole("button").click();
       await expect
         .poll(() =>

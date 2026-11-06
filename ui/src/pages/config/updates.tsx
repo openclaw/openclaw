@@ -145,7 +145,6 @@ function DeviceUpdates(props: {
                 title={t("updates.device.automatic")}
                 checked={checked()}
                 saving={saving()}
-                description={saving() ? t("common.saving") : undefined}
                 onChange={(value) => void changeAutomatic(value)}
               />
             </Loading>

@@ -610,6 +610,11 @@ export function SettingsEmpty(props: { message: JSX.Element; carapace?: boolean 
   );
 }
 
+/** Says why a surface can't be used here, in the same quiet state as an empty list. */
+export function SettingsUnavailable(props: { message: JSX.Element }) {
+  return <SettingsEmpty message={<span role="status">{props.message}</span>} />;
+}
+
 export function SettingsLoadingSkeleton(props: {
   label?: string;
   rows?: number;

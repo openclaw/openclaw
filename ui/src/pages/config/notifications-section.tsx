@@ -67,7 +67,17 @@ function NotificationSection(props: {
 const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?: string }) => (
   <SettingsRow
     title={t("configView.notifications.testOutcome")}
-    description={props.message}
+    description={
+      props.state === "error" ? (
+        <>
+          {t("configView.notifications.testFailed")}
+          <br />
+          {props.message}
+        </>
+      ) : (
+        props.message
+      )
+    }
     role={props.state === "error" ? "alert" : undefined}
     control={
       <SettingsStatus
@@ -77,7 +87,7 @@ const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?
             ? "configView.notifications.sendingTest"
             : props.state === "sent"
               ? "configView.notifications.testQueued"
-              : "configView.notifications.testFailed",
+              : "configView.notifications.testError",
         )}
       />
     }
@@ -145,7 +155,11 @@ function NativeNotificationSection(props: {
             >
               {props.native.permission === "granted" ? (
                 <button class="btn" disabled={testPending()} onClick={() => void sendTest()}>
-                  <Icon name={testPending() ? "loader" : "send"} />
+                  {testPending() ? (
+                    <span class="btn__spinner" aria-hidden="true" />
+                  ) : (
+                    <Icon name="send" />
+                  )}
                   {testPending()
                     ? t("configView.notifications.sendingTest")
                     : t("configView.notifications.sendTest")}
@@ -200,9 +214,10 @@ function NativeNotificationSection(props: {
 const renderWebPushError = (error: () => unknown) => (
   <div class="settings-row">
     <div class="settings-row__text">
-      <span class="cfg-field__error" role="alert">
-        {formatUiError(error())}
-      </span>
+      <div class="cfg-field__error" role="alert">
+        <div>{t("configView.notifications.updateFailed")}</div>
+        <div>{formatUiError(error())}</div>
+      </div>
     </div>
   </div>
 );
@@ -342,7 +357,7 @@ function WebPushSection(props: {
                       onClick={() => submit(props.actions.onWebPushSubscribe?.())}
                     >
                       <Show when={busy()}>
-                        <Icon name="loader" />
+                        <span class="btn__spinner" aria-hidden="true" />
                       </Show>
                       {t(
                         busy()

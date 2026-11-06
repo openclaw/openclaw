@@ -256,9 +256,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .sidebar-recent-session .session-owner-stack::after {
   right: 0;
+  /* Keep the right-hand face opaque underneath its away opacity. */
+  z-index: var(--owner-cutout-z, 0);
+  background:
+    linear-gradient(var(--session-row-bg, transparent) 0 0) padding-box,
+    var(--sidebar-bg, var(--bg));
+  mask: none;
 }
 
 .session-owner-stack--overflow {
+  --owner-cutout-z: 1;
+
   justify-content: flex-start;
 }
 
@@ -368,7 +376,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   left: -6px;
   width: 32px;
   height: 22px;
-  overflow: visible;
+  overflow: hidden;
+  /* Keep its animated stroke from rerasterizing the entire sidebar tile. */
+  transform: translateZ(0);
   pointer-events: none;
 }
 
@@ -382,13 +392,13 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   opacity: 0.2;
 }
 
-/* The arc covers the same share of its outline as the ring's arc and moves at the
-   ring's linear speed (~45px/s). */
+/* Keep the small arc at 30 painted positions per second without limiting
+   transcript frames. Its average speed still matches the ring (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-dasharray: var(--spinner-trace-dash);
-  animation: session-run-trace 2s linear infinite;
+  animation: session-run-trace 2s steps(60, end) infinite;
 }
 
 .session-glyph__badge {
@@ -535,10 +545,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-.settings-save-indicator__spinner svg {
-  animation: btn-spinner-spin 0.7s linear infinite;
-}
-
 @keyframes btn-spinner-spin {
   to {
     transform: rotate(360deg);
@@ -546,8 +552,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .btn__spinner,
-  .settings-save-indicator__spinner svg {
+  .btn__spinner {
     animation: none;
   }
 }
@@ -625,6 +630,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+.btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-active);
+}
+
 .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
@@ -652,6 +661,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+/* Keep the lazy toast renderer's failure and retry surface available offline. */
 openclaw-toast-host[popover] {
   position: fixed;
   inset: 0;
@@ -664,228 +674,264 @@ openclaw-toast-host[popover] {
   pointer-events: none;
 }
 
-/* Passive notifications stay in the trailing top corner, away from the chat
- * composer and other bottom-docked controls. The host shows one toast at a time
- * (`show()` replaces the active one), so there is no stack to offset against. */
+/* Notifications stay at the top, away from the chat composer and other
+ * bottom-docked controls, in two lanes: the center answers what the operator
+ * just did, the trailing corner holds arrivals. Each lane stacks its toasts. */
 .app-toast {
+  --app-toast-row: 20px;
+  --app-toast-wash: color-mix(in srgb, var(--text-strong) 7%, transparent);
+  --app-toast-wash-hover: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  --app-toast-wash-active: color-mix(in srgb, var(--text-strong) 17%, transparent);
+  --app-toast-edge: 0 0 0 0.5px color-mix(in srgb, var(--text-strong) 14%, transparent);
   pointer-events: auto;
-  position: fixed;
-  right: calc(20px + var(--safe-area-right));
-  top: calc(20px + var(--safe-area-top));
-  z-index: var(--z-toast);
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  width: max-content;
-  max-width: min(370px, calc(100vw - 32px));
-  padding: 7px 7px 7px 13px;
-  border: 1px solid transparent;
-  border-radius: var(--menu-radius);
-  background: var(--menu-surface);
-  color: var(--popover-foreground);
-  box-shadow: var(--menu-shadow);
-  backdrop-filter: var(--menu-backdrop);
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
+  min-width: min(240px, calc(100vw - 24px));
+  padding: 12px 16px;
+  border: 0;
+  /* One line reads as a pill: a 28px corner on a box under 56px tall clamps to
+   * half its height. Taller toasts keep 28. Square-cornered themes scale it down. */
+  border-radius: min(28px, calc(28px * var(--openclaw-corner-radius-scale)));
+  background: var(--popover);
+  color: var(--text-strong);
+  box-shadow:
+    var(--app-toast-edge),
+    0 1px 2px rgb(30 24 18 / 5%),
+    0 10px 26px -8px rgb(30 24 18 / 18%);
+  font-family: var(--font-body);
 }
 
-.shell--chat {
+.app-toast--action {
+  --app-toast-row: 28px;
+  padding-right: 10px;
+}
+
+/* Other chat-like pages have no session toolbar to clear. */
+.shell--session {
   --app-toast-shell-top: calc(var(--safe-area-top) + var(--rail-header-height) + 12px);
 }
 
-openclaw-toast-host[data-toast-placement="shell"]
-  .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
+.app-toast-lanes {
+  display: contents;
+}
+
+.app-toast-lane {
+  --app-toast-lane-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: auto;
+  position: fixed;
+  top: calc(20px + var(--safe-area-top));
+  z-index: var(--z-toast);
+  display: grid;
+  gap: 8px;
+}
+
+openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane {
   top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
 }
 
-/* Settings outcomes can use the lower corner without covering chat controls.
- * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
-.app-toast--bottom {
-  top: auto;
-  bottom: calc(100% - var(--shell-canvas-height) + 20px + var(--shell-safe-area-bottom));
-  transition:
-    opacity 180ms ease-out,
-    translate 180ms ease-out;
+.app-toast-lane:not(:has(> .app-toast)) {
+  display: none;
 }
 
-@starting-style {
-  .app-toast--bottom {
-    opacity: 0;
-    translate: 0 8px;
-  }
+/* Center hugs the widest toast; an open stack stretches every toast to it. Inside
+ * the shell it centers on the content column, not the window. */
+.app-toast-lane--top-center {
+  left: 50%;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  translate: -50% 0;
 }
 
-.app-toast--anchored {
-  right: auto;
-  left: var(--app-toast-anchor-center);
-  top: var(--app-toast-anchor-top);
-  transform: translateX(-50%);
-  max-width: min(370px, calc(var(--app-toast-anchor-width) - 24px));
-  transition-property: translate, scale, opacity;
+openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
+  left: calc(
+    var(--shell-nav-width, 0px) +
+      (100vw - var(--shell-nav-width, 0px) - var(--shell-dock-reserve-right, 0px)) / 2
+  );
 }
 
-.app-toast--anchored[data-active="true"] {
-  translate: 0 0;
-  scale: 1;
-  opacity: 1;
-  transition-duration: 200ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+.app-toast-lane--top-right {
+  right: calc(20px + var(--safe-area-right));
+  width: min(360px, calc(100vw - 24px));
 }
 
-@starting-style {
-  .app-toast--anchored[data-active="true"] {
-    translate: 0 -100%;
-    scale: 0.95;
-    opacity: 0;
-  }
-}
-
-.app-toast--anchored[data-active="false"] {
-  translate: 0 -100%;
-  scale: 0.95;
-  opacity: 0;
-  pointer-events: none;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
-}
-
-.app-toast__avatar {
-  display: grid;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-}
-
-.app-toast__icon {
-  display: grid;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  color: var(--info);
+/* An action stays beside the text only while the title and description fit one line
+ * next to it. The body's flex basis is its single-line width, so anything longer
+ * wraps the action onto its own row, right aligned. */
+.app-toast__content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 /* Recovery copy and rich links remain readable at narrow widths and enlarged
  * text sizes. Do not clamp away the instruction the operator needs next. */
-.app-toast__message {
-  flex: 1 1 auto;
+.app-toast__body {
+  display: flex;
+  flex: 1 1 max-content;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
+  min-height: var(--app-toast-row);
   max-height: min(240px, 40dvh);
   overflow: auto;
   overflow-wrap: anywhere;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: 1.5;
 }
 
-.app-toast__action,
-.app-toast__dismiss {
-  flex: 0 0 auto;
-  border: 0;
-  border-radius: var(--menu-item-radius);
+.app-toast__message {
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(20px * var(--control-ui-text-scale));
+  text-wrap: pretty;
 }
 
 .app-toast__action {
-  min-height: var(--overlay-modal-close-size);
-  max-width: 35%;
-  padding: 5px 10px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.app-toast__dismiss {
-  display: grid;
-  width: var(--overlay-modal-close-size);
-  height: var(--overlay-modal-close-size);
-  padding: 0;
-  place-items: center;
-  background: transparent;
-  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  background: var(--app-toast-wash);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(18px * var(--control-ui-text-scale));
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 120ms ease;
 }
 
 .app-toast__action:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--app-toast-wash-hover);
+}
+
+.app-toast__action:active {
+  background: var(--app-toast-wash-active);
+}
+
+/* Dismiss floats on the trailing corner and appears only while the toast is
+ * hovered or holds focus; it stays in the accessibility tree throughout. */
+.app-toast__dismiss {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--popover);
+  color: var(--text);
+  box-shadow:
+    var(--app-toast-edge),
+    0 1px 3px rgb(0 0 0 / 12%);
+  opacity: 0;
+  scale: 0.9;
+  transition:
+    opacity 140ms ease,
+    scale 140ms ease;
+}
+
+.app-toast__dismiss::after {
+  position: absolute;
+  inset: -4px;
+  content: "";
+}
+
+.app-toast:hover > .app-toast__dismiss,
+.app-toast:focus-within > .app-toast__dismiss {
+  opacity: 1;
+  scale: 1;
 }
 
 .app-toast__dismiss:hover {
-  background: var(--bg-muted);
+  color: var(--text-strong);
 }
 
-/* A corner toast spans nearly the whole phone viewport. Keep the owning shell's
- * chrome offset and safe areas, with full-size touch targets in every variant. */
+.app-toast__action:focus-visible,
+.app-toast__dismiss:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--text-strong) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* On a phone both lanes share one column at the top: the center lane, then
+ * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--chat {
+  .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
         20px
     );
   }
 
-  .app-toast {
+  .app-toast-lanes {
+    pointer-events: none;
+    position: fixed;
+    top: calc(20px + var(--safe-area-top));
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
+    z-index: var(--z-toast);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  openclaw-toast-host[data-toast-placement="shell"] .app-toast-lanes {
+    top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
+  }
+
+  /* Top notices (a required refresh and its status) stay readable: the lanes start
+   * 8px under them. Engines without anchor positioning keep the shell offset. */
+  @supports (anchor-name: --a) {
+    .sidebar-update-card--floating .sidebar-update-card {
+      anchor-name: --openclaw-top-notices;
+    }
+
+    openclaw-toast-host[data-toast-placement] .app-toast-lanes {
+      top: max(
+        calc(20px + var(--safe-area-top)),
+        calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
+      );
+    }
+
+    /* Only the shell placement sits under the shell chrome. */
+    openclaw-toast-host[data-toast-placement="shell"] .app-toast-lanes {
+      top: max(
+        var(--app-toast-shell-top, calc(20px + var(--safe-area-top))),
+        calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
+      );
+    }
+  }
+
+  .app-toast-lane,
+  openclaw-toast-host[data-toast-placement] .app-toast-lane {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
     width: auto;
     max-width: none;
+    translate: none;
   }
-
-  .app-toast--anchored {
-    left: var(--app-toast-anchor-center);
-    right: auto;
-    width: max-content;
-    max-width: calc(var(--app-toast-anchor-width) - 24px);
-  }
-
-  .app-toast__action {
-    min-height: 44px;
-    min-width: 44px;
-  }
-
-  .app-toast__dismiss {
-    width: 44px;
-    height: 44px;
-  }
-}
-
-.app-toast--top-center {
-  left: 50%;
-  right: auto;
-  width: max-content;
-  max-width: min(370px, calc(100vw - 32px));
-  transform: translateX(-50%);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-toast--bottom,
-  .app-toast--anchored,
-  .app-toast--anchored[data-active="true"],
-  .app-toast--anchored[data-active="false"] {
+  .app-toast__dismiss,
+  .app-toast__action {
     transition: none;
   }
-}
-
-.app-toast__action:hover,
-.app-toast__action:focus-visible,
-.app-toast__dismiss:hover,
-.app-toast__dismiss:focus-visible {
-  color: var(--text-strong);
-}
-
-.app-toast--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-  background: color-mix(in srgb, var(--danger) 12%, var(--popover));
-  color: var(--danger);
-}
-
-.app-toast--error :is(.app-toast__icon, .app-toast__action, .app-toast__dismiss) {
-  color: inherit;
-}
-
-.app-toast--error .app-toast__action,
-.app-toast--error :is(.app-toast__action, .app-toast__dismiss):is(:hover, :focus-visible) {
-  background: var(--danger-subtle);
-  color: inherit;
 }
 
 .btn--icon {
@@ -2446,7 +2492,6 @@ select.data-table-pagination__size {
   gap: 8px;
 }
 
-.app-toast__icon svg,
 .oc-sensitive-toggle svg {
   width: 16px;
   height: 16px;
@@ -2673,8 +2718,8 @@ select.data-table-pagination__size {
 }
 
 .agent-select__option .agent-select__avatar {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
 }
 
 .code-block-json-node > summary::-webkit-details-marker {
@@ -2846,7 +2891,6 @@ select.data-table-pagination__size {
   border-radius: 4px;
 }
 
-.app-toast__dismiss svg,
 .data-table-bulk-bar .btn svg,
 .agent-select__option-check svg {
   width: 14px;
@@ -3474,7 +3518,7 @@ select.data-table-pagination__size {
 }
 
 .sidebar-recent-session .hover-marquee {
-  --hover-marquee-fade-width: 24px;
+  --hover-marquee-fade-width: 6px;
 }
 
 /* Text on a tag fill keeps its readable tone; only icons take the quieter one. */
@@ -3487,53 +3531,243 @@ select.data-table-pagination__size {
   width: 26px;
 }
 
-/* One hover, disabled and corner treatment for every field and field-like trigger. */
-:where(
-  .field :is(input, textarea, select),
-  .settings-input,
-  select.settings-select,
-  .picker-select__trigger,
-  .agent-select__trigger,
-  .multi-select,
-  .usage-date-input,
-  .usage-select,
-  .usage-query-input,
-  .sessions-sort select,
-  .dashboards-search input,
-  .dashboards-select select,
-  .data-table-search input,
-  .cron-search-box input,
-  .input
-) {
+/* Keep zero-specificity leaf selectors flat: a mixed ancestor family makes
+   unrelated elements pay for repeated matching during style resolution. */
+:where(.field) :where(input, textarea, select),
+:where(.settings-input),
+:where(select.settings-select),
+:where(.picker-select__trigger),
+:where(.agent-select__trigger),
+:where(.multi-select),
+:where(.usage-date-input),
+:where(.usage-select),
+:where(.usage-query-input),
+:where(.sessions-sort) :where(select),
+:where(.dashboards-search) :where(input),
+:where(.dashboards-select) :where(select),
+:where(.data-table-search) :where(input),
+:where(.cron-search-box) :where(input),
+:where(.input) {
   corner-shape: superellipse(1.5);
   transition: border-color var(--duration-fast) var(--ease-out);
-
-  &::placeholder {
-    color: var(--muted);
+}
+:where(.field) :where(input, textarea, select)::placeholder,
+:where(.settings-input)::placeholder,
+:where(select.settings-select)::placeholder,
+:where(.picker-select__trigger)::placeholder,
+:where(.agent-select__trigger)::placeholder,
+:where(.multi-select)::placeholder,
+:where(.usage-date-input)::placeholder,
+:where(.usage-select)::placeholder,
+:where(.usage-query-input)::placeholder,
+:where(.sessions-sort) :where(select)::placeholder,
+:where(.dashboards-search) :where(input)::placeholder,
+:where(.dashboards-select) :where(select)::placeholder,
+:where(.data-table-search) :where(input)::placeholder,
+:where(.cron-search-box) :where(input)::placeholder,
+:where(.input)::placeholder {
+  color: var(--muted);
+}
+:where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+:where(.settings-input):focus-visible:focus-visible,
+:where(select.settings-select):focus-visible:focus-visible,
+:where(.picker-select__trigger):focus-visible:focus-visible,
+:where(.agent-select__trigger):focus-visible:focus-visible,
+:where(.multi-select):focus-visible:focus-visible,
+:where(.usage-date-input):focus-visible:focus-visible,
+:where(.usage-select):focus-visible:focus-visible,
+:where(.usage-query-input):focus-visible:focus-visible,
+:where(.sessions-sort) :where(select):focus-visible:focus-visible,
+:where(.dashboards-search) :where(input):focus-visible:focus-visible,
+:where(.dashboards-select) :where(select):focus-visible:focus-visible,
+:where(.data-table-search) :where(input):focus-visible:focus-visible,
+:where(.cron-search-box) :where(input):focus-visible:focus-visible,
+:where(.input):focus-visible:focus-visible,
+:where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+:where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+  border-color: var(--field-focus-border);
+  outline: none;
+}
+@media (forced-colors: active) {
+  :where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+  :where(.settings-input):focus-visible:focus-visible,
+  :where(select.settings-select):focus-visible:focus-visible,
+  :where(.picker-select__trigger):focus-visible:focus-visible,
+  :where(.agent-select__trigger):focus-visible:focus-visible,
+  :where(.multi-select):focus-visible:focus-visible,
+  :where(.usage-date-input):focus-visible:focus-visible,
+  :where(.usage-select):focus-visible:focus-visible,
+  :where(.usage-query-input):focus-visible:focus-visible,
+  :where(.sessions-sort) :where(select):focus-visible:focus-visible,
+  :where(.dashboards-search) :where(input):focus-visible:focus-visible,
+  :where(.dashboards-select) :where(select):focus-visible:focus-visible,
+  :where(.data-table-search) :where(input):focus-visible:focus-visible,
+  :where(.cron-search-box) :where(input):focus-visible:focus-visible,
+  :where(.input):focus-visible:focus-visible,
+  :where(.field) :where(input, textarea, select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.settings-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(select.settings-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.picker-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.agent-select__trigger)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.multi-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-date-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
+  :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
+    outline-offset: 2px;
+    outline: 2px solid selecteditem;
   }
-
-  &:focus-visible:focus-visible,
-  &[aria-expanded="true"]:not(.oc-menu-item) {
-    outline: none;
-    border-color: var(--field-focus-border);
-  }
-
-  @media (forced-colors: active) {
-    &:focus-visible:focus-visible,
-    &[aria-expanded="true"]:not(.oc-menu-item) {
-      outline: 2px solid SelectedItem;
-      outline-offset: 2px;
-    }
-  }
-
-  &:hover:not(:disabled, :focus-visible, :focus-within, [aria-expanded="true"], [data-disabled]) {
+}
+@media (hover: hover) {
+  :where(.field)
+    :where(input, textarea, select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.settings-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(select.settings-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.picker-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.agent-select__trigger):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.multi-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-date-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.usage-query-input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.sessions-sort)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.dashboards-select)
+    :where(select):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.data-table-search)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.cron-search-box)
+    :where(input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ),
+  :where(.input):hover:not(
+      :disabled,
+      :focus-visible,
+      :focus-within,
+      [aria-expanded="true"],
+      [data-disabled]
+    ) {
     border-color: var(--border-strong);
   }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+}
+:where(.field) :where(input, textarea, select):disabled,
+:where(.settings-input):disabled,
+:where(select.settings-select):disabled,
+:where(.picker-select__trigger):disabled,
+:where(.agent-select__trigger):disabled,
+:where(.multi-select):disabled,
+:where(.usage-date-input):disabled,
+:where(.usage-select):disabled,
+:where(.usage-query-input):disabled,
+:where(.sessions-sort) :where(select):disabled,
+:where(.dashboards-search) :where(input):disabled,
+:where(.dashboards-select) :where(select):disabled,
+:where(.data-table-search) :where(input):disabled,
+:where(.cron-search-box) :where(input):disabled,
+:where(.input):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Ghost triggers have no border to recolor, so focus draws one in the same place. */

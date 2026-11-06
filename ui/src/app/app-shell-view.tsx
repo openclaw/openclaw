@@ -150,6 +150,7 @@ export function ApplicationShell(props: {
           {
             "shell--navigation-rail": view().railAvailable,
             "shell--chat": view().chatLikeRoute,
+            "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
@@ -204,6 +205,8 @@ export function ApplicationShell(props: {
                   !view().mergedChatChrome &&
                   // New Session is already the destination of this action.
                   view().activeRoute !== "new-session" &&
+                  // Settings starts no session; the phone pill keeps its shape on every page.
+                  (view().floatingHeader || !view().settingsTakeover) &&
                   // The floating pill keeps its shape behind the drawer's backdrop.
                   (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&
@@ -411,7 +414,7 @@ export function ApplicationShell(props: {
               "content--new-session": view().activeRoute === "new-session",
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
-              "content--workboard": view().activeRoute === "workboard",
+              "content--workboard": view().workboardLayout,
             },
           ]}
           ref={(element) => {

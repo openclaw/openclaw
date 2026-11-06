@@ -313,6 +313,7 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 Unsupported binary attachment objects are rejected before any message is posted.
+Text sent with an attachment follows `textChunkLimit` and `streaming.chunkMode`: the first chunk is posted with the file and the rest follow as separate posts in the same thread.
 
 Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
 attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then

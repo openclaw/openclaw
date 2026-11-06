@@ -102,10 +102,12 @@ it("reuses committed encodings across admitted turns while isolating loads and b
       await saveCell(changed, "key", "appended value");
       changed.close();
     });
+    stringify.mockClear();
     await expect(loadDurableStore(scope)).resolves.toEqual({
       value: "appended value",
       networkContent: false,
     });
+    expect(stringify).toHaveBeenCalledTimes(1);
     await admitted(async () => {
       const source = await SessionManager.openAsync(scope);
       await source.branchAsync(originalLeaf);
@@ -158,6 +160,153 @@ it("invalidates cached encodings when a transcript rewrite preserves custom entr
     const loaded = await loadDurableStore(scope);
     expect(JSON.stringify(loaded.value)).toBe('{"after":2,"before":1}');
     expect(loaded.networkContent).toBe(true);
+  }));
+
+it("matches full replay through randomized appends, branch switches, and generation changes", () =>
+  withSessionState("store-replay-differential", async ({ scope }) => {
+    const admitted = <T>(operation: () => Promise<T>) =>
+      withSelectedTranscriptReader(scope, operation, true);
+    const keys = Array.from({ length: 6 }, (_, index) => `key-${index}`);
+    const branches: string[] = [];
+    let random = 695;
+    const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
+    for (let step = 0; step < 36; step++) {
+      await admitted(async () => {
+        const manager = await SessionManager.openAsync(scope);
+        if (step === 12 || step === 24) {
+          const leaf = branches[step === 12 ? 3 : 8];
+          assert(leaf);
+          await manager.branchAsync(leaf);
+        }
+        const prior = run(manager);
+        const priorCell = prior.cell();
+        const before = await Promise.all(keys.map((key) => priorCell.load(key)));
+        const set: Record<string, unknown> = {};
+        const networkContent: Record<string, boolean> = {};
+        const deleted: string[] = [];
+        for (let index = 0; index < 3; index++) {
+          const key = keys[next() % keys.length]!;
+          set[key] = { step, payload: "🦞".repeat(next() % 256), nested: [null, next()] };
+          networkContent[key] = next() % 2 === 0;
+          if (next() % 3 === 0) {
+            deleted.push(keys[next() % keys.length]!);
+          }
+        }
+        await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+          set,
+          delete: deleted,
+          networkContent,
+        });
+        branches.push(manager.getLeafId()!);
+        const full = SessionManager.inMemory();
+        for (const entry of manager.getBranch()) {
+          if (entry.type === "custom") {
+            await full.appendCustomEntryAsync(entry.customType, entry.data);
+          }
+        }
+        const incremental = run(manager);
+        const reference = run(full);
+        const incrementalCell = incremental.cell();
+        const referenceCell = reference.cell();
+        expect(await Promise.all(keys.map((key) => incrementalCell.load(key)))).toEqual(
+          await Promise.all(keys.map((key) => referenceCell.load(key))),
+        );
+        expect(await Promise.all(keys.map((key) => priorCell.load(key)))).toEqual(before);
+        prior.close();
+        incremental.close();
+        reference.close();
+      });
+      if (step === 18) {
+        await admitted(() =>
+          withPreparedTranscriptCorrection(scope, async (correction) => {
+            const entries = await correction.readEvents();
+            const replacement = entries.slice();
+            for (const [index, entry] of entries.entries()) {
+              if (isRecord(entry) && entry.type === "custom") {
+                replacement[index] = {
+                  ...entry,
+                  data: {
+                    set: { "key-0": "rewritten" },
+                    delete: [],
+                    networkContent: { "key-0": true },
+                  },
+                };
+              }
+            }
+            await correction.replaceEvents(replacement);
+          }),
+        );
+        await admitted(async () => {
+          const rewritten = run(await SessionManager.openAsync(scope));
+          await expect(rewritten.cell().load("key-0")).resolves.toEqual({
+            value: "rewritten",
+            networkContent: true,
+          });
+          rewritten.close();
+        });
+      }
+    }
+  }));
+
+it("matches full replay errors after a cached prefix, including later deletes of invalid history", () =>
+  withSessionState("store-replay-errors", async ({ scope }) => {
+    const value = "x".repeat(256 * 1024 - 2);
+    const cases = [
+      { set: {}, delete: [], networkContent: null },
+      { set: { e: 1 }, delete: [], networkContent: {} },
+      { set: { "": 1 }, delete: [], networkContent: { "": false } },
+      { set: {}, delete: [1], networkContent: {} },
+      { set: { e: `${value}x` }, delete: ["e"], networkContent: { e: false } },
+      { set: { e: value }, delete: [], networkContent: { e: false } },
+    ];
+    await withSelectedTranscriptReader(
+      scope,
+      async () => {
+        const manager = await SessionManager.openAsync(scope);
+        await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+          set: { a: value, b: value, c: value, d: value },
+          delete: [],
+          networkContent: { a: false, b: false, c: false, d: false },
+        });
+        const prefix = manager.getLeafId()!;
+        const outcome = async (source: SessionManager) => {
+          const owner = run(source);
+          try {
+            return await owner.cell().load("a");
+          } catch (error) {
+            assert(error instanceof Error);
+            return {
+              name: error.name,
+              message: error.message,
+              cause: error.cause instanceof Error ? [error.cause.name, error.cause.message] : null,
+            };
+          } finally {
+            owner.close();
+          }
+        };
+        for (const data of cases) {
+          await manager.branchAsync(prefix);
+          expect(await outcome(manager)).toEqual({ value, networkContent: false });
+          await manager.appendCustomEntryAsync("openclaw.code-mode-store", data);
+          await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+            set: {},
+            delete: ["a", "b", "c", "d", "e"],
+            networkContent: {},
+          });
+          const full = SessionManager.inMemory();
+          for (const entry of manager.getBranch()) {
+            if (entry.type === "custom") {
+              await full.appendCustomEntryAsync(entry.customType, entry.data);
+            }
+          }
+          const expected = await outcome(full);
+          expect(expected).toHaveProperty("message");
+          expect(await outcome(manager)).toEqual(expected);
+          expect(await outcome(manager)).toEqual(expected);
+        }
+      },
+      true,
+    );
   }));
 
 it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {

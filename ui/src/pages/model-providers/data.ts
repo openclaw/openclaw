@@ -44,7 +44,13 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
   | { target: ModelProviderLogoutTarget }
-  | { removeTargets: ModelProviderRemovalTarget[]; keptSource?: string; configKey?: string }
+  | {
+      removeTargets: ModelProviderRemovalTarget[];
+      keptSource?: string;
+      configKey?: string;
+      /** Names of default models this provider serves; removal leaves them selected. */
+      defaultModels?: string;
+    }
 );
 
 export type ModelProviderCard = {

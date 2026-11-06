@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
@@ -114,7 +114,7 @@ async function getLayoutPage(viewport: (typeof viewports)[number], colorScheme: 
 
 suite.define(() => {
   for (const destination of [
-    { from: "memory", route: "memory-import", title: "Import Memory", tab: "Settings" },
+    { from: "memory", route: "memory-import", title: "Import memory", tab: "Settings" },
     { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
     { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
@@ -342,28 +342,42 @@ suite.define(() => {
               await page.getByRole("combobox", { name: "Search provider", exact: true }).waitFor();
               await page.getByRole("button", { name: "Test search", exact: true }).waitFor();
               expect(await page.locator('openclaw-search-page [role="alert"]').count()).toBe(0);
-            }
-            if (route === "devices") {
+            } else if (route === "devices") {
               await page.locator("details.device-entry > summary").first().click();
               await page
                 .locator("details.device-entry[open] .device-entry__facts")
                 .first()
                 .waitFor();
-            }
-            if (["secrets", "approvals", "debug"].includes(route)) {
-              await page.locator(".settings-table--stacked tbody td[data-label]").first().waitFor();
+            } else if (["secrets", "approvals", "debug"].includes(route)) {
+              const content = page.locator(
+                `openclaw-${route}-page :is(.secrets-store__list, .approval-log, .standing-grants, .command-lanes-table.settings-table--stacked)`,
+              );
+              for (const label of route === "secrets"
+                ? ["SYNTHETIC_EXAMPLE_KEY", "SYNTHETIC_SERVICE_URL"]
+                : route === "approvals"
+                  ? ["echo synthetic-phone-layout-approval-command", "Healthy automation"]
+                  : ["synthetic-long-background-lane-name"]) {
+                await content.getByText(label, { exact: true }).waitFor();
+              }
               if (viewport.width <= 400) {
                 expect(
-                  await page
-                    .locator(".settings-table--stacked")
-                    .evaluateAll((tables) =>
-                      tables.every((table) => table.scrollWidth <= table.clientWidth),
-                    ),
+                  await content.evaluateAll((containers) =>
+                    containers.every((container) => container.scrollWidth <= container.clientWidth),
+                  ),
                   route,
                 ).toBe(true);
               }
-            }
-            if (route === "cron") {
+            } else if (route === "profile" && viewport.width <= 400) {
+              const name = "Help for Saved accounts";
+              const help = page.getByRole("button", { name, exact: true });
+              await help.scrollIntoViewIfNeeded();
+              const target = await help.boundingBox();
+              assert(target, "help target has visible bounds");
+              expect([target.width >= 44, target.height >= 44]).toEqual([true, true]);
+              await page.mouse.click(target.x + target.width / 2, target.y + 4);
+              await page.getByRole("dialog", { name, exact: true }).waitFor();
+              await page.keyboard.press("Escape");
+            } else if (route === "cron") {
               await page.getByText("Healthy automation", { exact: true }).first().waitFor();
             }
             expect(

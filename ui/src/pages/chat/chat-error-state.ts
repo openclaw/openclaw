@@ -1,14 +1,18 @@
 export type ChatErrorState = ReturnType<typeof createChatErrorState>;
 
 export function createChatErrorState() {
-  let lastError: { message: string | null } = { message: null };
-  let chatError: { message: string | null } = { message: null };
+  let lastError: { message: string | null; detail?: unknown } = { message: null };
+  let chatError: { message: string | null; detail?: unknown } = { message: null };
   let render: (() => void) | undefined;
   const publish = () => {
     render?.();
   };
   return {
-    readErrors: () => ({ lastError: lastError.message, chatError: chatError.message }),
+    readErrors: () => ({
+      lastError: lastError.message,
+      lastErrorDetail: lastError.detail,
+      chatError: chatError.message,
+    }),
     subscribeErrors(listener: () => void) {
       render = listener;
       return () => {
@@ -17,6 +21,9 @@ export function createChatErrorState() {
     },
     get lastError() {
       return lastError.message;
+    },
+    get lastErrorDetail() {
+      return lastError.detail;
     },
     set lastError(message: string | null) {
       lastError = { message };
@@ -29,8 +36,8 @@ export function createChatErrorState() {
       chatError = { message };
       publish();
     },
-    setRecoverableChatError(message: string): () => void {
-      const error = { message };
+    setRecoverableChatError(message: string, detail?: unknown): () => void {
+      const error = { message, detail };
       lastError = chatError = error;
       publish();
       return () => {
