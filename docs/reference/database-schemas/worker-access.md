@@ -237,6 +237,12 @@ migrations, timers, and closure. Borrowers prevent idle eviction; explicit dispo
 can still close the connection and invalidate its claims immediately. Maintenance
 closes cached handles before migrating or replacing their storage.
 
+Retained PostgreSQL connections use the same pre-query reconnect owner as pooled
+connections when the server's last completed status was idle. After one second
+of wall-clock inactivity, including VM suspension, transport validation runs
+before caller SQL. A lost active transaction or uncertain statement outcome still
+fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
+
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's

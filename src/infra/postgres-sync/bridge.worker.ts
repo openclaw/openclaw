@@ -196,7 +196,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
 
   async function useSchema(namespace: string, reconnectIfIdle: boolean, validateIfIdle: boolean) {
     if (connectionError) {
-      // Only a returned transport can reconnect before its new borrower starts work.
+      // Reconnect only before caller SQL, using the last completed idle status.
       if (!reconnectIfIdle || client.getTransactionStatus() !== "I") {
         throw connectionError;
       }
