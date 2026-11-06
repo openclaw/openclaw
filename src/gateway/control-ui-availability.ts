@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { escapeHtml } from "../shared/html-escape.js";
+import { OPENCLAW_WORDMARK_SVG } from "../shared/openclaw-wordmark.js";
 import {
   applyControlUiSecurityHeaders,
   buildControlUiCspHeader,
@@ -74,22 +75,22 @@ const recoveryScript = `(() => {
 
 /** Also usable by a disposable ingress fixture; the Gateway cannot serve a stopped listener. */
 export function renderControlUiUnavailableDocument(title: string, detail: string): string {
+  // Control UI default theme tokens (ui/src/styles/base.css); the fonts are app assets, so system faces stand in.
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>OpenClaw — Temporarily unavailable</title>
 <style>
-:root{color-scheme:light dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#202024;background:#f8f8f9}
-*{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;padding:24px}
-main{width:min(100%,520px);padding:40px;border:1px solid #dedee3;border-radius:20px;background:#fff;box-shadow:0 12px 40px #14141c08}
-.brand{margin:0 0 36px;font-size:15px;font-weight:650;letter-spacing:-.02em}.eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#777781}
-h1{font-size:30px;line-height:1.2;letter-spacing:-.04em;margin:12px 0 16px}p{font-size:15px;line-height:1.6;color:#5f5f69;margin:12px 0}
-#recovery-status{font-size:13px;min-height:42px;margin:28px 0 16px}
-@media(prefers-color-scheme:dark){:root{background:#121214;color:#f4f4f5}main{background:#1b1b1f;border-color:#323237;box-shadow:none}p{color:#aaaab4}.eyebrow{color:#9999a5}}
-@media(max-width:560px){body{padding:16px}main{padding:28px 24px}h1{font-size:27px}}
+:root{color-scheme:light;--bg:#f8f8f8;--text-strong:#202020;--muted:#5e5e5e;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text-strong);background:var(--bg);-webkit-font-smoothing:antialiased}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1015;--text-strong:#f4f4f5;--muted:#8e8e97}}
+*{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;padding:48px 32px;background:var(--bg)}
+main{width:min(100%,480px);padding-bottom:9vh}.wordmark{display:block;height:32px;width:auto;margin:0 0 48px}
+h1{margin:0;font-size:clamp(30px,3.2vw,44px);font-weight:600;line-height:1.15;letter-spacing:-.035em;text-wrap:balance}
+p{margin:16px 0 0;max-width:46ch;color:var(--muted);font-size:16px;line-height:1.65}
+#recovery-status{min-height:3.3em;margin-top:28px;font-size:14px}
+@media(max-width:560px){body{padding:32px 24px}main{padding-bottom:6vh}.wordmark{height:28px;margin-bottom:40px}p{font-size:15px}}
 </style></head><body>
-<main id="openclaw-maintenance"><div class="brand">OpenClaw</div><div class="eyebrow">Connection status</div>
-<h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>
-<p>This page will open automatically when it’s ready.</p>
+<main id="openclaw-maintenance">${OPENCLAW_WORDMARK_SVG}
+<h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)} This page will open automatically when it’s ready.</p>
 <p id="recovery-status" role="status" aria-live="polite">Checking now — no need to reload.</p>
 </main><script>${recoveryScript}</script></body></html>`;
 }
