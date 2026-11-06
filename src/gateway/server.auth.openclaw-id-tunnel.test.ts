@@ -40,7 +40,10 @@ installGatewayTestHooks({ scope: "suite" });
 
 // Records SSH verification probes instead of running them; a tunnel address names no host.
 const sshProbe = vi.hoisted(() => vi.fn(async () => ({ status: "timeout" as const })));
-vi.mock("./node-pairing-ssh-verify.runtime.js", () => ({ runNodeIdentityProbe: sshProbe }));
+vi.mock("./node-pairing-ssh-verify.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./node-pairing-ssh-verify.runtime.js")>()),
+  runNodeIdentityProbe: sshProbe,
+}));
 
 const makeIdentityPath = useAuthIdentityFixture();
 const TOKEN = "tunnel-suite-secret";
