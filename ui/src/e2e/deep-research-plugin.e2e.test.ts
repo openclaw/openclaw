@@ -2,7 +2,6 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect as pw } from "playwright/test";
 import { expect, it } from "vitest";
-import type { ResearchView } from "../../../extensions/deep-research/api.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -18,7 +17,7 @@ const method = (action: string) => `deep-research.view.v1.${action}`;
 const timestamp = Date.parse("2026-01-01T12:00:00Z");
 const id = "a".repeat(64);
 const question = "How do urban trees reduce summer heat?";
-const running: ResearchView = {
+const running = {
   version: 1,
   jobId: id,
   question,
@@ -55,7 +54,7 @@ const reportDocument = {
   report,
   citations: [{ sourceId: "S1", startByte, endByte: startByte + 4 }],
 };
-const partial: ResearchView = {
+const partial = {
   ...running,
   state: "partial",
   phase: "partial",
@@ -74,13 +73,14 @@ const partial: ResearchView = {
   gaps: ["Cooling varies by climate and canopy coverage."],
   limitations: ["Model support is fallible and does not establish truth."],
 };
-const list = (job?: ResearchView) => ({
+type FixtureJob = typeof running | typeof partial;
+const list = (job?: FixtureJob) => ({
   version: 1,
   sessionId: "ui-generation",
   incarnation: "ui-incarnation",
   jobs: job ? [job] : [],
 });
-const read = (job: ResearchView) => ({
+const read = (job: FixtureJob) => ({
   version: 1,
   sessionId: "ui-generation",
   incarnation: "ui-incarnation",
