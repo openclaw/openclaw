@@ -65,7 +65,7 @@ const CODEX_NATIVE_TOOL_GUIDANCE = [
 ];
 
 /** Ring-zero threads pin empty base instructions, so their policy stays in the developer carrier. */
-export function isCodexRingZeroThread(
+function isCodexRingZeroThread(
   params: Pick<CodexThreadPromptContext, "toolsAllow">,
   hostSystemAgentActive?: boolean,
 ): boolean {
@@ -87,7 +87,7 @@ function listDynamicToolNames(dynamicTools: readonly CodexDynamicToolSpec[] | un
  * the rollout, so it renders from thread-stable facts only: the thread fingerprint
  * covers it, and a changed render reaches an existing thread on its next cold resume.
  */
-export function buildCodexBaseInstructions(
+function buildCodexBaseInstructions(
   params: CodexThreadPromptContext,
   options: {
     dynamicTools?: readonly CodexDynamicToolSpec[];
