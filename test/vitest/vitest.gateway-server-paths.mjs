@@ -19,6 +19,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agents-create.inference-authority.integration.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/assistant-human-mentions.test.ts",
+  "src/gateway/assistant-media-policy.standalone.http.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",

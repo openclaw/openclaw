@@ -1,0 +1,3 @@
+# Restore roleless no-ACL standalone attachments through real authenticated HTTP.
+# Explicit ACL, named-role, creator and final-byte revocation controls; exact new test LF.
+248

@@ -264,12 +264,13 @@ function resolvePreparedAssistantMediaPolicy(
     if (!auth.operatorScopes.includes("operator.admin")) {
       const profileId = auth.authenticatedUserProfile?.profileId;
       if (profileId && profileId !== GATEWAY_OWNER_PROFILE_ID) {
-        // Standalone media and issued tickets use the same live confidential ACL
-        // as transcript/artifact reads, including callers without a named role.
+        // Keep roleless standalone reads of legacy rows; explicit ACL and
+        // named-role reads still use the live confidential visibility policy.
         if (entry.incognito || isIncognitoSessionKey(loaded.canonicalKey)) {
           return undefined;
         }
         if (
+          (!standaloneRead || config.gateway?.roles || entry.access !== undefined) &&
           !createProfileSessionEntryFilter({
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
