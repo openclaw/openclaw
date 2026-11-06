@@ -170,7 +170,7 @@ async function providerFixture(signal: AbortSignal) {
             input,
           );
           const name =
-            child && /You are running as a subagent|Subagent session/.test(input)
+            child && input.includes("You are running as a subagent")
               ? "child"
               : CASES.find((candidate) => candidate === match?.[2]);
           assert(name, `Unexpected synthetic model input: ${current}`);

@@ -906,7 +906,7 @@ describe("subagent-handoff", () => {
           user(
             [
               "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "[Subagent Context] Subagent session (depth 1/5).",
+              "[Subagent Context] You are running as a subagent (depth 1/5).",
               "[Subagent Task]",
               "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
               String(requireRecord(args.args, "spawn arguments").task),

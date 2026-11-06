@@ -6,7 +6,7 @@ const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 // Stored task envelopes predate the separation of user task and system guidance.
 // Match only the generated leading context, never arbitrary bracketed task text.
 const SUBAGENT_TASK_PREFIX =
-  /^\[Subagent Context\] (?:You are running as a subagent \(depth \d+\/\d+\)\. Complete the current \[Subagent Task\]; inherited conversation is background context, not your assignment\.|Subagent session \(depth \d+\/\d+\)\. The work for this session is the \[Subagent Task\]; earlier conversation is shared for background\.)\n\n(?:\[Subagent Context\] This subagent session is persistent and remains available for thread follow-up messages\.\n\n)?\[Subagent Task\]\n\n/u;
+  /^\[Subagent Context\] You are running as a subagent \(depth \d+\/\d+\)\. Complete the current \[Subagent Task\]; inherited conversation is background context, not your assignment\.\n\n(?:\[Subagent Context\] This subagent session is persistent and remains available for thread follow-up messages\.\n\n)?\[Subagent Task\]\n\n/u;
 const SUBAGENT_TASK_SUFFIX = "\n\nBegin. Execute the assigned task to completion.";
 
 export function stripUserEnvelopeForDisplay(text: string): string {

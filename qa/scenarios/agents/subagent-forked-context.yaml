@@ -100,7 +100,7 @@ flow:
                 const latest = userTexts.at(-1) ?? '';
                 const projection = /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(latest);
                 const current = projection?.[2] ?? latest;
-                const task = /\[Subagent Context\] (?:You are running as a subagent|Subagent session)\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(current)?.[1];
+                const task = /\[Subagent Context\] You are running as a subagent\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(current)?.[1];
                 if (!task || !task.startsWith('Report the visible code from the requester transcript.')) return [];
                 const history = userTexts.slice(0, -1).concat([...String(projection?.[1] ?? '').matchAll(/(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g)].map((match) => match[1]));
                 const instructions = [request.body.instructions, ...items.filter((item) => item.role === 'developer' || item.role === 'system').map(textOf)].join('\n');

@@ -14,7 +14,7 @@ const childResult = `FORKED-CONTEXT-CHILD: ${code}`;
 const childKey = "agent:qa:subagent:child";
 const task = "Report the visible code from the requester transcript.";
 const childTask = [
-  "[Subagent Context] Subagent session (depth 1/1).",
+  "[Subagent Context] You are running as a subagent (depth 1/1).",
   "[Subagent Task]",
   task,
   "Begin. Execute the assigned task to completion.",

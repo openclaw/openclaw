@@ -582,7 +582,7 @@ describe("built-in session tool role authority", () => {
           });
           expect(onAdmissionOwned).toBeUndefined();
           expect(inputOptions).toEqual({ stageCreatedInput: true });
-          expect(childParams.message).toContain("earlier conversation is shared for background");
+          expect(childParams.message).toContain("inherited conversation is background context");
           expect(childParams.message).toContain("Continue from the inherited reproduction");
           expect(registerRun).toHaveBeenCalledOnce();
           expect(mainSession(REQUESTER)?.sessionId).toBe(sessionId);
