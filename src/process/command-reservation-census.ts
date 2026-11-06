@@ -4,7 +4,7 @@ import { listProcesses } from "@openclaw/proc-safe/inspect";
 import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 
 // A reservation spawns within the same tick (agent tools: after a short admission await).
-const BORN_AFTER_RESERVATION_MS = 5_000;
+const BORN_AFTER_RESERVATION_MS = 15_000;
 // Linux reports boot time in whole seconds.
 const CLOCK_SLACK_MS = 2_000;
 const LINUX_CLOCK_TICKS_PER_SECOND = 100;
