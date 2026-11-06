@@ -65,7 +65,7 @@ var isChatHistoryState = (() => {
       /(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)/u,
       /^.*$/u,
       /^.*$/u,
-      /(^name$|^nativeName$|^textAliases$|^description$|^category$|^source$|^skillDisplayName$|^skillModelVisible$|^scope$|^acceptsArgs$|^args$|^clientPresentation$)/u,
+      /(^name$|^nativeName$|^textAliases$|^description$|^category$|^source$|^skillDisplayName$|^skillModelVisible$|^skillReferenceable$|^scope$|^acceptsArgs$|^args$|^clientPresentation$)/u,
       /(^name$|^description$|^type$|^required$|^choices$|^dynamic$)/u,
       /(^value$|^label$)/u,
       /(^when$|^action$)/u,
@@ -915,6 +915,9 @@ var isChatHistoryState = (() => {
       (value.skillModelVisible === void 0 ||
         !("skillModelVisible" in value) ||
         check_37(value.skillModelVisible)) &&
+      (value.skillReferenceable === void 0 ||
+        !("skillReferenceable" in value) ||
+        check_37(value.skillReferenceable)) &&
       check_182(value.scope) &&
       check_90(value.acceptsArgs) &&
       (value.args === void 0 || !("args" in value) || check_185(value.args)) &&

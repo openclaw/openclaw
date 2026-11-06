@@ -295,7 +295,8 @@
   vertical-align: middle;
 }
 
-.chat-text :where(th:last-child, td:last-child) {
+.chat-text :where(th:last-child),
+.chat-text :where(td:last-child) {
   border-right: none;
 }
 
@@ -303,7 +304,8 @@
   border-bottom: none;
 }
 
-.chat-text :where(th:first-child, td:first-child) {
+.chat-text :where(th:first-child),
+.chat-text :where(td:first-child) {
   min-width: 8rem;
   overflow-wrap: normal;
   word-break: normal;
@@ -1470,4 +1472,25 @@
 /* Sticky insets start inside the transcript's top padding. */
 .chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
   top: calc(4px - var(--chat-thread-padding-top));
+}
+
+.markdown-template-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-accent);
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+.markdown-template-link::before {
+  content: "◇";
+  color: var(--accent);
+  font-size: 0.9em;
+}
+.markdown-template-link:hover {
+  background: var(--bg-hover);
 }

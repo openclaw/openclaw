@@ -53,6 +53,19 @@ backup.
 
 ## Update implementation contract
 
+Interactive failed-update triage preserves the invoking operator's `PATH`, home,
+and authentication environment before candidate admission enters the managed
+Gateway environment. Repair agents still receive the latest target installation's
+state, config, and workspace selectors and require launch confirmation. The
+installed updater must contain this fix; a downloaded candidate cannot repair
+the older updater's already-captured environment. No schema or config migration
+is required.
+
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. Probe batching, backup refusal, and rollback safety
+are unchanged. This diagnostic requires the updater performing discovery to
+contain the fix; a candidate cannot change an older installed updater's probe.
+
 Candidate Doctor prepares plugin setup sources asynchronously before resolving
 legacy session migrations. Configured external channels can then finish
 post-plugin Doctor without an unprepared-source refusal blocking later state

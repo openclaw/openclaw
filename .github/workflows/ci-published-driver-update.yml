@@ -96,6 +96,7 @@ jobs:
         env:
           CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
           DRIVER_VERSION: ${{ steps.driver.outputs.version }}
+          OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE: "1"
         run: |
           set -euo pipefail
           package=.artifacts/published-driver-package/openclaw-candidate.tgz

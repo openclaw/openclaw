@@ -299,7 +299,9 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       ? !options.error.diagnosticEmitted
       : isUpdateCommand ||
         isPluginUpdateCommand ||
+        (options.error instanceof Error && options.error.name === "GatewayClientRequestError") ||
         isNodeRunCommand ||
+        commandPath[0] === "connect" ||
         isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,

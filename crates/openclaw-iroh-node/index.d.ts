@@ -56,7 +56,7 @@ export declare class Endpoint {
 export declare class HomeRelayWatcher {
   /**
    * Resolves with the status: at once on the first call, then after each change.
-   * Resolves null once the endpoint is gone.
+   * Resolves null once the endpoint is closed.
    */
   next(): Promise<Array<HomeRelayStatus> | null>
 }

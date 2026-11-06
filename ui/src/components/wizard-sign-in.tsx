@@ -3,10 +3,11 @@ import { createMemo, createSignal, Show } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../lib/reactive/provider-presentation.tsx";
 import { createInterval, createTimeout } from "../lib/reactive/timers.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { resolveProviderIconName } from "./provider-icon-data.ts";
-import { ProviderBrandIcon, ProviderFallbackIcon } from "./solid/provider-icon.tsx";
+import { ProviderFallbackIcon } from "./solid/provider-icon.tsx";
 import "../styles/wizard-sign-in.css";
 
 /** After this long without a callback, the tab most likely opened in another browser or profile. */
@@ -52,7 +53,7 @@ function ProviderBadge(props: {
             />
           }
         >
-          {(provider) => <ProviderBrandIcon provider={provider()} class="wizard-sign-in__icon" />}
+          {(provider) => <ModelProviderIcon provider={provider()} class="wizard-sign-in__icon" />}
         </Show>
       )}
     </div>
