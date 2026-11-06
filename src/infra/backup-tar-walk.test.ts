@@ -11,6 +11,7 @@ import {
   type BackupSymbolicLink,
 } from "./backup-archive-path-policy.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
+import { isUnreadableForeignEntry } from "./unreadable-foreign-entry.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -60,7 +61,9 @@ it.skipIf(process.platform === "win32")(
 async function collectArchive(
   source: string,
   chunks: Buffer[],
-  callbacks: Partial<Pick<Parameters<typeof walkBackupTar>[0], "onEntry" | "onVanished">> = {},
+  callbacks: Partial<
+    Pick<Parameters<typeof walkBackupTar>[0], "onEntry" | "onVanished" | "onUnreadable">
+  > = {},
 ) {
   for await (const chunk of walkBackupTar({
     tar,
@@ -86,6 +89,51 @@ async function writeSource(root: string, body: string) {
   await fs.writeFile(file, body);
   return file;
 }
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each(["directory", "file"])(
+  "omits a foreign %s denied by the filesystem, while owned files still refuse",
+  async (kind) => {
+    const root = tempDirs.make("backup-unreadable-");
+    const keep = await writeSource(root, "retained");
+    const foreign = path.join(root, "foreign");
+    if (kind === "directory") {
+      await fs.mkdir(foreign);
+    } else {
+      await fs.writeFile(foreign, "foreign bytes");
+    }
+    await fs.chmod(foreign, 0);
+    const lstat = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stat = lstat(...args);
+      if (stat && args[0] === foreign) {
+        Object.defineProperty(stat, "uid", { value: 0 });
+      }
+      return stat;
+    });
+    const skipped: string[] = [];
+    const archived: string[] = [];
+    const onUnreadable = (error: unknown, sourcePath: string) => {
+      if (!isUnreadableForeignEntry(error, sourcePath)) {
+        return false;
+      }
+      skipped.push(sourcePath);
+      return true;
+    };
+    try {
+      await collectArchive(root, [], { onUnreadable, onEntry: (source) => archived.push(source) });
+      expect(skipped).toEqual([foreign]);
+      expect(archived).toContain(keep);
+      expect(archived).not.toContain(foreign);
+      await fs.chmod(keep, 0);
+      await expect(collectArchive(keep, [], { onUnreadable })).rejects.toMatchObject({
+        code: "EACCES",
+      });
+    } finally {
+      await fs.chmod(foreign, 0o700);
+      await fs.chmod(keep, 0o600);
+    }
+  },
+);
 
 it("archives a source whose exact file ID exceeds Number precision", async () => {
   const source = path.join(tempDirs.make("backup-exact-identity-"), "payload.txt");

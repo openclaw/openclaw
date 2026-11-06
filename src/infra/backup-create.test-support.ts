@@ -36,6 +36,8 @@ export function createBackupClassificationInventory(stateDir: string): BackupRes
     isTraversable: () => true,
     isPackageContent: () => false,
     isVolatile: () => false,
+    skippedUnreadablePaths: new Set(),
+    skipUnreadable: () => false,
   };
 }
 

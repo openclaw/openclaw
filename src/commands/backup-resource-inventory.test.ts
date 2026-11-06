@@ -8,6 +8,49 @@ import {
   sealBackupResourceInventory,
 } from "./backup-resource-inventory.js";
 
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "retains refusal for a plugin resource declared after the agent scratch scan",
+  async () => {
+    await withTempDir("backup-explicit-unreadable-", async (root) => {
+      const stateDir = await fs.realpath(root);
+      const foreign = path.join(stateDir, "agents/main/agent/durable");
+      await fs.mkdir(foreign, { recursive: true });
+      await fs.chmod(foreign, 0);
+      const lstat = fsSync.lstatSync;
+      using _ = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+        const stat = lstat(...args);
+        if (stat && args[0] === foreign) {
+          Object.defineProperty(stat, "uid", { value: 0 });
+        }
+        return stat;
+      });
+      try {
+        await expect(
+          createBackupResourcePlan({
+            stateDir,
+            configPaths: [],
+            oauthDirs: [],
+            workspaceDirs: [],
+            excludedWorkspaceDirs: [],
+            agentRoots: [],
+            pluginRoots: [],
+            pluginResources: [
+              {
+                pluginId: "selected",
+                disposition: "include",
+                scope: "state",
+                relativePath: "agents/main/agent/durable",
+              },
+            ],
+          }),
+        ).rejects.toMatchObject({ code: "EACCES" });
+      } finally {
+        await fs.chmod(foreign, 0o700);
+      }
+    });
+  },
+);
+
 it.each(["plan", "inventory"] as const)(
   "%s checks privacy once per traversal and observes later markers",
   async (kind) => {

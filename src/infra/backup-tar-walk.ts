@@ -14,6 +14,7 @@ export async function* walkBackupTar(params: {
   filter: (sourcePath: string, stat: Stats) => boolean;
   onEntry: (sourcePath: string, header: HeaderData) => void;
   onVanished: (sourcePath: string) => void;
+  onUnreadable?: (error: unknown, sourcePath: string) => boolean;
   onProgress: (sourcePath: string, bytes?: number) => void;
 }): AsyncGenerator<Buffer> {
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
@@ -87,6 +88,9 @@ export async function* walkBackupTar(params: {
           await assertDirectory(parent);
         }
       } catch (error) {
+        if (params.onUnreadable?.(error, sourcePath)) {
+          return;
+        }
         ignoreMissingPath(error);
         params.onVanished(sourcePath);
         return;
