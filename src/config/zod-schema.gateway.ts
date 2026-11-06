@@ -112,7 +112,7 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       deny: z.array(z.string().trim().min(1)).optional(),
     })
     .optional(),
-  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  /** Explicit Access ceiling; omission uses admin authority or Standard for restricted roles. */
   accessPrograms: z
     .strictObject({
       cyber: z
