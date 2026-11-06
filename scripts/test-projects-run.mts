@@ -23,13 +23,14 @@ import {
   resolveLocalFullSuiteProfile,
   shouldContinueVitestFailures,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   mergeVitestExitCodes,
   vitestInfrastructureExitCode,
 } from "./lib/vitest-outcome.mts";
 import { resolveCiVitestPlanConcurrency, runVitestPlans } from "./lib/vitest-plan-scheduling.mts";
-import { resolveVitestNodeArgs, resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
+import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import {
   createVitestReportOwner,

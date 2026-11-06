@@ -513,12 +513,14 @@
   }
 }
 
-:is(.chat-text, .chat-thinking) {
+.chat-text,
+.chat-thinking {
   --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);
 }
 
-:is(.chat-text, .chat-thinking) :where(ul, ol) {
+:is(.chat-text, .chat-thinking) :where(ul),
+:is(.chat-text, .chat-thinking) :where(ol) {
   padding-inline-start: var(--chat-markdown-indent);
 }
 
@@ -725,6 +727,10 @@
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
   visibility: visible;
+}
+
+.chat-text :where(.markdown-link-favicon[data-link-favicon-state="failed"]) {
+  display: none;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -1404,33 +1410,31 @@
 }
 
 /* renderBody is shared by normal bubbles and expanded tool output. */
-:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
-  > :is(
-    .chat-message-images,
-    .chat-assistant-attachments,
-    .chat-assistant-attachment-card,
-    .chat-pairing-qr-notices,
-    .chat-thinking,
-    .chat-tool-card__widget-host,
-    .chat-text,
-    .chat-message-disclosure,
-    .chat-message-avatar-anchor,
-    .chat-tools-inline
-  ) {
+.chat-bubble,
+.chat-tool-msg-body,
+.chat-message-avatar-anchor {
+  > .chat-message-images,
+  > .chat-assistant-attachments,
+  > .chat-assistant-attachment-card,
+  > .chat-pairing-qr-notices,
+  > .chat-thinking,
+  > .chat-tool-card__widget-host,
+  > .chat-text,
+  > .chat-message-disclosure,
+  > .chat-message-avatar-anchor,
+  > .chat-tools-inline {
     margin-block: 0;
 
-    + :is(
-      .chat-message-images,
-      .chat-assistant-attachments,
-      .chat-assistant-attachment-card,
-      .chat-pairing-qr-notices,
-      .chat-thinking,
-      .chat-tool-card__widget-host,
-      .chat-text,
-      .chat-message-disclosure,
-      .chat-message-avatar-anchor,
-      .chat-tools-inline
-    ) {
+    + .chat-message-images,
+    + .chat-assistant-attachments,
+    + .chat-assistant-attachment-card,
+    + .chat-pairing-qr-notices,
+    + .chat-thinking,
+    + .chat-tool-card__widget-host,
+    + .chat-text,
+    + .chat-message-disclosure,
+    + .chat-message-avatar-anchor,
+    + .chat-tools-inline {
       margin-block-start: var(--chat-block-gap);
     }
   }

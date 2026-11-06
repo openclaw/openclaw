@@ -4,6 +4,7 @@ import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
@@ -40,7 +41,7 @@ export class PaletteSessionDraft {
     this.callbacks.changed();
   }
   setSubmissionError(error: unknown) {
-    this.draft?.submission.setError(error instanceof Error ? error.message : String(error));
+    this.draft?.submission.setError(formatUiError(error));
   }
   private slot: PaletteDraftSlot | undefined;
   private get draft(): NewSessionDraft | undefined {
@@ -541,7 +542,7 @@ export class PaletteSessionDraft {
     const isCurrentOwner = captureSessionNoticeOwner(context);
     const message =
       result.initialRun.status === "rejected"
-        ? t("palette.sessionCreatedWithError", { error: result.initialRun.error })
+        ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
         : t(
             result.initialRun.status === "started"
               ? "palette.sessionStarted"

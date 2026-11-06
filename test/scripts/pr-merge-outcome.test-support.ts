@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -705,7 +705,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
   const checks=restCheckRuns();
   if(s.restUnseenSuite==="new-gate") checks.push(...restCheckSuites().filter(suite=>suite.id>=30).flatMap(suiteChecks));
   const runs=checks.map((check,index)=>({id:100+index,head_sha:s.pr.headRefOid,check_suite_id:check.check_suite.id,
-    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:s.priorCi.currentGateChecks.find(value=>value.id===check.id)?.event??(index===1&&s.restDuplicate==="other-event"?"push":"pull_request")}));
+    workflow_id:index===1&&s.restDuplicate==="other-workflow"?43:42,event:s.priorCi.currentGateChecks.find(value=>value.id===check.id)?.event??(s.restChecks==="manual-only"||(index===0&&s.restDuplicate==="manual-event")?"workflow_dispatch":index===1&&s.restDuplicate==="other-event"?"push":"pull_request")}));
   if(s.restDuplicate==="missing-mapping") runs.pop();
   if(s.restDuplicate==="ambiguous-mapping") runs.push({...runs[1],id:103,workflow_id:44});
   out([{total_count:runs.length,workflow_runs:runs}]);

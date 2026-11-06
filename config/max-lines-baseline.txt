@@ -242,7 +242,6 @@ src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/models/auth.ts
@@ -315,7 +314,6 @@ src/gateway/session-reset-service.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk/handlers/index.test.ts
-src/gateway/talk/handlers/index.ts
 src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/watch-node-http.ts

@@ -235,7 +235,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   text-decoration: none;
 }
 
-:is(.mobile-header__retry, .mobile-header__machine) {
+.mobile-header__retry,
+.mobile-header__machine {
   cursor: var(--cursor-action);
   pointer-events: auto;
 }
@@ -313,9 +314,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   & .topnav-shell {
     position: relative;
     display: grid;
-    /* Equal sides center the title; their floors keep it clear of the pill,
-       so a long title truncates instead of colliding. */
-    grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+    /* Reserve title clearance for a page action before it mounts, without an empty pill slot. */
+    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
+    grid-template-columns:
+      minmax(max-content, 1fr) minmax(0, auto)
+      minmax(calc(3 * var(--floating-header-pill-button) + 6px), 1fr);
     gap: 6px;
     min-height: var(--floating-header-control);
   }
@@ -360,12 +363,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 
   & .topnav-shell__actions {
-    /* Reserve the page action even before its route mounts, keeping the pill and title still. */
-    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
+    /* Only wrap actions that are present; title clearance belongs to the grid. */
     grid-column: 3;
     justify-self: end;
     gap: 0;
-    width: calc(3 * var(--floating-header-pill-button) + 6px);
+    width: max-content;
     height: var(--floating-header-control);
     padding: 0 3px;
   }

@@ -7,11 +7,16 @@ import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as directoryWatch from "../../infra/directory-watch-host.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -324,6 +329,101 @@ it.each([false, true])(
     }
   },
 );
+
+it("republishes a read whose registration a config refresh retired mid-scan", async () => {
+  await write("Current instructions");
+  const scanning = createDeferred();
+  const release = createDeferred();
+  const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+  run.mockImplementationOnce(async function (
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
+  ) {
+    scanning.resolve();
+    await release.promise;
+    run.mockRestore();
+    return this.run(...args);
+  });
+  const read = descriptions();
+  await scanning.promise;
+  const reset = refreshSkillsDiscovery({ reason: "config-change" });
+  release.resolve();
+  await reset;
+  expect(await read).toEqual(["Current instructions"]);
+});
+
+it("keeps watching disabled after config refresh supersedes a skill status read", async () => {
+  await write("Original instructions");
+  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", temporary.make("skills-watch-disabled-bundled-"));
+  const config = {
+    ...agentConfig({ main: { workspace } }),
+    skills: { load: { watch: true } },
+  };
+  const disabledConfig = { ...config, skills: { load: { watch: false } } };
+  setRuntimeConfigSnapshot(config);
+  const scanning = createDeferred();
+  const release = createDeferred();
+  const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+  run.mockImplementationOnce(async function (
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
+  ) {
+    scanning.resolve();
+    await release.promise;
+    run.mockRestore();
+    return this.run(...args);
+  });
+  // skills.status first ensures discovery, then reads status using its captured config.
+  const read = ensureSkillsWatcher({ workspaceDir: workspace, config, agentId: "main" }).then(() =>
+    prepareWorkspaceSkillStatus(workspace, { config, agentId: "main" }),
+  );
+  let refresh: Promise<void> | undefined;
+  try {
+    await scanning.promise;
+    setRuntimeConfigSnapshot(disabledConfig);
+    refresh = refreshSkillsDiscovery({
+      config: disabledConfig,
+      reason: "config-change",
+    });
+    release.resolve();
+    await Promise.all([read, refresh]);
+    expect((await read).report.skills).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "guide" })]),
+    );
+    const version = getSkillsSnapshotVersion(workspace);
+    await write("Edited after watching was disabled");
+    await completePassiveScan();
+    expect(getSkillsSnapshotVersion(workspace)).toBe(version);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([read, refresh]);
+    clearRuntimeConfigSnapshot();
+  }
+});
+
+it("still fails a read whose registration a shutdown retired mid-scan", async () => {
+  await write("Current instructions");
+  const scanning = createDeferred();
+  const release = createDeferred();
+  const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+  run.mockImplementationOnce(async function (
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args: Parameters<WorkerTaskPool<unknown, unknown>["run"]>
+  ) {
+    scanning.resolve();
+    await release.promise;
+    run.mockRestore();
+    return this.run(...args);
+  });
+  const read = descriptions();
+  await scanning.promise;
+  const closed = closeSkillsWatchers();
+  // A shutdown retires the worker, so the resumed scan fails instead of republishing.
+  const outcome = expect(read).rejects.toThrow("worker task pool closed");
+  release.resolve();
+  await outcome;
+  await closed;
+});
 
 it("keeps each source environment while refreshing a reused worker's plans and prompt paths", async () => {
   const firstHome = temporary.make("skills-first-home-");

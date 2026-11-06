@@ -188,6 +188,9 @@ export const operations = {
   ) => s.memoryCandidates(input, a),
   memoryIndex: (s: Storage, a: Access, input: In<Storage["memoryIndex"]>) =>
     s.memoryIndex(input, a),
+  gateIndex: (s: Storage, a: Access) => s.gateIndex(a),
+  gateCandidates: (s: Storage, a: Access, input: In<Storage["gateCandidates"]>) =>
+    s.gateCandidates(input, a),
   memoryHealth: (s: Storage, a: Access) =>
     s.run(a, async (vault) => {
       const data = await vault.scan();

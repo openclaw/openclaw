@@ -17,14 +17,14 @@ const enSessionSkillLibrary = {
       attachable: "Add from your libraries",
       pin: "Selected revision {revision}",
       read: "Read selected revision",
-      empty: "No managed skills selected.",
+      empty: "No skills selected yet. Add one from your libraries.",
       refresh: "Refresh revision",
       attachNamed: "Attach {name} · {owner}",
       detach: "Detach",
       queued:
-        "Skill selections updated for the next turn. An active turn keeps its current revision.",
+        "Skill selections updated for the next reply. A reply in progress keeps its current revision.",
       readOnly:
-        "This is the exact revision selected for this session. Session access allows reading this pin, not editing its library or browsing other revisions.",
+        "This is the revision selected for this session. You can view it, but session access doesn’t let you edit its library or browse other revisions.",
     },
     revision: "Retained revision",
   },

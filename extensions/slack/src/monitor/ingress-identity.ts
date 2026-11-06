@@ -48,7 +48,7 @@ function normalizeSlackBareUserEntry(entry: string): string | null {
   return /^[ubw][a-z0-9_]+$/i.test(userId) ? userId : null;
 }
 
-function normalizeSlackStableEntry(entry: string): string | null {
+export function normalizeSlackStableEntry(entry: string): string | null {
   return normalizeSlackBareUserEntry(entry) ?? normalizeSlackWorkspaceUserEntry(entry);
 }
 

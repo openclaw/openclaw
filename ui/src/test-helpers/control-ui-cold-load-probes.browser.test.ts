@@ -171,6 +171,56 @@ describe("serialized cold-load probes", () => {
     }
   });
 
+  it.each(["eligibility", "completion"])(
+    "keeps sequenced events in wire order when %s callbacks overtake",
+    (phase) => {
+      const iframe = document.createElement("iframe");
+      document.body.append(iframe);
+      try {
+        const target = iframe.contentWindow;
+        const doc = iframe.contentDocument;
+        if (!target || !doc) {
+          throw new Error("Probe realm was not created");
+        }
+        const script = doc.createElement("script");
+        script.textContent = `
+          Object.defineProperty(performance, "now", { value: () => 0 });
+          const timers = [];
+          window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
+          window.WebSocket = class extends EventTarget { send() {} };
+          ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 100, downloadKbps: 8, frameGapMs: 0, events: [] })}
+          const socket = new WebSocket();
+          const delivered = [];
+          socket.addEventListener("message", (event) => delivered.push(JSON.parse(event.data).seq));
+          for (const seq of [1, 2]) {
+            socket.dispatchEvent(new MessageEvent("message", {
+              data: JSON.stringify({type: "event", event: "example", payload: {}, seq})
+            }));
+          }
+          const eligibility = timers.splice(0);
+          if (${JSON.stringify(phase)} === "eligibility") eligibility.reverse();
+          eligibility.forEach(timer => timer.callback());
+          const completion = timers.splice(0);
+          if (${JSON.stringify(phase)} === "completion") completion.reverse();
+          completion[0].callback();
+          const beforePredecessor = [...delivered];
+          completion[1].callback();
+          const predecessorTask = [...delivered];
+          while (timers.length) timers.shift().callback();
+          window.eventOrderProof = { beforePredecessor, predecessorTask, delivered };
+        `;
+        doc.body.append(script);
+        expect(Reflect.get(target, "eventOrderProof")).toEqual({
+          beforePredecessor: [],
+          predecessorTask: [1],
+          delivered: [1, 2],
+        });
+      } finally {
+        iframe.remove();
+      }
+    },
+  );
+
   it("retires closed-socket requests without losing their RPC count or another socket's work", () => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);

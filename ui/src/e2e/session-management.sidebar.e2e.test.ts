@@ -140,10 +140,8 @@ suite.define(() => {
       await initialToggle.waitFor();
       expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
-      // Hidden work belongs to the child toggle; the idle parent's own glyph stays idle.
-      await expect
-        .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
-        .toBe(1);
+      // Collapsed child work stays off the idle parent row; expanded child rows show it.
+      expect(await initialToggle.locator(".session-run-spinner").count()).toBe(0);
       expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
         0,
       );
@@ -154,7 +152,8 @@ suite.define(() => {
           node.role?.value === "button" &&
           node.name?.value === "Show 4 child sessions for Plan release",
       );
-      expect(collapsedToggle?.description?.value).toBe("Active run");
+      expect(collapsedToggle).toBeDefined();
+      expect(collapsedToggle?.description?.value ?? "").toBe("");
       await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
@@ -182,8 +181,6 @@ suite.define(() => {
       await failedChild.getByRole("img", { name: "Failed" }).waitFor();
       await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
 
-      const childToggle = parent.locator(".sidebar-child-session-toggle--running");
-      expect(await childToggle.count()).toBe(1);
       const expandedTree = await accessibility.send("Accessibility.getFullAXTree");
       const expandedToggle = expandedTree.nodes.find(
         (node) =>
@@ -246,7 +243,7 @@ suite.define(() => {
       );
       await captureUiProof(suite, page, "child-session-menu.png");
       await openSessionMenuSubmenu(page, "Advanced");
-      await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       await page.getByRole("menuitem", { name: "Icon & color", exact: true }).waitFor();
       await page.keyboard.press("Escape");

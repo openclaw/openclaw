@@ -5,6 +5,7 @@ import { sanitizeSessionRow } from "../../lib/sessions/session-row-reconcile.ts"
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
+  createComposerControlsFixture,
   createComposerProps,
   resetComposerFixture,
   renderComposerInto,
@@ -56,7 +57,14 @@ function usageProps(refreshed = false) {
   const [provider, displayName, plan, usedPercent, revision] = refreshed
     ? (["anthropic", "Claude", "Max", 61, 2] as const)
     : (["openai", "OpenAI", "Plus", 21, 1] as const);
+  const controls = createComposerControlsFixture();
+  controls.model.accountSelection = {
+    kind: "shared",
+    label: "Selected account",
+    authProfileId: `${provider}:oauth`,
+  };
   return createComposerProps({
+    composerControls: controls,
     selectedSession: {
       key: "main",
       kind: "direct",
@@ -78,6 +86,7 @@ function usageProps(refreshed = false) {
             profiles: [{ profileId: `${provider}:oauth`, type: "oauth", status: "ok" }],
             usage: {
               providerId: provider,
+              authProfileId: `${provider}:oauth`,
               plan,
               windows: [{ label: "Week", usedPercent }],
             },
@@ -108,6 +117,7 @@ it("keeps the context counter exempt and usage-link focus during refreshes", asy
   const current = usageProps(true);
   renderComposerInto(container, {
     ...props,
+    composerControls: current.composerControls,
     selectedSession: current.selectedSession,
     providerUsage: current.providerUsage,
   });

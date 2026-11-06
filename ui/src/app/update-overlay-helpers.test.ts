@@ -185,11 +185,11 @@ describe("update status localization", () => {
     const error = "gateway request timed out after 5000ms: update.status";
     expect(resolveUpdateStatusCheckBanner(new Error(error))).toEqual({
       tone: "warn",
-      text: `Could not check for updates: ${error}`,
+      text: `Couldn’t check for updates. ${error}`,
     });
     expect(resolveUpdateStatusBanner({ status: "error", reason: "build-failed" })).toMatchObject({
       tone: "danger",
-      text: expect.stringContaining("Update error: build-failed"),
+      text: expect.stringContaining("Couldn’t update OpenClaw. build-failed"),
     });
   });
 
@@ -279,7 +279,7 @@ describe("update status localization", () => {
       })?.banner,
     ).toEqual({
       tone: "danger",
-      text: "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+      text: "Couldn’t complete install: ENOSPC: no space left on device, write. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     });
   });
 
@@ -320,7 +320,7 @@ describe("update status localization", () => {
 
       expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
         tone: "danger",
-        text: `Update error: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
+        text: `Couldn’t update OpenClaw. ${reason}. See the Gateway logs for the exact failure and retry once the cause is fixed.`,
       });
       expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
     },

@@ -66,6 +66,7 @@ import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
+import { SubmittedAppContext } from "./submitted-app-context.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -335,6 +336,8 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
 }
 
 function BubbleContents(props: ContentProps) {
+  const images = () =>
+    props.state().renderInOrder ? props.state().supplementalImages : props.state().images;
   const previewCount = createMemo(() => props.state().videoPreviews.length);
   const previews = createMemo(() =>
     Array.from({ length: previewCount() }, (_, index) => (
@@ -351,13 +354,13 @@ function BubbleContents(props: ContentProps) {
         </For>
       </Show>
       <PairingQrNotices count={props.state().expiredPairingQrCount} />
-      <MessageImages
-        images={
-          props.state().renderInOrder ? props.state().supplementalImages : props.state().images
-        }
-        options={props.state().imageRenderOptions}
-        previews={previews()}
-      />
+      <Show when={images().length > 0 || previewCount() > 0}>
+        <MessageImages
+          images={images()}
+          options={props.state().imageRenderOptions}
+          previews={previews()}
+        />
+      </Show>
       <OmittedMedia items={props.state().omittedMedia} />
       <AssistantAttachments
         attachments={
@@ -388,6 +391,7 @@ function BubbleContents(props: ContentProps) {
       </Show>
       <Show when={props.state().normalizedRole === "user"} fallback={<MessageText {...props} />}>
         <Show when={hasText() || props.options.avatar}>
+          <SubmittedAppContext message={props.state().message} />
           <div class="chat-message-avatar-anchor">
             <MessageText {...props} />
             <MessageAvatar render={props.options.avatar} />

@@ -325,12 +325,12 @@
   overflow: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: auto;
-  transition:
-    height 220ms cubic-bezier(0.2, 1, 0.22, 1),
-    opacity var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete;
+}
+
+/* Height eases only between views of a settled menu. Entry and exit keep the
+   shared menu presentation instead of growing from the last measured height. */
+.agent-chat__capability-menu-panel:where([data-phase="open"]) {
+  transition: height 220ms cubic-bezier(0.2, 1, 0.22, 1);
 }
 
 .agent-chat__capability-menu-body {
@@ -1792,17 +1792,16 @@
   pointer-events: none;
 }
 
-:is(.chat-attachment-thumb--file, .chat-attachment-thumb--browser-annotation) {
+.chat-attachment-thumb--file,
+.chat-attachment-thumb--browser-annotation {
   width: max-content;
   min-width: 168px;
   max-width: min(216px, calc(100vw - 64px));
 }
 
-:is(
-  .chat-attachment-file__icon,
-  .chat-attachment-file__preview,
-  .chat-browser-annotation-card__preview
-) {
+.chat-attachment-file__icon,
+.chat-attachment-file__preview,
+.chat-browser-annotation-card__preview {
   display: grid;
   place-items: center;
   flex: 0 0 40px;
@@ -1828,18 +1827,17 @@
   line-height: 16px;
 }
 
-:is(
-  .chat-attachment-file__type,
-  .chat-browser-annotation-card__meta,
-  .chat-attachment-text-action
-) {
+.chat-attachment-file__type,
+.chat-browser-annotation-card__meta,
+.chat-attachment-text-action {
   font-size: 11px;
   font-weight: 400;
   line-height: 14px;
   font-variant-numeric: tabular-nums;
 }
 
-:is(.chat-attachment-compress, .chat-attachment-text-action) {
+.chat-attachment-compress,
+.chat-attachment-text-action {
   padding: 0;
   border: 0;
   background: transparent;
@@ -1949,7 +1947,8 @@
 }
 
 .chat-attachment-loading > .chat-attachment-loading__icon,
-:is(.chat-attachment-loading__title, .chat-attachment-loading__line) {
+.chat-attachment-loading__title,
+.chat-attachment-loading__line {
   background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 

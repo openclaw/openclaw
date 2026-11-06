@@ -8,6 +8,7 @@ import { observeResize } from "../../lib/reactive/observers.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
+import { ErrorDetails } from "../config-error.tsx";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
@@ -145,7 +146,10 @@ function ViewportContent(
           presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("browser.loadFailed")}
-          description={props.controller.errorText!}
+          description={props.controller.errorText!.split("\n", 1).join("")}
+          details={
+            <ErrorDetails error={props.controller.errorText!.split("\n").slice(1).join("\n")} />
+          }
           action={
             <button
               class="btn"
@@ -416,7 +420,8 @@ export function BrowserPanelChrome(
       {props.controller.errorText ? (
         emptyError() ? null : (
           <div class="bp-note bp-note--error" role="alert">
-            {props.controller.errorText}
+            <div>{props.controller.errorText.split("\n")[0]}</div>
+            <ErrorDetails error={props.controller.errorText.split("\n").slice(1).join("\n")} />
           </div>
         )
       ) : props.controller.noticeText ? (

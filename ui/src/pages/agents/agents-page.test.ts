@@ -327,7 +327,7 @@ describe("AgentsPage gateway lifecycle", () => {
       await waitForFast(async () =>
         expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
           hasRows
-            ? "Some models could not be refreshed. Open Models to try again."
+            ? "Couldn’t refresh some models. Open Models to try again."
             : "Models unavailable",
         ),
       );
