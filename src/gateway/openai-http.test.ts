@@ -2377,16 +2377,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     async ({ stream, includeUsage }, { signal: testSignal }) => {
       const port = enabledPort;
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const entered = createDeferred();
+      const entered = createDeferred<AbortSignal | undefined>();
       const agentAborted = createDeferred();
       const finishAgentCleanup = createDeferred();
       const cleanupAdmissionClosed = createDeferred<boolean>();
-      let serverAbortSignal: AbortSignal | undefined;
 
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
         const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-        serverAbortSignal = signal;
         if (includeUsage) {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
           emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
@@ -2397,7 +2395,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         } else {
           signal?.addEventListener("abort", () => agentAborted.resolve(), { once: true });
         }
-        entered.resolve();
+        entered.resolve(signal);
         await agentAborted.promise;
         cleanupAdmissionClosed.resolve(isGatewaySubordinateWorkAdmissionClosed());
         await finishAgentCleanup.promise;
@@ -2425,7 +2423,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
 
       try {
-        await withinTest(entered.promise, testSignal);
+        const serverAbortSignal = await withinTest(entered.promise, testSignal);
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
         clientReq.destroy();
 

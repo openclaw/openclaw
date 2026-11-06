@@ -2,10 +2,9 @@ import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  nextEventLoopTurn,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createOpenAiHttpTestClient, parseSseEvents } from "./http-stream.test-support.js";
 import { agentCommandMock } from "./test-helpers.js";
@@ -19,33 +18,19 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
     "keeps the %s admitted until its deferred SSE terminal is written",
     async ([_label, name, failed, providerTerminal, reject], { signal }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const entered = createDeferred();
+      const entered = createDeferred<string>();
       const terminalAdmission = createDeferred<number>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
-      let activeRunId: string | undefined;
-      const unsubscribe = onAgentEvent((event) => {
-        const phase = event.data?.phase;
-        if (event.runId !== activeRunId || event.stream !== "lifecycle") {
-          return;
-        }
-        if (phase !== "end" && phase !== "error") {
-          return;
-        }
-        lifecycleTerminals.push(phase);
-        // Restart drains run before the next-turn SSE finalizer, so inspect the real
-        // root owner at that boundary instead of observing eventual client delivery.
-        queueMicrotask(() => terminalAdmission.resolve(getActiveGatewayRootWorkCount()));
-      });
+      let unsubscribe = () => {};
 
-      agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        activeRunId = (opts as { runId?: string }).runId;
+        const activeRunId = (opts as { runId?: string }).runId;
         if (!activeRunId) {
           throw new Error("expected a streaming response run ID");
         }
-        entered.resolve();
+        entered.resolve(activeRunId);
         await continueAgent.promise;
         emitAgentEvent({ runId: activeRunId, stream: "assistant", data: { delta: "answer" } });
         if (providerTerminal) {
@@ -58,10 +43,7 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
         if (reject) {
           throw new Error("provider request failed");
         }
-        return {
-          payloads: [{ text: "answer" }],
-          meta: { agentMeta: { usage: { input: 3, output: 2, total: 5 } } },
-        };
+        return { payloads: [{ text: "answer" }] };
       }) as never);
 
       const client = createOpenAiHttpTestClient(getPort()).withOptions({
@@ -80,22 +62,26 @@ export function registerOpenResponsesHttpAdmissionTests(getPort: () => number) {
       stream.on("response.failed", () => terminalEvents.push("response.failed"));
       const completion = Promise.all([stream.finalResponse(), wireResponse.promise]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            completion,
-            "Response settled before agent entry",
-          ),
-          signal,
+        const entry = awaitGateBeforeSettlement(
+          entered.promise,
+          completion,
+          "Response ended before entry",
         );
+        const activeRunId = await withinTest(entry, signal);
+        unsubscribe = onAgentEventForRun(activeRunId, (event) => {
+          const phase = event.data?.phase;
+          if (event.stream !== "lifecycle" || (phase !== "end" && phase !== "error")) {
+            return;
+          }
+          lifecycleTerminals.push(phase);
+          // Observe restart admission before the next-turn SSE finalizer.
+          queueMicrotask(() => terminalAdmission.resolve(getActiveGatewayRootWorkCount()));
+        });
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
-        await nextEventLoopTurn();
         continueAgent.resolve();
 
-        const [admission, [response, wire]] = await withinTest(
-          Promise.all([terminalAdmission.promise, completion]),
-          signal,
-        );
+        const [response, wire] = await withinTest(completion, signal);
+        const admission = await withinTest(terminalAdmission.promise, signal);
 
         expect(admission).toBe(idleRootCount + 1);
         expect(response.status).toBe(name);
