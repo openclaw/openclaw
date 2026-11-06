@@ -108,7 +108,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.1"
+  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.2"
   IOS_SCREENSHOT_NODE_VERSION: "24.22.1"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.1 Build version 27A9275"
   NODE_VERSION: "24.22.1"
@@ -161,6 +161,7 @@ jobs:
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
+      skills_python_targets_json: ${{ steps.manifest.outputs.skills_python_targets_json }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_built_source_verifiers: ${{ steps.manifest.outputs.run_built_source_verifiers }}
@@ -785,8 +786,10 @@ jobs:
                   "scripts/ci-build-manifest.mjs",
                   "scripts/ci-adaptive-priors.mjs",
                   "scripts/lib/actions-artifact-archive.mjs",
+                  "scripts/lib/changed-path-facts.mjs",
                   "scripts/lib/ci-test-observations.mjs",
                   "scripts/lib/ci-ios-smoke-plan.mjs",
+                  "scripts/lib/ci-skills-python-plan.mjs",
                   "scripts/lib/release-context.mjs",
                   "scripts/lib/release-version.mjs",
               )
@@ -1055,6 +1058,7 @@ jobs:
             /.github/actions/
             /scripts/
             /test/vitest/
+            /config/ci-adaptive-markdown.json
             /config/ci-test-timings.json
             /node-runtime-env.mjs
             /runtime-process-scripts.generated.mjs
@@ -4837,6 +4841,8 @@ jobs:
         run: pnpm run --workspace-concurrency=2 --no-bail '/^(format:docs:check|check:docs:content)$/'
 
   skills-python:
+    env:
+      SKILLS_PYTHON_TARGETS_JSON: ${{ needs.preflight.outputs.skills_python_targets_json }}
     permissions:
       contents: read
     needs: [preflight]
@@ -4866,11 +4872,21 @@ jobs:
 
       - name: Lint Python skill scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
-        run: python -m ruff check --config skills/pyproject.toml skills
+        run: |
+          python - <<'PYTHON'
+          import json, os, subprocess, sys
+          targets = json.loads(os.environ.get("SKILLS_PYTHON_TARGETS_JSON") or '["skills"]')
+          subprocess.run([sys.executable, "-m", "ruff", "check", "--config", "skills/pyproject.toml", *targets], check=True)
+          PYTHON
 
       - name: Test skill Python scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
-        run: python -m pytest -q -c skills/pyproject.toml skills
+        run: |
+          python - <<'PYTHON'
+          import json, os, subprocess, sys
+          targets = json.loads(os.environ.get("SKILLS_PYTHON_TARGETS_JSON") or '["skills"]')
+          subprocess.run([sys.executable, "-m", "pytest", "-q", "-c", "skills/pyproject.toml", *targets], check=True)
+          PYTHON
 
   checks-windows:
     permissions:
@@ -5649,6 +5665,9 @@ jobs:
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
           key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+          # The build phase verifies each slice fingerprint and checksum before reuse.
+          restore-keys: |
+            watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-
 
       - name: Restore iOS test build products
         id: ios-build-cache

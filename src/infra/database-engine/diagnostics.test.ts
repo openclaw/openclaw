@@ -1,7 +1,10 @@
 import "./backup-worker.test-support.js";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -10,11 +13,16 @@ import {
   addPreCutoverClientCredentialTablesForTest,
   restorePreTemplateStateIdentifiersForTest,
 } from "../../state/openclaw-state-schema.test-support.js";
+import { defaultPayload } from "../gateway-state-owner-record.js";
 import * as stateOwner from "../gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
+import * as liveOwner from "../sqlite-live-owner.js";
+import * as inspection from "../sqlite-readonly-inspection.js";
 import * as snapshotSource from "../sqlite-snapshot-source.js";
 import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
+import { databaseStoreLiveReadOperations } from "./database-store-live-read.worker.js";
+import { createDatabaseStoreDiagnostic } from "./diagnostic-record.js";
 import { formatDatabaseStoreDiagnostic } from "./diagnostics-format.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import { writePortAnchor } from "./port-backup.test-support.js";
@@ -69,7 +77,150 @@ async function stateStore(version: number, contentVersion = version) {
   return input;
 }
 
+const PROBE =
+  "INSERT INTO config_machine_state VALUES ('probe', json_quote(hex(zeroblob(2097152))), 1);";
+const LIVE_WAL = `PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; ${PROBE}`;
+// Spill an uncommitted update into the database file so a killed writer leaves a hot journal.
+const HOT_JOURNAL = `PRAGMA journal_mode = DELETE; ${PROBE} PRAGMA cache_size = 2; BEGIN IMMEDIATE;
+  UPDATE config_machine_state SET value_json = json_quote(hex(randomblob(2097152))) WHERE state_key = 'probe';`;
+// A separate process owns its SQLite locks, as the Gateway does.
+async function holdSqlite(databasePath: string, sql: string) {
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=commonjs",
+      "-e",
+      `const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]);
+      db.exec(process.argv[2]); process.send("ready"); process.on("disconnect", () => db.close());`,
+      databasePath,
+      sql,
+    ],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  );
+  const exited = once(child, "exit");
+  await once(child, "message");
+  return {
+    stop: async () => {
+      if (child.connected) {
+        child.disconnect();
+      }
+      await exited;
+    },
+    crash: async () => {
+      child.kill("SIGKILL");
+      await exited;
+    },
+  };
+}
+function sourceFamily(databasePath: string) {
+  return ["", "-wal", "-journal"].map((suffix) =>
+    fs.existsSync(databasePath + suffix)
+      ? createHash("sha256")
+          .update(fs.readFileSync(databasePath + suffix))
+          .digest("hex")
+      : null,
+  );
+}
+function recordSnapshotCopies() {
+  const bytes: number[] = [];
+  const prepare = snapshotSource.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(async (...args) => {
+    const prepared = await prepare(...args);
+    const directory = path.dirname(prepared.location);
+    bytes.push(
+      fs
+        .readdirSync(directory)
+        .reduce((total, name) => total + fs.statSync(path.join(directory, name)).size, 0),
+    );
+    return prepared;
+  });
+  return bytes;
+}
+function ownLiveSource(databasePath: string) {
+  const owner = stateOwner.acquireGatewayStateOwner({
+    databasePath,
+    payload: { ...defaultPayload(databasePath), role: "gateway" },
+  });
+  onTestFinished(() => owner.release());
+}
+
 describe("physical store diagnostics", () => {
+  it("reads a verified live WAL source in place instead of copying it", async () => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    const holder = await holdSqlite(input.path!, LIVE_WAL);
+    onTestFinished(holder.stop);
+    ownLiveSource(input.path!);
+    const before = sourceFamily(input.path!);
+    const copies = recordSnapshotCopies();
+    // The same source through the private-copy path is the reference result.
+    vi.spyOn(liveOwner, "hasVerifiedLiveSqliteOwner").mockReturnValueOnce(false);
+    const copied = await inspectDatabaseStore(input);
+    const inPlace = await inspectDatabaseStore(input);
+    expect(copies).toEqual([expect.any(Number)]);
+    expect(copies[0]).toBeGreaterThan(4 * 1024 ** 2);
+    expect(inPlace).toEqual(copied);
+    expect(inPlace).toMatchObject({ observed: "sqlite", custody: "live-owner", issues: [] });
+    expect(sourceFamily(input.path!)).toEqual(before);
+  });
+
+  it("lets a live writer commit without waiting while the in-place read holds its snapshot", async () => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    const holder = await holdSqlite(input.path!, LIVE_WAL);
+    onTestFinished(holder.stop);
+    ownLiveSource(input.path!);
+    const tryInspect = inspection.tryInspectSqliteReadOnlyInProcess;
+    vi.spyOn(inspection, "tryInspectSqliteReadOnlyInProcess").mockImplementation((source, read) =>
+      tryInspect(source, (db) => {
+        // busy_timeout=0: any lock this open read held against the writer fails its commit.
+        execFileSync(process.execPath, [
+          "-e",
+          `const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]);
+          db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; INSERT INTO config_machine_state VALUES ('writer', '1', 1); COMMIT;");`,
+          source,
+        ]);
+        return read(db);
+      }),
+    );
+    const diagnostic = createDatabaseStoreDiagnostic(input);
+    diagnostic.schema.expectedVersion = OPENCLAW_STATE_SCHEMA_VERSION;
+    const read = databaseStoreLiveReadOperations["databaseStore.inspectLive"](
+      { diagnostic },
+      { path: input.path!, env: process.env, assertCurrent: () => {} },
+    );
+    expect(read?.engine).toEqual({ engine: "sqlite" });
+    expect(read?.diagnostic.schema).toMatchObject({ version: OPENCLAW_STATE_SCHEMA_VERSION });
+    using db = openNodeSqliteDatabase(input.path!, { readOnly: true });
+    expect(
+      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'writer'").get(),
+    ).toEqual({ value_json: "1" });
+  });
+
+  it.each([
+    { name: "an unowned live WAL", sql: LIVE_WAL, owned: false, crash: false },
+    { name: "a WAL without its shared-memory index", sql: LIVE_WAL, owned: true, crash: true },
+    { name: "a hot rollback journal", sql: HOT_JOURNAL, owned: true, crash: true },
+  ])("keeps the private copy for $name", async ({ sql, owned, crash }) => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    const holder = await holdSqlite(input.path!, sql);
+    onTestFinished(holder.stop);
+    if (crash) {
+      await holder.crash();
+      fs.rmSync(`${input.path}-shm`, { force: true });
+    }
+    if (owned) {
+      ownLiveSource(input.path!);
+    }
+    const before = sourceFamily(input.path!);
+    // Each control keeps the live sidecar that makes an in-place read unsafe or unproven.
+    expect(before.slice(1).some(Boolean)).toBe(true);
+    const copies = recordSnapshotCopies();
+    const result = await inspectDatabaseStore(input);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toBeGreaterThan(4 * 1024 ** 2);
+    expect(result).toMatchObject({ observed: "sqlite", issues: [] });
+    expect(sourceFamily(input.path!)).toEqual(before);
+  });
+
   it.each(["retired cache", "index repair"])(
     "keeps current-version %s preparation separate from schema lag",
     async (preparation) => {
@@ -231,10 +382,6 @@ describe("physical store diagnostics", () => {
       }
       createStore(input, version);
       input.configured = { ...input.configured, default: effective, effective };
-      const actual = await vi.importActual<typeof snapshotSource>("../sqlite-snapshot-source.js");
-      vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(
-        actual.prepareSqliteReadOnlyLocation,
-      );
       const turn = vi.fn();
       setImmediate(turn);
       const result = await inspectUnchanged(input);

@@ -51,11 +51,9 @@ function normalizeDetails(
     (typeof rawExitCode === "number" && Number.isFinite(rawExitCode) && rawExitCode !== 0);
   const exitCode =
     typeof rawExitCode === "number" && Number.isFinite(rawExitCode) ? rawExitCode : failed ? 1 : 0;
-  return {
-    ...metadata,
-    status: failed ? "failed" : "completed",
-    exitCode,
-  };
+  metadata.status = failed ? "failed" : "completed";
+  metadata.exitCode = exitCode;
+  return metadata;
 }
 
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
@@ -71,18 +69,17 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
   return async (event) => {
     const current = event.result;
     const workdir = event.args.workdir;
-    const cwd = event.cwd?.trim()
-      ? event.cwd
-      : typeof workdir === "string" && workdir.trim()
-        ? workdir
-        : process.cwd();
     const details = normalizeDetails(event, current);
-    // Include every cwd source the dependency may choose without changing its precedence.
-    const ruleScope = JSON.stringify([
-      typeof workdir === "string" ? workdir : undefined,
-      isRecord(details) && typeof details.cwd === "string" ? details.cwd : undefined,
-      cwd,
-    ]);
+    const detailsCwd = isRecord(details) ? details.cwd : undefined;
+    // Match Tokenjuice's cwd precedence; ignored fallbacks must not evict rules.
+    const cwd =
+      typeof workdir === "string" && workdir.trim()
+        ? workdir
+        : typeof detailsCwd === "string" && detailsCwd.trim()
+          ? detailsCwd
+          : event.cwd?.trim()
+            ? event.cwd
+            : process.cwd();
     try {
       const next = await handler?.(
         {
@@ -103,7 +100,7 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
           }
         : undefined;
     } finally {
-      retainedRuleScopes.add(ruleScope);
+      retainedRuleScopes.add(cwd);
       if (retainedRuleScopes.size >= 128) {
         const { clearRuleCache } = await import("tokenjuice");
         clearRuleCache();

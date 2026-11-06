@@ -86,8 +86,10 @@ async function withSignalRestDeadline<T>(
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const deadlineAtMs = Date.now() + safeTimeoutMs;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(signalRestRequestTimeoutError()), safeTimeoutMs);
-  timer.unref?.();
+  const timer = setTimeout(
+    () => controller.abort(signalRestRequestTimeoutError()),
+    safeTimeoutMs,
+  ).unref();
   try {
     return await run({
       signal: controller.signal,
@@ -161,8 +163,7 @@ function containerReceiveCheck(
     const timer = setTimeout(() => {
       settle({ ok: false, status: null, error: "Signal container receive WebSocket timed out" });
       ws?.terminate();
-    }, safeTimeoutMs);
-    timer.unref?.();
+    }, safeTimeoutMs).unref();
     const settle = (result: { ok: boolean; status?: number | null; error?: string | null }) => {
       if (settled) {
         return;
@@ -472,8 +473,7 @@ export async function streamContainerEvents(params: {
           );
           ws.terminate();
           resolveOnce();
-        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS);
-        shutdownDrainTimer.unref?.();
+        }, WS_SHUTDOWN_DRAIN_TIMEOUT_MS).unref();
         ws.close();
       };
       params.abortSignal.addEventListener("abort", abortHandler, { once: true });

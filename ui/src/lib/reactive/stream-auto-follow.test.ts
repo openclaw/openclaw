@@ -84,6 +84,7 @@ it("keeps admitted virtual following through an anchor scroll and rechecks the t
     // The virtualizer retains an old row while the new tail is being rendered.
     container.scrollTop = 400;
     container.dispatchEvent(new Event("scroll"));
+    follow.schedule();
     vi.advanceTimersByTime(20);
     expect(scrollToEnd).toHaveBeenCalledOnce();
     expect(container.scrollTop).toBe(400);

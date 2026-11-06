@@ -266,7 +266,7 @@ function boundedCatchup(
   nowMs: number,
   result: CronSchedulerResult,
   jobs: ReadonlyMap<string, CronJob>,
-  options?: { skipJobIds?: string[]; deferAgentWork?: boolean },
+  options?: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number },
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
   if (jobs.size === 0) {
     return { immediate: [], overflow: new Map() };
@@ -346,13 +346,27 @@ function boundedCatchup(
         }
       }
       missed.sort((left, right) => (left.state.nextRunAtMs ?? 0) - (right.state.nextRunAtMs ?? 0));
-      const eligible = options?.deferAgentWork ? missed.filter((job) => !isAgentWork(job)) : missed;
+      // Startup defers agent work missed during downtime. A due slot that came due
+      // after this Gateway went live, such as a job added before the scheduler
+      // finished starting, is only late; deferring it would push its first run out.
+      // A future nextRunAtMs means the miss was found from persisted lastRun state,
+      // which is downtime.
+      const isLateLiveSlot = (job: CronJob) => {
+        const dueAtMs = job.state.nextRunAtMs;
+        return (
+          options?.liveSinceMs !== undefined &&
+          dueAtMs !== undefined &&
+          dueAtMs >= options.liveSinceMs &&
+          dueAtMs <= nowMs
+        );
+      };
+      const deferAgentWork = (job: CronJob) =>
+        options?.deferAgentWork === true && isAgentWork(job) && !isLateLiveSlot(job);
+      const eligible = missed.filter((job) => !deferAgentWork(job));
       const immediate = eligible.slice(0, maxImmediate);
       const deferred = [
         ...eligible.slice(maxImmediate).map((job) => ({ job, delayMs: undefined })),
-        ...(options?.deferAgentWork
-          ? missed.filter(isAgentWork).map((job) => ({ job, delayMs: agentDelayMs }))
-          : []),
+        ...missed.filter(deferAgentWork).map((job) => ({ job, delayMs: agentDelayMs })),
       ];
       const overflow = new Map<string, StartupOverflow>();
       for (const [index, { job, delayMs }] of deferred.entries()) {
