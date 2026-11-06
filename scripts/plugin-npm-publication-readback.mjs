@@ -372,6 +372,9 @@ export async function createPluginNpmPublicationReadback(options) {
   const evidence = [];
   return {
     evidence,
+    /**
+     * @returns {Promise<{ disposition: "published" | "deferred-auth"; note?: string }>}
+     */
     async verify(packageName, releaseVersion, releaseDistTag) {
       const entry = byJob.get(`${JOB_PREFIX}${packageName})`);
       requireValue(
