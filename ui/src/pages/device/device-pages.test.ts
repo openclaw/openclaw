@@ -202,16 +202,50 @@ it("switches the advertised Mac experience and follows the native owner's saved 
   const experience = row(page, title);
   expect(toggleInput(experience).checked).toBe(false);
   toggle(page, title, true);
-  expect(set).toHaveBeenCalledExactlyOnceWith("app.nativeExperienceEnabled", true);
+  expect(set).toHaveBeenCalledExactlyOnceWith(
+    "app.nativeExperienceEnabled",
+    true,
+    expect.any(Function),
+  );
   const saved = createNativeDeviceSettingsSnapshot();
   saved.app.nativeExperienceEnabled = true;
   render(saved);
   expect(toggleInput(experience).checked).toBe(true);
   toggle(page, title, false);
-  expect(set).toHaveBeenLastCalledWith("app.nativeExperienceEnabled", false);
+  expect(set).toHaveBeenLastCalledWith("app.nativeExperienceEnabled", false, expect.any(Function));
   delete saved.app.nativeExperienceEnabled;
   render(saved);
   expect(page.textContent).not.toContain(title);
+});
+
+it("surfaces native edit failures on generic device setting rows", async () => {
+  const failed = createNativeDeviceSettingsSnapshot();
+  failed.app.appearance = "system";
+  const { page, set, settle } = await setup(failed);
+  const experience = row(page, "Native experience (experimental)");
+  toggle(page, "Native experience (experimental)", true);
+  expect(set).toHaveBeenCalledExactlyOnceWith(
+    "app.nativeExperienceEnabled",
+    true,
+    expect.any(Function),
+  );
+  settle(0, failed, new Error("The native host rejected this edit."));
+  await waitForSolid(() =>
+    expect(experience.querySelector('[role="alert"]')?.textContent).toContain(
+      "native host rejected",
+    ),
+  );
+  const appearance = row(page, "Appearance");
+  const select = appearance.querySelector<HTMLSelectElement>("select")!;
+  select.value = "dark";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(set).toHaveBeenLastCalledWith("app.appearance", "dark", expect.any(Function));
+  settle(1, failed, new Error("Appearance change failed."));
+  await waitForSolid(() =>
+    expect(appearance.querySelector('[role="alert"]')?.textContent).toContain(
+      "Appearance change failed",
+    ),
+  );
 });
 
 it("reconciles failed Launch at Login changes and shows native recovery guidance", async () => {
@@ -309,7 +343,11 @@ it("shows native desktop state and reconciles Keep computer awake with the nativ
   expect(row(page, "Desktop availability").textContent).toContain("Locked");
   expect(set).not.toHaveBeenCalled();
   toggle(page, "Keep computer awake", true);
-  expect(set).toHaveBeenCalledWith("capabilities.unattendedDesktopEnabled", true);
+  expect(set).toHaveBeenCalledWith(
+    "capabilities.unattendedDesktopEnabled",
+    true,
+    expect.any(Function),
+  );
   render({ ...snapshot, desktopAvailability: { state: "unknown" } });
   expect(toggleInput(hosting).checked).toBe(false);
   expect(row(page, "Desktop availability").textContent).toContain("Unknown");
@@ -388,7 +426,7 @@ it("delegates iOS toggles and device panels", async () => {
     ["Health summaries", "capabilities.healthSummaryEnabled"],
   ] as const) {
     toggle(page, title, true);
-    expect(set).toHaveBeenCalledWith(key, true);
+    expect(set).toHaveBeenCalledWith(key, true, expect.any(Function));
   }
   for (const [title, panel] of [
     ["Diagnostics", "diagnostics"],
@@ -565,20 +603,30 @@ it.each([false, undefined])(
 );
 
 it("enables precision with location access and changes local location and activity preferences", async () => {
-  const { page, set, render } = await setup(undefined, permissionsTag);
+  const { page, set, render, settle } = await setup(undefined, permissionsTag);
   expect(toggleInput(row(page, "Precise location")).disabled).toBe(true);
   row(page, "Location access")
     .querySelector<HTMLInputElement>('input.settings-segmented__input[value="whileUsing"]')!
     .click();
-  expect(set).toHaveBeenCalledWith("permissions.location.mode", "whileUsing");
+  expect(set).toHaveBeenCalledWith("permissions.location.mode", "whileUsing", expect.any(Function));
   const next = createNativeDeviceSettingsSnapshot();
   next.permissions.location.mode = "whileUsing";
   render(next);
   expect(toggleInput(row(page, "Precise location")).disabled).toBe(false);
   toggle(page, "Precise location", true);
-  expect(set).toHaveBeenCalledWith("permissions.location.precise", true);
+  expect(set).toHaveBeenCalledWith("permissions.location.precise", true, expect.any(Function));
+  settle(1, createNativeDeviceSettingsSnapshot(), new Error("Precise location edit failed."));
+  await waitForSolid(() =>
+    expect(row(page, "Precise location").querySelector('[role="alert"]')?.textContent).toContain(
+      "Precise location edit failed",
+    ),
+  );
   toggle(page, "System-wide presence detection", true);
-  expect(set).toHaveBeenCalledWith("capabilities.activeComputerPresenceEnabled", true);
+  expect(set).toHaveBeenCalledWith(
+    "capabilities.activeComputerPresenceEnabled",
+    true,
+    expect.any(Function),
+  );
   expect(row(page, "System-wide presence detection").textContent).toContain(
     "Shares only idle duration, never keys, pointer positions, app names, or window titles.",
   );

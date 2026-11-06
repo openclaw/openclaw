@@ -19,6 +19,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createNativeEditFeedback } from "./native-edit-feedback.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -28,6 +29,9 @@ export function DevicePermissionsPage() {
   const snapshot = () => projection?.read();
 
   function Permissions(props: { snapshot: NativeDeviceSettingsSnapshot }) {
+    const locationMode = createNativeEditFeedback(capability);
+    const preciseLocation = createNativeEditFeedback(capability);
+    const activePresence = createNativeEditFeedback(capability);
     const location = () => props.snapshot.permissions.location;
     const preciseEditable = () =>
       location()?.preciseEditable ?? props.snapshot.device.platform === "macos";
@@ -112,7 +116,7 @@ export function DevicePermissionsPage() {
           <SettingsSection title={t("configPage.deviceSettings.location")}>
             <SettingsRow
               title={t("configPage.deviceSettings.locationAccess")}
-              description={t("configPage.deviceSettings.locationHint")}
+              description={locationMode.describe(t("configPage.deviceSettings.locationHint"))}
               stackedOnNarrow
               control={
                 <SettingsSegmented
@@ -122,7 +126,7 @@ export function DevicePermissionsPage() {
                     value,
                     label: t(`configPage.deviceSettings.locationModes.${value}`),
                   }))}
-                  onChange={(value) => void capability?.set("permissions.location.mode", value)}
+                  onChange={(value) => locationMode.set("permissions.location.mode", value)}
                 />
               }
             />
@@ -159,10 +163,12 @@ export function DevicePermissionsPage() {
             >
               <SettingsToggleRow
                 title={t("configPage.deviceSettings.preciseLocation")}
-                description={t("configPage.deviceSettings.preciseLocationHint")}
+                description={preciseLocation.describe(
+                  t("configPage.deviceSettings.preciseLocationHint"),
+                )}
                 checked={location()!.precise}
                 disabled={location()!.mode === "off"}
-                onChange={(value) => void capability?.set("permissions.location.precise", value)}
+                onChange={(value) => preciseLocation.set("permissions.location.precise", value)}
               />
             </Show>
           </SettingsSection>
@@ -171,10 +177,12 @@ export function DevicePermissionsPage() {
           <SettingsSection title={t("configPage.deviceSettings.privacy")}>
             <SettingsToggleRow
               title={t("configPage.deviceSettings.activePresence")}
-              description={t("configPage.deviceSettings.activePresenceHint")}
+              description={activePresence.describe(
+                t("configPage.deviceSettings.activePresenceHint"),
+              )}
               checked={props.snapshot.capabilities?.activeComputerPresenceEnabled ?? false}
               onChange={(value) =>
-                void capability?.set("capabilities.activeComputerPresenceEnabled", value)
+                activePresence.set("capabilities.activeComputerPresenceEnabled", value)
               }
             />
           </SettingsSection>
