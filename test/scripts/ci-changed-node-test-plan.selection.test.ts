@@ -201,19 +201,13 @@ it.each(
     "src/readers/unknown.test.ts": 'import "@fixture/subject/generated";',
     "src/readers/types.test.ts": 'import type { Other } from "@fixture/subject/other";',
   });
-  const expected = [
-    companion,
-    ...["barrel", "unknown", "value"].map((name) => `src/readers/${name}.test.ts`),
-  ];
+  const expected = ["barrel", "unknown", "value"].map((name) => `src/readers/${name}.test.ts`);
   if (deleted) {
     fs.unlinkSync(path.join(cwd, changed));
   }
-  expect(select(cwd, [changed])).toEqual(expected);
-  expect(select(cwd, [changed, companion])).toEqual(expected);
-  const all = [
-    ...expected.filter((file) => file !== companion),
-    "src/readers/other.test.ts",
-  ].toSorted();
+  expect(select(cwd, [changed])).toEqual([companion, ...expected]);
+  expect(select(cwd, [changed, companion])).toEqual([companion, ...expected]);
+  const all = [...expected, "src/readers/other.test.ts"].toSorted();
   expect(select(cwd, [manifest])).toEqual(all);
   expect(select(cwd, [changed, `${root}/subject/src/value.test-support.ts`])).toEqual([
     companion,
