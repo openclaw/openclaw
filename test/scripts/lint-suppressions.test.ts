@@ -141,6 +141,8 @@ describe("production lint suppressions", () => {
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
+        // Persisted research receipts omit undefined fields exactly as JSON encoding does.
+        "extensions/deep-research/src/job-state.ts|unicorn/prefer-structured-clone|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         // Markdown rendering sorts fresh private arrays without copying them again.
         "extensions/discord/src/markdown.ts|unicorn/no-array-sort|2",
