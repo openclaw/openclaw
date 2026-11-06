@@ -156,8 +156,14 @@ struct ChatFileAdmissionTests {
             let file = directory.appendingPathComponent(kind == "voice" ? "second.m4a" : "second.pdf")
             try Data("file".utf8).write(to: file)
             if kind == "voice" {
-                await model.addVoiceNoteAttachment(fileURL: file, durationSeconds: 1)
+                _ = await model.addVoiceNoteAttachment(fileURL: file, durationSeconds: 1)
+                // A budget-rejected capture is retained with its file for retry.
+                #expect(FileManager.default.fileExists(atPath: file.path))
+                #expect(model.retainedVoiceNote?.fileName == "second.m4a")
+                model.discardRetainedVoiceNote()
                 #expect(!FileManager.default.fileExists(atPath: file.path))
+                #expect(model.retainedVoiceNote == nil)
+                #expect(model.errorText == nil)
             } else {
                 await model.loadAttachments(urls: [file])
             }
@@ -166,10 +172,84 @@ struct ChatFileAdmissionTests {
         let rejectedName = switch kind {
         case "image": "second.jpg"
         case "image-file-batch": "second.png, third.pdf"
-        case "voice": "second.m4a"
+        case "voice": nil
         default: "second.pdf"
         }
-        #expect(model.errorText == "Too large to send: \(rejectedName)")
+        if let rejectedName {
+            #expect(model.errorText == "Too large to send: \(rejectedName)")
+        }
+    }
+
+    @Test
+    @MainActor
+    func `budget rejected voice note is retained and retries after removal`() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: FileAdmissionTransport(limits: .init(maxBytes: 10000, maxImageBytes: 10000)),
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { model.detachTransport() }
+
+        let first = directory.appendingPathComponent("first.pdf")
+        try Data(count: 8000).write(to: first)
+        await model.loadAttachments(urls: [first])
+        #expect(model.attachments.map(\.fileName) == ["first.pdf"])
+
+        // The recording fits the per-note limit but not the remaining budget.
+        let voice = directory.appendingPathComponent("second.m4a")
+        try Data(count: 4000).write(to: voice)
+        let staged = await model.addVoiceNoteAttachment(fileURL: voice, durationSeconds: 2)
+        #expect(!staged)
+        #expect(model.attachments.map(\.fileName) == ["first.pdf"])
+        #expect(model.errorText == "Too large to send: second.m4a")
+        #expect(model.retainedVoiceNote?.recording.fileURL == voice)
+        #expect(model.retainedVoiceNote?.recording.durationSeconds == 2)
+        #expect(FileManager.default.fileExists(atPath: voice.path))
+
+        // Removing the blocking attachment retries the retained note and
+        // admits it once the freed budget fits.
+        model.removeAttachment(model.attachments.first!.id)
+        await model.retainedVoiceNoteRetryTask?.value
+        #expect(model.attachments.map(\.fileName) == ["second.m4a"])
+        #expect(model.retainedVoiceNote == nil)
+        #expect(!FileManager.default.fileExists(atPath: voice.path))
+        #expect(model.errorText == nil)
+    }
+
+    @Test
+    @MainActor
+    func `retrying a retained voice note keeps it when budget is still short`() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaultsName = "ChatFileAdmissionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: FileAdmissionTransport(limits: .init(maxBytes: 10000, maxImageBytes: 10000)),
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { model.detachTransport() }
+
+        let first = directory.appendingPathComponent("first.pdf")
+        try Data(count: 8000).write(to: first)
+        await model.loadAttachments(urls: [first])
+        let voice = directory.appendingPathComponent("second.m4a")
+        try Data(count: 4000).write(to: voice)
+        _ = await model.addVoiceNoteAttachment(fileURL: voice, durationSeconds: 2)
+        #expect(model.retainedVoiceNote != nil)
+
+        await model.retryRetainedVoiceNote()
+
+        #expect(model.attachments.map(\.fileName) == ["first.pdf"])
+        #expect(model.retainedVoiceNote?.recording.fileURL == voice)
+        #expect(FileManager.default.fileExists(atPath: voice.path))
+        #expect(model.errorText == "Too large to send: second.m4a")
     }
 
     @Test(arguments: [Int?.none, 6, 8])

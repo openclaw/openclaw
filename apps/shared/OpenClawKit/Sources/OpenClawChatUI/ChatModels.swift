@@ -1234,6 +1234,19 @@ public struct OpenClawPendingAttachment: Identifiable {
     }
 }
 
+/// A finished voice note kept after the aggregate attachment budget rejected
+/// it at the recorder handoff, so it can be retried or discarded instead of
+/// losing the only copy of the capture.
+public struct OpenClawRetainedVoiceNote: Equatable {
+    public let recording: OpenClawVoiceNoteRecording
+    public let fileName: String
+
+    public init(recording: OpenClawVoiceNoteRecording, fileName: String) {
+        self.recording = recording
+        self.fileName = fileName
+    }
+}
+
 public struct OpenClawChatAttachmentPayload: Codable, Sendable, Hashable {
     public let type: String
     public let mimeType: String

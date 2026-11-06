@@ -96,6 +96,22 @@ public final class OpenClawChatViewModel {
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = []
+    /// A finished voice note the aggregate budget rejected at the recorder
+    /// handoff. The recording file is kept so the note can be retried after an
+    /// attachment removal frees budget, or discarded explicitly, instead of
+    /// losing the only copy of the capture.
+    public private(set) var retainedVoiceNote: OpenClawRetainedVoiceNote?
+    @ObservationIgnored
+    var retainedVoiceNoteRejectionMessage: String?
+    /// Bumped whenever retention is dropped, superseded, or invalidated so an
+    /// in-flight retry of the retained note cannot stage discarded bytes.
+    @ObservationIgnored
+    var retainedVoiceNoteGeneration = 0
+    @ObservationIgnored
+    var isRetryingRetainedVoiceNote = false
+    /// Latest spawned auto-retry; tests join it to observe the retry outcome.
+    @ObservationIgnored
+    var retainedVoiceNoteRetryTask: Task<Void, Never>?
     public internal(set) var healthOK: Bool = false
     /// Bumped after every successful group-catalog mutation so views keyed on it
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
@@ -1289,6 +1305,9 @@ extension OpenClawChatViewModel {
         self.isLoadingSessionBranches = false
         self.sessionBranchSwitchActivity = nil
         clearPendingRuns()
+        // The retained note was recorded for this draft; attachments cannot
+        // cross sessions and neither can its retry.
+        self.discardRetainedVoiceNote()
     }
 
     func performReset() async {

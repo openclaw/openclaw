@@ -333,7 +333,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
         }
 
-        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 8.4)
+        _ = await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 8.4)
 
         let attachment = try await MainActor.run { () throws -> (Data, String, String, String, Double?, Bool) in
             let attachment = try XCTUnwrap(viewModel.attachments.first)
@@ -362,7 +362,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
         }
 
-        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 180)
+        _ = await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 180)
 
         let result = await MainActor.run { (viewModel.attachments.count, viewModel.errorText) }
         XCTAssertEqual(result.0, 0)
@@ -378,7 +378,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
         }
 
-        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: .infinity)
+        _ = await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: .infinity)
 
         let duration = await MainActor.run { viewModel.attachments.first?.durationSeconds }
         XCTAssertEqual(duration, 0)
@@ -745,7 +745,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             makeDurableAttachmentViewModel(transport: transport, outbox: outbox)
         }
 
-        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 21.2)
+        _ = await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 21.2)
         await viewModel.send()?.value
         await capture.sent.waitUntilEntered()
         let attachmentCount = await capture.count()

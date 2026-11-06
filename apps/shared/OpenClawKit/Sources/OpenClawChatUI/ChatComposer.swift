@@ -438,6 +438,15 @@ struct OpenClawChatComposer: View {
             ChatTalkActivityStrip(control: talkControl)
         }
 
+        if let retained = self.viewModel.retainedVoiceNote {
+            OpenClawVoiceNoteRetainedRow(
+                note: retained,
+                onRetry: {
+                    Task { await self.viewModel.retryRetainedVoiceNote() }
+                },
+                onDiscard: { self.viewModel.discardRetainedVoiceNote() })
+        }
+
         if let dictationControl, self.dictationTask != nil || dictationControl.isActive {
             ChatDictationActivityRow(
                 control: dictationControl,
@@ -1438,7 +1447,9 @@ extension OpenClawChatComposer {
 
         let viewModel = self.viewModel
         Task {
-            await viewModel.addVoiceNoteAttachment(
+            // The view model keeps a budget-rejected capture for retry or
+            // discard; either way the recorder's staging claim is consumed.
+            _ = await viewModel.addVoiceNoteAttachment(
                 fileURL: recording.fileURL,
                 durationSeconds: recording.durationSeconds)
             recorder.completeStaging(recording)
