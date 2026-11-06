@@ -31,6 +31,7 @@ import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentIdentityEditor } from "./agent-identity-editor.ts";
 import { createAgentModelCatalog } from "./agent-model-catalog.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
+import type { AgentChannelsReadState } from "./channels-read-state.ts";
 import { createAgentFilePanel, type AgentFilesState, type AgentFilesViewState } from "./files.ts";
 import {
   type AgentIdentityDraft,
@@ -89,7 +90,7 @@ export function createAgentsPageState(
   const [skillsFilter, setSkillsFilter] = createSignal("");
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
   const channelCapability = context.acquireChannels(createChannelCapability);
-  const channels = projectOwner(channelCapability, (source) => source.state);
+  const channels = projectOwner(channelCapability, (c): AgentChannelsReadState => c.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const observation = observeState<AgentsPageData>({
