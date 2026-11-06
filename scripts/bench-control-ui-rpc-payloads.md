@@ -23,6 +23,9 @@ than credited with another route's readiness. Each route is visited
 in the same document after cold New Session and its warm reload. Warm reload
 waits for the application's persisted boot record. `--engines chromium,webkit`
 is the default. All browsers are headless. `--idle-ms` defaults to 5,000.
+Like the existing engine and Usage benchmarks, browser contexts block service
+workers; warm boot measures the application's persisted boot record and caches,
+not an installed service worker's asset cache.
 
 `report.json` records every request and push observed during each window, with
 synthetic parameters (connect parameters are always redacted), decoded UTF-8

@@ -349,7 +349,7 @@ const selectors: Partial<Record<RouteId, string>> = {
   cron: ".cron-table__row .cron-table__name",
   agents: ".agents-refresh-btn:not(:disabled)",
   usage: 'openclaw-usage-page button[aria-label="Refresh"]:not(:disabled)',
-  "skill-settings": ".skills-toolbar__search input",
+  "skill-settings": '.skill-library-search input[name="library-search"]',
   "plugin-settings": ".plugins-settings-search input",
   "model-providers": ".model-providers__provider-list",
   appearance: ".settings-theme-grid [data-theme-id]",
@@ -494,6 +494,7 @@ try {
         }
         const context = await browser.newContext({
           viewport: { width: 1440, height: 1000 },
+          serviceWorkers: "block",
           ...(values.profile === "remote"
             ? { extraHTTPHeaders: { "x-forwarded-for": "198.51.100.10" } }
             : {}),
