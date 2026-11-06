@@ -21,6 +21,13 @@ the release-only proofs described in the scheduled-workflow guide.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 
+The Node Runtime Conformance workflow selects TypeScript and Rust proofs from
+exact PR revisions using the same input lists as scheduled proof reuse.
+TypeScript-only tooling changes omit Rust; Rust configuration changes omit
+TypeScript. Shared protocol versions, fixtures, and crate changes retain both.
+Deleted, unknown, malformed, or capped diff inputs retain both proofs. Manual
+runs and existing scheduled proof policies remain unchanged.
+
 ### PR vs hourly vs release
 
 Ordinary `pull_request` runs, including contributions from forks, use the
