@@ -16,7 +16,7 @@ An older followup does not disable steering for later input. OpenClaw tries each
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
+Ordinary steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
@@ -26,6 +26,22 @@ Steering does not interrupt a tool call that is already running. An assistant me
 6. After either kind of batch settles, OpenClaw checks steering before stop hooks or the next model call. It appends the exact drained steering messages after the tool results, before the next LLM call.
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
+
+In the Control UI, a waiting steer has a small **Send now** link below its normal
+user bubble. A session writer can use it to interrupt supported running tools
+without aborting the run. Each interrupted tool records that the user interrupted
+it; the steer then reaches the next model decision after those results. Repeated
+clicks do not reinject the message or interrupt later work. When a running tool
+cannot safely stop, or the runtime does not support tool-only interruption, the
+UI explains the wait instead of offering the link.
+
+Foreground local `exec` waits for process cleanup before delivery. Interrupting a
+`process` poll only stops that wait; its independently owned background command
+keeps running, and the tool result tells the model how to poll or stop it. Node,
+durable, and explicitly backgrounded execution do not offer this shortcut.
+Code Mode aggregate tools and native or remote backends do not support tool-only
+interruption. Their pending steers keep waiting for the runtime boundary, with
+the same quiet explanation in the UI.
 
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 

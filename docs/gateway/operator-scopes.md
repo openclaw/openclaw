@@ -385,22 +385,30 @@ an older browser roster cannot restore agents excluded by the current role.
 
 ### Access program grants
 
-For role-governed people, Standard Access needs no additional grant. Blue and Red
-each require an explicit entry in the role's `accessPrograms.cyber` list:
+Execution capabilities follow the initiating operator's live authority, including
+in child runs, retries, and recovery. An operator admitted with `operator.admin`
+can use eligible Access programs without enumerating each execution mode when the
+role omits `accessPrograms`. This does not expand permitted agents, models, account
+access, tools, sandbox access, or authority for external actions.
+
+An explicit `accessPrograms.cyber` list is a ceiling, including for administrators.
+Use an empty list to permit Standard only. For operators without `operator.admin`,
+Standard needs no additional grant, and Blue and Red each require an entry:
 
 ```json5 validate=false
 // Inside gateway.roles.definitions.maintainer
 accessPrograms: { cyber: ["daybreak_blue", "daybreak_red"] },
 ```
 
-Omitting the field or setting `cyber: []` permits neither Blue nor Red. Granting
+For restricted operators, omitting the field permits neither Blue nor Red. Granting
 Red does not grant Blue, or vice versa. The person's effective role supplies these
 grants through the same explicit assignment, GitHub mapping, and default-role
 rules described above; there is no separate per-person Access assignment.
 
-These grants are independent of `modelPolicy`: an unrestricted model list, model
-wildcards, the old Daybreak model aliases, or `operator.admin` do not grant Access
-to a named role. The selected model still needs model permission. The exact
+These ceilings are independent of `modelPolicy`: an unrestricted model list, model
+wildcards, or the old Daybreak model aliases do not grant Access to restricted
+operators. Internal runtime or adapter scopes cannot elevate the original operator.
+The selected model still needs model permission. The exact
 provider account and runtime must also advertise the program; provider metadata
 is capability evidence, never an RBAC grant. Catalog choices show only the
 intersection, and direct mutations and execution enforce it server-side.
@@ -411,9 +419,7 @@ grant, and restoring it does not revive revoked authority. New admission is
 required. An unset-selection cyber fallback can retry with Blue only when both
 the role and provider permit Blue; an explicit Standard selection never escalates.
 
-Existing roles are not automatically granted Blue or Red during upgrade.
-Administrators must explicitly add the intended grants. System/shared-secret
-use and deployments without `gateway.roles` keep their existing non-RBAC
+System/shared-secret use and deployments without `gateway.roles` keep their existing non-RBAC
 behavior and provider capability checks. This is not a bypass available to a
 role-governed person.
 

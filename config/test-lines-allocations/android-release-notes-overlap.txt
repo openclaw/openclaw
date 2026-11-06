@@ -1,0 +1,2 @@
+103
+# Actual-CLI overlap and failure-join regression coverage; existing Fastlane gate fixture updated for asynchronous notes.

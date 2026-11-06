@@ -38,9 +38,11 @@ import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import {
   createControlUiChatHistoryMessage as chatHistoryMessage,
   createControlUiMockSessionRow as sessionRow,
@@ -1551,7 +1553,7 @@ function syntheticAvatar(color: "coral" | "green"): string {
 
 async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
-): Promise<ControlUiMockGatewayScenario> {
+): Promise<NativeControlUiMockGatewayScenario> {
   const baseTime =
     fixture === "session-design" ? Date.now() : Date.parse("2026-05-22T09:00:00.000Z");
   const rosterTime = Date.now();
@@ -1964,7 +1966,7 @@ async function createChatPickerScenario(
     tokenBudget: 300_000,
     continuationTurns: 3,
   };
-  const rosterSessions: NonNullable<ControlUiMockGatewayScenario["sessions"]> =
+  const rosterSessions: NonNullable<NativeControlUiMockGatewayScenario["sessions"]> =
     rosterAgents.flatMap((agent, index) => [
       sessionRow(`agent:${agent.id}:main`, agent.name, rosterTime - (index + 1) * 720_000, {
         agentId: agent.id,
@@ -2404,7 +2406,7 @@ async function createChatPickerScenario(
       },
     ],
   } satisfies SystemChangesListResult;
-  const scenario: ControlUiMockGatewayScenario = {
+  const scenario: NativeControlUiMockGatewayScenario = {
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
@@ -3654,7 +3656,7 @@ function escapeScriptContent(script: string): string {
 }
 
 async function createMockGatewayPlugin(
-  scenario: ControlUiMockGatewayScenario,
+  scenario: NativeControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
   sandbox?: SessionDesignSandbox,
 ): Promise<Plugin> {
@@ -3668,7 +3670,7 @@ async function createMockGatewayPlugin(
           ],
         }
       : scenario;
-  const prepared = await prepareControlUiMockGatewayScenario(
+  const prepared = await prepareNativePluginMockGatewayScenario(
     fixture === "workboard-states" ? { ...mockScenario, nativePlugins: [] } : mockScenario,
   );
   if (fixture === "workboard-states") {

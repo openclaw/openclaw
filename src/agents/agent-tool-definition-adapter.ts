@@ -208,6 +208,7 @@ export function toToolDefinitions(
     const definition = {
       ...projectAgentToolDefinition(tool),
       prepareArguments: tool.prepareArguments,
+      interruptible: tool.interruptible,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const [toolCallId, params, callSignal, onUpdate] = args;
         const signal = resolveAbortSignal(callSignal);

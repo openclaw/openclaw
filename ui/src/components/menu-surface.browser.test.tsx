@@ -681,3 +681,85 @@ async function openAdmittedMenu(host: HTMLElement, selector: string) {
     .toEqual({ expanded: "true", shown: true, interactive: true });
   return menu;
 }
+
+describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
+  it("keeps multiline labels inside their highlight in a capped scrolling menu", async () => {
+    await import("../styles/sidebar-menus.css");
+    const { renderSidebarMenuAction } = await import("./app-sidebar-dropdown.tsx");
+    const host = mountMenu({
+      id: "multiline-menu",
+      label: "Multiline menu",
+      panelClass: "sidebar-customize-menu",
+      items: Array.from({ length: 20 }, (_, index) => ({
+        ...renderSidebarMenuAction(`row-${index}`, `Action ${index}`, "key"),
+        content: (
+          <span class="sidebar-openclaw-id__lines">
+            <span>Action {index}</span>
+            <span class="sidebar-openclaw-id__detail">
+              A wrapped secondary description that must fit inside its highlighted row.
+            </span>
+          </span>
+        ),
+      })),
+    });
+    const menu = await openMenu(host);
+    expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+    for (const label of menu.querySelectorAll(".sidebar-openclaw-id__lines")) {
+      const row = label.closest(".oc-menu-item")!.getBoundingClientRect();
+      const bounds = label.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(row.top);
+      expect(bounds.bottom).toBeLessThanOrEqual(row.bottom);
+    }
+  });
+
+  it.each(["Enter", "Space", "disabled"])(
+    "registers the signed-out native button: %s",
+    async (key) => {
+      await import("../styles/sidebar-menus.css");
+      const { openClawIdMenuEntries } = await import("./openclaw-id/account-menu.tsx");
+      const { page, userEvent } = await import("vitest/browser");
+      const selected = vi.fn();
+      const host = mountMenu({
+        id: "sign-in-menu",
+        label: "Account menu",
+        panelClass: "sidebar-customize-menu",
+        items: [
+          ...openClawIdMenuEntries({
+            status: { state: "on" },
+            link: { linked: false },
+            channel: "local_operator",
+            owner: true,
+            connection: { kind: "local" },
+            services: {
+              issuerUrl: null,
+              discoveryUrl: null,
+              loaderDomain: null,
+              clientId: key === "disabled" ? undefined : "fixture",
+            },
+          }),
+          { id: "settings", label: "Settings" },
+        ],
+        onSelect: selected,
+      });
+      const menu = await openMenu(host);
+      const button = menu.querySelector<HTMLButtonElement>('[data-value="openclaw-id:sign-in"]')!;
+      await expect
+        .element(page.elementLocator(button))
+        .toHaveAccessibleName("Sign in with OpenClaw ID");
+      expect(button.getAttribute("role")).toBe("button");
+      query(menu, '[data-value="settings"]').focus();
+      await userEvent.keyboard("{ArrowUp}");
+      if (key === "disabled") {
+        expect(button.disabled).toBe(true);
+        expect(button.title).not.toBe("");
+        expect(document.activeElement).not.toBe(button);
+        button.click();
+        expect(selected).not.toHaveBeenCalled();
+      } else {
+        await expect.poll(() => document.activeElement).toBe(button);
+        await userEvent.keyboard(key === "Enter" ? "{Enter}" : " ");
+        expect(selected).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+});
