@@ -49,6 +49,7 @@ import {
 } from "./cli-runner/delivery-evidence.js";
 import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
 import {
   loadCliSessionContextEngineMessages,
@@ -248,7 +249,9 @@ async function runPreparedCliAgentOwned(
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
-  const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
+  const hasModelRequestHooks = hookRunner?.hasHooks("before_model_request") === true;
+  const needsHookHistory =
+    hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks || hasModelRequestHooks;
   let historyMessages: unknown[] = [];
   const promptForHooks = context.promptForHooks ?? params.prompt;
   const contextWindowFields = () => ({
@@ -275,6 +278,17 @@ async function runPreparedCliAgentOwned(
     ...buildAgentHookContextChannelFields(params),
     ...buildAgentHookContextIdentityFields(params),
   } as const;
+
+  context.beforeModelRequest = hookRunner
+    ? createCliRunModelRequestGate({
+        hookRunner,
+        hookContext: buildAgentHookContext(hookContext),
+        run: params,
+        model: context.modelId,
+        prompt: promptForHooks,
+        history: () => historyMessages,
+      })
+    : undefined;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
     buildAgentHookConversationMessages({

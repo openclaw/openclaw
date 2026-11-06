@@ -384,19 +384,33 @@ Conversation access and prompt mutation have separate permission gates; see
 
 ### Final model request policy
 
-`before_model_request` is an awaited, modifying policy hook on the embedded
-runner's provider transport. It runs once per provider request, including each
-model call inside a tool loop and each encode-only transport retry, after
-provider and config `onPayload` transforms. For transports that use host
-request encoding it runs at final encoding instead. The returned payload is
-what the transport hashes, records for context-retry admission, and sends.
+`before_model_request` is an awaited, modifying policy hook on the last step
+before a model sees a request. On the embedded runner it sits on the provider
+transport and runs once per provider request, including each model call inside
+a tool loop and each encode-only transport retry, after provider and config
+`onPayload` transforms. For transports that use host request encoding it runs
+at final encoding instead. The returned payload is what the transport hashes,
+records for context-retry admission, and sends.
 
-The event is `{ payload, provider, model, messages }`:
+On CLI-backed runtimes such as `claude-cli`, the CLI owns its provider
+requests, so the hook runs where OpenClaw hands text to the CLI: once per CLI
+turn dispatch (including each recovery retry), and once per input steered into
+a live CLI turn. It runs after history reseeding, resume context, and plugin
+input text transforms, before image paths are attached.
 
-- `payload` is the provider-specific request body. Return `{ payload }` to
-  replace it, or return nothing to send it unchanged. Handlers run in priority
-  order and each one sees the previous replacement.
-- A replacement may rewrite content but not the tool surface, model, or
+The event is `{ runtime, payload, provider, model, messages }`:
+
+- `runtime` is `"embedded"` or `"cli"`.
+- On embedded runs, `payload` is the provider-specific request body. Return
+  `{ payload }` to replace it, or return nothing to send it unchanged. Handlers
+  run in priority order and each one sees the previous replacement.
+- On CLI runs, `payload` is `{ prompt, prependContext?, appendContext? }`: the
+  turn or steered prompt text and the runtime context OpenClaw adds around it.
+  A replacement must keep that shape with string values; anything else fails
+  the dispatch. In-place edits to `payload` are sent too. The system prompt,
+  image attachments, and what the CLI does inside its own tool loop are not part
+  of the payload.
+- An embedded replacement may rewrite content but not the tool surface, model, or
   Access program. If `tools`, `tool_choice`, `toolConfig`, `functions`,
   `function_call`, `model`, or `access_programs` (top level or under `config`)
   differ from the request as it was before any handler ran, the request fails.
@@ -404,16 +418,20 @@ The event is `{ payload, provider, model, messages }`:
   nothing. Tool, model, and Access-program authorization is settled before this
   hook, and provider-hosted tools have no later local gate.
 - `messages` is a detached copy of the model-facing history, including
-  host-owned metadata such as `__openclaw.senderIsOwner`. Editing it does not
-  change the request. Use that metadata, not text inside a message, to decide
-  sender trust.
+  host-owned metadata such as `__openclaw.senderIsOwner` and input `provenance`
+  (for example `kind: "inter_session"` with `sourceSessionKey` on a subagent
+  completion). On CLI runs it is the session transcript view with the current
+  turn's (or steered input's) user message last. Editing it does not change the
+  request. Use that metadata, not text inside a message, to decide sender
+  trust.
 
 The hook context carries the usual agent fields (`agentId`, `sessionKey`,
 `sessionId`, `runId`, channel and sender fields when known) plus
 `modelProviderId` and `modelId`.
 
 A thrown error or a timeout (10 seconds by default) fails the model request;
-the original payload is never sent. A scanner that wants outage passthrough
+the original payload is never sent. On CLI runs the CLI is not started for that
+turn, and a steered input is refused. A scanner that wants outage passthrough
 must catch its own failures and return nothing. If the turn is aborted while a
 handler runs, the request is not sent.
 
@@ -443,10 +461,12 @@ access and prompt modification, like `before_prompt_build`. It still runs for in
 hooks do; `llm_input` and `llm_output` observations stay suppressed there. With
 no handler registered, messages are not copied and nothing is awaited.
 
-Scope: embedded agent attempts only. CLI-backed runtimes, external harnesses
-such as Codex, compaction summary calls, custom provider transports that bypass
-both `onPayload` and host encoding, and provider-hosted tool results that never
-return to the client are not intercepted.
+Scope: embedded agent attempts and CLI-backed agent turns. External harnesses
+such as Codex, compaction summary calls, CLI side questions, isolated
+completions, and control operations such as compaction, tool results a CLI
+reads inside its own loop, custom provider
+transports that bypass both `onPayload` and host encoding, and provider-hosted
+tool results that never return to the client are not intercepted.
 
 ### Session extensions and next-turn injections
 
