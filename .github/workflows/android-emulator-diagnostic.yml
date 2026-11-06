@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android ${{ inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'benchmark' && 'notes/build benchmark' || inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ on:
         options:
           - boot
           - screenshots
+          - benchmark
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -23,6 +24,7 @@ permissions:
 
 jobs:
   validate-target:
+    if: inputs.operation != 'benchmark'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -705,4 +707,92 @@ jobs:
         with:
           name: android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/android-emulator-diagnostic
+          retention-days: 7
+
+  benchmark:
+    if: inputs.operation == 'benchmark'
+    permissions:
+      contents: read
+      actions: read
+    name: ${{ matrix.sample }} ${{ matrix.variant }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 25
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - sample: "01"
+            variant: serial
+          - sample: "02"
+            variant: overlap
+          - sample: "03"
+            variant: serial
+          - sample: "04"
+            variant: overlap
+    steps:
+      - name: Checkout committed benchmark tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout identical release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 872da7a4fa7a72e7759eab87cd0adb31dd159b90
+          path: candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download the successful run's frozen plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-release-recovery-42282370098-1
+          path: ${{ runner.temp }}/android-overlap-plan
+          run-id: 42282370098
+          github-token: ${{ github.token }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          install-deps: "false"
+          node-version: "24.22.1"
+
+      - name: Install identical mobile release dependencies
+        working-directory: candidate
+        run: node scripts/install-mobile-release-dependencies.mjs
+
+      - name: Setup identical Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+          install-screenshot-emulators: "false"
+
+      - name: Compare notes and bundles without publishing
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: >-
+          node scripts/bench-android-release-overlap.mjs
+          --source candidate
+          --plan "$RUNNER_TEMP/android-overlap-plan/android-plan.json"
+          --variant "${{ matrix.variant }}"
+          --output ".build/android-overlap/${{ matrix.sample }}-${{ matrix.variant }}"
+
+      - name: Retain timing and resource evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-overlap-${{ matrix.sample }}-${{ matrix.variant }}-${{ github.run_id }}
+          path: |
+            .build/android-overlap/*/result.json
+            .build/android-overlap/*/resources.json
+            .build/android-overlap/*/preflight.log
+            .build/android-overlap/*/notes.log
+            .build/android-overlap/*/build.log
+            .build/android-overlap/*/gradle-profile/**
+          if-no-files-found: warn
           retention-days: 7
