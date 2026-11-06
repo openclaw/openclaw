@@ -14,9 +14,15 @@ import {
   claimPreparedSessionTranscriptProjectionInTransaction,
   deletePreparedSessionTranscriptProjectionChunkInTransaction,
   finalizePreparedSessionTranscriptProjectionInTransaction,
-  prepareSessionTranscriptProjection,
-  type PreparedSessionTranscriptProjection,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
 } from "./session-transcript-projection-rebuild.js";
+
+function prepareSessionTranscriptProjection(
+  ...args: Parameters<typeof prepareStreamingProjection>
+) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-projection-catchup-");
@@ -58,7 +64,7 @@ async function prepareDirtyProjection(label: string) {
 function publishPreparedBase(params: {
   claimId: number;
   databaseOptions: { agentId: string; env: NodeJS.ProcessEnv };
-  plan: PreparedSessionTranscriptProjection;
+  plan: NonNullable<ReturnType<typeof prepareSessionTranscriptProjection>>;
   sessionId: string;
 }) {
   expect(

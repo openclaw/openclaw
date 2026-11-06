@@ -24,13 +24,20 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   hasUnclassifiedSessionTranscriptEvents,
-  prepareSessionTranscriptProjection,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
   claimPreparedSessionTranscriptProjectionInTransaction,
   deletePreparedSessionTranscriptProjectionChunkInTransaction,
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   finalizePreparedSessionTranscriptProjectionInTransaction,
 } from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+
+function prepareSessionTranscriptProjection(
+  ...args: Parameters<typeof prepareStreamingProjection>
+) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const sessionId = "eligibility";
 const entries = [

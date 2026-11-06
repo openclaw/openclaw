@@ -1,0 +1,4 @@
+# Regression for the verified admitted reconcile-worker OOM: SQLite payload reads
+# stay behind consumer advancement, without retaining decoded transcript history.
+# Includes materializing small fixtures in the four existing planner consumers.
+64

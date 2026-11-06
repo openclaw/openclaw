@@ -33,7 +33,8 @@ function projection(rows: SessionTranscriptProjectionSourceRow[]) {
     for (const sourceRow of rows) {
       insert.run(SESSION_ID, sourceRow.seq, JSON.stringify(sourceRow.event), sourceRow.createdAt);
     }
-    return prepareSessionTranscriptProjection(db, SESSION_ID)!;
+    const plan = prepareSessionTranscriptProjection(db, SESSION_ID)!;
+    return { ...plan, ftsRows: [...plan.ftsRows] };
   } finally {
     db.close();
   }
@@ -191,4 +192,47 @@ describe("canonical SQLite session transcript projection", () => {
     ]);
     expect(result.sourceIndexedSeq).toBe(2);
   });
+});
+
+it("reads SQLite FTS payloads only as the consumer advances", () => {
+  const db = openNodeSqliteDatabase(":memory:");
+  let payloadReads = 0;
+  db.function("observe_payload", (value) => {
+    payloadReads += 1;
+    return value;
+  });
+  try {
+    db.exec(
+      `CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, transcript_updated_at INTEGER);
+      CREATE TABLE transcript_rewrite_watermarks (session_id TEXT PRIMARY KEY, generation TEXT);
+      CREATE TABLE stored_events (session_id TEXT, seq INTEGER, event_json TEXT, created_at INTEGER,
+        event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT, PRIMARY KEY (session_id, seq));
+      CREATE VIEW transcript_events AS SELECT session_id, seq, observe_payload(event_json) AS event_json,
+        created_at, event_zstd, event_utf8_bytes, navigation_json FROM stored_events;
+      INSERT INTO session_windows VALUES ('stream', 1);
+      INSERT INTO transcript_rewrite_watermarks VALUES ('stream', 'generation');`,
+    );
+    const ids = ["first", "second", "third"];
+    const insert = db.prepare(
+      "INSERT INTO stored_events VALUES ('stream', ?, ?, ?, NULL, NULL, ?)",
+    );
+    for (const [index, id] of ids.entries()) {
+      const navigation = { type: "message", id, parentId: ids[index - 1] ?? null };
+      const event = { ...navigation, message: { role: "user", content: id.repeat(10_000) } };
+      insert.run(index + 1, JSON.stringify(event), index + 10, JSON.stringify(navigation));
+    }
+    const plan = prepareSessionTranscriptProjection(db, "stream")!;
+    expect(plan).toMatchObject({ activeEventCount: 3, activeMessageCount: 3, sourceIndexedSeq: 3 });
+    const planningReads = payloadReads;
+    const iterator = plan.ftsRows[Symbol.iterator]();
+    expect(payloadReads).toBe(planningReads);
+    for (const [index, id] of ids.entries()) {
+      expect(iterator.next().value).toMatchObject({ messageId: id, text: id.repeat(10_000) });
+      expect(payloadReads).toBe(planningReads + index + 1);
+    }
+    expect(iterator.next().done).toBe(true);
+    expect(payloadReads).toBe(planningReads + 3);
+  } finally {
+    db.close();
+  }
 });

@@ -28,10 +28,17 @@ import {
   claimPreparedSessionTranscriptProjectionInTransaction,
   deletePreparedSessionTranscriptProjectionChunkInTransaction,
   finalizePreparedSessionTranscriptProjectionInTransaction,
-  prepareSessionTranscriptProjection,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
 } from "./session-transcript-projection-rebuild.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
+
+function prepareSessionTranscriptProjection(
+  ...args: Parameters<typeof prepareStreamingProjection>
+) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
