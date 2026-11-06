@@ -1,6 +1,6 @@
-// Reads the claw's Discovery mailbox (store-and-forward). Member invite redemptions
-// become pending, never admitted; the authority verifies root statements and
-// revocations. Every other kind is explicitly refused until its handler exists.
+// Reads the claw's Discovery mailbox (store-and-forward). Member and node invite
+// redemptions become pending, never admitted; the authority verifies root statements
+// and revocations. Every other kind is explicitly refused until its handler exists.
 // Device-signed approvals arriving this way are refused (spec section 7).
 import {
   MAILBOX_MAX_WAIT_SECONDS,
@@ -20,6 +20,7 @@ export type MailboxSink = {
     redemption: unknown,
     sender: RedemptionSender,
   ) => Promise<AuthorityAccepted | AuthorityRefusal>;
+  redeemNode: (redemption: unknown) => Promise<AuthorityAccepted | AuthorityRefusal>;
   saveCursor: (cursor: string) => Promise<void>;
 };
 
@@ -33,7 +34,7 @@ type ReaderLogger = { info: (message: string) => void; warn: (message: string) =
  */
 export async function applyMailboxMessage(
   message: MailboxMessage,
-  sink: Pick<MailboxSink, "submit" | "redeem">,
+  sink: Pick<MailboxSink, "submit" | "redeem" | "redeemNode">,
   settle: (result: AuthorityAccepted | AuthorityRefusal) => Promise<void> = async () => {},
   signal?: AbortSignal,
 ): Promise<Array<AuthorityAccepted | AuthorityRefusal>> {
@@ -60,6 +61,8 @@ export async function applyMailboxMessage(
         location_hint: message.location_hint,
       }),
     );
+  } else if (payload.kind === "node_redemption") {
+    await record(await sink.redeemNode(payload.redemption));
   } else if (payload.kind === "revocation") {
     await record(await sink.submit(payload.revocation));
   } else if (payload.kind === "root_statement") {
@@ -75,10 +78,7 @@ export async function applyMailboxMessage(
     await record({
       ok: false,
       code: "unsupported",
-      detail:
-        payload.kind === "node_redemption"
-          ? "node enrollment is not enabled in this Gateway"
-          : `mailbox kind ${payload.kind} is not for the Gateway`,
+      detail: `mailbox kind ${payload.kind} is not for the Gateway`,
     });
   }
   return results;

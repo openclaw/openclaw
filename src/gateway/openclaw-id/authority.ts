@@ -25,12 +25,9 @@ import {
   type Ed25519PublicKey,
   type InactivityWindows,
   type IrohEndpointKey,
-  type KeyFingerprint,
   parseStatement,
   registerInvite,
   ROOT_EPOCH,
-  type OwnerCapability,
-  type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { verifyBinding } from "./binding-check.js";
@@ -58,6 +55,8 @@ import {
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
+import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
+import type { OwnerDeviceView } from "./owner-devices-view.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -118,13 +117,6 @@ function emptyRecord(clawId: string): StoredClaw {
     },
   };
 }
-
-/** An owner device as the owner's own devices see it: certificate, granted caps and approver. */
-export type OwnerDeviceView = {
-  cert: SignedStatement<"OwnerDeviceCert">;
-  caps: OwnerCapability[];
-  approved_by: "root" | KeyFingerprint;
-};
 
 /** A tunnel-issued device token and the device key it is bound to. */
 export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
@@ -260,6 +252,14 @@ export function createOpenClawIdAuthority(
         isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
     );
     const source = { clawId: state.claw_id, rootPub: state.anchor.root_pub };
+    const node = state.nodes[peerKey];
+    if (node) {
+      return {
+        kind: "node",
+        peerKey,
+        authority: { ...source, listedSeq: node.listed_seq },
+      };
+    }
     if (owner) {
       return {
         kind: "owner",
@@ -488,6 +488,8 @@ export function createOpenClawIdAuthority(
       });
     },
 
+    ...createNodeInviteOperations({ serialize, load, commit }),
+
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
       input: unknown,
@@ -638,6 +640,11 @@ export function createOpenClawIdAuthority(
       if (!state) {
         return undefined;
       }
+      const nodeInvites = await listNodeInviteViews(current, nowSeconds());
+      // Hashing comparison codes may yield; disclose only the same committed owner view.
+      if (record !== current) {
+        return undefined;
+      }
       const now = nowSeconds();
       const owners = activeOwnerDevices(state, now);
       if (
@@ -662,12 +669,16 @@ export function createOpenClawIdAuthority(
           peer_keys: member.peer_keys,
         })),
         invites: listInviteViews(current, now),
+        nodes: Object.entries(state.nodes).map(([peer_key, node]) =>
+          Object.assign({ peer_key }, node),
+        ),
+        node_invites: nodeInvites,
       };
     },
 
     /**
      * Who the tunnel device `peerKey` is right now: an active owner device, a
-     * member with their role, or undefined when the protocol would not admit it.
+     * member with their role, a node-only key, or undefined when not admitted.
      * An owner device that is also listed as a member is the owner.
      */
     async resolvePeer(peerKey: string): Promise<OpenClawIdTunnelPrincipal | undefined> {
@@ -714,7 +725,21 @@ export function createOpenClawIdAuthority(
       });
     },
 
-    /** Peer keys the tunnel child may admit right now (members and active owner devices). */
+    /** Durable pairing provenance compares the original listing, independently of Labs. */
+    isCurrentNodeListing(source: {
+      peerKey: string;
+      authority: NonNullable<OpenClawIdTunnelPrincipal["authority"]>;
+    }): boolean {
+      const current = currentPeer(source.peerKey);
+      return (
+        current?.kind === "node" &&
+        current.authority?.clawId === source.authority.clawId &&
+        current.authority.rootPub === source.authority.rootPub &&
+        current.authority.listedSeq === source.authority.listedSeq
+      );
+    },
+
+    /** Peer keys the tunnel child may admit now (nodes, members and active owner devices). */
     async admittedPeerKeys(): Promise<{ seq: number; admitted: IrohEndpointKey[] }> {
       const state = (await load())?.authority;
       if (!state) {
@@ -804,11 +829,12 @@ function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): A
   return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
 }
 
-// Every device key of a member or owner device, admitted now or not.
+// Every listed node, member or owner device key, admitted now or not.
 function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
   return new Set<IrohEndpointKey>([
     ...Object.values(state.members).flatMap((member) => member.peer_keys),
     ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
+    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
   ]);
 }
 

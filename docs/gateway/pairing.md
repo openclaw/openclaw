@@ -98,6 +98,31 @@ Gateway command policy and [node-local exec approvals](/tools/exec-approvals)
 remain separate gates. Local exec approvals default to `full` with `ask: "off"`;
 configure them before using a link if that access is too broad.
 
+## OpenClaw ID nodes (Labs)
+
+An owner-approved OpenClaw ID node invitation replaces the initial manual device
+pairing and command-surface approval. The owner must compare the six-digit code
+and explicitly approve the signed redemption, which includes the node's
+self-reported name, platform, commands, and capabilities.
+
+On the first connection from that admitted tunnel key, the Gateway automatically
+pairs the node device once. Only commands and capabilities within the description
+the owner approved qualify for automatic surface approval. Additional access uses
+the normal `node.pair` approval flow. Gateway command policy, node-local execution
+approvals, and OS permissions still apply.
+
+The approval records `approvedVia: "openclaw-id-node"` and its tunnel-key
+provenance. Removing the pairing with `openclaw nodes remove` keeps subsequent
+pairing requests for that key manual, including after a Gateway restart. It does
+not silently repeat the invitation's one-time approval.
+
+Removing or revoking the node's OpenClaw ID key disconnects it, invalidates its
+tunnel-bound device tokens, and removes node-role pairings and approved surfaces
+associated with that key. Unrelated device roles remain intact. Synthetic tunnel
+addresses are never evidence for trusted-CIDR or SSH-verified auto-approval.
+
+For connection setup, see [OpenClaw ID nodes](/gateway/remote#openclaw-id-nodes-labs).
+
 ## CLI workflow (headless friendly)
 
 For manual device admission, first run on the Gateway:

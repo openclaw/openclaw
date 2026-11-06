@@ -30,6 +30,7 @@ const APPROVAL_KIND_MEMBERS = {
   "trusted-proxy": true,
   "remote-ingress": true,
   "ssh-verified": true,
+  "openclaw-id-node": true,
   bootstrap: true,
 } satisfies Record<PairedDeviceApprovalKind, true>;
 const APPROVAL_KINDS = new Set(Object.keys(APPROVAL_KIND_MEMBERS));

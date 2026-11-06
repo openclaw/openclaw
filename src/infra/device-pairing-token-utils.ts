@@ -23,6 +23,7 @@ export function createDeviceAuthToken(params: {
   return {
     token: generatePairingToken(),
     role: params.role,
+    ...(params.existing?.approval ? { approval: params.existing.approval } : {}),
     scopes: params.scopes,
     issuer: params.issuer ?? (params.preserveExistingIssuer ? params.existing?.issuer : undefined),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
