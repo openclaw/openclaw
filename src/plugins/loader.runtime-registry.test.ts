@@ -9,7 +9,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
@@ -196,7 +195,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         const state = runtime.state;
         const system = runtime.system;
         expect(system.captureSessionEventTarget).toBe(captureSessionEventTarget);
-        expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
         expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
         const command = await system.runCommandWithTimeout(
           [process.execPath, "-e", 'process.stdout.write("system-ready")'],

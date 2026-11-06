@@ -1,4 +1,4 @@
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
 import { captureSessionEventTarget, createSessionEventEnqueuer } from "./runtime-session-events.js";
 import {
@@ -18,7 +18,12 @@ export function createRuntimeSystem(
     enqueueSystemEvent: enqueueSystemEventFromSdk,
     captureSessionGeneration: capturePluginSessionGeneration,
     postSessionNotice: postPluginSessionNotice,
-    runCommandWithTimeout,
+    async runCommandWithTimeout(...args) {
+      const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertSystemOwnerCurrent;
+      const { runCommandWithTimeout } = await import("../../process/exec.js");
+      assertCurrent?.();
+      return await runCommandWithTimeout(...args);
+    },
     formatNativeDependencyHint,
   };
 }

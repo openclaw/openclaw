@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
-it("loads the catalog worker without session-event execution", async () => {
+it("loads the catalog worker without session-event or process execution", async () => {
   await withOpenClawTestState(
     { label: "catalog-worker-import", applyEnv: false },
     async (state) => {
@@ -19,8 +19,9 @@ it("loads the catalog worker without session-event execution", async () => {
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const resolved = nextResolve(specifier, context);
-    if ([".ts", ".js"].some((extension) => resolved.url.endsWith("/session-event-handoff" + extension))) {
-      throw new Error("Catalog imported session-event execution from " + context.parentURL);
+    if (["/session-event-handoff", "/process/exec"].some((module) =>
+      [".ts", ".js"].some((extension) => resolved.url.endsWith(module + extension)))) {
+      throw new Error("Catalog imported execution runtime from " + context.parentURL);
     }
     return resolved;
   },
