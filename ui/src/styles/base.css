@@ -1296,7 +1296,8 @@ textarea,
   content: "";
   /* Keep the highlight offscreen when accessibility modes disable the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration) var(--skeleton-easing) infinite;
+  animation: var(--skeleton-animation, shimmer) var(--skeleton-duration) var(--skeleton-easing)
+    infinite;
   will-change: transform;
 }
 

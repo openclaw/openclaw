@@ -11,6 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import {
   canonicalPluginsRouteLocation,
+  pluginSettingsNeedsSchema,
   pluginsRouteLocation,
   type PluginsRouteData,
 } from "./route-data.ts";
@@ -52,7 +53,11 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       if (surface === "settings") {
         const configLoad = context.runtimeConfig.ensureLoaded();
         void configLoad
-          .then(() => context.runtimeConfig.ensureSchemaLoaded())
+          .then(() =>
+            pluginSettingsNeedsSchema(surface, location, context.basePath)
+              ? context.runtimeConfig.ensureSchemaLoaded()
+              : undefined,
+          )
           .catch(() => undefined);
       }
       return loadPluginsRouteData(context, options);

@@ -2708,6 +2708,7 @@ jobs:
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -2748,6 +2749,7 @@ jobs:
           echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
 
       - name: Test Control UI end-to-end
+        id: ui_e2e_tests
         if: matrix.task == 'control-ui'
         # Fail the step before the job deadline so progress diagnostics can upload.
         timeout-minutes: 20
@@ -2769,6 +2771,46 @@ jobs:
         with:
           name: control-ui-e2e-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
           path: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Collect synthetic Control UI failure evidence
+        if: failure() && steps.ui_e2e_tests.outcome == 'failure'
+        env:
+          DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          EVIDENCE_DIR: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import shutil
+
+          source = Path(os.environ["DIAGNOSTIC_DIR"])
+          destination = Path(os.environ["EVIDENCE_DIR"])
+          remaining = 64 * 1024 * 1024
+          # Only this mocked-Gateway job exports raw browser state and screenshots.
+          # The JSON includes the final URL and bounded timestamped browser event ring.
+          for name in ("failure.private.json", "failure.private.png"):
+              for capture in sorted(source.glob("failure-*")):
+                  artifact = capture / name
+                  if not artifact.is_file():
+                      continue
+                  size = artifact.stat().st_size
+                  if size > remaining:
+                      print(f"::warning::Failure evidence budget exceeded; omitted {capture.name}/{name}")
+                      continue
+                  target = destination / capture.name / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(artifact, target)
+                  remaining -= size
+
+      - name: Upload synthetic Control UI failure evidence
+        if: failure() && steps.ui_e2e_tests.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: control-ui-e2e-failure-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e-failures/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
