@@ -20,7 +20,15 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   ledgerRuntimeImport: string;
   runId: string;
   updaterStopped?: "native" | "legacy";
-  cut: "before" | "prepared" | "publishing" | "after" | "risk" | "operator-stop";
+  cut:
+    | "before"
+    | "prepared"
+    | "publishing"
+    | "after"
+    | "risk"
+    | "operator-stop"
+    | "finalize-failure"
+    | "post-finalize-risk";
 }) {
   const fixture = await createPackageSwapFixture(params.root);
   const installRoot = fixture.packageRoot;
@@ -46,6 +54,8 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       fence.assertCurrent();
       ${managedServiceStateUpdateScript(params.statePath, "state.postCoreRepaired = true; state.repairRunId = runId;")};
       ledger.recordUpdateRunStep(runId, {step:"finalize:doctor",status:"completed"});
+      ${params.cut === "finalize-failure" ? 'throw new Error("post-core maintenance failed after Doctor");' : ""}
+      ${params.cut === "post-finalize-risk" ? 'ledger.recordUpdateRunVerification(runId, {recovery:{serviceRestartSafe:false, reason:"state-migration-started", dataAtRisk:"unreadable-state"}});' : ""}
     });
     console.log(JSON.stringify({status:"ok",mode:"finalize",restart:false,postUpdate:{doctor:{status:"ok"},plugins:{status:"ok"}}}));
   `;
@@ -62,7 +72,19 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       path.join(directory, "package.json"),
       JSON.stringify({ name: "openclaw", version, type: "module" }),
     );
-    await fs.writeFile(path.join(directory, "dist/cli/daemon-cli.js"), recovery);
+    // Observe the writer selected by the real helper after post-core work. This
+    // fixture models runtime selection, not an actual cross-version migration.
+    const observedRecovery =
+      version === "2.0.0" && ["finalize-failure", "post-finalize-risk"].includes(params.cut)
+        ? recovery.replace(
+            "export const { finishUpdateRun } = ledger;",
+            `export async function finishUpdateRun(...args) {
+              ${managedServiceStateUpdateScript(params.statePath, "state.installedTerminalWriter = true;")};
+              return ledger.finishUpdateRun(...args);
+            }`,
+          )
+        : recovery;
+    await fs.writeFile(path.join(directory, "dist/cli/daemon-cli.js"), observedRecovery);
     await fs.writeFile(path.join(directory, "openclaw.mjs"), repair);
     await writePackageDistInventory(directory);
   }
@@ -119,7 +141,7 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       ${
         params.cut === "prepared"
           ? ""
-          : params.cut === "after"
+          : ["after", "finalize-failure", "post-finalize-risk"].includes(params.cut)
             ? "await createPublicationOwner(prepared.anchor, prepared.journal, fence.assertCurrent).publish();"
             : `
       const record = prepared.journal.read();

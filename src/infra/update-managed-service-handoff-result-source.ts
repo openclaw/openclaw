@@ -297,6 +297,10 @@ async function recoverInterruptedUpdater() {
       originalIdentity: originalInstallationIdentity, timeoutMs: params.recoveryTimeoutMs,
       assertCurrent,
       finalize: async () => {
+        // The recovery owner verified the installed candidate before entering here.
+        // Post-core work can advance its schema even when finalization fails.
+        terminalRuntimePath = params.recoveryModulePath;
+        runLedger = createInstalledRuntimeLedger(params.recoveryModulePath);
         const repair = await runOwnedUpdateCommand("repair", params.finalizeCommandArgv,
           params.recoveryTimeoutMs, params.cwd, { ...process.env, OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
         let repaired;
@@ -306,7 +310,6 @@ async function recoverInterruptedUpdater() {
           !["ok", "warning"].includes(repaired.status)) {
           throw new Error("Interrupted update post-core repair did not complete");
         }
-        runLedger = createInstalledRuntimeLedger(params.recoveryModulePath);
         return runLedger.getUpdateRun(params.runId);
       },
     });

@@ -97,3 +97,27 @@ itUnix.each(["systemd", "launchd"] as const)(
     expect(result.run, result.log).toMatchObject({ status: "failed", phase: "finished" });
   },
 );
+
+itUnix.each(["finalize-failure", "post-finalize-risk"] as const)(
+  "records failure through the verified installed runtime after %s",
+  async (interruptedUpdate) => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate,
+      helperExitCode: 1,
+    });
+    expect(result.state, result.log).toMatchObject({
+      postCoreRepaired: true,
+      installedTerminalWriter: true,
+    });
+    expect(result.state.restored, result.log).toBeUndefined();
+    expect(result.run, result.log).toMatchObject({ status: "failed", phase: "finished" });
+    expect(result.log).toContain(
+      interruptedUpdate === "finalize-failure"
+        ? "Interrupted update post-core repair did not complete"
+        : "Installed generation changed or data risk was recorded during post-core repair",
+    );
+    expect(result.log).not.toContain("failed to finalize update run");
+  },
+);
