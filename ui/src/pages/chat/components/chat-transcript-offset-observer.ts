@@ -99,11 +99,10 @@ export function scrollTranscriptToEnd(
   endAnchor: TranscriptEndAnchor,
   prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
 ): void {
-  // A settled end needs no preparation or additional mounted rows.
   if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
     return;
   }
-  // Retargeting automatic follow must not insert an instant stop.
+  // Retargeting retains native motion and its issued destination during preparation.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
   } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
@@ -114,6 +113,7 @@ export function scrollTranscriptToEnd(
   const command = (state.scrollCommand = {
     behavior,
     target: "end",
+    offset: state.scrollCommand?.target === "end" ? state.scrollCommand.offset : undefined,
   });
   const scroll = () => {
     instance.scrollToEnd({ behavior });
