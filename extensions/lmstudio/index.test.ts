@@ -326,12 +326,24 @@ describe("lmstudio plugin", () => {
         reasoningEffortMap: { off: "off", high: "on" },
       },
     };
+    const invertedMap = {
+      id: "inverted-map",
+      name: "inverted-map",
+      reasoning: true,
+      input: ["text"],
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "high"],
+        reasoningEffortMap: { off: "low", medium: "none" },
+      },
+    };
     const config = configuredModels([
       compactModel,
+      invertedMap,
       { id: "phi-4", compat: { codeMode: "capable" } },
       { id: "fractional-window", contextWindow: 4096.5 },
       { id: " ", name: "ignored" },
     ]);
+    const saved = structuredClone(config);
     expect(
       provider.augmentModelCatalog?.({
         config,
@@ -351,6 +363,15 @@ describe("lmstudio plugin", () => {
           reasoningEffortMap: { off: "off", high: "on" },
         },
       },
+      {
+        ...invertedMap,
+        provider: "lmstudio",
+        compat: {
+          supportsUsageInStreaming: true,
+          supportedReasoningEfforts: ["none", "low", "high"],
+          reasoningEffortMap: { off: "low", medium: "none" },
+        },
+      },
       ...["phi-4", "fractional-window"].map((id) => ({
         provider: "lmstudio",
         id,
@@ -361,5 +382,6 @@ describe("lmstudio plugin", () => {
         },
       })),
     ]);
+    expect(config).toEqual(saved);
   });
 });

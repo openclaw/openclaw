@@ -1,0 +1,2 @@
+# Restored inverted reasoning-map catalog coverage for PR #191529.
+18
