@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
@@ -160,6 +164,35 @@ describe("artifacts RPC handlers", () => {
   function mockArtifactBlock(seq: number, block: Record<string, unknown>, role = "assistant") {
     mockedMessages([{ role, content: [block], __openclaw: { seq } }]);
   }
+
+  it("shows expired scratch artifacts in list/get and explains their failed download", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "artifact-scratch-"));
+    onTestFinished(() => fs.rm(root, { recursive: true, force: true }));
+    const file = path.join(root, ".openclaw", "tmp", "proof", "report.txt");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, "proof");
+    mockArtifactBlock(1, { type: "file", title: "report.txt", url: pathToFileURL(file).href });
+    const query = { sessionKey: "agent:main:main" };
+    const initial = expectFirstArtifact((await listArtifacts(query)).calls)!;
+    expect(initial.title).toBe("report.txt");
+    await fs.unlink(file);
+    const expired = expectFirstArtifact((await listArtifacts(query)).calls)!;
+    expect(expired).toMatchObject({
+      id: initial.id,
+      title: "file expired (scratch cleaned after 24 h): report.txt",
+      download: { mode: "unsupported" },
+    });
+    expect(expired).not.toHaveProperty("localPath");
+    const selected = { ...query, artifactId: initial.id };
+    expect(expectOkPayload((await getArtifact(selected)).calls)).toEqual({ artifact: expired });
+    expect((await downloadArtifact(selected)).calls[0]).toMatchObject({
+      ok: false,
+      error: {
+        message: "file expired (scratch cleaned after 24 h)",
+        details: { type: "artifact_file_expired" },
+      },
+    });
+  });
 
   it("translates run lookup selection-required into INVALID_REQUEST", async () => {
     hoisted.resolveSessionForRun.mockImplementation(() => {

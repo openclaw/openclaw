@@ -450,8 +450,7 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
       const agentIds = listConfiguredSessionStoreAgentIds(context.getRuntimeConfig());
       const prepared = await Promise.allSettled(
         agentIds.flatMap(
-          (agentId) =>
-            preparation.waitForAgentPreparation(agentId, { signal, forWrite: true }) ?? [],
+          (agentId) => preparation.waitForAgentPreparation(agentId, { signal }) ?? [],
         ),
       );
       if (
@@ -608,6 +607,7 @@ async function resumeRestartStore(
             agentId,
             sessionKey,
             sessionId: entry.sessionId,
+            preserveRecordedSource: true,
             assertCurrent: () => signal.throwIfAborted(),
           });
           admissionStage = "target";

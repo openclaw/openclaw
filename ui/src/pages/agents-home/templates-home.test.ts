@@ -52,23 +52,38 @@ describe("Templates discovery", () => {
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
-      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "notes/context.md"],
+      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "View all"],
     },
-    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "notes/context.md"] },
+    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "View all"] },
+    { names: ["templates/AGENTS.md", "fixtures/request.json"], ordered: ["View all"] },
     { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
-  ])("lists every release file inline for $names", async ({ names, ordered }) => {
-    const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
-    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
-    const section = detail.querySelector(".plugin-capabilities")!;
-    const titles = [...section.querySelectorAll(".settings-row__title")].map(
-      (node) => node.textContent,
-    );
-    expect(titles).toEqual(ordered);
-    expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(names.length);
-  });
+  ])(
+    "lists only root agent documents and a View all row for $names",
+    async ({ names, ordered }) => {
+      const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
+      await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
+      const section = detail.querySelector(".plugin-capabilities")!;
+      const titles = [...section.querySelectorAll(".settings-row__title")].map(
+        (node) => node.textContent,
+      );
+      expect(titles).toEqual(ordered);
+      expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(
+        ordered.filter((name) => name !== "View all").length,
+      );
+    },
+  );
 
-  it("opens every release file inline without treating help as navigation", async () => {
-    const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
+  it("opens named files and View all in the shared complete-file preview without navigating from help", async () => {
+    const names = [
+      "AGENTS.md",
+      "SOUL.md",
+      "USER.md",
+      "BOOTSTRAP.md",
+      "templates/AGENTS.md",
+      "fixtures/request.json",
+      "schemas/report.json",
+      "avatars/agent.svg",
+    ];
     const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() =>
       expect(detail.querySelector(".templates-workspace-file__info")).not.toBeNull(),
@@ -87,9 +102,21 @@ describe("Templates discovery", () => {
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
-    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(names.length);
+    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(5);
+    preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
+    );
+    [...section.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "View all")!
+      .click();
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
+    );
+    const allFilesPreview = detail.querySelector("openclaw-file-preview-modal")!;
+    expect(allFilesPreview.files.map((file) => file.path)).toEqual(names);
     for (const name of names) {
-      preview.dispatchEvent(
+      allFilesPreview.dispatchEvent(
         new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
       );
       await vi.waitFor(() =>

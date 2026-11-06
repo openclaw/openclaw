@@ -158,6 +158,30 @@ packages recorded as `npm-token-bootstrap` on the approved
 [first-package route](first-package.md); their recovery does not wait on this
 exchange. If no recovered package uses `npm-oidc`, skip this check.
 
+A regular release parent with core npm publication enabled may continue when one or more
+`npm-oidc` matrix entries return the exact npm `ENEEDAUTH` code. Each deferred
+entry uploads a `plugin-npm-deferred-auth-*` checkpoint. Treat every checkpoint
+as an unpublished package, not a successful plugin publication. After the npm
+trusted-publisher binding is repaired, run the read-only exchange above for all
+deferred package names, then publish only that selected set:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=false \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-deferred-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Use the checkpoint's exact protected workflow ref, source SHA, package identity,
+and version. Omit parent publication inputs: this direct recovery has its own
+`npm-release` approval and remains valid after core publication completes.
+Reconcile every checkpoint independently when several packages were deferred.
+An error other than exact `ENEEDAUTH`, a direct recovery failure, or any
+extended-stable failure remains blocking and must not use this route.
+
 For extended-stable recovery, use the same read-only exchange from protected
 tooling, but preserve that track's full-roster and frozen-source boundaries:
 
@@ -269,6 +293,34 @@ parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from ano
 child. Docker-only recovery does not recover canceled ClawHub publication;
 verify and recover that surface separately. Recover a failed Plugin ClawHub New
 bootstrap child through its [direct route](first-package.md), not a rerun.
+
+## Reviewed security-scan mismatch
+
+Plugin NPM Release repacks plugins with the publisher tooling P and scans each
+tarball against P's reviewed inventory in `scripts/plugin-npm-security-scan.mts`.
+An `unreviewed critical findings in exact npm artifact` failure is deterministic
+for that P; a redispatch from the same tooling fails again. Full Release
+Validation runs the same scan for packages with reviewed findings in `Prepare
+exact plugin npm artifacts`, so a publish-time mismatch usually means P advanced
+after validation or the package had no reviewed finding.
+
+Reproduce under P before any redispatch. In a clean checkout of the source SHA
+with frozen dependencies:
+
+```bash
+git worktree add .release-tooling <P-workflow-sha>
+(cd .release-tooling && CI=true pnpm install --frozen-lockfile --ignore-scripts)
+export TSX_TSCONFIG_PATH="$PWD/.release-tooling/tsconfig.json"
+OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR=/tmp/plugin-scan \
+  bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$PWD" --pack extensions/<id>
+node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
+  --package-name <package-name> --package-version <version> --tarball /tmp/plugin-scan/<tarball>.tgz
+```
+
+If it fails the same way, review the flagged file. Record the new hash on `main`
+only after review confirms the flagged logic is unchanged (see #192489), then
+publish from protected tooling that contains the update. If it passes, diagnose
+the runner before you dispatch again.
 
 ## Docker mirror
 

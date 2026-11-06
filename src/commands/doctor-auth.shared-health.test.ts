@@ -88,6 +88,7 @@ describe("Doctor shared auth health", () => {
       writePersistedAuthProfileStateRaw(
         {
           version: 1,
+          order: { "diagnostic-provider": [profileId, "diagnostic-provider:missing"] },
           usageStats: {
             [profileId]: { cooldownUntil: Date.now() + 600_000, cooldownReason: "session_expired" },
           },
@@ -104,33 +105,34 @@ describe("Doctor shared auth health", () => {
           message: expect.stringContaining("expired"),
         }),
         expect.objectContaining({
+          target: "diagnostic-provider:missing",
+          path: resolveAuthProfileDatabasePath(agentDir),
+          requirement: "missing_ordered_profile",
+          fixHint: expect.stringContaining("openclaw models auth list --agent alpha"),
+        }),
+        expect.objectContaining({
           target: profileId,
           path: resolveAuthProfileDatabasePath(agentDir),
           message: expect.stringContaining("cooldown:session_expired"),
           fixHint: recoveryHint,
         }),
       ]);
-      const currentFindings = await inspect(cfg);
-      expect(currentFindings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            target: profileId,
-            category: "fix-now",
-            path: resolveAuthProfileDatabasePath(agentDir),
-            fixHint: recoveryHint,
-          }),
-        ]),
+      expect(await inspect(cfg)).toContainEqual(
+        expect.objectContaining({
+          target: profileId,
+          category: "fix-now",
+          path: resolveAuthProfileDatabasePath(agentDir),
+          fixHint: recoveryHint,
+        }),
       );
     });
   });
 
   it("reports a missing host profile without importing the native Codex account", async () => {
     await withFleet(async (state, cfg) => {
+      const missingCredential = { type: "oauth", provider: "openai", expires: 1 };
       writePersistedAuthProfileStoreRaw(
-        {
-          version: 1,
-          profiles: { "openai:default": { type: "oauth", provider: "openai", expires: 1 } },
-        },
+        { version: 1, profiles: { "openai:default": missingCredential } },
         state.agentDir("alpha"),
       );
       cliCredentials.readCodex.mockReturnValue(oauth({ expires: Date.now() + 7 * 86_400_000 }));

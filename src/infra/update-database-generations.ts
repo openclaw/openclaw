@@ -11,9 +11,8 @@ import {
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
-import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import type {
   PreparedSqliteReadOnlyLocation,
@@ -114,6 +113,26 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
+/** Without journal data or WAL frames, the verified family proves no commit; the index can come or go. */
+function sameWalCommitPublication(
+  before: Buffer | null,
+  after: Buffer | null,
+  generation: SqliteFileGeneration,
+) {
+  if (before === null ? after === null : after?.equals(before)) {
+    return true;
+  }
+  if (generation.journal || (generation.wal?.size ?? 0n) !== 0n) {
+    return false;
+  }
+  // The last close removes the index, even one with commit evidence; bind the closed state.
+  // A non-writing open builds one whose iChange and commit checksum stay zero.
+  return (
+    after === null ||
+    (before === null && after.readUInt32LE(8) === 0 && after.readBigUInt64LE(24) === 0n)
+  );
+}
+
 type DatabaseGenerationObservation = {
   generation: string | null;
   physical: string | null;
@@ -193,12 +212,23 @@ export function readUnchangedUpdateDatabaseGeneration(
   const after = readWalIndexHeader(pathname);
   verifyGenerationFamily(pathname, entries, current);
   if (
-    (before === null ? after !== null : !after?.equals(before)) ||
+    !sameWalCommitPublication(before, after, current) ||
     (current.wal && current.wal.size > 0n && after?.[12] !== 1)
   ) {
     throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
   }
-  return serializePhysicalGeneration(current, after) === receipt.physical
+  if (serializePhysicalGeneration(current, after) === receipt.physical) {
+    return receipt.generation;
+  }
+  // A non-writing open since a closed receipt adds only a zero-commit index (iChange and
+  // checksum zero); the receipt's generation is that index's empty-reader alternate.
+  const openedWithoutCommit =
+    after !== null &&
+    !current.journal &&
+    (current.wal?.size ?? 0n) === 0n &&
+    after.readUInt32LE(8) === 0 &&
+    after.readBigUInt64LE(24) === 0n;
+  return openedWithoutCommit && serializePhysicalGeneration(current, null) === receipt.physical
     ? receipt.generation
     : undefined;
 }
@@ -257,7 +287,7 @@ export function readUpdateDatabaseGeneration(
       verifyGenerationFamily(pathname, entries, current);
       if (
         !sameSqliteFileGeneration(generation, current) ||
-        (before === null ? after !== null : !after?.equals(before)) ||
+        !sameWalCommitPublication(before, after, current) ||
         (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
       ) {
         throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);

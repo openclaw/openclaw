@@ -59,6 +59,7 @@ export const controlUiParticipantPalette = {
 };
 
 let operatorSeamColor: string | undefined;
+let operatorSeamRoot: HTMLElement | undefined;
 let userAccentOverride: string | undefined;
 const systemChromeRevisions = new WeakMap<
   HTMLElement,
@@ -295,6 +296,11 @@ export function applyControlUiAccent(userAccent?: string): void {
 }
 
 export function applyControlUiOperatorSeamColor(seamColor?: string): void {
+  const root = document.documentElement;
+  if (operatorSeamRoot === root && operatorSeamColor === seamColor) {
+    return;
+  }
+  operatorSeamRoot = root;
   operatorSeamColor = seamColor;
   applyControlUiAccent(userAccentOverride);
 }
