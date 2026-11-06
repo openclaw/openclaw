@@ -8,6 +8,10 @@
 import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+} from "../open-external-url.ts";
 import { listen } from "../reactive/listener.ts";
 import { showToast } from "../toast.ts";
 import { browserSignOutUrl, signedInIssuer } from "./browser-sign-out.ts";
@@ -177,7 +181,9 @@ export async function signInWithOpenClawId(params: {
       throw new Error("You signed out while sign-in was in progress. Start again.");
     }
   };
-  const popup = window.open("", "openclaw-id-sign-in", "popup,width=520,height=720");
+  // Reserved while the click still counts as user activation; the callback answers through
+  // localStorage, so the popup needs no opener.
+  const popup = reserveExternalWindowForDeferredNavigation({ popup: true });
   try {
     const started = await params.client.request<{ authorizationUrl: string; state: string }>(
       "openclawId.authority",
@@ -188,7 +194,7 @@ export async function signInWithOpenClawId(params: {
     if (popup) {
       popup.location.href = started.authorizationUrl;
     } else {
-      window.open(started.authorizationUrl, "openclaw-id-sign-in");
+      openExternalUrlSafe(started.authorizationUrl);
     }
     const returned = await awaitCallback(started.state);
     assertCurrent();
