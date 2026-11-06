@@ -82,6 +82,16 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   if (delivery?.kind === PLUGIN_NOTICE_KIND || delivery?.kind === MODEL_FALLBACK_NOTICE_KIND) {
     return true;
   }
+  // Mirrored command exchanges (e.g. a /stop handled while a queued follow-up
+  // waits for replay admission) are replayable conversation, not newer user
+  // content; they do not complete the interrupted turn.
+  const idempotencyKey = Reflect.get(message, "idempotencyKey");
+  if (
+    typeof idempotencyKey === "string" &&
+    (idempotencyKey.startsWith("command-input:") || idempotencyKey.startsWith("command-reply:"))
+  ) {
+    return true;
+  }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
     return false;
   }
