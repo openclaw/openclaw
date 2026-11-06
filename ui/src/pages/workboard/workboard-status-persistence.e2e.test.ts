@@ -9,10 +9,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import {
-  type MockGatewayControls,
-  type MockGatewayRequest,
-} from "../../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls, MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { button, createWorkboardProof, makeCard, moved } from "./workboard.e2e.test-support.ts";
