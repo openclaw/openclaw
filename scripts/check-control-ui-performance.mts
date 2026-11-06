@@ -57,10 +57,8 @@ const controlUiPerformanceBudgets = {
   // Generated-name-normalized main measurement plus 64 B toolchain headroom.
   // PR #194017 (L294): 1,288,049 B CI-measured with the shared-boot window receipt, plus 64 B headroom.
   // Ayaan Zaidi approved +1 KiB for naming a failed reply's provider cause (#193996, 2026-11-06).
-  // Sidebar selection: coordinator accepted +199/+115 B over prior caps for the
-  // measured session-switch CPU win; 1,289,336/797,735 B plus 64 B headroom.
-  chatBootJsGzipBytes: 1_289_400,
-  newBootJsGzipBytes: 797_799,
+  chatBootJsGzipBytes: 1_289_137,
+  newBootJsGzipBytes: 797_620,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
