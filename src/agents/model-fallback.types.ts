@@ -14,18 +14,6 @@ export type ModelFallbackAvailability =
   | { kind: "disabled_by_model_override" }
   | { kind: "disabled_by_model_selection_lock" };
 
-export type ModelQuotaRecoveryPolicy =
-  | { kind: "eligible"; target: ModelCandidate }
-  | {
-      kind: "blocked";
-      reason:
-        | "locked"
-        | "disabled"
-        | "configured_fallbacks"
-        | "non_interactive"
-        | "no_same_provider_default";
-    };
-
 export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";
 export type ModelFallbackRouteResolution = "raw" | "resolved";
 

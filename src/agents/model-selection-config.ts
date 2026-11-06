@@ -8,10 +8,7 @@ import {
   resolveSubagentSpawnModelFallbacksOverride,
 } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type {
-  ModelFallbackAvailability,
-  ModelQuotaRecoveryPolicy,
-} from "./model-fallback.types.js";
+import type { ModelFallbackAvailability } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { normalizeModelSelection, resolveConfiguredModelRef } from "./model-selection-shared.js";
 
@@ -135,57 +132,6 @@ export function resolveModelFallbackAvailability(params: {
     fallbacksOverride ?? resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
     source,
   );
-}
-
-/**
- * Eligibility for an explicit post-failure switch, not permission to append an
- * automatic candidate or continue a transcript. Preserve omission versus disable.
- */
-export function resolveModelQuotaRecoveryPolicy(
-  params: Parameters<typeof resolveModelFallbackAvailability>[0],
-): ModelQuotaRecoveryPolicy {
-  if (params.modelSelectionLocked) {
-    return { kind: "blocked", reason: "locked" };
-  }
-  if (isSubagentSessionKey(params.sessionKey) || params.subagentSpawnLineage) {
-    return { kind: "blocked", reason: "non_interactive" };
-  }
-  if (params.modelFallbacksOverride !== undefined) {
-    return {
-      kind: "blocked",
-      reason: params.modelFallbacksOverride.length ? "configured_fallbacks" : "disabled",
-    };
-  }
-  if (params.modelOverrideSource === "auto" || params.hasAutoFallbackProvenance) {
-    return { kind: "blocked", reason: "configured_fallbacks" };
-  }
-  const agentModel = resolveAgentModelConfigForRuntime(
-    resolveAgentConfig(params.cfg, params.agentId),
-  );
-  const effectiveModel =
-    normalizeModelSelection(agentModel) ||
-    (typeof agentModel === "object" && Object.hasOwn(agentModel, "fallbacks"))
-      ? agentModel
-      : params.cfg.agents?.defaults?.model;
-  if (
-    effectiveModel &&
-    typeof effectiveModel === "object" &&
-    effectiveModel.fallbacks !== undefined
-  ) {
-    return {
-      kind: "blocked",
-      reason: effectiveModel.fallbacks.length ? "configured_fallbacks" : "disabled",
-    };
-  }
-  const target = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  if (
-    !params.selectedModel ||
-    params.selectedModel.provider !== target.provider ||
-    params.selectedModel.model === target.model
-  ) {
-    return { kind: "blocked", reason: "no_same_provider_default" };
-  }
-  return { kind: "eligible", target };
 }
 
 export function resolveEffectiveModelFallbacks(params: {

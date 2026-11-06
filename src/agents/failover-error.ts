@@ -557,7 +557,6 @@ export function describeFailoverError(err: unknown): {
   status?: number;
   code?: string;
   quotaScope?: FailoverSignal["quotaScope"];
-  quotaRecovery?: FailoverError["quotaRecovery"];
   provider?: string;
   model?: string;
   profileId?: string;
@@ -581,7 +580,6 @@ export function describeFailoverError(err: unknown): {
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
       quotaScope: normalizeErrorSignal(err).quotaScope,
-      quotaRecovery: err.quotaRecovery,
       provider: err.provider,
       model: err.model,
       profileId: err.profileId,
@@ -611,7 +609,6 @@ type FailoverErrorContext = {
   sessionId?: string;
   lane?: string;
   timeout?: FailoverError["timeout"];
-  quotaRecovery?: FailoverError["quotaRecovery"];
 };
 
 type ModelFallbackErrorResolution =
@@ -634,8 +631,7 @@ export function coerceToFailoverError(
       !Object.is(status, err.status) ||
       (context?.authMode && !err.authMode) ||
       (context?.timeout && !err.timeout) ||
-      context?.rateLimitRetriesExhausted !== undefined ||
-      context?.quotaRecovery !== undefined
+      context?.rateLimitRetriesExhausted !== undefined
     ) {
       const message = typeof err.message === "string" ? err.message : String(err);
       const enriched = new FailoverError(
@@ -649,7 +645,6 @@ export function coerceToFailoverError(
           status,
           code: err.code,
           quotaScope: normalizeErrorSignal(err).quotaScope,
-          quotaRecovery: context?.quotaRecovery ?? err.quotaRecovery,
           rawError:
             err.rawError ??
             (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),

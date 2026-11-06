@@ -6,7 +6,6 @@ import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js"
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
-  resolveModelQuotaRecoveryPolicy,
 } from "../../agents/model-selection-config.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import {
@@ -85,9 +84,6 @@ export function resolveModelFallbackOptions(
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
-    modelQuotaRecoveryPolicy: automation
-      ? { kind: "blocked" as const, reason: "non_interactive" as const }
-      : resolveModelQuotaRecoveryPolicy(selectionParams),
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
   };
 }
@@ -103,7 +99,6 @@ export function buildRunEntrySelection(
     requestedRouteResolution: selection.requestedRouteResolution,
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
-    modelQuotaRecoveryPolicy: selection.modelQuotaRecoveryPolicy,
     cyberAccessProgram: run.cyberAccessProgram,
     userLockedAuthProfileId: run.scheduledAutomation
       ? run.scheduledAutomation.job.inferenceBinding?.source === "user"

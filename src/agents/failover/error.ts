@@ -48,8 +48,6 @@ export class FailoverError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly quotaScope?: FailoverSignal["quotaScope"];
-  /** Candidate only; resumption requires a separate admitted continuation operation. */
-  readonly quotaRecovery?: { provider: string; model: string; continuation: "unavailable" };
   readonly rawError?: string;
   /** Controller-owned count exhaustion; zero means retries were disabled. Not a provider fact. */
   readonly rateLimitRetriesExhausted?: number;
@@ -80,7 +78,6 @@ export class FailoverError extends Error {
     this.status = params.status;
     this.code = params.code;
     this.quotaScope = params.quotaScope;
-    this.quotaRecovery = params.quotaRecovery;
     this.rawError = params.rawError;
     this.rateLimitRetriesExhausted = params.rateLimitRetriesExhausted;
     this.requestSizeCeiling = isProviderRequestSizeCeilingError(params.rawError ?? message);

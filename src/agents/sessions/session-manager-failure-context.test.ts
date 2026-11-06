@@ -4,8 +4,10 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "../../config/sessions/session-transcript-events.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
 it.each([{ generation: "new" }, { generation: "existing" }])(
@@ -53,6 +55,40 @@ it.each([{ generation: "new" }, { generation: "existing" }])(
         "original request",
         "retained custom context",
       ]);
+    });
+  },
+);
+
+it.each([undefined, "daily-model"] as const)(
+  "roundtrips assistant quota scope %s through the stored transcript",
+  async (quotaScope) => {
+    await withOpenClawTestState({ label: "quota-transcript" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "quota-transcript",
+        sessionKey: "agent:main:quota-transcript",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(scope);
+      const assistant = makeAgentAssistantMessage({
+        provider: "provider-cedar",
+        model: "selected-model",
+        content: [],
+        stopReason: "error",
+        errorMessage: "429 Quota exhausted",
+        errorCode: "RESOURCE_EXHAUSTED",
+        ...(quotaScope ? { quotaScope } : {}),
+      });
+      await source.appendMessageAsync(assistant);
+      const restored = await SessionManager.openAsync(scope);
+      const entry = restored.getEntries().find((entry) => entry.type === "message");
+      expect(entry?.type).toBe("message");
+      if (entry?.type !== "message" || entry.message.role !== "assistant") {
+        throw new Error("Expected stored assistant failure");
+      }
+      expect(entry.message).toEqual(assistant);
+      expect(isRetryableAssistantError(entry.message)).toBe(quotaScope === undefined);
     });
   },
 );

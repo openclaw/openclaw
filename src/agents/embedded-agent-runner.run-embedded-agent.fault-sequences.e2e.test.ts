@@ -253,6 +253,7 @@ async function runScenario(params: {
   workspaceDir: string;
   config: OpenClawConfig;
   runId: string;
+  requestedProvider?: string;
 }) {
   const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
   const sessionTarget = {
@@ -281,6 +282,7 @@ async function runScenario(params: {
         cfg: params.config,
         provider: "openai",
         model: "mock-1",
+        ...(params.requestedProvider ? { provider: params.requestedProvider } : {}),
         runId: params.runId,
         sessionId: sessionTarget.sessionId,
         sessionKey: sessionTarget.sessionKey,
@@ -782,3 +784,81 @@ it("compacts a provider overflow after settled writes and continues their record
     });
   });
 });
+
+it.each([false, true])(
+  "suppresses daily-model retries and honors Cedar fallback=%s",
+  async (fallback) => {
+    await withScenarioWorkspace(async (paths) => {
+      const provider = "provider-cedar";
+      const routes: string[] = [];
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "cedar:single": { type: "api_key", provider, key: "synthetic-key" },
+          },
+        },
+        paths.agentDir,
+      );
+      runEmbeddedAttemptMock.mockImplementation(async (params) => {
+        routes.push(params.modelId);
+        const failed = params.modelId === "mock-1";
+        return {
+          ...makeEmbeddedRunnerAttempt({
+            providerRetryMaxRetries: 3,
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider,
+              model: params.modelId,
+              content: failed ? [] : [{ type: "text", text: "Recovered" }],
+              ...(failed
+                ? {
+                    stopReason: "error" as const,
+                    errorMessage: "429 Quota exhausted",
+                    errorCode: "RESOURCE_EXHAUSTED",
+                    quotaScope: "daily-model" as const,
+                  }
+                : {}),
+            }),
+          }),
+          sessionIdUsed: params.sessionId,
+        };
+      });
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: `${provider}/mock-1`,
+              fallbacks: fallback ? [`${provider}/backup`] : [],
+            },
+          },
+          entries: { test: {} },
+        },
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-responses",
+              apiKey: "synthetic-key",
+              baseUrl: "https://cedar.example.test",
+              models: ["mock-1", "backup"].map((id) =>
+                modelDefinition(id, id, { contextWindow: 16000, maxTokens: 2048 }),
+              ),
+            },
+          },
+        },
+      };
+      const outcome = await runScenario({
+        ...paths,
+        config,
+        requestedProvider: provider,
+        runId: `cedar-daily-${fallback}`,
+      });
+      expect(routes).toEqual(fallback ? ["mock-1", "backup"] : ["mock-1"]);
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      if (fallback) {
+        expect(expectResult(outcome).result.payloads?.[0]?.text).toBe("Recovered");
+      } else {
+        expect(expectError(outcome)).toMatchObject({ quotaScope: "daily-model" });
+      }
+    });
+  },
+);

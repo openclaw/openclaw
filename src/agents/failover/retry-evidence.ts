@@ -177,7 +177,10 @@ export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
   signal: Pick<FailoverSignal, "code" | "message" | "status">;
 }): boolean {
-  if (!hasTransientRetryEvidence(params.signal)) {
+  if (
+    (params.classification?.kind === "reason" && params.classification.sameModelRetry === false) ||
+    !hasTransientRetryEvidence(params.signal)
+  ) {
     return false;
   }
   const reason =

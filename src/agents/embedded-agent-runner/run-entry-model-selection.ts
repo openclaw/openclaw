@@ -80,7 +80,6 @@ export function resolveRunEntryFallbackSelection(
     ? {
         ...params.selection,
         fallbacksOverride: [],
-        modelQuotaRecoveryPolicy: { kind: "blocked" as const, reason: "locked" as const },
       }
     : hookOwnsFallbacks && hookSelection
       ? {
@@ -88,7 +87,6 @@ export function resolveRunEntryFallbackSelection(
           provider: hookSelection.provider,
           model: hookSelection.modelId,
           fallbacksOverride: hookSelection.fallbacksOverride,
-          modelQuotaRecoveryPolicy: { kind: "blocked" as const, reason: "disabled" as const },
           requestedRouteResolution:
             hookSelection.provider !== params.selection.provider ||
             hookSelection.modelId !== params.selection.model

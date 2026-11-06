@@ -13,6 +13,7 @@ import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortabl
 import {
   FailoverError,
   buildFailoverRemediationHint,
+  coerceToFailoverError,
   describeFailoverError,
   hasModelFallbackStop,
   isFailoverError,
@@ -642,7 +643,6 @@ export function throwFallbackFailureSummary(params: {
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
       code: lastAttempt?.code,
       quotaScope: lastAttempt?.quotaScope,
-      quotaRecovery: isFailoverError(params.lastError) ? params.lastError.quotaRecovery : undefined,
       cause: params.lastError instanceof Error ? params.lastError : undefined,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
@@ -711,5 +711,21 @@ export function shouldDiscardDeferredSessionSuspension(params: {
     (resolution.kind !== "terminal" &&
       (isTranscriptNotContinuableError(params.error) ||
         isLikelyContextOverflowError(formatErrorMessage(params.error))))
+  );
+}
+
+export function normalizeFallbackError(
+  err: unknown,
+  failoverContext: Parameters<typeof coerceToFailoverError>[1],
+): unknown {
+  return (
+    coerceToFailoverError(err, failoverContext) ??
+    (isLikelyContextOverflowError(formatErrorMessage(err))
+      ? new FailoverError(formatErrorMessage(err), {
+          reason: "context_overflow",
+          ...failoverContext,
+          cause: err,
+        })
+      : err)
   );
 }

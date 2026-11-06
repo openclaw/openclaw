@@ -13,7 +13,6 @@ import type {
   ModelFallbackAttemptProvenance,
   ModelFallbackResultClassification,
   ModelFallbackRouteResolution,
-  ModelQuotaRecoveryPolicy,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import type {
@@ -75,7 +74,6 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
-    modelQuotaRecoveryPolicy?: ModelQuotaRecoveryPolicy;
     agentDir?: string;
     userLockedAuthProfileId?: string;
     cyberAccessProgram?: CyberAccessProgram;

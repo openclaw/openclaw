@@ -32,6 +32,7 @@ import { isAgentHarnessPreflightError, isMissingAgentHarnessError } from "./harn
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
+  normalizeFallbackError,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -64,7 +65,6 @@ import {
   resolveCooldownDecision,
   resolveProbeThrottleKey,
 } from "./model-fallback-cooldown.js";
-import { normalizeFallbackError, withQuotaRecovery } from "./model-fallback-failure.js";
 import {
   isModelFallbackDecisionLogEnabled,
   logModelFallbackChainStopped,
@@ -78,7 +78,6 @@ import {
   type FallbackAttempt,
   type ModelFallbackCandidate,
   type ModelFallbackRouteResolution,
-  type ModelQuotaRecoveryPolicy,
 } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
@@ -106,7 +105,6 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
-  modelQuotaRecoveryPolicy?: ModelQuotaRecoveryPolicy;
   requestedRouteResolution?: ModelFallbackRouteResolution;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
@@ -611,7 +609,7 @@ async function runWithModelFallbackInternal<T>(
     if (isMissingAgentHarnessError(err)) {
       throw err;
     }
-    let normalized = normalizeFallbackError(err, failoverContext);
+    const normalized = normalizeFallbackError(err, failoverContext);
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
@@ -649,14 +647,6 @@ async function runWithModelFallbackInternal<T>(
       continue;
     }
 
-    normalized = withQuotaRecovery(normalized, params, {
-      candidates,
-      candidate,
-      candidateAuthProfileIds,
-      authStore,
-      selectionChanged,
-      operatorAuthority,
-    });
     const isKnownFailover = isFailoverError(normalized);
     if (!isKnownFailover && !hasRemainingCandidate) {
       throw err;
