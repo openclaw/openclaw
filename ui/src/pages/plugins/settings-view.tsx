@@ -6,6 +6,8 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
+  SettingsSection,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -20,7 +22,6 @@ import { PluginInstallAction, type PluginInstallActionProps } from "./install-ac
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -118,6 +119,14 @@ function PluginConnectionAction(props: {
   const verb = () => CONNECTION_VERBS[props.kind][props.ready ? 1 : 0];
   return (
     <>
+      {props.ready ? (
+        <span class="plugin-connection-status" role="status">
+          <Icon name="check" />
+          {t(
+            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
+          )}
+        </span>
+      ) : null}
       <button
         type="button"
         class="btn btn--sm oc-action oc-action-secondary"
@@ -127,14 +136,6 @@ function PluginConnectionAction(props: {
       >
         {t(`pluginsPage.auth.${verb()}`)}
       </button>
-      {props.ready ? (
-        <span class="plugin-connection-status" role="status">
-          <Icon name="check" />
-          {t(
-            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
-          )}
-        </span>
-      ) : null}
     </>
   );
 }
@@ -159,14 +160,18 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
     if (
       field.path[3] !== "hooks" ||
       field.path.length !== 5 ||
-      (key !== "allowPromptInjection" && key !== "allowConversationAccess")
+      (key !== "allowPromptModification" && key !== "allowConversationAccess")
     ) {
       continue;
     }
-    const labelKey = key === "allowPromptInjection" ? "promptContextAccess" : "conversationAccess";
+    const labelKey =
+      key === "allowPromptModification" ? "promptContextAccess" : "conversationAccess";
     field.label = t(`pluginsPage.${labelKey}`);
     field.help = t(`pluginsPage.${labelKey}Description`);
-    field.effectiveValue = options.inspection.grants.hooks[key].effective;
+    field.effectiveValue =
+      options.inspection.grants.hooks[
+        key === "allowPromptModification" ? "allowPromptInjection" : key
+      ].effective;
   }
   return {
     fields,
@@ -213,7 +218,6 @@ function PluginNotices(props: DetailProps) {
         </div>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
-      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }
@@ -225,7 +229,9 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
     <>
       {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
-          <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />
+          <SettingsSection carapace={true}>
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} />
+          </SettingsSection>
         </SettingsPage>
       ) : props.error && !props.result ? (
         <SettingsPage carapace={true}>
@@ -238,7 +244,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : !plugin()?.installed ? (
         <SettingsPage carapace={true}>
           <a
-            class="btn btn--sm oc-action oc-action-secondary"
+            class="btn btn--sm oc-action oc-action-secondary plugins-settings-back"
             href={props.backHref}
             onClick={(event) => {
               event.preventDefault();

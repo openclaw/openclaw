@@ -29,7 +29,7 @@ function rowSelect(section: Element, title: string) {
   return expectDefined(getSettingsRow(section, title).querySelector("select"), `${title} select`);
 }
 
-const approvalSection = (container: Element) => getSection(container, "Exec approvals");
+const approvalSection = (container: Element) => getSection(container, "Command approvals");
 const scopeRow = (section: Element, name: string) =>
   expectDefined(
     Array.from(section.querySelectorAll(".device-entry")).find(
@@ -101,7 +101,7 @@ describe("devices execution settings", () => {
     });
     for (const title of ["ops", "Night triage (triage)"]) {
       expect(getSettingsRow(approvalSection(container), title)).toBeInstanceOf(Element);
-      expect(getSettingsRow(getSection(container, "Exec node binding"), title)).toBeInstanceOf(
+      expect(getSettingsRow(getSection(container, "Device binding"), title)).toBeInstanceOf(
         Element,
       );
     }
@@ -151,7 +151,7 @@ describe("devices execution settings", () => {
     });
     const section = approvalSection(container);
     expect(section.querySelector('[role="alert"]')?.textContent).toContain(
-      "Couldn't load approvals",
+      "Couldn’t load approvals. Try again.",
     );
     expect(section.textContent).toContain("Gateway unavailable");
     expect(container.querySelector(".callout.danger")).toBeNull();
@@ -203,7 +203,7 @@ describe("devices execution settings", () => {
       onExecApprovalsTargetChange,
     };
     const container = renderDevicesContainer(props);
-    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Host"]')!;
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')!;
     selectValue(select, "second", true);
 
     expect(onExecApprovalsTargetChange).toHaveBeenCalledWith("node", "second");
@@ -230,7 +230,7 @@ describe("devices execution settings", () => {
     });
     const section = approvalSection(container);
 
-    for (const text of ["Host-native policy", "Read-only here", "hostname", "deny"]) {
+    for (const text of ["Device-managed policy", "Read-only here", "hostname", "deny"]) {
       expect(section.textContent).toContain(text);
     }
     expect(section.querySelector("button")).toBeNull();
@@ -259,9 +259,9 @@ describe("devices execution settings", () => {
       nodes: [],
       configForm: agentsConfig({ main: {}, research: {} }),
     });
-    const section = getSection(container, "Exec node binding");
+    const section = getSection(container, "Device binding");
     expect(section.querySelector("select")).toBeNull();
-    expect(section.textContent).toContain("No nodes with system.run available.");
+    expect(section.textContent).toContain("No devices can run commands yet.");
   });
 
   it("offers no Save for bindings and names what an agent inherits", () => {
@@ -269,7 +269,7 @@ describe("devices execution settings", () => {
       nodes: [{ nodeId: "worker-node", displayName: "Worker", commands: ["system.run"] }],
       configForm: { ...agentsConfig({ main: {} }), tools: { exec: { node: "worker-node" } } },
     });
-    const section = getSection(container, "Exec node binding");
+    const section = getSection(container, "Device binding");
     expect(section.querySelector("button")).toBeNull();
     expect(rowSelect(section, "main").selectedOptions[0]?.textContent?.trim()).toBe(
       "Use default (worker-node)",
@@ -285,7 +285,7 @@ describe("devices execution settings", () => {
       onBindDefault,
       onBindAgent,
     });
-    const section = getSection(container, "Exec node binding");
+    const section = getSection(container, "Device binding");
     const bind = (title: string, sentinel: string) => {
       const select = rowSelect(section, title);
       selectValue(select, "worker-node");
@@ -315,7 +315,7 @@ describe("devices execution settings", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
         renderDevicesInto(container, { nodes: inventory, configForm, onBindDefault, onBindAgent });
-        const section = getSection(container, "Exec node binding");
+        const section = getSection(container, "Device binding");
         for (const title of ["Default binding", "research"]) {
           const select = rowSelect(section, title);
           expect(select).toHaveProperty("value", ref);

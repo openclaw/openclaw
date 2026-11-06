@@ -45,7 +45,7 @@ function unwrapNullable(schema: JsonSchema): JsonSchema {
   return variants.length === 1 && variants[0] ? unwrapNullable(variants[0]) : schema;
 }
 
-export function configFieldShape(input: JsonSchema): ConfigFieldShape {
+function configFieldShape(input: JsonSchema): ConfigFieldShape {
   const schema = unwrapNullable(input);
   const type = schemaType(schema);
   if (type === "array") {
@@ -163,37 +163,44 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
       : key === onlyGroup
         ? ("only-group" as const)
         : undefined;
-  // What renders in place reads as this level's own settings.
-  const orderOf = (entry: readonly [string, JsonSchema]) =>
-    inlineMode(entry) ? SHAPE_ORDER.scalar : SHAPE_ORDER[configFieldShape(entry[1])];
-
-  const sorted = entries.toSorted((left, right) => {
-    const shapeOrder = orderOf(left) - orderOf(right);
-    if (shapeOrder !== 0) {
-      return shapeOrder;
-    }
-    if (orderOf(left) === SHAPE_ORDER.object) {
-      const modelOrder = modelGroupRank(left[0]) - modelGroupRank(right[0]);
-      if (modelOrder !== 0) {
-        return modelOrder;
+  // Prepare each field once; sorting otherwise repeats schema and translated-label work.
+  const sorted = entries
+    .map(([key, node]) => {
+      const inline = inlineMode([key, node]);
+      return {
+        key,
+        node,
+        inline,
+        shapeOrder: inline ? SHAPE_ORDER.scalar : SHAPE_ORDER[configFieldShape(node)],
+        hint: hintForPath([...path, key], hints),
+      };
+    })
+    .toSorted((left, right) => {
+      const shapeOrder = left.shapeOrder - right.shapeOrder;
+      if (shapeOrder !== 0) {
+        return shapeOrder;
       }
-    }
-    const leftAdvanced = hintForPath([...path, left[0]], hints)?.advanced === true ? 1 : 0;
-    const rightAdvanced = hintForPath([...path, right[0]], hints)?.advanced === true ? 1 : 0;
-    if (leftAdvanced !== rightAdvanced) {
-      return leftAdvanced - rightAdvanced;
-    }
-    const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
-    const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    // A group opened on its own leads with the switch that decides whether the rest applies.
-    if (params.collapseObjects && (left[0] === "enabled" || right[0] === "enabled")) {
-      return left[0] === "enabled" ? -1 : 1;
-    }
-    return left[0].localeCompare(right[0]);
-  });
+      if (left.shapeOrder === SHAPE_ORDER.object) {
+        const modelOrder = modelGroupRank(left.key) - modelGroupRank(right.key);
+        if (modelOrder !== 0) {
+          return modelOrder;
+        }
+      }
+      const advancedOrder =
+        Number(left.hint?.advanced === true) - Number(right.hint?.advanced === true);
+      if (advancedOrder !== 0) {
+        return advancedOrder;
+      }
+      const hintOrder = (left.hint?.order ?? 0) - (right.hint?.order ?? 0);
+      if (hintOrder !== 0) {
+        return hintOrder;
+      }
+      // A group opened on its own leads with the switch that decides whether the rest applies.
+      if (params.collapseObjects && (left.key === "enabled" || right.key === "enabled")) {
+        return left.key === "enabled" ? -1 : 1;
+      }
+      return left.key.localeCompare(right.key);
+    });
 
   const reservedKeys = new Set(entries.map(([key]) => key));
   const additionalProperties = objectAdditionalPropertiesSchema(schema);
@@ -239,12 +246,12 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   const helpContext = ownHelp ? [...(params.helpContext ?? []), ownHelp] : params.helpContext;
 
   return {
-    fields: sorted.map(([propertyKey, node]) => {
+    fields: sorted.map(({ key: propertyKey, node, inline }) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
       return Object.assign(configChildRenderOptions(params), {
         contextLabel,
         helpContext,
-        inlineObject: inlineMode([propertyKey, node]),
+        inlineObject: inline,
         schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],

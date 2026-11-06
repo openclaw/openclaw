@@ -6,10 +6,16 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import { invokeTalkSpeakDirect } from "./test-helpers.js";
 
 describe("Talk catalog-selected ClawRouter speech", () => {
-  it("runs talk.speak through the registered provider and rejects a revoked offer", async () => {
+  it.each(["openai", "gradium"] as const)("Talk via %s refreshes grants", async (upstream) => {
+    const gradium = upstream === "gradium";
     await withTempHome(
       async () => {
-        const audio = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
+        const audio = gradium
+          ? Buffer.from(
+              "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "base64",
+            )
+          : Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
         const calls: Array<{ url: string; auth?: string; body?: unknown }> = [];
         let eligible = true;
         await withServer(
@@ -22,31 +28,43 @@ describe("Talk catalog-selected ClawRouter speech", () => {
                 res.end(
                   JSON.stringify({
                     version: "clawrouter.client-catalog.v1",
+                    observedAt: new Date().toISOString(),
+                    scope: {
+                      authType: "proxy_key",
+                      credentialId: "synthetic-router-id",
+                      principalId: null,
+                    },
                     providers: [
                       {
-                        id: "openai",
+                        id: upstream,
                         allowed: true,
                         executable: true,
-                        nativeBaseUrl: "/v1/native/openai",
+                        nativeBaseUrl: `/v1/native/${upstream}`,
                         routes: [
                           {
                             endpoint: "speech",
-                            path: "/v1/audio/speech",
+                            path: gradium ? "/api/post/speech/tts" : "/v1/audio/speech",
                             methods: ["POST"],
-                            requestFormat: "openai.audio_speech",
+                            requestFormat: gradium ? "gradium.speech" : "openai.audio_speech",
                             responseFormat: "audio.binary",
                           },
                         ],
-                        models: [
-                          { id: "openai/tts-1", upstream: "tts-1", capabilities: ["audio.speech"] },
-                        ],
+                        models: gradium
+                          ? []
+                          : [
+                              {
+                                id: "openai/tts-1",
+                                upstream: "tts-1",
+                                capabilities: ["audio.speech"],
+                              },
+                            ],
                         offers: [
                           {
                             endpoint: "speech",
-                            modelId: "openai/tts-1",
+                            modelId: gradium ? null : "openai/tts-1",
                             transport: "http",
                             routeKind: "manifest",
-                            route: "/v1/proxy/openai/speech",
+                            route: `/v1/proxy/${upstream}/speech`,
                             eligible,
                             affordability: "request-dependent",
                           },
@@ -61,8 +79,9 @@ describe("Talk catalog-selected ClawRouter speech", () => {
               for await (const chunk of req) {
                 body += chunk;
               }
+              expect(req.headers["x-api-key"]).toBeUndefined();
               calls.push({ url, auth: req.headers.authorization, body: JSON.parse(body) });
-              res.setHeader("content-type", "audio/mpeg");
+              res.setHeader("content-type", gradium ? "audio/wav" : "audio/mpeg");
               res.end(audio);
             })().catch((error: unknown) =>
               res.destroy(error instanceof Error ? error : new Error(String(error))),
@@ -84,11 +103,13 @@ describe("Talk catalog-selected ClawRouter speech", () => {
               talk: {
                 provider: "clawrouter",
                 providers: {
-                  clawrouter: {
-                    modelId: "openai/tts-1",
-                    speakerVoiceId: "shimmer",
-                    responseFormat: "mp3",
-                  },
+                  clawrouter: gradium
+                    ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
+                    : {
+                        modelId: "openai/tts-1",
+                        speakerVoiceId: "shimmer",
+                        responseFormat: "mp3",
+                      },
                 },
               },
             };
@@ -96,31 +117,39 @@ describe("Talk catalog-selected ClawRouter speech", () => {
             try {
               const result = await invokeTalkSpeakDirect({
                 text: "Synthetic Talk speech",
-                voiceId: "nova",
-                speed: 1.25,
+                voiceId: gradium ? "synthetic-override" : "nova",
+                ...(gradium ? {} : { speed: 1.25 }),
               });
               expect(result, JSON.stringify(result?.error)).toMatchObject({
                 ok: true,
                 payload: {
                   provider: "clawrouter",
                   audioBase64: audio.toString("base64"),
-                  outputFormat: "mp3",
-                  mimeType: "audio/mpeg",
+                  outputFormat: gradium ? "wav" : "mp3",
+                  mimeType: gradium ? "audio/wav" : "audio/mpeg",
                 },
               });
               expect(calls).toEqual([
                 { url: "/v1/catalog", auth: "Bearer synthetic-router-key" },
                 {
-                  url: "/v1/proxy/openai/speech",
+                  url: `/v1/proxy/${upstream}/speech`,
                   auth: "Bearer synthetic-router-key",
                   body: {
-                    body: {
-                      model: "tts-1",
-                      input: "Synthetic Talk speech",
-                      voice: "nova",
-                      response_format: "mp3",
-                      speed: 1.25,
-                    },
+                    body: gradium
+                      ? {
+                          text: "Synthetic Talk speech",
+                          voice_id: "synthetic-override",
+                          only_audio: true,
+                          output_format: "wav",
+                          json_config: '{"padding_bonus":0}',
+                        }
+                      : {
+                          model: "tts-1",
+                          input: "Synthetic Talk speech",
+                          voice: "nova",
+                          response_format: "mp3",
+                          speed: 1.25,
+                        },
                   },
                 },
               ]);
@@ -132,7 +161,7 @@ describe("Talk catalog-selected ClawRouter speech", () => {
               });
               expect(calls.map((call) => call.url)).toEqual([
                 "/v1/catalog",
-                "/v1/proxy/openai/speech",
+                `/v1/proxy/${upstream}/speech`,
                 "/v1/catalog",
               ]);
             } finally {
@@ -141,7 +170,13 @@ describe("Talk catalog-selected ClawRouter speech", () => {
           },
         );
       },
-      { env: { CLAWROUTER_API_KEY: undefined, OPENAI_API_KEY: "synthetic-upstream-not-router" } },
+      {
+        env: {
+          CLAWROUTER_API_KEY: undefined,
+          OPENAI_API_KEY: "synthetic-upstream-not-router",
+          GRADIUM_API_KEY: "synthetic-gradium-not-router",
+        },
+      },
     );
   });
 });

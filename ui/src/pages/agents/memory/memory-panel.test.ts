@@ -40,7 +40,7 @@ afterEach(() => {
 
 const REPAIR = "doctor.memory.repairDreamingArtifacts";
 const PREVIEW = ".dreams-diary__preview-panel";
-const CONFIRM_BUTTON = ".exec-approval-actions button:last-child";
+const CONFIRM_BUTTON = ".oc-dialog__footer button:last-child";
 const PREVIEW_TEXT = ".dreams-diary__preview-pre";
 
 function memoryStatus(promotedToday: number, extra: Record<string, unknown> = {}) {
@@ -87,18 +87,18 @@ it.each(["rejected", "declined"] as const)(
     } else {
       pending.resolve(false);
     }
-    await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
+    await waitForSolid(() => expect(page.query(".oc-dialog .callout.danger")).not.toBeNull());
     expect(page.toggle.open).toBe(true);
     expect(page.query<HTMLButtonElement>(CONFIRM_BUTTON)?.disabled).toBe(false);
     const retry = deferred<boolean>();
     patch.mockReturnValueOnce(retry.promise);
     click(page.container, CONFIRM_BUTTON);
     await waitForSolid(() => expect(page.text(CONFIRM_BUTTON)).toBe("Saving…"));
-    expect(page.query(".exec-approval-error")).toBeNull();
+    expect(page.query(".oc-dialog .callout.danger")).toBeNull();
     retry.resolve(true);
     await waitForSolid(() => expect(page.toggle.open).toBe(false));
     expect(patch).toHaveBeenCalledTimes(2);
-    expect(page.query(".exec-approval-error")).toBeNull();
+    expect(page.query(".oc-dialog .callout.danger")).toBeNull();
   },
 );
 
@@ -135,7 +135,7 @@ it.each(["reconnect", "agent", "client", "access", "unmount"] as const)(
     }
     pending.reject(new Error("retired transport failure"));
     await Promise.resolve();
-    expect(page.query(".exec-approval-error")).toBeNull();
+    expect(page.query(".oc-dialog .callout.danger")).toBeNull();
   },
 );
 
@@ -736,7 +736,7 @@ it.each([false, true])(
       plugins.entries = { "memory-core": { config: { dreaming: { enabled: false } } } };
     }
     context.setConfig({ plugins });
-    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is Off"));
+    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is off."));
     const toggle = page.query<HTMLInputElement>('input[role="switch"]')!;
     expect(toggle.disabled).toBe(true);
     expect(toggle.checked).toBe(false);

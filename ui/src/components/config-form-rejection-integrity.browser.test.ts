@@ -56,7 +56,8 @@ describe("config form rejection integrity", () => {
       initial: [{ "custom-1": {} }, {}],
       path: "entries",
       index: 1,
-      addLabel: "Add Entry",
+      addLabel: "Add",
+      commitLabel: "Add entry",
       key: "custom-2",
       value: "{}",
       expected: [{ "custom-1": {} }, { "custom-2": {} }],
@@ -102,7 +103,7 @@ describe("config form rejection integrity", () => {
     );
     edit(value, testCase.value);
     flush();
-    add(draft, testCase.addLabel);
+    add(draft, testCase.commitLabel ?? testCase.addLabel);
     expect(onPatch).toHaveBeenCalledWith([testCase.path], testCase.expected);
     container.remove();
   });
@@ -207,11 +208,11 @@ describe("config form rejection integrity", () => {
     add(draft);
     flush();
     expect(onPatch).not.toHaveBeenCalled();
-    expect(draft.textContent).toContain("1 item");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(1);
 
     renderValue();
     flush();
-    expect(draft.textContent).toContain("1 item");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(1);
 
     add(draft);
     flush();
@@ -219,12 +220,12 @@ describe("config form rejection integrity", () => {
     const [path, value] = onPatch.mock.calls[0] ?? [];
     expect(path).toEqual(["settings", "codes"]);
     expect(value).toEqual(Array.from({ length: 101 }, () => ""));
-    expect(draft.textContent).toContain("101 items");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(101);
     expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
 
     renderValue();
     flush();
-    expect(draft.textContent).toContain("101 items");
+    expect(draft.querySelectorAll(".cfg-array__item")).toHaveLength(101);
     expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
     container.remove();
   });

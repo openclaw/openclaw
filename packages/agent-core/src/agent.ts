@@ -22,6 +22,7 @@ import {
 import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { ToolInterruptions } from "./tool-interruption.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -141,6 +142,7 @@ export class Agent {
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
   private toolLoopRecoveryState: ToolLoopRecoveryState = { criticalToolLoopSeen: false };
+  private readonly toolInterruptions = new ToolInterruptions();
 
   public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
   public transformContext?: NonNullable<AgentOptions["transformContext"]>;
@@ -307,6 +309,10 @@ export class Agent {
     return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
   }
 
+  hasPendingSteeringMessage(predicate: (message: AgentMessage) => boolean): boolean {
+    return this.steeringQueue.hasPending(predicate);
+  }
+
   /** Active abort signal for the current run, if any. */
   get signal(): AbortSignal | undefined {
     return this.activeRun?.abortController.signal;
@@ -315,6 +321,19 @@ export class Agent {
   /** Abort the current run, if one is active. */
   abort(reason?: unknown): void {
     this.activeRun?.abortController.abort(reason);
+  }
+
+  getToolInterruptionStatus() {
+    return this.toolInterruptions.status();
+  }
+
+  subscribeToolInterruptionStatus(listener: () => void): () => void {
+    return this.toolInterruptions.subscribe(listener);
+  }
+
+  /** Request safe call cancellation without ending the active run. */
+  interruptTools() {
+    return this.toolInterruptions.interrupt();
   }
 
   /**
@@ -492,6 +511,7 @@ export class Agent {
       },
     );
     const config: AgentLoopConfig = {
+      toolInterruptions: this.toolInterruptions,
       model: this.mutableState.model,
       repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,

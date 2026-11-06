@@ -43,6 +43,7 @@ async function makeWorkspace(files: Record<string, string>) {
 }
 const cacheRoots = [
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
   ".cache/openclaw/bun",
   ".cache/ms-playwright",

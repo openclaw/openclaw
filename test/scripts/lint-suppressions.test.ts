@@ -174,6 +174,8 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-engine-metrics.ts|no-underscore-dangle|3",
         // The streaming probe forwards native methods with their original receivers.
         "scripts/lib/control-ui-engine-streaming-scenarios.ts|typescript/unbound-method|2",
+        // The diagnostic observer restores native methods and forwards their original receiver.
+        "scripts/lib/control-ui-mutation-audit.ts|typescript/unbound-method|2",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
@@ -195,6 +197,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The stack probe compares V8's formatter callback identity without invoking it.

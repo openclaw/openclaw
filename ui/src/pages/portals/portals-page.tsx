@@ -275,6 +275,7 @@ function PortalPreview(props: {
                 if (item.id === "copy") {
                   void copyToClipboard(props.portal.publicUrl).then((copied) =>
                     showToast({
+                      severity: copied ? "success" : "error",
                       message: t(
                         copied ? "portalsPage.embeddedCopied" : "portalsPage.embeddedCopyFailed",
                       ),
@@ -503,7 +504,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
     const pending = props.model.closePortal(portal);
     await Promise.resolve();
     await presentClose(view, portal.id, pending, retired).catch((error: unknown) =>
-      showToast({ message: formatUiError(error) }),
+      showToast({ severity: "error", message: formatUiError(error) }),
     );
   };
   const closing = () => presentation().closing() ?? state().closingPortalId;

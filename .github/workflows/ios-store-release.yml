@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.1"
+          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
       - name: Select Xcode and install pinned native tools
         run: |
@@ -116,14 +116,17 @@ jobs:
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
           key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+          # The build phase verifies each slice fingerprint and checksum before reuse.
+          restore-keys: |
+            watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-
 
       - name: Restore screenshot source packages
         continue-on-error: true
         timeout-minutes: 3
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: apps/ios/build/SnapshotDerivedData/SourcePackages
-          key: ios-screenshot-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
+          path: apps/ios/build/SourcePackages
+          key: ios-source-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
@@ -145,7 +148,7 @@ jobs:
             --source apps/ios/build/SnapshotDerivedData \
             --output "$RUNNER_TEMP/ios-spotlight-probe.json"
 
-      - name: Retain screenshots and sanitized diagnostics
+      - name: Retain screenshots and XCTest diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -153,6 +156,8 @@ jobs:
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/SnapshotTestResults/*.xcresult
+            apps/ios/build/SnapshotLogs/*.log
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
@@ -214,7 +219,11 @@ jobs:
         with:
           cache-mode: off
           install-bun: "false"
+          install-deps: "false"
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install mobile release dependencies
+        run: node scripts/install-mobile-release-dependencies.mjs
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
@@ -230,7 +239,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.1"
+          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
       - name: Select Xcode
         run: |
@@ -270,6 +279,9 @@ jobs:
         with:
           path: &watch_rtc_release_cache_path ${{ runner.temp }}/openclaw-watch-rtc-release-libraries
           key: watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+          # The build phase verifies each slice fingerprint and checksum before reuse.
+          restore-keys: |
+            watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-
 
       # Release sources use a different project path from ordinary CI. Keep the
       # default DerivedData package directory in its own cache namespace.

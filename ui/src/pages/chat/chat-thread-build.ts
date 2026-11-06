@@ -58,6 +58,7 @@ import {
 } from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
+  appendActiveRunItem,
   buildMessageItems,
   canvasPreviewBaseIdentity,
   createCanvasAssistantMessage,
@@ -176,13 +177,27 @@ export function buildChatItems(
     facts.history = history;
   }
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
-  const matchesSearch = createChatSearchMatcher(
+  const matchSource = createChatSearchMatcher(
     searchFiltering ? (props.searchQuery ?? "") : "",
     props.messageRecovery,
   );
+  // Canvas lookahead and row filtering share one result per source in this build.
+  // Derived inline/canvas messages have their own identity and search text.
+  const searchMatches = searchFiltering ? new Map<unknown, boolean>() : undefined;
+  const matchesSearch = (message: unknown) => {
+    if (!searchMatches) {
+      return true;
+    }
+    let matches = searchMatches.get(message);
+    if (matches === undefined) {
+      matches = matchSource(message);
+      searchMatches.set(message, matches);
+    }
+    return matches;
+  };
   const hiddenHistoryKeys = new Set<string>();
   const hideSearchMiss = (item: Extract<ChatItem, { kind: "message" }>) => {
-    if (searchFiltering && !matchesSearch(item.message)) {
+    if (!matchesSearch(item.message)) {
       hiddenHistoryKeys.add(item.key);
     }
   };
@@ -684,18 +699,6 @@ export function buildChatItems(
     (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
       (activeInputKey ? { afterKey: activeInputKey } : null),
   );
-  const appendActiveRunItem = (
-    item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
-  ) => {
-    // Queued custody is a ceiling for the whole live response, not just its text.
-    // Moving its working indicator past that ceiling splits and remeasures the run.
-    if (activeTurnBounds) {
-      const { maximum } = insertionIndexesForBounds(items, activeTurnBounds);
-      items.splice(maximum, 0, item);
-    } else {
-      items.push(item);
-    }
-  };
   if (
     activeReasoning ||
     (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
@@ -703,7 +706,7 @@ export function buildChatItems(
     const liveProgress = resolveProgress();
     const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
     // Unsaved answer text follows accepted steers at the run's live tail.
-    appendActiveRunItem({
+    appendActiveRunItem(items, activeTurnBounds, {
       kind: "stream",
       key: liveProgress.key,
       text: visibleText,
@@ -720,7 +723,7 @@ export function buildChatItems(
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    appendActiveRunItem({
+    appendActiveRunItem(items, activeTurnBounds, {
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
@@ -730,7 +733,7 @@ export function buildChatItems(
   } else if (props.subagentWait && !initialHistoryLoad) {
     // The handoff ended the parent's run, not its work. Carrying that run's
     // identity keeps the claw in the same frame instead of opening another row.
-    appendActiveRunItem({
+    appendActiveRunItem(items, activeTurnBounds, {
       kind: "reading-indicator",
       key: `waiting-subagents:${props.sessionKey}`,
       startedAt: props.subagentWait.startedAt,

@@ -79,7 +79,6 @@ export function createConfigPage(
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
   host: () => HTMLElement,
 ) {
-  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
   const lobsterdex = projectSource(subscribeLobsterdex, {
@@ -628,7 +627,6 @@ export function createConfigPage(
       onCameraRefresh: () => void mediaDeviceOwner.refresh("camera", true),
       onCameraSelect: mediaDeviceOwner.selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
-      assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: renderPageId === "advanced" ? undefined : titleForRoute(renderPageId),
       showSectionDocs: renderPageId !== "communications",

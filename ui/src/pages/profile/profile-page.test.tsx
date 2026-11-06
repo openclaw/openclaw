@@ -111,19 +111,25 @@ afterEach(async () => {
 
 it("refreshes translated copy when the locale changes while mounted", async () => {
   const { context } = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
-  context.gateway.snapshot.phase = "stopped";
-  context.gateway.snapshot.client = null;
   const page = mountProfilePage(context);
-  flush();
+  await waitForFast(() =>
+    expect(page.querySelector("#settings-profile-identity h2")).not.toBeNull(),
+  );
 
-  const note = page.querySelector(".settings-empty");
-  const englishNote = note?.textContent?.trim();
+  // Use unchanged copy: newly edited English intentionally falls back until translated.
+  const title = page.querySelector("#settings-profile-identity h2");
+  const englishTitle = title?.textContent?.trim();
 
   await i18n.setLocale("de");
   flush();
 
-  expect(note?.textContent?.trim()).toBe(t("profilePage.offline"));
-  expect(note?.textContent?.trim()).not.toBe(englishNote);
+  await waitForFast(() => {
+    const translatedTitle = page
+      .querySelector("#settings-profile-identity h2")
+      ?.textContent?.trim();
+    expect(translatedTitle).toBe(t("profilePage.identity.title"));
+    expect(translatedTitle).not.toBe(englishTitle);
+  });
 });
 
 it("renders identity before Usage statistics and opens the usage page", async () => {
@@ -588,7 +594,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   const accountContext = page.querySelector("openclaw-model-accounts");
-  expect(accountContext?.textContent).toContain("Augusta Ada");
   expect(accountContext?.textContent).not.toContain("Unsaved draft");
   stubProfileAvatarProcessing();
   const processAvatar = vi.spyOn(avatarProcessing, "processProfileAvatar");
@@ -748,7 +753,10 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   await waitForFast(() => expect(page.textContent).toContain("Ada · Personal workspace"));
   expect(page.querySelector("#profile-account-auth-answer")).toBeNull();
   expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(false);
-  expect(page.querySelector<HTMLButtonElement>(".profile-auth-link-unlink")?.disabled).toBe(false);
+  expect(
+    page.querySelector<HTMLButtonElement>(".profile-auth-account-picker .picker-select__trigger")
+      ?.disabled,
+  ).toBe(false);
 });
 
 it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
@@ -829,16 +837,16 @@ it("replaces a retired profile read when the same ID gains profile qualification
 });
 
 it.each([
-  { scopes: ["operator.read"], summary: "You have permission to view server information." },
+  { scopes: ["operator.read"], summary: "You can view settings and activity." },
   { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
   {
     scopes: ["operator.sessions.read"],
     summary: "You have permission to view your own sessions.",
   },
-  { scopes: ["operator.admin"], summary: "You have permission to manage this server." },
+  { scopes: ["operator.admin"], summary: "You have admin access." },
   {
     scopes: ["operator.approvals"],
-    summary: "This connection has a limited set of permissions.",
+    summary: "Your access is limited.",
   },
   {
     scopes: ["operator.read", "operator.sessions.write"],
@@ -855,12 +863,12 @@ it.each([
   expect(access?.querySelector(".settings-row__title")?.textContent).toBe(summary);
   const details = access?.querySelector("details");
   expect(details?.open).toBe(false);
-  expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+  expect(details?.querySelector("summary")?.textContent).toBe("Show details");
   expect(details?.querySelector(".settings-row__value")?.textContent).toBe(scopes.join(", "));
   expect(access?.textContent).toContain(
     "Sessions, browsers, and tools may have additional restrictions.",
   );
-  expect(access?.textContent).toContain("Ask your server administrator to review your access.");
+  expect(access?.textContent).toContain("Ask your admin to review your access.");
   expect(request).not.toHaveBeenCalled();
 });
 
@@ -871,7 +879,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   const page = mountProfilePage(harness.context);
   flush();
   expect(page.querySelector("#settings-profile-access")?.textContent).toContain(
-    "Your permissions could not be confirmed.",
+    "Couldn’t confirm your access. Reconnect to try again.",
   );
 
   harness.emitHello(gatewayHelloForMethods([], []));
@@ -905,7 +913,7 @@ it("reconnects through the connection owner while retaining the last access summ
   expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
     scope,
   );
-  expect(page.textContent).toContain("You have permission to manage this server.");
+  expect(page.textContent).toContain("You have admin access.");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));

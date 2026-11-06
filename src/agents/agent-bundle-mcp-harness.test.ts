@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 import type { AnyAgentTool } from "./tools/common.js";

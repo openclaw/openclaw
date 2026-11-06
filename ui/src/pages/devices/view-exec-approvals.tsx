@@ -169,12 +169,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
       {props.canAdmin ? (
         <SettingsSection
           title={t("devices.execApprovals.title")}
-          description={
-            <>
-              {t("devices.execApprovals.subtitlePrefix")}{" "}
-              <span class="mono">exec host=gateway/node</span>.
-            </>
-          }
+          description={t("devices.execApprovals.subtitlePrefix")}
         >
           <HostRow {...props} />
           {props.nativePolicy ? (

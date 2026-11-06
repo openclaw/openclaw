@@ -38,6 +38,7 @@ import {
 import {
   normalizeAssistantMediaSource,
   openAssistantMedia,
+  respondAssistantMediaReadFailure,
   resolveAssistantMediaAvailability,
   resolveAssistantMediaSource,
 } from "./control-ui-assistant-media-read.js";
@@ -422,11 +423,9 @@ export async function handleControlUiAssistantMediaRequest(
     });
     await delivery;
     return true;
-  } catch {
+  } catch (error) {
     await byteStream?.close();
-    if (!res.destroyed && !res.writableEnded) {
-      respondControlUiNotFound(res);
-    }
+    await respondAssistantMediaReadFailure(error, source, res, publishResponse);
     return true;
   }
 }
@@ -440,10 +439,7 @@ export async function handleControlUiAvatarRequest(
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
-  if (!urlRaw) {
-    return false;
-  }
-  if (!isReadHttpMethod(req.method)) {
+  if (!urlRaw || !isReadHttpMethod(req.method)) {
     return false;
   }
 
@@ -462,11 +458,14 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
+  // Avatar bytes are the image behind agent.identity.get's avatar URL, so they
+  // share its session-read authority instead of assistant media file access.
   const requestAuth = await authorizeControlUiReadRequestOrReply({
     ...opts,
     req,
     res,
     cfg: opts.cfg ?? opts.config,
+    requiredOperatorMethod: "agent.identity.get",
   });
   if (!requestAuth) {
     return true;

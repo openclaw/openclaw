@@ -47,6 +47,12 @@ import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
+import { expectInlineImageOpened } from "./chat-view-media.test-support.ts";
+import {
+  authStatus,
+  googleAuthProviders,
+  subscriptionProfiles,
+} from "./chat-view-model-auth.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   appendChatBubble,
@@ -66,6 +72,7 @@ import {
   renderChatView,
   getComposerTextarea,
   requireElement,
+  waitForElement,
   stubAnimationFrames,
   createDragEvent,
   getChatModelSelect,
@@ -1299,7 +1306,14 @@ describe("chat loading skeleton", () => {
   });
 
   it("keeps subscription usage and its navigation scoped to the configured base path", () => {
+    const controls = createComposerControlsFixture();
+    controls.model.accountSelection = {
+      kind: "shared",
+      label: "Selected account",
+      authProfileId: "openai",
+    };
     const container = renderChatView({
+      composerControls: controls,
       providerUsage: {
         basePath: "/rosita",
         modelAuthStatusResult: {
@@ -1310,7 +1324,11 @@ describe("chat loading skeleton", () => {
               displayName: "OpenAI",
               status: "ok",
               profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
+              usage: {
+                providerId: "openai",
+                authProfileId: "openai",
+                windows: [{ label: "Week", usedPercent: 72 }],
+              },
             },
           ],
         },
@@ -1455,7 +1473,7 @@ describe("chat loading skeleton", () => {
     });
 
     expect(container.querySelector(".chat-group.assistant .chat-turn-recap")).toBeNull();
-    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in");
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("42 output tokens");
   });
 });
 
@@ -1518,8 +1536,8 @@ describe("chat voice controls", () => {
   });
 
   it.each([
-    ["connecting", "Connecting voice input..."],
-    ["thinking", "Asking OpenClaw..."],
+    ["connecting", "Connecting voice input…"],
+    ["thinking", "Asking the agent…"],
   ] as const)("renders %s voice activity with the appropriate status region", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
@@ -2032,7 +2050,7 @@ describe("chat slash menu accessibility", () => {
         name: "status-report",
         description: "Prepare a status report.",
         source: "skill",
-        skillModelVisible: true,
+        skillReferenceable: true,
       },
       {
         key: "status-check",
@@ -2650,7 +2668,7 @@ describe("chat welcome", () => {
       modelSetupRequired: true,
       onModelSetup,
     });
-    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.textContent).toContain("No model set up");
     expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
     container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
@@ -2732,41 +2750,6 @@ describe("chat welcome", () => {
 });
 
 describe("chat model controls", () => {
-  const subscriptionProfiles = [
-    { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
-    { profileId: "openai:personal", type: "oauth", status: "ok", email: "peter@steipete.me" },
-  ] satisfies ModelAuthStatusResult["providers"][number]["profiles"];
-  const authStatus: ModelAuthStatusResult = {
-    ts: 1,
-    providers: [
-      {
-        provider: "openai-codex",
-        displayName: "OpenAI",
-        status: "ok",
-        profiles: subscriptionProfiles,
-        profileOrder: ["openai:personal", "openai:work"],
-        usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
-      },
-    ],
-  };
-
-  const googleAuthProviders = [
-    {
-      provider: "google",
-      displayName: "Google",
-      status: "static",
-      profiles: [{ profileId: "google:key", type: "api_key", status: "static" }],
-      apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
-    },
-    {
-      provider: "google-gemini-cli",
-      displayName: "Gemini CLI",
-      status: "ok",
-      profiles: [{ profileId: "google:oauth", type: "oauth", status: "ok" }],
-      usage: { providerId: "google", windows: [], plan: "Gemini Pro" },
-    },
-  ] satisfies ModelAuthStatusResult["providers"];
-
   it.each([
     {
       model: { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -2790,7 +2773,7 @@ describe("chat model controls", () => {
       providers: googleAuthProviders,
     },
     {
-      selected: undefined,
+      selected: "google:oauth",
       expected: "Gemini Pro",
       model: { id: "gemini", name: "Gemini", provider: "google" },
       providers: googleAuthProviders,
@@ -3453,9 +3436,9 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await import("./components/chat-effort-picker-panel.tsx");
     await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
-    expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
@@ -3801,6 +3784,8 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   const replyTarget = { messageId: "msg-1", text: "quoted", senderLabel: "User" };
   const renderReply = (overrides: Partial<ChatProps> = {}) =>
     renderChatView({ replyTarget, ...overrides });
@@ -4048,11 +4033,7 @@ describe("right-click Reply", () => {
         const cancel = document.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel");
         expect(cancel).toBeInstanceOf(HTMLButtonElement);
         expect(document.activeElement).toBe(cancel);
-        const confirmationEscape = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const confirmationEscape = escape();
         cancel!.dispatchEvent(confirmationEscape);
         expect(confirmationEscape.defaultPrevented).toBe(true);
         expect(document.querySelector(".chat-confirm-popover")).toBeNull();
@@ -4087,7 +4068,7 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
-  it("renders a dismissible reply preview without splitting an emoji at the limit", () => {
+  it("renders a dismissible reply preview without splitting an emoji at the limit", async () => {
     const onClearReply = vi.fn();
     const container = renderReply({
       replyTarget: {
@@ -4097,16 +4078,15 @@ describe("right-click Reply", () => {
       },
       onClearReply,
     });
-    expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
-      `${"x".repeat(119)}...`,
-    );
+    const preview = await waitForElement(container, ".chat-reply-preview__text");
+    expect(preview.textContent).toBe(`${"x".repeat(119)}...`);
     container.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss")!.click();
     expect(onClearReply).toHaveBeenCalledTimes(1);
   });
 
   it.each(["isComposing", "keyCode229", "rerendered-live"])(
     "preserves the reply and draft for %s Escape before deliberate reply clearing and abort",
-    (mode) => {
+    async (mode) => {
       const draft = "Keep this reply draft";
       const quote = "Keep this quoted message";
       const pane = createReplyPane(`reply-${mode}`, draft, quote);
@@ -4117,7 +4097,8 @@ describe("right-click Reply", () => {
         textarea.focus();
         expect(document.activeElement).toBe(textarea);
         expect(textarea.value).toBe(draft);
-        expect(pane.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(quote);
+        const preview = await waitForElement(pane.container, ".chat-reply-preview__text");
+        expect(preview.textContent).toBe(quote);
         const updatesBeforeComposition = pane.redraw.mock.calls.length;
         if (mode === "rerendered-live") {
           textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -4156,11 +4137,7 @@ describe("right-click Reply", () => {
           textarea.focus();
         }
         expect(pane.host.draft).toBe(visibleDraft);
-        const clear = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const clear = escape();
         textarea.dispatchEvent(clear);
         expect(clear.defaultPrevented).toBe(true);
         expect(pane.onClearReply).toHaveBeenCalledOnce();
@@ -4171,11 +4148,7 @@ describe("right-click Reply", () => {
         expect(textarea.value).toBe(visibleDraft);
         expect(document.activeElement).toBe(textarea);
 
-        const abort = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const abort = escape();
         textarea.dispatchEvent(abort);
         expect(abort.defaultPrevented).toBe(true);
         expect(pane.onAbort).toHaveBeenCalledOnce();
@@ -4191,33 +4164,26 @@ describe("right-click Reply", () => {
     },
   );
 
-  it("keeps a composing reply isolated from Escape in another pane", () => {
+  it("keeps a composing reply isolated from Escape in another pane", async () => {
     const paneA = createReplyPane("reply-pane-a", "Draft A", "Quote A");
     const paneB = createReplyPane("reply-pane-b", "Draft B", "Quote B");
     try {
       document.body.append(paneA.container, paneB.container);
       paneA.redraw();
       paneB.redraw();
+      await waitForElement(paneA.container, ".chat-reply-preview:not([role])");
       const textareaA = getComposerTextarea(paneA.container);
       const textareaB = getComposerTextarea(paneB.container);
       textareaA.focus();
       textareaA.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      const escapeB = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const escapeB = escape();
       textareaB.dispatchEvent(escapeB);
 
       expect(escapeB.defaultPrevented).toBe(true);
       expect(paneB.onClearReply).toHaveBeenCalledOnce();
       expect(paneB.host.replyTarget).toBeNull();
       expect(paneB.container.querySelector(".chat-reply-preview")).toBeNull();
-      const escapeA = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const escapeA = escape();
       textareaA.dispatchEvent(escapeA);
       expect(escapeA.defaultPrevented).toBe(false);
       expect(paneA.onClearReply).not.toHaveBeenCalled();
@@ -4363,14 +4329,9 @@ describe("chat transcript rendering cache", () => {
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(widgetUrl);
       expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
       requireElement(container, ".markdown-inline-image-button", "image control").dispatchEvent(
-        new MouseEvent("click", { bubbles: true }),
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
       );
-      await waitForFast(() =>
-        expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(
-          { src: imageSource, title: "Synthetic preview" },
-          7,
-        ),
-      );
+      await expectInlineImageOpened(onOpenImage, imageSource, 7);
       expect(onRequestOpenImage).toHaveBeenCalledOnce();
       requireElement(container, "a.markdown-file-link", "workspace file link").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),

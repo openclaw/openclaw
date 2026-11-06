@@ -67,8 +67,8 @@ async function openApprovals(page: Page) {
   });
   await page.goto(`${suite.server.baseUrl}nodes`);
   await gateway.waitForRequest("exec.approvals.get");
-  const section = page.locator(".settings-section", { hasText: "Exec approvals" });
-  return { gateway, section, hostSelect: section.getByRole("combobox", { name: "Host" }) };
+  const section = page.locator(".settings-section", { hasText: "Command approvals" });
+  return { gateway, section, hostSelect: section.getByRole("combobox", { name: "Device" }) };
 }
 
 const defaultsRow = (section: Locator) =>
@@ -157,7 +157,7 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Node is offline",
       });
-      await section.getByText("Couldn't load approvals", { exact: true }).waitFor();
+      await section.getByText("Couldn’t load approvals. Try again.", { exact: true }).waitFor();
       await section.getByText("Node is offline").waitFor();
       expect(await page.locator(".callout.danger").count()).toBe(0);
       await section.getByRole("button", { name: "Retry", exact: true }).click();

@@ -177,7 +177,9 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
       edits() ?? [],
     ),
   );
-  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
+  // A field the form already edits isn't worth repeating as text below it.
+  const extraFields = () =>
+    EXTRA_CHANNEL_FIELDS.filter((field) => field in value() && !node()?.properties?.[field]);
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const saving = () =>
     params.props.savingChannel === params.channelId ||
@@ -191,7 +193,7 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
     >
       <form
         id={channelConfigFormId(params.channelId)}
-        class="settings-row settings-row--stacked"
+        class="channels-detail__form"
         novalidate
         onSubmit={(event) => {
           event.preventDefault();

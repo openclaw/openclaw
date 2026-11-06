@@ -432,7 +432,7 @@ suite.define(() => {
         )
         .toBe("page");
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
-      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent Defaults");
+      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent defaults");
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
@@ -449,25 +449,11 @@ suite.define(() => {
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual([
-          "Ask OpenClaw",
-          "Approvals",
-          "Infrastructure",
-          "Labs",
-          "Advanced",
-          "Debug",
-          "Logs",
-          "Updates",
-          "About",
-          "Profile",
-          "Appearance",
-          "Notifications",
-          "Gateway",
-        ]);
+        .toEqual(["Infrastructure", "Labs", "Advanced", "Debug", "Logs", "Updates", "About"]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("browser");
       const browserResult = settingsSidebar.getByRole("link", {
-        name: "Browser",
+        name: "Browser Infrastructure",
         exact: true,
       });
       await expect.poll(() => browserResult.isVisible()).toBe(true);
@@ -482,7 +468,7 @@ suite.define(() => {
       await settingsSearch.fill("session observer");
       const sidebarPreferencesResult = settingsSidebar.getByRole("link", {
         exact: true,
-        name: "Sidebar",
+        name: "Sidebar Appearance",
       });
       await expect.poll(() => sidebarPreferencesResult.isVisible()).toBe(true);
       await sidebarPreferencesResult.click();
@@ -501,7 +487,7 @@ suite.define(() => {
       await settingsSearch.fill("message width");
       const chatPreferencesResult = settingsSidebar.getByRole("link", {
         exact: true,
-        name: "Chat",
+        name: "Chat Appearance",
       });
       await expect.poll(() => chatPreferencesResult.isVisible()).toBe(true);
       await chatPreferencesResult.click();
@@ -534,7 +520,10 @@ suite.define(() => {
         )
         .toBe("page");
       await settingsSearch.fill("sandbox access");
-      const toolsResult = settingsSidebar.getByRole("link", { name: "Tools", exact: true });
+      const toolsResult = settingsSidebar.getByRole("link", {
+        name: "Tools Agent defaults",
+        exact: true,
+      });
       await expect.poll(() => toolsResult.isVisible()).toBe(true);
       await toolsResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");

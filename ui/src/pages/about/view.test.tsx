@@ -75,7 +75,7 @@ it("renders the identity, links, license, and Clawd's active wave", () => {
     "https://docs.openclaw.ai/releases",
     "https://openclaw.ai",
     "https://github.com/openclaw/openclaw",
-    "https://discord.gg/clawd",
+    "https://openclaw.ai/discord?from=openclaw-app-community",
     "https://x.com/openclaw",
   ]);
   for (const link of links) {
@@ -140,7 +140,7 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
 
 it("copies version and full commit, falling back to whichever exists", async () => {
   const writeText = vi.fn(async () => {});
-  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
   const { container, props, update } = render();
   const copy = async (index: number) => {
     writeText.mockClear();

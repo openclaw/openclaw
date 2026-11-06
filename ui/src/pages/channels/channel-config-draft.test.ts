@@ -1,15 +1,13 @@
-import { describe, expect, it } from "vitest";
-import type { ChannelConfigEdit } from "../../lib/channels/index.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { ChannelConfigBase, ChannelConfigEdit } from "../../lib/channels/index.ts";
 import {
   applyChannelConfigEdits,
   buildChannelConfigPatch,
-  channelConfigEditBase,
   dropConflictingChannelConfigEdits,
-  emptiesStoredSecret,
+  editChannelField,
   findChannelConfigConflicts,
-  keepStoredSecrets,
+  keptChannelEdits,
   rebaseChannelConfigEdits,
-  writesOverReference,
 } from "./channel-config-draft.ts";
 
 const schema = {
@@ -99,25 +97,24 @@ describe("channel config draft", () => {
   });
 });
 
-describe("emptiesStoredSecret", () => {
+describe("channel edits over stored secrets", () => {
   const base = { botToken: "__OPENCLAW_REDACTED__", proxy: "http://x" };
+  const root = { channels: { telegram: base } };
   const tokenPath = ["channels", "telegram", "botToken"];
 
-  it("keeps a stored secret when its field is emptied", () => {
-    expect(emptiesStoredSecret(base, "telegram", tokenPath, "")).toBe(true);
-    expect(emptiesStoredSecret(base, "telegram", tokenPath, undefined)).toBe(true);
+  it.each(["", undefined])("keeps a stored secret when its field is emptied to %s", (value) => {
+    expect(keptChannelEdits({}, "telegram", root, [{ path: tokenPath, value }])).toEqual([]);
   });
 
-  it("leaves typed values and other fields as edits", () => {
-    expect(emptiesStoredSecret(base, "telegram", tokenPath, "new")).toBe(false);
-    expect(emptiesStoredSecret(base, "telegram", ["channels", "telegram", "proxy"], "")).toBe(
-      false,
-    );
-    expect(emptiesStoredSecret(null, "telegram", tokenPath, "")).toBe(false);
+  it("leaves other fields and fields without a stored value as edits", () => {
+    const edit = { path: ["channels", "telegram", "proxy"], value: "" };
+    expect(keptChannelEdits({}, "telegram", root, [edit])).toEqual([edit]);
+    const empty = { path: tokenPath, value: "" };
+    expect(keptChannelEdits({}, "telegram", null, [empty])).toEqual([empty]);
   });
 });
 
-describe("writesOverReference", () => {
+describe("channel edits over references", () => {
   const REDACTED = "__OPENCLAW_REDACTED__";
   const token = ["channels", "telegram", "botToken"];
   const secretRefId = ["channels", "telegram", "webhookSecret", "id"];
@@ -140,22 +137,33 @@ describe("writesOverReference", () => {
     },
   });
 
-  it("lets an edit replace plain text in the file", () => {
-    expect(writesOverReference(snapshot(REDACTED), token)).toBe(false);
-    expect(writesOverReference(snapshot(REDACTED), ["channels", "telegram", "proxy"])).toBe(false);
-  });
-
-  it("never lets an edit replace a reference", () => {
-    expect(writesOverReference(snapshot("${TELEGRAM_TOKEN}"), token)).toBe(true);
-    // A template is redacted like plaintext; the Gateway then withholds the file's text.
-    expect(writesOverReference(snapshot(REDACTED, null), token)).toBe(true);
-    expect(writesOverReference(snapshot({ $include: "./token.json5" }), token)).toBe(true);
-    expect(writesOverReference(snapshot(REDACTED), secretRefId)).toBe(true);
-    expect(writesOverReference(null, token)).toBe(false);
+  it("allows plain-text edits but preserves references", () => {
+    const edits = [
+      { path: token, value: "new" },
+      { path: ["channels", "telegram", "proxy"], value: "new-proxy" },
+    ];
+    expect(
+      keptChannelEdits({ configSnapshot: snapshot(REDACTED) }, "telegram", config, edits),
+    ).toEqual(edits);
+    for (const [saved, editPath] of [
+      [snapshot("${TELEGRAM_TOKEN}"), token],
+      // A template is redacted like plaintext; the Gateway withholds the file's text.
+      [snapshot(REDACTED, null), token],
+      [snapshot({ $include: "./token.json5" }), token],
+      [snapshot(REDACTED), secretRefId],
+    ] as const) {
+      expect(
+        keptChannelEdits({ configSnapshot: saved }, "telegram", config, [
+          { path: editPath, value: "new" },
+        ]),
+      ).toEqual([]);
+    }
+    const edit = { path: token, value: "new" };
+    expect(keptChannelEdits({ configSnapshot: null }, "telegram", null, [edit])).toEqual([edit]);
   });
 });
 
-describe("keepStoredSecrets", () => {
+describe("channel edits of whole lists containing secrets", () => {
   const REDACTED = "__OPENCLAW_REDACTED__";
   const listPath = ["channels", "telegram", "accounts"];
   const base = {
@@ -172,15 +180,7 @@ describe("keepStoredSecrets", () => {
     sourceConfig: root,
     parsed: root,
   });
-  const keep = (value: unknown, raw: string | null = "{}") =>
-    keepStoredSecrets({
-      base,
-      snapshot: snapshot(raw),
-      channelId: "telegram",
-      path: listPath,
-      value,
-    });
-
+  const state = { configSnapshot: snapshot("{}") };
   it("keeps a secret emptied inside a list row the form sends whole", () => {
     // Typing over row b's token and clearing it sends the list without that token.
     const emptied = [{ name: "a", token: REDACTED }, { name: "b" }];
@@ -192,22 +192,22 @@ describe("keepStoredSecrets", () => {
     });
     expect(unguarded?.patch).toEqual({ channels: { telegram: { accounts: emptied } } });
 
-    expect(keep(emptied)).toBeUndefined();
-    expect(
-      keep([
-        { name: "a", token: REDACTED },
-        { name: "B", token: "" },
-      ]),
-    ).toEqual({
-      value: [
-        { name: "a", token: REDACTED },
-        { name: "B", token: REDACTED },
-      ],
-    });
+    const edit = { path: listPath, value: emptied };
+    expect(keptChannelEdits(state, "telegram", root, [edit])).toEqual([]);
+    const renamed = [
+      { name: "a", token: REDACTED },
+      { name: "B", token: "" },
+    ];
+    const preserved = [
+      { name: "a", token: REDACTED },
+      { name: "B", token: REDACTED },
+    ];
+    expect(keptChannelEdits(state, "telegram", root, [{ path: listPath, value: renamed }])).toEqual(
+      [{ path: listPath, value: preserved }],
+    );
     // Removing a row still removes it.
-    expect(keep([{ name: "a", token: REDACTED }])).toEqual({
-      value: [{ name: "a", token: REDACTED }],
-    });
+    const removed = { path: listPath, value: [{ name: "a", token: REDACTED }] };
+    expect(keptChannelEdits(state, "telegram", root, [removed])).toEqual([removed]);
   });
 
   it("replaces plain text in a row, and never a reference", () => {
@@ -215,9 +215,12 @@ describe("keepStoredSecrets", () => {
       { name: "a", token: REDACTED },
       { name: "b", token: "new" },
     ];
-    expect(keep(typed)).toEqual({ value: typed });
+    const edit = { path: listPath, value: typed };
+    expect(keptChannelEdits(state, "telegram", root, [edit])).toEqual([edit]);
     // A template is redacted like plaintext; the Gateway then withholds the file's text.
-    expect(keep(typed, null)).toBeUndefined();
+    expect(keptChannelEdits({ configSnapshot: snapshot(null) }, "telegram", root, [edit])).toEqual(
+      [],
+    );
   });
 });
 
@@ -244,33 +247,40 @@ describe("channel config draft against a file that changed elsewhere", () => {
       value: { "-1001": { requireMention: true }, "-1002": { requireMention: true } },
     },
   ];
-  const bases = draft.map((edit) => channelConfigEditBase(before, edit.path));
+  const bases: ChannelConfigBase[] = [
+    { path: path("allowFrom"), value: ["111", "222"] },
+    { path: path("dmPolicy"), value: "allowlist" },
+    { path: path("groups"), value: { "-1001": { requireMention: true } } },
+  ];
 
-  it("identifies edited fields changed elsewhere before Save", () => {
+  it("identifies only edited fields changed elsewhere before Save", () => {
     expect(findChannelConfigConflicts(bases, elsewhere)).toEqual([
       path("allowFrom"),
       path("dmPolicy"),
       path("groups"),
     ]);
-  });
-
-  it("finds nothing when the file is still what the edits were made against", () => {
     expect(findChannelConfigConflicts(bases, before)).toEqual([]);
   });
 
   it("guards a whole list when an edit lands inside it", () => {
-    expect(channelConfigEditBase(before, path("allowFrom", 1))).toEqual({
-      path: path("allowFrom"),
-      value: ["111", "222"],
-    });
-    expect(channelConfigEditBase(before, path("groups", "-1001", "requireMention"))).toEqual({
-      path: path("groups", "-1001", "requireMention"),
-      value: true,
-    });
-    expect(channelConfigEditBase(before, path("proxy", "url"))).toEqual({
-      path: path("proxy", "url"),
-      value: undefined,
-    });
+    const editConfig = vi.fn();
+    for (const target of [
+      path("allowFrom", 1),
+      path("groups", "-1001", "requireMention"),
+      path("proxy", "url"),
+    ]) {
+      editChannelField(
+        { editConfig, restoreConfigField: vi.fn() },
+        { configForm: before, configSnapshot: { sourceConfig: before } },
+        "telegram",
+        { path: target, value: "changed" },
+      );
+    }
+    expect(editConfig.mock.calls.map((call) => call[2])).toEqual([
+      { path: path("allowFrom"), value: ["111", "222"] },
+      { path: path("groups", "-1001", "requireMention"), value: true },
+      { path: path("proxy", "url"), value: undefined },
+    ]);
   });
 
   it("keeps the edits on Overwrite and drops them on Reload", () => {
@@ -280,7 +290,7 @@ describe("channel config draft against a file that changed elsewhere", () => {
     const extra: ChannelConfigEdit = { path: path("textChunkLimit"), value: 1000 };
     const kept = dropConflictingChannelConfigEdits(
       [...draft, extra],
-      [...bases, channelConfigEditBase(before, extra.path)],
+      [...bases, { path: extra.path, value: undefined }],
       findChannelConfigConflicts(bases, elsewhere),
     );
     expect(kept).toEqual({

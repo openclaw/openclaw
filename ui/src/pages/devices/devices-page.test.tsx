@@ -119,9 +119,9 @@ describe("DevicesPage gateway lifecycle", () => {
       page.publishConfig();
       const queries = getQueriesForElement(page.container);
       await waitForSolid(() =>
-        expect(queries.getByRole("combobox", { name: "Node" })).toHaveProperty("disabled", false),
+        expect(queries.getByRole("combobox", { name: "Device" })).toHaveProperty("disabled", false),
       );
-      const binding = queries.getByRole("combobox", { name: "Node" });
+      const binding = queries.getByRole("combobox", { name: "Device" });
       if (reason === "reconnect") {
         invalidateConfigConnection(page.config);
         fixture.emitSnapshot({ ...snapshot, phase: "reconnecting", hello: null });
@@ -135,7 +135,7 @@ describe("DevicesPage gateway lifecycle", () => {
       read.completion.resolve({ ok: false, error: "Config failed" });
       page.publishConfig();
       await waitForSolid(() => {
-        expect(queries.getByRole("combobox", { name: "Node" })).toBe(binding);
+        expect(queries.getByRole("combobox", { name: "Device" })).toBe(binding);
         expect(binding).toHaveProperty("value", "draft-node");
         expect(binding).toHaveProperty("disabled", false);
         expect(page.config.configFormDirty).toBe(true);
@@ -189,7 +189,7 @@ describe("DevicesPage gateway lifecycle", () => {
     page.publishConfig();
     await waitForSolid(() =>
       expect(
-        page.container.querySelector<HTMLSelectElement>('select[aria-label="Node"]')?.value,
+        page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')?.value,
       ).toBe("draft-node"),
     );
     invalidateConfigConnection(page.config);
@@ -200,7 +200,7 @@ describe("DevicesPage gateway lifecycle", () => {
     ).toBe("allowlist");
     expect(button(page.container, "Save").disabled).toBe(true);
     expect(
-      page.container.querySelector<HTMLSelectElement>('select[aria-label="Node"]')?.value,
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')?.value,
     ).toBe("draft-node");
     fixture.emitSnapshot(snapshot);
     expect(
@@ -499,28 +499,35 @@ describe("DevicesPage gateway lifecycle", () => {
     );
   });
 
-  it("keeps initial and event-driven pairing and exec-approval loads gated by scopes", async () => {
-    const { client, request } = clientFor();
-    const fixture = gatewayFixture(
-      gatewaySnapshot(
-        client,
-        true,
-        ["node.list", "device.pair.list", "exec.approvals.get"],
-        ["operator.read"],
-      ),
-    );
-    const page = mountPage(fixture);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
-    fixture.emitEvent("presence", {
-      presence: [{ instanceId: "browser-1", ts: 2_000, reason: "connect" }],
-    });
-    fixture.emitEvent("device.pair.changed", {});
-    await Promise.resolve();
-    flush();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
-    expect(button(page.container, t("devices.pairing.button")).disabled).toBe(true);
-  });
+  it.each([true, false, undefined])(
+    "keeps pairing and command approvals gated with admin ceiling %s",
+    async (roleAllowsAdmin) => {
+      const { client, request } = clientFor();
+      const fixture = gatewayFixture(
+        gatewaySnapshot(
+          client,
+          true,
+          ["node.list", "device.pair.list", "exec.approvals.get"],
+          ["operator.read"],
+          roleAllowsAdmin,
+        ),
+      );
+      const page = mountPage(fixture);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+      fixture.emitEvent("presence", {
+        presence: [{ instanceId: "browser-1", ts: 2_000, reason: "connect" }],
+      });
+      fixture.emitEvent("device.pair.changed", {});
+      expect(page.container.textContent).toContain(
+        roleAllowsAdmin === true ? "this browser needs approval" : "only admins can change them",
+      );
+      await Promise.resolve();
+      flush();
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+      expect(button(page.container, t("devices.pairing.button")).disabled).toBe(true);
+    },
+  );
 
   it.each([
     { name: "node disconnects", role: "node", nodeRoles: ["node"], operatorRoles: ["operator"] },
@@ -828,13 +835,12 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(document.body.querySelector(".secret-reveal__callout")?.textContent).toContain(
       t("devices.inventory.rotateWithheldException"),
     );
-    expect(document.body.querySelector(".secret-reveal__status")).not.toBeNull();
     expect(document.body.querySelector(".secret-reveal__note")?.textContent).toContain(
       t("devices.inventory.rotateWithheldNote"),
     );
     expect(document.body.querySelector(".secret-reveal__code")).toBeNull();
     expect(document.body.querySelector("openclaw-modal-dialog .chat-copy-btn")).toBeNull();
-    expect(dialogButton(t("common.close")).className).toBe("btn secret-reveal__dismiss");
+    expect(dialogButton(t("common.close")).className).toBe("btn");
     dialogButton(t("common.close")).click();
     await expectNoModal();
   });

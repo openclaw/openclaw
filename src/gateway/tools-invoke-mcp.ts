@@ -41,7 +41,7 @@ async function prepareSessionMcpOverridesCheck(params: AcquireInvocationMcpTools
 }
 
 /** Materialized tools from one private MCP runtime, whose disposal and policy check the owner holds. */
-export type InvocationMcpTools = {
+type InvocationMcpTools = {
   tools: readonly AnyAgentTool[];
   /** Why the owning server listed no tools, when acquisition, connection, or listing failed. */
   unavailable?: string;
@@ -101,7 +101,7 @@ function resolveOtherServerDenials(params: AcquireInvocationMcpToolsParams): str
  * `unavailable` reason; only cancellation rejects, after the runtime retires.
  * The caller still applies tool policy to the returned tools.
  */
-export async function acquireInvocationMcpTools(
+async function acquireInvocationMcpTools(
   params: AcquireInvocationMcpToolsParams,
 ): Promise<InvocationMcpTools | undefined> {
   if (!params.toolName.includes(TOOL_NAME_SEPARATOR)) {

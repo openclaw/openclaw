@@ -130,28 +130,53 @@ function createDataUsageFixture(): InteractionFixtureOverrides {
 
 async function ready(page: Page) {
   await page.locator(".usage-page .session-bar-row").first().waitFor();
-  await page.locator(".usage-page .usage-query-input").waitFor();
-  await page.waitForFunction(
-    () =>
-      document.querySelector<HTMLButtonElement>('.usage-page button[aria-label="Refresh"]')
-        ?.disabled === false,
-  );
+  await page.waitForFunction(() => {
+    const refresh = document.querySelector<HTMLButtonElement>(
+      '.usage-page button[aria-label="Refresh"]',
+    );
+    if (refresh) {
+      return !refresh.disabled;
+    }
+    const action = document.querySelector(
+      '[id="usage-phone-actions:content"] [data-value="refresh"]',
+    );
+    return action !== null && action.getAttribute("aria-disabled") !== "true";
+  });
+}
+
+async function openFilters(page: Page) {
+  if (await page.locator(".usage-query-input").isVisible()) {
+    return false;
+  }
+  await page.locator(".usage-filter-sheet__trigger").click();
+  await page.locator(".usage-query-input").waitFor();
+  return true;
+}
+
+async function closeFilters(page: Page, opened: boolean) {
+  if (opened) {
+    await page.locator("#usage-filter-sheet .oc-sheet__close").click();
+    await page.locator("#usage-filter-sheet").waitFor({ state: "hidden" });
+  }
 }
 
 async function months(page: Page) {
   await ready(page);
+  const opened = await openFilters(page);
   const now = Date.now();
   const start = new Date(now - (dayCount - 1) * dayMs).toISOString().slice(0, 10);
   const end = new Date(now).toISOString().slice(0, 10);
-  const dates = page.locator(".usage-date-range input");
+  const startInput = page.getByLabel("Start date", { exact: true });
+  const endInput = page.getByLabel("End date", { exact: true });
   // The fixture uses UTC days; the page's default end date uses the browser's local day.
-  await dates.last().fill(end);
-  await dates.last().press("Tab");
-  await dates.first().fill(start);
-  await dates.first().press("Tab");
+  await endInput.fill(end);
+  await endInput.press("Tab");
+  await startInput.fill(start);
+  await startInput.press("Tab");
+  await closeFilters(page, opened);
   await page
-    .locator(".usage-query-count")
-    .getByText(/12[,.]?000/)
+    .locator(".sessions-card-count")
+    .filter({ hasText: /12[,.]?000/ })
     .waitFor();
 }
 
@@ -202,6 +227,7 @@ const usageScenarios: readonly InteractionScenario[] = [
     expected: "The model filter selects one of 96 models and shows its 125 matching sessions.",
     prepare: months,
     run: async (page, gateway) => {
+      const opened = await openFilters(page);
       const after = (await gateway.getRequests("sessions.usage")).length;
       await page.locator('[id="usage-filter-model:trigger"]').click();
       await page
@@ -209,6 +235,7 @@ const usageScenarios: readonly InteractionScenario[] = [
         .click();
       await gateway.waitForRequest("sessions.usage", { after });
       await page.locator('[id="usage-filter-model:trigger"]').click();
+      await closeFilters(page, opened);
       await page.locator(".usage-query-count").getByText(/125/).waitFor();
       return { models: modelCount, matchingSessions: sessionCount / modelCount };
     },
@@ -220,10 +247,12 @@ const usageScenarios: readonly InteractionScenario[] = [
     expected: "Applying a query returns the one matching session from 12,000 rows.",
     prepare: months,
     run: async (page, gateway) => {
+      const opened = await openFilters(page);
       const after = (await gateway.getRequests("sessions.usage", { query })).length;
       await page.locator(".usage-query-input").fill(query);
       await page.locator(".usage-query-input").press("Enter");
       await gateway.waitForRequest("sessions.usage", { after, match: { query } });
+      await closeFilters(page, opened);
       await page.locator(".session-bar-title").getByText(query, { exact: true }).waitFor();
       return { populationSessions: sessionCount, matchingSessions: 1 };
     },
@@ -238,7 +267,8 @@ const usageScenarios: readonly InteractionScenario[] = [
     run: async (page, gateway) => {
       const firstTitle = await page.locator(".session-bar-title").first().textContent();
       const after = (await gateway.getRequests("sessions.usage", { sort: "recent" })).length;
-      await page.locator(".sessions-sort select").selectOption("recent");
+      // Native type-ahead emits a trusted input boundary for application timing.
+      await page.locator(".sessions-sort select").press("r");
       await gateway.waitForRequest("sessions.usage", { after, match: { sort: "recent" } });
       await page.waitForFunction(
         (previous) => document.querySelector(".session-bar-title")?.textContent !== previous,
@@ -256,10 +286,16 @@ const usageScenarios: readonly InteractionScenario[] = [
     prepare: months,
     run: async (page, gateway) => {
       const after = (await gateway.getRequests("sessions.usage")).length;
-      await page
-        .locator(".usage-page")
-        .getByRole("button", { name: "Refresh", exact: true })
-        .click();
+      const refresh = page.locator(".usage-page").getByRole("button", {
+        name: "Refresh",
+        exact: true,
+      });
+      if (await refresh.isVisible()) {
+        await refresh.click();
+      } else {
+        await page.locator(".usage-phone-actions__trigger").click();
+        await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+      }
       await gateway.waitForRequest("sessions.usage", { after });
       await ready(page);
     },

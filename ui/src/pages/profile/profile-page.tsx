@@ -15,9 +15,9 @@ import {
   Show,
 } from "solid-js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
@@ -34,6 +34,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
@@ -311,7 +312,11 @@ export function ProfilePage() {
                       <openclaw-viewer-avatar
                         prop:user={{
                           id: profile().id,
-                          name: profile().displayName ?? undefined,
+                          name: userProfileDisplayName(
+                            profile().id,
+                            profile().displayName,
+                            profile().githubIdentity?.login,
+                          ),
                           email: profile().emails[0],
                           avatarUrl: avatarUrl() ?? undefined,
                           watchedSessions: [],
@@ -527,14 +532,14 @@ export function ProfilePage() {
 
   return (
     <openclaw-profile-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("profile")}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
-            </div>
-          </div>
+      <SettingsPageHeader
+        title={titleForRoute("profile")}
+        subtitle={
+          <>
+            {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
+          </>
+        }
+        actions={
           <Show when={view().connected}>
             <RefreshButton
               class="profile-refresh"
@@ -544,8 +549,8 @@ export function ProfilePage() {
               onClick={() => state.refreshManually()}
             />
           </Show>
-        </section>
-      </ShellLayoutBoundary>
+        }
+      />
       <SettingsWorkspace>
         <SettingsPage>
           <Show
@@ -609,9 +614,11 @@ export function ProfilePage() {
               target={state.modelAccountsTarget}
               personLabel={
                 view().ownProfile
-                  ? view().ownProfile!.displayName?.trim() ||
-                    view().ownProfile!.emails[0] ||
-                    t("profilePage.modelAccounts.currentPerson")
+                  ? userProfileDisplayName(
+                      view().ownProfile!.id,
+                      view().ownProfile!.displayName,
+                      view().ownProfile!.githubIdentity?.login,
+                    ) || t("profilePage.modelAccounts.currentPerson")
                   : null
               }
             />

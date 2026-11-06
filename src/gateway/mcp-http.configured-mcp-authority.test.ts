@@ -1,7 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import {
   listenLoopback,
   closeHttpServer,
@@ -27,9 +27,9 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -177,6 +177,7 @@ let state: OpenClawTestState;
 let config: OpenClawConfig;
 let probe: Awaited<ReturnType<typeof startProbeServer>>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+let resetWorkshopPlugin: (() => void) | undefined;
 const contexts: PreparedCliRunContext[] = [];
 const admissions: PreparedAgentRunAdmission[] = [];
 
@@ -184,7 +185,7 @@ beforeAll(async () => {
   state = await createOpenClawTestState({
     prefix: "openclaw-mcp-configured-authority-",
     layout: "state-only",
-    env: { OPENCLAW_TEST_FAST: "0", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    env: { OPENCLAW_TEST_FAST: "0", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0" },
   });
   probe = await startProbeServer();
   config = {
@@ -198,7 +199,7 @@ beforeAll(async () => {
         main: { workspace: state.workspaceDir },
         // Same workspace, but every session runs sandboxed.
         sbx: { workspace: state.workspaceDir, sandbox: { mode: "all" } },
-        // Sandboxed, with Workshop admitted by the sandbox tool policy.
+        // Sandboxed, with Workshop named in the sandbox tool policy.
         sbxw: {
           workspace: state.workspaceDir,
           sandbox: { mode: "all" },
@@ -206,7 +207,7 @@ beforeAll(async () => {
         },
       },
     },
-    plugins: { enabled: false },
+    plugins: { enabled: true, allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
     tools: {
       allow: ["read", "probe__*", "skill_workshop", "skill_library"],
@@ -222,7 +223,6 @@ beforeAll(async () => {
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
   openOpenClawStateDatabase();
-  setActivePluginRegistry(createEmptyPluginRegistry());
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
@@ -240,6 +240,15 @@ beforeAll(async () => {
   scheduler = createTestGatewayScheduler();
   await setSessionMcpRuntimeScheduler(scheduler);
   await ensureMcpLoopbackServer();
+});
+
+beforeEach(async () => {
+  resetWorkshopPlugin = (await activateWorkshopPluginForTest(config)).reset;
+});
+
+afterEach(async () => {
+  resetWorkshopPlugin?.();
+  await closeSkillsWatchers(true);
 });
 
 afterAll(async () => {
@@ -467,11 +476,11 @@ it.for(["personal", "workspace"] as const)(
 );
 
 it.for([
-  { agentId: "sbx", policy: "default sandbox tool policy", listed: false },
-  { agentId: "sbxw", policy: "sandbox policy admitting skill_workshop", listed: true },
+  { agentId: "sbx", policy: "default sandbox tool policy" },
+  { agentId: "sbxw", policy: "sandbox policy allowing skill_workshop" },
 ])(
   "refuses a sandboxed completion's workspace Workshop write under the $policy",
-  async ({ agentId, listed }, { signal }) => {
+  async ({ agentId }, { signal }) => {
     const human: SkillLibraryAuthoringCapability = {
       target: "personal",
       defaultTarget: "workspace",
@@ -497,14 +506,12 @@ it.for([
       await prepareTurn(name, false, signal, human, agentId),
     );
     const completionTurn = await prepareTurn(name, true, signal, undefined, agentId);
-    // Human and completion turns list the same Workshop surface.
+    // The plugin withholds Workshop in sandboxed runs even when tool policy allows it.
     expect(await workshopDefinition(completionTurn)).toEqual(humanDefinition);
-    expect(humanDefinition !== undefined).toBe(listed);
+    expect(humanDefinition).toBeUndefined();
     expect(await completionTurn.call("skill_workshop", create)).toEqual({
       isError: true,
-      text: listed
-        ? expect.stringContaining("Workshop is unavailable in a sandboxed run")
-        : "Tool not available: skill_workshop",
+      text: "Tool not available: skill_workshop",
     });
     expect(await snapshot()).toEqual(before);
   },

@@ -1,5 +1,4 @@
 /** Owns one admitted worker-native app-server and its execution environment. */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -18,6 +17,7 @@ import {
   resolveManagedCodexNativeCommand,
   isManagedCodexDesktopCommand,
 } from "./app-server/managed-binary.js";
+import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import { createStdioTransport } from "./app-server/transport-stdio.js";
 import {
   deriveCodexWorkerConfigurationVersion,
@@ -114,7 +114,7 @@ export async function runCodexNodeAppServer(params: {
   });
   const workspace = { ...params.workspace, repositoryReadiness: resources.readiness };
   const frames = params.io.frames;
-  let child: ChildProcessWithoutNullStreams | undefined;
+  let child: CodexStdioChild | undefined;
   let unsubscribe: (() => void) | undefined;
   let environment: Awaited<ReturnType<typeof createCodexNodeWorkspaceEnvironment>> | undefined;
   let writes = Promise.resolve();

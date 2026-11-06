@@ -509,7 +509,7 @@ it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   const { element, find } = current;
   const sibling = document.createElement("details");
   document.body.append(sibling);
-  await current.ready("Couldn't load automations.");
+  await current.ready("Couldn’t load automations. Try again.");
   expect(element.textContent).not.toContain("private server detail");
   const retry = find<HTMLButtonElement>(".chat-summary__automation-retry")!;
   expect(retry.textContent?.trim()).toBe("Retry");
@@ -706,7 +706,7 @@ it("shares pending reads, retained rows, and failed refresh recovery between the
   refresh.reject(new Error("private inventory failure"));
   await waitForSolid(() => {
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Couldn't update automations.",
+      "Couldn’t update automations. Try again.",
     );
     expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
   });

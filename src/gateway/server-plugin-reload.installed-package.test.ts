@@ -9,10 +9,7 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  BUNDLED_PLUGIN_DEV_RELOAD_ENV,
-  formatBundledPluginDevReloadWarning,
-} from "../plugins/bundled-plugin-dev-reload.js";
+import { formatBundledPluginDevReloadWarning } from "../plugins/bundled-plugin-dev-reload.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
@@ -988,7 +985,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       expect(await probe("sibling")).toEqual(sibling);
 
       // The operator opt-in recaptures the edited bundled code for explicit reload targets.
-      vi.stubEnv(BUNDLED_PLUGIN_DEV_RELOAD_ENV, "1");
+      vi.stubEnv("OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS", "1");
       try {
         const devReload = await reload(changedSettings, ["bundled-probe"]);
         expect(devReload.runtime.restartRequired).toBeUndefined();

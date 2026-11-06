@@ -40,6 +40,11 @@ openclaw-new-session-page,
   }
 }
 
+/* A new draft has no session title; keep its header's accessible group name. */
+.new-session-page .mobile-header__title-row {
+  display: none;
+}
+
 /* Chat's phone header holds these controls, so the page has nothing to clear. */
 .new-session-page--chat-header .new-session-page__scroll {
   padding-top: 0;
@@ -103,7 +108,8 @@ openclaw-new-session-page,
   color: var(--session-header-control-active-color);
 }
 
-:is(.new-session-page__draft-toggle-label, .new-session-page__incognito-toggle-label) {
+.new-session-page__draft-toggle-label,
+.new-session-page__incognito-toggle-label {
   font-size: 12px;
 }
 
@@ -815,17 +821,8 @@ span.new-session-page__select {
   --openclaw-modal-width: 480px;
 }
 
-.connect-machine-dialog__card {
-  padding: 18px;
-}
-
-.connect-machine-dialog__card h2,
-.connect-machine-dialog__card p {
+.connect-machine-dialog p {
   margin-block: 0;
-}
-
-.connect-machine-dialog__body {
-  margin-top: 16px;
 }
 
 .connect-machine-dialog__status,
@@ -833,10 +830,6 @@ span.new-session-page__select {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
-}
-
-.connect-machine-dialog__hint {
-  margin-top: 8px;
 }
 
 .connect-machine-dialog .login-gate__command {
