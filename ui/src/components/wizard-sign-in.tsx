@@ -7,8 +7,9 @@ import { ModelProviderIcon } from "../lib/reactive/provider-presentation.tsx";
 import { createInterval, createTimeout } from "../lib/reactive/timers.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { resolveProviderIconName } from "./provider-icon-data.ts";
-import { ProviderFallbackIcon } from "./solid/provider-icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import "../styles/wizard-sign-in.css";
+import { ProviderFallbackIcon } from "./solid/provider-icon.tsx";
 
 /** After this long without a callback, the tab most likely opened in another browser or profile. */
 const SIGN_IN_SLOW_MS = 45_000;
@@ -138,14 +139,14 @@ export function ModelSetupSignIn(props: {
         {status()}
       </span>
       <Show when={stillWaiting()}>
-        <div class="callout warning wizard-sign-in__callout">
+        <InlineAlert tone="warning" class="wizard-sign-in__callout">
           {t("modelSetup.wizard.stillWaiting")}
-        </div>
+        </InlineAlert>
       </Show>
       <Show when={expired()}>
-        <div class="callout warning wizard-sign-in__callout" role="alert">
+        <InlineAlert tone="warning" class="wizard-sign-in__callout" role="alert">
           {t("modelSetup.wizard.deviceCodeExpired")}
-        </div>
+        </InlineAlert>
       </Show>
       <Show when={!expired() && code()}>
         {(current) => (
