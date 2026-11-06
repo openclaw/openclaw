@@ -49,6 +49,7 @@ print_release_resume_command() {
   inputs_json="$(jq -ce '.inputs | select(type == "object")' "$GITHUB_EVENT_PATH")" || return 1
   printf -v command 'printf %%s %q | gh workflow run openclaw-release-publish.yml --repo %q --ref %q --json' \
     "$inputs_json" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+  printf 'Release recovery command:\n%s\n' "$command"
   {
     printf '\n### Resume publication\n\n'
     printf 'Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile failed stages, then resume with these frozen inputs; the original successful npm publisher is recovered automatically.\n\n'
@@ -117,6 +118,9 @@ cleanup_clawhub_children() {
     [[ -n "$run_id" ]] || continue
     run_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
     [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
+    # A cancel request does not end a job waiting on an environment gate
+    # (Plugin ClawHub New's clawhub-plugin-bootstrap); reject it first.
+    reject_pending_deployments "$run_id"
     if ! gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id"; then
       echo "::warning::Could not cancel ClawHub child ${run_id}; inspect https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}." >&2
       failed=1

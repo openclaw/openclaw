@@ -84,6 +84,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa-parity
           - qa-live
           - npm-telegram
@@ -443,7 +444,7 @@ jobs:
           if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
-          elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&
+          elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&
                   -z "${RELEASE_PACKAGE_SPEC// }" &&
                   -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
@@ -934,7 +935,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qualified-package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -1803,7 +1804,7 @@ jobs:
   release_checks_candidate:
     name: Run release checks candidate validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package","qualified-package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_small
     timeout-minutes: 15
     outputs:
@@ -2030,6 +2031,10 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight
+      # The normal publish route repacks with the admitted publisher tooling P;
+      # the preflight child packs with this run's tooling.
+      PUBLISHER_SHA: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission.workflowSha || '' }}
+      PUBLICATION_ROUTE: ${{ fromJSON(needs.resolve_target.outputs.publication_selection_json || '{}').route || '' }}
     steps:
       - name: Retain original plugin npm artifact descriptor
         id: reused
@@ -2042,6 +2047,62 @@ jobs:
         id: dispatch
         if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
+
+      # While the child runs, pack and scan as Plugin NPM Release will: candidate
+      # source at the root, P's tooling, scripts, and inventory at .release-tooling.
+      # A P-only bundler or inventory drift then fails here instead of at publish.
+      - name: Checkout target source for publisher scan
+        if: &publisher_tooling_scan env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout publisher tooling
+        if: *publisher_tooling_scan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PUBLISHER_SHA }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment for publisher tooling scan
+        if: *publisher_tooling_scan
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Install publisher tooling dependencies
+        if: *publisher_tooling_scan
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Scan plugin npm packs with publisher tooling
+        if: *publisher_tooling_scan
+        env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
+        run: |
+          set -euo pipefail
+          if [[ ! -f .release-tooling/scripts/check-plugin-npm-security-scan.mts ]]; then
+            echo "::warning::Publisher tooling ${PUBLISHER_SHA} predates this scan; Plugin NPM Release scans at publish."
+            exit 0
+          fi
+          plan_args=(--selection-mode "$PLUGIN_PUBLISH_SCOPE")
+          [[ -z "$PLUGINS" ]] || plan_args+=(--plugins "$PLUGINS")
+          [[ "$NPM_DIST_TAG" != extended-stable ]] || plan_args+=(--npm-dist-tag "$NPM_DIST_TAG")
+          node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
+          echo "Packing with publisher tooling ${PUBLISHER_SHA}."
+          node --import tsx .release-tooling/scripts/check-plugin-npm-security-scan.mts \
+            --tooling-root .release-tooling \
+            --plan "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
 
       - name: Resolve and seal exact plugin npm artifact descriptor
         id: prepared

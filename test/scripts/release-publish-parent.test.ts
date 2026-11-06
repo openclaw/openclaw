@@ -545,6 +545,9 @@ it("cleans up recorded ClawHub children after a later dispatch fails", () => {
   const cleanup = f.run(`${source}source "$GITHUB_ENV"\ncleanup_clawhub_children`);
   expect(cleanup.status, cleanup.stderr).toBe(0);
   expect(cancellations(cleanup)).toContain("92");
+  // Cancellation alone leaves a gated bootstrap child waiting; reject its gate first.
+  const rejection = cleanup.calls.findIndex((call) => call.args.includes("state=rejected"));
+  expect([rejection >= 0, rejection < cleanup.calls.findIndex(isCancel)]).toEqual([true, true]);
 });
 
 it.each<{ config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }>([

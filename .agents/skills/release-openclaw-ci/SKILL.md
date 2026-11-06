@@ -190,6 +190,41 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   Tooling SHAs. Do not dispatch candidate Testbox workflow refs or borrow
   another checkout's wrapper.
 
+## Keep FRV off the idle path
+
+Optimize time to the next **passing** Full Release Validation. Remote FRV is
+usually the long pole; use its runtime for diagnosis, repairs, review, and
+focused proof. This is scheduling guidance, not a new checklist, approval step,
+or demand for certainty before dispatch. Existing release gates still apply.
+
+- **Start remote qualification promptly.** Favor starting remote FRV while
+  useful local checks run alongside it, rather than finishing those checks
+  first. If the remote run passes, that overlap saves an entire cycle; if local
+  work finds a defect, the run can be superseded through the existing recovery
+  path. Uncertainty alone is not a reason to leave remote validation idle.
+- **Repair as failures arrive.** Use the watcher to spot failures and start
+  diagnosis and fixes while other lanes drain. Prioritize known non-flake
+  failures over optional confidence checks. Use independent repair lanes when
+  helpful, and integrate fixes as they become ready rather than waiting for
+  the final diagnostic report to start work.
+- **Aim to be ready when diagnostics finish.** Ideally, fixes for the drained
+  failures are already on the branch, with focused proof and review done, by
+  drain completion. This is an overlap goal, not a deadline or another gate.
+  If a repair takes longer, keep working it; avoid filling the gap with
+  redundant checks or process overhead.
+- **Fix the whole known set before the next FRV.** Include fixes for every
+  known non-flake failure affecting the next run, whether in the candidate,
+  qualification harness, or trusted tooling. The waste to avoid is knowingly
+  launching another full cycle with failure B still unfixed after fixing A.
+  This does not mean proving there are no undiscovered failures or resolving
+  unrelated issues before running again.
+- **Use retries strategically.** An eligible targeted retry can run while
+  unrelated diagnostics continue. Use the existing
+  [retry budget](#run-identity-and-retry-budget) for flakes or repaired external
+  prerequisites and retain valid green evidence. A repeat of an unchanged
+  deterministic failure buys little; fix it instead. When a fresh parent is
+  needed, include the known fixes and get it running without optional delays.
+
 ## Deferred CI recovery
 
 Release validation does not pause CI or supporting workflows. The legacy
@@ -304,29 +339,42 @@ until their dependent enforcement changes land.
   "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
-  before sending the request; it does not retry unrelated failures.
+  before sending the request; it does not retry unrelated failures. Without
+  `--no-follow` it then follows the whole tree through the parent reseal; pass
+  `--no-follow` to return once the new attempt is observed, then run
+  `continue --failed` to reseal.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
-  [--max-attempts N]` records one of those bounded reruns. It waits for the
-  child to finish, sends exactly one rerun-failed-jobs request, and returns once
-  the new attempt exists without duplicate jobs. Before the request it prints
-  each failed job's runner labels and the current `OPENCLAW_CI_RUNNER_BACKEND`;
-  afterwards it appends an audit line to
-  `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It refuses a passed
-  child, an artifact producer (use `continue --failed`), and a child past its
-  attempt budget: the default 2 allows one rerun; pass `--max-attempts 3` only
-  for a confirmed flake. When a failed-jobs rerun would re-execute an
-  attempt-bound install-smoke payload consumer (`installer_smoke_update`,
-  `installer_smoke_nonroot`; #161317), it reruns the green
-  producer job and its dependents instead, or the whole child when another
-  failed job is outside that set. `continue --failed` applies the same choice.
-  Reseal with `continue --failed`.
-- `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
-  as soon as it is terminal, even while the parent or siblings remain active.
-  It adopts active attempts and preserves green children. Once every required
+  [--max-attempts N]` records one bounded exact-job rerun. It waits for the
+  child to finish, requires exactly one blocking failed job, sends one request
+  for that accepted Actions job ID, and returns once the new attempt exists
+  without duplicate jobs. Before the request it prints the failed job's runner
+  labels and the current `OPENCLAW_CI_RUNNER_BACKEND`; afterwards it appends
+  an audit line to `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`. It
+  refuses a passed child, an artifact producer (use `continue --failed`), a
+  child with multiple blocking failures, and a child past its attempt budget:
+  the default 2 allows one rerun; pass `--max-attempts 3` only for a confirmed
+  flake. Start a fresh all-group FRV when multiple blocking jobs fail. Reseal
+  with `continue --failed`.
+- `pnpm frv continue --failed --run <parent-run-id>` applies the same
+  exact-job restriction to each terminal failed child and failed artifact
+  producer, even while the parent or siblings remain active. It refuses
+  multi-job recovery and directs the operator to a fresh all-group FRV. It
+  adopts active attempts and preserves green children. Once every required
   child is green and the original parent finishes, it reruns the parent once
   to restore the same immutable plan and seal the updated all-group manifest.
   An early retry can invalidate the original Decision/Drain pairing; the final
   reseal and strict verification own completion.
+- GitHub ghost jobs (runnerless queued copies of the same job name) can follow
+  any rerun request, single-job or batched, and make that attempt unsealable.
+  Send at most one rerun request per child, only after the child is terminal;
+  never stack separate job reruns on one child. Duplicates can settle within
+  the controller's 60-second reconciliation window; once a command reports
+  ghost jobs (duplicates that persisted), stop rerunning that FRV: cancel the
+  attempt and start a fresh all-group FRV.
+- `continue --failed` reruns each failed child once per invocation. If a child
+  it reran fails again, it exits immediately with the attempt and remaining
+  rerun budget instead of waiting for siblings; rerun `continue --failed` only
+  for a confirmed flake within the flake budget above.
 - Each child or parent rerun mutation is sent exactly once per invocation;
   ambiguous transport failures trigger bounded read-only reconciliation. Do
   not blindly repeat an interrupted or timed-out command: inspect exact
@@ -634,6 +682,11 @@ skipped, cancelled, or unknown required coverage still block.
 Use the maintainer [publication recovery guide](../release-openclaw-maintainer/references/publication-recovery.md)
 for publication ordering and prepared/direct recovery.
 
+- Watch every publish parent with one `pnpm release:watch --run <parent>`
+  ([contract](../../../docs/reference/RELEASING.md#watch-publication)), not a
+  hand-rolled monitor. It reports parent and child environment gates, failed
+  runs and failed `continue-on-error` jobs, and it backs off on rate limits.
+
 - `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
   dispatches the parent once, approves the parent's `npm-release` gate, prints
   child-approval commands only for older tooling without `npm-publish` and
@@ -689,7 +742,11 @@ for publication ordering and prepared/direct recovery.
   plugin npm and ClawHub retain target-serialized slots and refuse before any
   new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
   children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children. To clean up as a reviewer, list
+  cancels its own waiting npm children and its recorded unfinished ClawHub
+  children; it rejects a recorded child's pending gate first, because a cancel
+  request alone leaves a Plugin ClawHub New child waiting on
+  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
+  To clean up as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 

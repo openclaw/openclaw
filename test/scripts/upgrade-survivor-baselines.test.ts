@@ -44,6 +44,8 @@ let output: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   root = tempDirs.make("openclaw-upgrade-baselines-");
+  // Exercise PATH tools in ESM scope even outside workspace-local temp roots.
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   bin = path.join(root, "bin");
   output = path.join(root, "output");
   mkdirSync(bin);
@@ -164,13 +166,14 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       writeExecutable(
         path.join(bin, "gh"),
         `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
+import assert from "node:assert/strict";
 const releases = JSON.parse(fs.readFileSync(process.env.RELEASE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 if (args[0] === "release") {
   console.log(JSON.stringify(releases.slice(0, Number(args[args.indexOf("--limit") + 1]))));
 } else {
-  require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
+  assert.deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
   const pages = [releases.slice(0, 100), releases.slice(100)].map(page => page.map(release => ({
     tag_name: release.tagName, published_at: release.publishedAt, prerelease: release.isPrerelease,
   })));
@@ -268,7 +271,7 @@ if (process.env.FAIL_API === "true") process.exit(75);
     writeExecutable(
       path.join(bin, "npm"),
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.log(JSON.stringify(process.argv[4] === "dist-tags"

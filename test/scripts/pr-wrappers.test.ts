@@ -1607,14 +1607,15 @@ ${source}`,
     fixture.write(
       "pnpm",
       `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const root = args[1];
 if (root === ${JSON.stringify(fixture.tooling)}) process.exit(0);
 if (process.env.PR_TEST_INSTALL_GIT) {
-  const result = require("node:child_process").spawnSync("git", ["--version"], { stdio: "inherit", env: { ...process.env, PR_TEST_GIT_PHASE: "install-child" } });
+  const result = spawnSync("git", ["--version"], { stdio: "inherit", env: { ...process.env, PR_TEST_GIT_PHASE: "install-child" } });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 fs.cpSync(fs.realpathSync(${JSON.stringify(join(fixture.tooling, "node_modules"))}), path.join(root, "node_modules"), { recursive: true });

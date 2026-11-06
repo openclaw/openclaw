@@ -2675,11 +2675,11 @@ describe("ci workflow guards", () => {
       copyFileSync("scripts/lib/swift-toolchain.sh", path.join(helpers, "swift-toolchain.sh"));
       writeExecutable(path.join(bin, "xcodebuild"), [
         `#!${testNodeExecPath}`,
-        'require("node:fs").appendFileSync(process.env.COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+        'import { appendFileSync } from "node:fs"; appendFileSync(process.env.COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
       writeExecutable(path.join(bin, "python3"), [
         `#!${testNodeExecPath}`,
-        'require("node:fs").appendFileSync(process.env.RESTART_COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+        'import { appendFileSync } from "node:fs"; appendFileSync(process.env.RESTART_COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
       const job = readCiWorkflow().jobs["ios-build"];
       for (const name of [
@@ -4371,7 +4371,7 @@ describe("ci workflow guards", () => {
       );
       writeExecutable(path.join(root, "date"), [
         "#!/usr/bin/env node",
-        'const fs = require("node:fs");',
+        'import fs from "node:fs";',
         'const previous = fs.existsSync(process.env.CLOCK_READS) ? fs.readFileSync(process.env.CLOCK_READS, "utf8").trim().split("\\n") : [];',
         "const instant = new Date(1700000000000 + previous.length * 1000).toISOString();",
         'fs.appendFileSync(process.env.CLOCK_READS, instant + "\\n");',
@@ -4379,7 +4379,7 @@ describe("ci workflow guards", () => {
       ]);
       writeExecutable(path.join(root, "gradlew"), [
         "#!/usr/bin/env node",
-        'require("node:fs").appendFileSync(process.env.GRADLE_CALLS, JSON.stringify({ args: process.argv.slice(2), javaHome: process.env.JAVA_HOME }) + "\\n");',
+        'import { appendFileSync } from "node:fs"; appendFileSync(process.env.GRADLE_CALLS, JSON.stringify({ args: process.argv.slice(2), javaHome: process.env.JAVA_HOME }) + "\\n");',
         "if (process.argv.includes(process.env.FAIL_GRADLE_TASK)) process.exit(23);",
       ]);
       const result = runWorkflowShellScript(expectDefined(step.run, "Android commands"), {
@@ -8521,7 +8521,7 @@ describe("ci workflow guards", () => {
       mkdirSync(fakeBin);
       writeExecutable(path.join(fakeBin, "pnpm"), [
         "#!/usr/bin/env node",
-        'require("node:fs").appendFileSync(process.env.PNPM_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+        'import { appendFileSync } from "node:fs"; appendFileSync(process.env.PNPM_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
       // Historical release checkouts retain these tasks; current PRs select the owner row above.
       const run = runWorkflowCommand("bash", ["-c", runStep.run], {

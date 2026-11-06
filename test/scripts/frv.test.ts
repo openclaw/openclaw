@@ -107,13 +107,22 @@ function controllerClient(
   return {
     ...preflightMethods(children, (entry) => runFor(entry, 1, "failure")),
     getAttemptJobs: async (runId: string, attempt: number) => [
-      job(
-        blockingChildJobName(byRunId.get(runId)?.key),
-        attempt === childRuns.get(runId)?.attempt
-          ? (childRuns.get(runId)?.conclusion ?? "")
-          : "failure",
-      ),
+      {
+        ...job(
+          blockingChildJobName(byRunId.get(runId)?.key),
+          attempt === childRuns.get(runId)?.attempt
+            ? (childRuns.get(runId)?.conclusion ?? "")
+            : "failure",
+        ),
+        id: Number(runId),
+      },
     ],
+    rerunFailed: async (_runId: string) => {
+      throw new Error("unexpected child rerun");
+    },
+    rerunJob(jobId: number) {
+      return this.rerunFailed(String(jobId));
+    },
     getRun: async (runId: string) =>
       runId === "77"
         ? rootRun(parent.attempt, parent.conclusion)
@@ -205,7 +214,10 @@ function rerunScenario(options: {
     client: {
       ...preflightMethods([selected], () => makeRun("child", source.child)),
       getAttemptJobs: async (_runId: string, attempt: number) => [
-        job("test", attempt === source.child[0] ? (source.child[1] ?? "failure") : "success"),
+        {
+          ...job("test", attempt === source.child[0] ? (source.child[1] ?? "failure") : "success"),
+          id: 101,
+        },
       ],
       getRun: async (runId: string) => {
         const target = runId === "77" ? "parent" : "child";
@@ -219,6 +231,7 @@ function rerunScenario(options: {
       },
       repository: REPOSITORY,
       rerunFailed: () => mutate("child", options.childError),
+      rerunJob: () => mutate("child", options.childError),
       rerunParent: () => mutate("parent", options.parentError),
       verify: async () => {
         counters.verifies += 1;
@@ -499,8 +512,16 @@ describe("FRV continuation preflight", () => {
       ],
       getJobLog: async (id: number) => (id === 90 ? logs.dispatch : methods.getJobLog(id)),
       getRun: vi.fn(async (id: string) => (id === "81" ? producer : methods.getRun(id))),
-      getAttemptJobs: async (_runId: string, _attempt: number) => [job("test")],
+      getAttemptJobs: async (runId: string, _attempt: number) => [
+        {
+          ...job("test", runId === "81" ? (producer.conclusion ?? "") : "success"),
+          id: Number(runId),
+        },
+      ],
       rerunFailed: vi.fn(),
+      rerunJob(jobId: number) {
+        return this.rerunFailed(String(jobId));
+      },
       rerunParent: vi.fn(),
     };
     return { client, producer, logs, selected, plan: plan([selected]) };
@@ -668,9 +689,12 @@ describe("FRV continuation preflight", () => {
         candidate: { producer: { runId: "606" } },
       };
 
-      await expect(
-        continueFailed(consumedPlan, "77", fixture.client, { dryRun: true }),
-      ).resolves.toMatchObject({ action: "would-rerun" });
+      const result = expect(continueFailed(consumedPlan, "77", fixture.client, { dryRun: true }));
+      if (carriedPreparation) {
+        await result.rejects.toThrow("has no exact failed job identity; refusing a risky rerun");
+      } else {
+        await result.resolves.toMatchObject({ action: "would-rerun" });
+      }
     },
   );
 
@@ -693,7 +717,7 @@ describe("FRV continuation preflight", () => {
         fixture.client,
         { dryRun: true },
       ),
-    ).resolves.toMatchObject({ action: "would-rerun" });
+    ).rejects.toThrow("has no exact failed job identity; refusing a risky rerun");
   });
 
   it("rejects a replacement npm preparation even without a second descriptor", async () => {
@@ -763,6 +787,19 @@ describe("FRV continuation preflight", () => {
           ? structuredClone(dockerProducer)
           : structuredClone(await read(id)),
     );
+    fixture.client.getAttemptJobs = async (runId: string) => [
+      {
+        ...job(
+          "test",
+          runId === "81"
+            ? "failure"
+            : runId === "82"
+              ? (dockerProducer.conclusion ?? "")
+              : "success",
+        ),
+        id: Number(runId),
+      },
+    ];
     fixture.client.rerunFailed.mockImplementation(async (id: string) => {
       const producer = id === "81" ? fixture.producer : dockerProducer;
       producer.run_attempt = 2;
@@ -886,7 +923,7 @@ describe("FRV continuation preflight", () => {
           : runFor(fixture.selected, childAttempt, childAttempt === 1 ? "failure" : "success"),
     );
     fixture.client.getAttemptJobs = async () => [
-      job("test", childAttempt === 1 ? "failure" : "success"),
+      { ...job("test", childAttempt === 1 ? "failure" : "success"), id: 101 },
     ];
     fixture.client.rerunFailed.mockImplementation(async (id: string) => {
       expect(id).toBe("101");
@@ -1069,7 +1106,7 @@ describe("FRV continuation preflight", () => {
       return read(id);
     });
     if (target === "child") {
-      fixture.client.getAttemptJobs = async () => [job("test", "failure")];
+      fixture.client.getAttemptJobs = async () => [{ ...job("test", "failure"), id: 101 }];
     }
     await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
       "identity changed",
@@ -1077,34 +1114,23 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
     expect(fixture.client.rerunParent).not.toHaveBeenCalled();
   });
-  it.each(["parent", "child"])(
-    "rechecks the producer before uncertain %s retry",
-    async (target) => {
-      const fixture = artifactFixture();
-      if (target === "child") {
-        const read = fixture.client.getRun.getMockImplementation()!;
-        fixture.client.getRun.mockImplementation(async (id) =>
-          id === "101" ? runFor(fixture.selected, 1, "failure") : read(id),
-        );
-        fixture.client.getAttemptJobs = async () => [job("test", "failure")];
-      }
-      const mutation = target === "child" ? fixture.client.rerunFailed : fixture.client.rerunParent;
-      mutation.mockImplementation(async () => {
-        fixture.producer.head_sha = "c".repeat(40);
-        throw Object.assign(new Error("gh api failed"), {
-          stderr: "gh: request failed (HTTP 502)",
-        });
+  it("rechecks the producer before an uncertain parent retry", async () => {
+    const fixture = artifactFixture();
+    fixture.client.rerunParent.mockImplementation(async () => {
+      fixture.producer.head_sha = "c".repeat(40);
+      throw Object.assign(new Error("gh api failed"), {
+        stderr: "gh: request failed (HTTP 502)",
       });
-      await withFastPolling(
-        () =>
-          expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
-            "identity changed",
-          ),
-        "5",
-      );
-      expect(mutation).toHaveBeenCalledOnce();
-    },
-  );
+    });
+    await withFastPolling(
+      () =>
+        expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+          "identity changed",
+        ),
+      "5",
+    );
+    expect(fixture.client.rerunParent).toHaveBeenCalledOnce();
+  });
 
   it("rejects deleted B admission before continuation can select rerun effects", async () => {
     const selected = child("normalCi", "101");
@@ -1596,6 +1622,35 @@ describe("FRV same-parent recovery", () => {
     expect(client.verify).toHaveBeenCalledOnce();
   });
 
+  it("exits when a rerun child fails again instead of idling on an active sibling", async () => {
+    const first = child("normalCi", "101");
+    const sibling = child("pluginPrerelease", "202");
+    const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
+      ["101", { attempt: 1, conclusion: "failure" }],
+      ["202", { attempt: 1, conclusion: null }],
+    ]);
+    const client = {
+      ...controllerClient([first, sibling], childRuns, { attempt: 1, conclusion: null }),
+      rerunFailed: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "failure" });
+      }),
+      rerunParent: vi.fn(),
+      verify: vi.fn(),
+    };
+    await withFastPolling(() =>
+      expect(
+        continueFailed(plan([first, sibling]), "77", client, {
+          operationDeadline: Date.now() + 2_000,
+        }),
+      ).rejects.toThrow(
+        "child normalCi failed again on attempt 2; rerun budget remaining 0; rerun pnpm frv continue --failed --run 77 to retry",
+      ),
+    );
+    expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+    expect(childRuns.get("202")?.conclusion).toBeNull();
+    expect(client.rerunParent).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "reruns the exact carried failed job once, including ambiguous response=%s",
     async (ambiguous) => {
@@ -1631,12 +1686,59 @@ describe("FRV same-parent recovery", () => {
         continueFailed(plan([selected]), "77", client, {
           job: "normalCi:selected",
         }),
-      ).rejects.toThrow("complete green composite: normalCi");
+      ).rejects.toThrow("child normalCi failed again on attempt 3; rerun budget remaining 0");
       expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
       expect(client.rerunFailed).not.toHaveBeenCalled();
       expect(client.rerunParent).not.toHaveBeenCalled();
     },
   );
+
+  it("returns an accepted targeted-job receipt without following the new attempt", async () => {
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" }]]);
+    const parent = { attempt: 1, conclusion: "failure" };
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        {
+          ...job("selected", "failure"),
+          id: 11,
+          run_id: 101,
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "failure" });
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(),
+      verify: vi.fn(),
+    };
+
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        job: "normalCi:selected",
+        noFollow: true,
+      }),
+    ).resolves.toMatchObject({
+      action: "rerun-accepted",
+      continueCommand: "pnpm frv continue --failed --run 77",
+      nextCommand: "pnpm frv watch --run 77",
+      receipt: {
+        acceptedRunAttempt: 1,
+        child: "normalCi",
+        jobId: 11,
+        jobName: "selected",
+        parentRunId: "77",
+        runAttempt: 2,
+        runId: "101",
+        sourceRunAttempt: 1,
+      },
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(11);
+    expect(client.rerunParent).not.toHaveBeenCalled();
+    expect(client.verify).not.toHaveBeenCalled();
+  });
 
   it("waits only for the selected child before sending a targeted job rerun and reseals afterward", async () => {
     const selected = child("normalCi", "101");
@@ -1839,7 +1941,7 @@ describe("FRV same-parent recovery", () => {
               })
             : expect(inspection).rejects.toThrow(
                 outcome === "persists"
-                  ? "duplicate job identity"
+                  ? "duplicate job identity: test; GitHub ghost jobs detected"
                   : "changed during attempt materialization",
               );
         await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
@@ -1960,7 +2062,7 @@ describe("FRV same-parent recovery", () => {
   });
 
   it.each(["child", "parent"] as const)(
-    "retries one %s rerun after a 502 produces no newer attempt",
+    "handles a 502 with no newer %s attempt conservatively",
     async (target) => {
       const selected = child("normalCi", "101");
       const childRuns = new Map([
@@ -1991,18 +2093,21 @@ describe("FRV same-parent recovery", () => {
         },
         verify: async () => "{}",
       };
-      await withFastPolling(
-        () =>
-          expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
-            action: "reran-parent",
-          }),
-        "5",
-      );
-      expect(posts[target]).toBe(2);
+      await withFastPolling(async () => {
+        const result = expect(continueFailed(plan([selected]), "77", client));
+        if (target === "child") {
+          await result.rejects.toThrow(
+            "rerun mutation did not produce an observable newer attempt for 101",
+          );
+        } else {
+          await result.resolves.toMatchObject({ action: "reran-parent" });
+        }
+      }, "5");
+      expect(posts[target]).toBe(target === "child" ? 1 : 2);
     },
   );
 
-  it("bounds a repeated 502 rerun failure to one retry", async () => {
+  it("does not retry an ambiguous child job rerun after a 502", async () => {
     const selected = child("normalCi", "101");
     const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" }]]);
     const parent = { attempt: 1, conclusion: "success" };
@@ -2027,7 +2132,7 @@ describe("FRV same-parent recovery", () => {
         ),
       "5",
     );
-    expect(posts).toBe(2);
+    expect(posts).toBe(1);
   });
 
   it("keeps exact-terminal parent admission before dispatch", async () => {
@@ -2226,7 +2331,7 @@ describe("FRV manual retry admission", () => {
 describe("FRV child rerun", () => {
   const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
 
-  it("sends one failed-jobs rerun, verifies the new attempt, and records an audit line", async () => {
+  it("sends one exact-job rerun, verifies the new attempt, and records an audit line", async () => {
     const scenario = rerunScenario({});
     const audit = vi.fn();
     await expect(
@@ -2237,7 +2342,7 @@ describe("FRV child rerun", () => {
       }),
     ).resolves.toMatchObject({
       action: "reran-child",
-      reruns: [{ child: "normalCi", failedJobs: ["test"], mode: "failed-jobs", runAttempt: 2 }],
+      reruns: [{ child: "normalCi", failedJobs: ["test"], mode: "single-job", runAttempt: 2 }],
     });
     expect(scenario.counters.posts).toEqual({ child: 1, parent: 0 });
     expect(audit).toHaveBeenCalledExactlyOnceWith(
@@ -2348,18 +2453,18 @@ describe("FRV child rerun", () => {
       ["root_dockerfile_image", "root_dockerfile_image_ready", "installer_smoke"],
     ],
     ["a failed Bun consumer that verifies the producer attempt", ["bun_global_install_smoke"]],
-  ])("plans a failed-jobs install-smoke rerun for %s", (_case, failed) => {
+  ])("refuses a duplicate-prone multi-job install-smoke rerun for %s", (_case, failed) => {
     const jobs = [
       job(producer),
       ...failed.map((name) => job(`install_smoke_release_checks / ${name}`, "failure")),
       job("Verify release checks", "failure"),
     ];
-    expect(planReleaseChildRerun({ childKey: "releaseChecks", jobs })).toMatchObject({
-      mode: "failed-jobs",
-    });
+    expect(() => planReleaseChildRerun({ childKey: "releaseChecks", jobs })).toThrow(
+      "refusing a multi-job rerun because GitHub can create persistent duplicate jobs",
+    );
   });
 
-  it("continue --failed reruns failed install-smoke jobs without the green producer", async () => {
+  it("continue --failed refuses multiple failed install-smoke jobs before mutation", async () => {
     const failed = [
       "install_smoke_release_checks / installer_smoke_update_image",
       "install_smoke_release_checks / root_dockerfile_image",
@@ -2370,25 +2475,27 @@ describe("FRV child rerun", () => {
     const client = {
       ...scenario.client,
       getAttemptJobs: async (_runId: string, attempt: number) => [
-        job(producer),
-        ...failed.map((name) => job(name, attempt === 1 ? "failure" : "success")),
+        { ...job(producer), id: 1 },
+        ...failed.map((name, index) =>
+          Object.assign(job(name, attempt === 1 ? "failure" : "success"), { id: index + 2 }),
+        ),
       ],
       rerunFailed: vi.fn(async () => scenario.client.rerunFailed()),
     };
     await expect(
       continueFailed(plan([scenario.selected]), "77", client, { dryRun: true }),
-    ).resolves.toMatchObject({ action: "would-rerun" });
-    const log = vi.fn();
-    await withFastPolling(() =>
-      expect(
-        continueFailed(plan([scenario.selected]), "77", client, { log }),
-      ).resolves.toMatchObject({ action: "reran-parent", finalRunId: "77" }),
+    ).rejects.toThrow(
+      "refusing a multi-job rerun because GitHub can create persistent duplicate jobs",
     );
-    expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
+    expect(client.rerunFailed).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["keeps duplicate queued jobs", 2, "attempt 2 holds duplicate jobs: test"],
+    [
+      "keeps duplicate queued jobs",
+      2,
+      "attempt 2 is unsealable and holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning",
+    ],
     ["exposes no jobs", 0, "attempt 2 exposed no jobs"],
   ])("fails after one POST when the new attempt %s", async (_case, copies, message) => {
     const scenario = rerunScenario({});
@@ -2396,7 +2503,9 @@ describe("FRV child rerun", () => {
     const client = {
       ...scenario.client,
       getAttemptJobs: async (_runId: string, attempt: number) =>
-        attempt === 1 ? [job("test", "failure")] : Array.from({ length: copies }, () => queued),
+        attempt === 1
+          ? [{ ...job("test", "failure"), id: 101 }]
+          : Array.from({ length: copies }, () => queued),
     };
     await withFastPolling(
       () =>
@@ -2816,6 +2925,46 @@ describe("FRV watch", () => {
     expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
   });
 
+  it("advises a fresh FRV only for duplicate jobs that persist into a final attempt", async () => {
+    const ci = child("normalCi", "101");
+    let polls = 0;
+    const duplicateJobs = (status: string) => [
+      { ...job("test"), id: 900, status: "completed" },
+      { ...job("test", status === "completed" ? "success" : ""), id: 901, status },
+    ];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77"
+          ? rootRun(1, polls > 2 ? "failure" : null)
+          : runFor(ci, 1, polls > 2 ? "failure" : null),
+      getParentJobs: async () => [
+        {
+          conclusion: "success",
+          id: 5,
+          name: "Run normal full CI",
+          run_attempt: 1,
+          status: "completed",
+        },
+      ],
+      getJobLog: async () =>
+        `2026-09-29T22:00:00.1Z Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)\n`,
+      getAttemptJobs: async () => duplicateJobs(++polls > 2 ? "completed" : "queued"),
+    };
+    const messages: string[] = [];
+    await watchRelease("77", client, {
+      emit: (event: { message: string }) => messages.push(event.message),
+      intervalMs: 0,
+      statePath: path.join(tempDirs.make("frv-duplicates-"), "state.json"),
+    });
+    const duplicates = messages.filter((message) => message.includes("duplicate jobs"));
+    expect(duplicates).toEqual([
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; they may still settle; recheck before rerunning",
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV",
+    ]);
+  });
+
   it("labels carried-forward failures and does not replay them after a rerun", async () => {
     const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
     const resumedStatePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
@@ -2910,7 +3059,7 @@ describe("FRV watch", () => {
 });
 
 describe("FRV client", () => {
-  it("uses the direct failed-jobs and parent rerun endpoints", async () => {
+  it("uses only the exact-job and parent rerun endpoints", async () => {
     const calls: string[][] = [];
     const client = createClient(REPOSITORY, {
       mutate: async (args: string[]) => {
@@ -2918,11 +3067,9 @@ describe("FRV client", () => {
       },
     });
     await client.rerunJob(1001);
-    await client.rerunFailed("101");
     await client.rerunParent("77");
     expect(calls).toEqual([
       ["api", "-X", "POST", `repos/${REPOSITORY}/actions/jobs/1001/rerun`],
-      ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/101/rerun-failed-jobs`],
       ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/77/rerun`],
     ]);
   });

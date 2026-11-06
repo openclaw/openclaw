@@ -1333,9 +1333,9 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
             writeFileSync(
               join(binDir, "openclaw"),
               `#!/usr/bin/env node
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 assert.deepEqual(process.argv.slice(2), ["transcripts", "path", "2026-07-01/design-review", "--dir"]);
 const root = process.env.OPENCLAW_STATE_DIR;
 const sessionDir = path.join(root, "transcripts", "2026-07-01", "design-review");
@@ -1990,7 +1990,7 @@ process.stdout.write(sessionDir + "\\n");
         writeFileSync(
           join(bin, "openclaw"),
           `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const method = process.argv[4];
 const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
 const outcome = process.env.PROBE_OUTCOME;

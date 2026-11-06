@@ -760,8 +760,8 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     fixture.root,
     "bin/gh",
     `#!${process.execPath}
-    const { appendFileSync, existsSync, readFileSync, writeFileSync } = require('node:fs');
-    const { join } = require('node:path');
+    import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
     const args = process.argv.slice(2);
     const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
     appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'gh', args }) + '\\n');
@@ -906,7 +906,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     fixture.root,
     "bin/git",
     `#!${process.execPath}
-    const { readFileSync } = require('node:fs');
+    import { readFileSync } from 'node:fs';
     const args = process.argv.slice(2);
     if (JSON.stringify(args) !== JSON.stringify(['ls-remote', '--tags', 'origin',
       'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,

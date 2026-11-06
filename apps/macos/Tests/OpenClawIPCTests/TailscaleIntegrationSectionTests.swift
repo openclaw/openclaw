@@ -202,7 +202,8 @@ struct TailscaleIntegrationSectionTests {
 
         #expect(outcome == .saved)
         #expect((gateway?["tailscale"] as? [String: Any])?["mode"] as? String == "off")
-        #expect(NSDictionary(dictionary: gateway?["auth"] as? [String: Any] ?? [:]).isEqual(to: credentials))
+        let savedCredentials = NSDictionary(dictionary: gateway?["auth"] as? [String: Any] ?? [:])
+        #expect(savedCredentials.isEqual(to: credentials))
     }
 
     @Test func `tailscale apply validates changed passwords before saving`() async {

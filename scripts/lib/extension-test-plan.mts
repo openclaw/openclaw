@@ -32,6 +32,7 @@ import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-what
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isGitWorktreeRoot } from "../check-file-utils.ts";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { hasExtensionMetadata, listAvailableExtensionIds } from "./changed-extensions.mts";
 import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
@@ -185,6 +186,9 @@ function isSkippedTrackedTestFile(relativePath: string) {
 
 let trackedRepoTestFiles: string[] | null | undefined;
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
   const result = spawnSync("git", ["ls-files", "-z", "--", ...pathspecs], {

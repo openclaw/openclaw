@@ -159,6 +159,20 @@ async function runGh(args, options = {}) {
   throw lastError;
 }
 
+// gh 2.97+ refuses raw job logs containing terminal escapes, even off a TTY;
+// older gh rejects the flag before issuing the request.
+async function readJobLog(id, signal) {
+  const args = ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`];
+  try {
+    return await runGh([...args, "--allow-escape-sequences"], { signal });
+  } catch (error) {
+    if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+      throw error;
+    }
+    return runGh(args, { signal });
+  }
+}
+
 async function githubJson(path, signal) {
   return JSON.parse(
     await runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { signal }),
@@ -331,12 +345,7 @@ export async function readChild(child, previous, signal, options = {}) {
       await validateReleaseWaiverAggregates({
         policy,
         jobs,
-        getJobLog:
-          options.readJobLog ??
-          ((id) =>
-            runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`], {
-              signal,
-            })),
+        getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
       });
     }
     return snapshot;
