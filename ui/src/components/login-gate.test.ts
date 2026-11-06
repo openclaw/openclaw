@@ -345,6 +345,48 @@ describe("login gate failure recovery", () => {
     expect(checkNow.textContent?.trim()).toBe("Connect");
   });
 
+  // OCF-495: the Gateway reports a revoked approved role as "role-upgrade".
+  it.each([
+    {
+      requested: ["operator.read", "operator.write"],
+      approvedRoles: ["operator"],
+      title: "Approve this browser again",
+      summary: "operator access is no longer active",
+    },
+    {
+      requested: ["operator.read", "operator.admin"],
+      approvedRoles: ["operator"],
+      title: "Approve the new access level",
+      summary: "asking for more access: operator.admin.",
+    },
+    {
+      requested: ["operator.read"],
+      approvedRoles: ["node"],
+      title: "Approve the new role",
+      summary: "asking for the operator role",
+    },
+  ])("titles a role request by what it adds: $title", async (pairing) => {
+    const element = await mountFailure(
+      "role upgrade pending approval (requestId: req-123)",
+      Codes.PAIRING_REQUIRED,
+    );
+    element.props = {
+      ...element.props,
+      lastErrorPairing: {
+        code: Codes.PAIRING_REQUIRED,
+        reason: "role-upgrade",
+        requestedRole: "operator",
+        requestedScopes: pairing.requested,
+        approvedRoles: pairing.approvedRoles,
+        approvedScopes: ["operator.read", "operator.write"],
+      },
+    };
+    await element.updateComplete;
+
+    expectText(element, "failure-title").toBe(pairing.title);
+    expect(element.textContent).toContain(pairing.summary);
+  });
+
   it("renders only a normalized pairing request in the approve command", async () => {
     const safe = await mountFailure(
       "scope upgrade pending approval (requestId: req-123)",

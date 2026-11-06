@@ -265,7 +265,9 @@ export async function authorizeGatewayConnectDevice(
           : undefined,
       );
       const operatorApprovalScopes =
-        pairing.request.isRepair !== true || plan.isSameKeyScopeUpgrade
+        pairing.request.isRepair !== true ||
+        plan.isSameKeyScopeUpgrade ||
+        plan.restoresApprovedAccess
           ? plan.autoApproveOperatorScopes
           : null;
       const requestContext = buildRequestContext();
