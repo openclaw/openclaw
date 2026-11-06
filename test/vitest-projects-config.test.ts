@@ -519,6 +519,7 @@ describe("projects vitest config", () => {
   it.each([
     "extensions/deep-research/src/jobs.test.ts",
     "extensions/deep-research/src/jobs.cancel.test.ts",
+    "extensions/deep-research/src/jobs.control.test.ts",
     "extensions/deep-research/src/jobs.wake.test.ts",
     "extensions/google/research-gateway.test.ts",
   ])("routes %s through the host database owner exactly once", (file) => {
@@ -540,25 +541,6 @@ describe("projects vitest config", () => {
     expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
     expect(requireTestConfig(createGatewayDatabaseWorkersVitestConfig({})).pool).toBe("forks");
     expect(requireTestConfig(createGatewayMethodsVitestConfig({})).exclude).toContain(file);
-  });
-
-  it.each([
-    "extensions/deep-research/src/jobs.test.ts",
-    "extensions/deep-research/src/jobs.cancel.test.ts",
-    "extensions/deep-research/src/jobs.control.test.ts",
-    "extensions/deep-research/src/jobs.wake.test.ts",
-    "extensions/deep-research/test/gateway-recovery.integration.test.ts",
-    "extensions/deep-research/test/gateway-routing.integration.test.ts",
-    "extensions/google/research-gateway.test.ts",
-  ])("routes %s through the host database owner exactly once", (file) => {
-    const project = "test/vitest/vitest.extension-database-workers.config.ts";
-    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-    expect(requireTestConfig(createExtensionDatabaseWorkersVitestConfig({})).pool).toBe(
-      diagnosticForksPool,
-    );
-    expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
-      file.slice("extensions/".length),
-    );
   });
 
   it.each([

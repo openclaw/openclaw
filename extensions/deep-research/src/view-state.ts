@@ -71,6 +71,9 @@ export async function requestResearchWake(
     updatedAt: now,
     ...(cancelRequested ? { cancelRequested: true } : {}),
   };
+  // A renewed job must remain discoverable if the service stops after its CAS.
+  // A wake left by a failed CAS is harmless: recovery rechecks the current job.
+  await state.prepareWake(next, context.assertInvocationCurrent);
   const saved = await store.compareAndApply(id, observed.comparison, {
     operation: "update",
     action: "set",
