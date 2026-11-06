@@ -141,7 +141,7 @@ async function createBrewFixture() {
   vi.stubEnv("PATH", bin);
   mocks.run.mockImplementation(
     async ([command, ...args]: string[], options: { env?: NodeJS.ProcessEnv }) => {
-      if (state.gogPaths.has(command)) {
+      if (command !== undefined && state.gogPaths.has(command)) {
         return schemaResult(state.secure ? undefined : []);
       }
       expect(command).toBe(brew);
