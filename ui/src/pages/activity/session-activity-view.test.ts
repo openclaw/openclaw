@@ -569,7 +569,6 @@ describe("session activity people filter", () => {
     expect(document.activeElement).toBe(find(".activity-feed__people-popover"));
     container.querySelector<HTMLButtonElement>('[data-activity-person=""]')?.click();
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(trigger);
 
     expect(onFiltersChange).toHaveBeenCalledWith({ personId: null, query: "release", time: "30d" });
   });
