@@ -126,32 +126,46 @@ suite.define(() => {
             Reflect.set(window, "childActivityReloadFrames", frames);
             requestAnimationFrame(sample);
           });
-          if (failActivity) {
-            await page.route("**/assets/chat-subagent-activity-live-*.js", (route) =>
-              route.abort(),
-            );
-          }
-          await page.reload();
+          const readFrames = () =>
+            page.evaluate(async () => {
+              await new Promise(requestAnimationFrame);
+              return Reflect.get(window, "childActivityReloadFrames") as DetailsFrame[];
+            });
+          const activityRequested = Promise.withResolvers<void>();
+          const activityRelease = Promise.withResolvers<void>();
+          await page.route("**/assets/chat-subagent-activity-live-*.js", async (route) => {
+            activityRequested.resolve();
+            if (failActivity) {
+              await route.abort();
+              return;
+            }
+            await activityRelease.promise;
+            await route.continue();
+          });
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await activityRequested.promise;
           await gateway.waitForRequest("connect");
           if (failActivity) {
             await details.locator('[data-details-group="outputs"]').waitFor();
             await details.locator('[data-details-group="automations"]').waitFor();
             await group.locator(".lazy-view-error").waitFor();
+            await group.getByRole("button", { name: "Reload", exact: true }).waitFor();
             expect(await details.locator(".lazy-view-error").count()).toBe(1);
             await gateway.resolveDeferred("connect");
             return;
           }
-          await details.locator("section.chat-details-session").waitFor();
-          const first = await page.evaluate(async () => {
-            await new Promise(requestAnimationFrame);
-            return (Reflect.get(window, "childActivityReloadFrames") as DetailsFrame[])[0]!;
-          });
-          expect(first.sections.some((section) => section.id === "subagents")).toBe(true);
-          expect(first.rows).toBe(2);
-          expect(first.labels).toEqual(childLabels);
-          expect(
-            await group.locator("button.chat-subagent-activity__row:not(:disabled), a").count(),
-          ).toBe(0);
+          try {
+            await details.locator("section.chat-details-session").waitFor();
+            const first = (await readFrames())[0]!;
+            expect(first.sections.some((section) => section.id === "subagents")).toBe(true);
+            expect(first.rows).toBe(2);
+            expect(first.labels).toEqual(childLabels);
+            expect(
+              await group.locator("button.chat-subagent-activity__row:not(:disabled), a").count(),
+            ).toBe(0);
+          } finally {
+            activityRelease.resolve();
+          }
           await gateway.resolveDeferred("connect");
           await group.locator("button.chat-subagent-activity__row").first().waitFor();
           await page.waitForFunction(() => {
@@ -167,10 +181,7 @@ suite.define(() => {
                 )
             );
           });
-          const frames = await page.evaluate(async () => {
-            await new Promise(requestAnimationFrame);
-            return Reflect.get(window, "childActivityReloadFrames") as DetailsFrame[];
-          });
+          const frames = await readFrames();
           const final = frames.at(-1)!;
           expect(final.sections.map((section) => section.id)).toEqual([
             "subagents",

@@ -1,0 +1,2 @@
+# Hold the real activity chunk across cached first-frame and live handoff assertions in the existing native reload case.
+11
