@@ -1,0 +1,2 @@
+# Native SQLite allocation and interrupted-compaction cleanup regressions.
+48
