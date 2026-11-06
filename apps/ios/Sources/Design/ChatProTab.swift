@@ -199,7 +199,7 @@ struct ChatProTab: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Message recovery")
                 .font(OpenClawType.headline)
-            Text(verbatim: viewModel.errorText ?? "Copy or clear this draft to finish switching.")
+            Text(verbatim: viewModel.errorText ?? String(localized: "Copy or clear this draft to finish switching."))
                 .font(OpenClawType.body)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {

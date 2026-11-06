@@ -359,7 +359,7 @@ extension OpenClawChatViewModel {
                 self.unsecuredLiveSendRecoveryComposerKey = draft.composerSessionKey
                 self.resolveRetiredComposerRecovery()
                 self.errorText = self.inputHistoriesBySession[draft.composerSessionKey]?.recoveryWarning ??
-                    "Message was not sent. Copy or clear this draft to finish switching."
+                    String(localized: "Message was not sent. Copy or clear this draft to finish switching.")
             }
             self.isSubmittingDraft = false
         }
@@ -778,7 +778,7 @@ extension OpenClawChatViewModel {
         if deliveryIsAmbiguous {
             self.restoreDraftAfterLiveSendFailure(
                 attempt,
-                warning: "Message delivery could not be confirmed. Check the conversation before retrying.")
+                warning: String(localized: "Message delivery could not be confirmed. Check the conversation before retrying."))
         } else {
             await self.recoverUnsentLiveSend(attempt, expectedSessionSettings: preparedDelivery?.settings)
         }
@@ -807,7 +807,7 @@ extension OpenClawChatViewModel {
                messageID: attempt.userMessageID,
                session: attempt.draft.session,
                expectedSessionSettings: expectedSessionSettings,
-               failureReason: "Message was not sent. Review and retry.")
+               failureReason: String(localized: "Message was not sent. Review and retry."))
         {
             self.finishAcceptedComposerSend(attempt.draft)
             return
