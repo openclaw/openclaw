@@ -98,15 +98,19 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
 // Both the chat composer and the new-session page submit on the same
 // chatSendShortcut preference, so their displayed chords swap together.
 const SEND_PREFERENCE_ENTRY_IDS = new Set(["sendMessage", "startNewSession"]);
+const ARCHIVE_PREFERENCE_ENTRY_IDS = new Set(["archiveSession"]);
 
 function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
+  options: { archiveShortcutEnabled?: boolean } = {},
 ): readonly KeyboardShortcutSection[] {
   const mobile = isMobileBrowserPlatform();
+  const archiveShortcutEnabled = options.archiveShortcutEnabled !== false;
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
     keyboardShortcutSection(
       section.id,
       section.entries
+        .filter((entry) => archiveShortcutEnabled || !ARCHIVE_PREFERENCE_ENTRY_IDS.has(entry.id))
         .filter(
           (entry) =>
             !mobile ||
@@ -134,6 +138,7 @@ function resolveKeyboardShortcutSections(
 
 type DialogProps = {
   sendShortcut: ChatSendShortcut;
+  archiveShortcutEnabled: boolean;
   newSessionHost?: ShellNewSessionHost;
   isOpen: boolean;
 };
@@ -205,7 +210,11 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
               </button>
             </header>
             <div class="body">
-              <For each={resolveKeyboardShortcutSections(props.sendShortcut)}>
+              <For
+                each={resolveKeyboardShortcutSections(props.sendShortcut, {
+                  archiveShortcutEnabled: props.archiveShortcutEnabled,
+                })}
+              >
                 {(section) => (
                   <section>
                     <h3>{t(section.label)}</h3>
@@ -237,6 +246,7 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
   {
     properties: {
       sendShortcut: { default: "enter", attribute: false },
+      archiveShortcutEnabled: { default: true, attribute: false },
       newSessionHost: { default: undefined, attribute: false },
       isOpen: { default: false, attribute: false },
     },

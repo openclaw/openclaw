@@ -127,6 +127,9 @@ export function ShellLazyOverlays(props: {
               props.host.shellComponentMounted(element);
             }}
             sendShortcut={sendShortcut()}
+            archiveShortcutEnabled={
+              props.host.context?.theme.settings.archiveShortcutEnabled !== false
+            }
             newSessionHost={props.host}
           />
         </ShellRequestedComponent>

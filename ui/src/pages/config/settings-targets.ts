@@ -408,6 +408,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.sendShortcutHint",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
+      "chat.archiveShortcut",
+      "chat.archiveShortcutHint",
       "chat.followUpMode",
       "chat.followUpModeSteer",
       "chat.followUpModeQueue",
@@ -420,7 +422,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.catalogOpenTargetTerminal",
     ],
     aliases:
-      "keyboard enter follow-up followup steer queue codex claude terminal viewer width task progress checklist collapse expand",
+      "keyboard enter follow-up followup steer queue codex claude terminal viewer width task progress checklist collapse expand archive shortcut disable browser collision",
   },
   appearanceDevices: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.devices),

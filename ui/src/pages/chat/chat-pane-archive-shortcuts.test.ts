@@ -112,6 +112,24 @@ it("deduplicates rapid requests through the shared archive owner", async () => {
   expect(patch).toHaveBeenCalledOnce();
 });
 
+it("leaves the chord to the browser when this browser disabled direct Archive", async () => {
+  const { pane, state, patch, sessions, row } = fixture();
+  const previous = state.settings;
+  state.settings = { ...previous, archiveShortcutEnabled: false };
+  onTestFinished(() => {
+    state.settings = previous;
+  });
+  vi.mocked(showToast).mockClear();
+  const event = press(pane);
+  // Not consumed: the page must not steal ⌘/Ctrl+Shift+A from the browser, so the
+  // unhandled event reaches the browser's own shortcut.
+  expect(event.defaultPrevented).toBe(false);
+  await vi.dynamicImportSettled();
+  expect(patch).not.toHaveBeenCalled();
+  expect(sessions.archiveVisibility(row.key)).toBeUndefined();
+  expect(showToast).not.toHaveBeenCalled();
+});
+
 it.each([
   ["protected", false],
   ["archived", false],
