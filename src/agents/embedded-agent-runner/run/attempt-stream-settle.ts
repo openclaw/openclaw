@@ -37,12 +37,10 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
+import { createAttemptModelRequestTransformer } from "../model-request-hook.js";
 import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
-import {
-  type ProviderPromptState,
-  wrapStreamFnWithProviderPromptState,
-} from "../provider-prompt-state.js";
+import { wrapStreamFnWithProviderPromptState } from "../provider-prompt-state.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -400,11 +398,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
-  providerPromptState: {
-    state: ProviderPromptState;
-    effectiveContextTokenBudget: number;
-    recordEvent?: (type: string, data?: Record<string, unknown>) => void;
-  };
+  providerPromptState: Omit<Parameters<typeof wrapStreamFnWithProviderPromptState>[0], "streamFn">;
 }) {
   const attempt = input.attempt;
   const session = input.session;
@@ -587,6 +581,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    transformPayload: createAttemptModelRequestTransformer(attempt, input.sessionAgentId),
   });
   session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
     streamFn: session.agent.streamFn,

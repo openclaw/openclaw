@@ -202,6 +202,11 @@ export function wrapStreamFnWithProviderPromptState(params: {
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
   recordEvent?: (type: string, data?: Record<string, unknown>) => void;
+  transformPayload?: (
+    payload: unknown,
+    model: Model,
+    context: Parameters<StreamFn>[1],
+  ) => Promise<unknown>;
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
@@ -212,10 +217,16 @@ export function wrapStreamFnWithProviderPromptState(params: {
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
-        const finalPayload = replacement === undefined ? payload : replacement;
+        const preparedPayload = replacement === undefined ? payload : replacement;
+        // Encoding transports may still alter the payload after onPayload.
+        // Their final gate runs at encode; other transports gate here.
         if (modelRequestBodyState(observedOptions).enabled) {
-          return finalPayload;
+          return preparedPayload;
         }
+        const finalPayload = params.transformPayload
+          ? await params.transformPayload(preparedPayload, payloadModel, context)
+          : preparedPayload;
+        options?.signal?.throwIfAborted();
         await recordProviderPrompt({
           state: params.state,
           model: payloadModel,
@@ -259,10 +270,14 @@ export function wrapStreamFnWithProviderPromptState(params: {
     };
     markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
+      const finalPayload = params.transformPayload
+        ? await params.transformPayload(payload, model, context)
+        : payload;
+      options?.signal?.throwIfAborted();
       const encoded = await recordProviderPrompt({
         state: params.state,
         model,
-        payload,
+        payload: finalPayload,
         signal: options?.signal,
         effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         encode: true,
