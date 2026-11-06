@@ -76,7 +76,6 @@ export function snapshotSessions(
     | "state"
     | "owner"
     | "archivedBy"
-    | "participants"
     | "participantCount"
   >,
 ): SidebarSnapshotSession[] {
@@ -90,6 +89,7 @@ export function snapshotSessions(
       ]);
       const display = presentation?.(row);
       const state = {
+        ownerViewing: display?.state?.ownerViewing,
         pinnable: row.snapshot ? row.snapshot.pinnable : row.pinnable ? undefined : false,
         childCount: privateChildren
           ? undefined
@@ -120,7 +120,6 @@ export function snapshotSessions(
         agentId: row.agentId,
         owner: display?.owner,
         archivedBy: display?.archivedBy,
-        participants: display?.participants,
         participantCount: display?.participantCount,
         subtitle: row.subtitle,
         icon: row.icon,

@@ -1,12 +1,16 @@
-import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
+import { readCachedAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
+import {
+  presenceViewerLastActivity,
+  profileIsViewingSession,
+  profilePresenceViewer,
+} from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
@@ -15,13 +19,14 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasSidebarListFilter } from "./session-data-events.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
-import { resolveSidebarOnline } from "./sidebar-online-state.ts";
+import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
   snapshotIssuesCount,
   type SidebarSnapshotModel,
+  type SidebarSnapshotSession,
 } from "./sidebar-snapshot-model.ts";
 
 function displayUser(user: AuthenticatedUser | null | undefined) {
@@ -119,7 +124,7 @@ export function captureSidebarSnapshotModel(
   ) {
     return null;
   }
-  const online = resolveSidebarOnline(host);
+  const online = sidebarOnlineOrder(host);
   const plugins = [...zone.pluginTabs].map(([key, tab]) => ({
     key,
     pluginId: tab.pluginId,
@@ -130,38 +135,48 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
-  const displayPerson = <T extends SessionCreatedActor | SessionParticipant>(person: T) => ({
-    ...person,
-    avatarUrl:
-      person.identity?.type === "agent"
-        ? (resolveAgentAvatarUrl(
-            agents.agents.find((agent) => agent.id === person.identity?.id) ?? {},
-            context.agentIdentity.get(person.identity.id),
-          ) ?? person.avatarUrl)
-        : profileDirectory(context.gateway).avatarIdentity({
-            identity: person.identity,
-            name: person.label,
-            profileAvatarUrl: person.avatarUrl,
-          }).profileAvatarUrl,
-  });
-  const presentation = (row: SidebarRecentSession) => ({
-    ...(visibleKeys.has(row.key)
-      ? {
-          owner: row.owner && { ...row.owner, actor: displayPerson(row.owner.actor) },
-          archivedBy: row.archivedBy && displayPerson(row.archivedBy),
-          participants:
-            (row.participantCount ?? row.participants?.length) === 1
-              ? row.participants?.slice(0, 1).map(displayPerson)
-              : undefined,
-          participantCount: row.participantCount ?? row.participants?.length,
-        }
-      : {}),
-    childrenDisplayMode: host.sessionProjection.children.capture(row.key),
-    snapshotSubtitle: row.snapshot
-      ? row.snapshotSubtitle
-      : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
-  });
+  const portrait = (
+    actor: SessionCreatedActor | undefined,
+  ): SidebarSnapshotSession["archivedBy"] => {
+    const { type, id, identity, label, avatarUrl: profileAvatarUrl } = actor ?? {};
+    if (type !== "human" || !id || identity?.type !== "profile") {
+      return;
+    }
+    const avatar = resolveAvatar(
+      profileDirectory(context.gateway).avatarIdentity({ identity, name: label, profileAvatarUrl }),
+    );
+    return avatar.kind === "profile" && readCachedAvatarImageUrl(avatar.url)
+      ? { type, id, label, identity, avatarUrl: avatar.url }
+      : undefined;
+  };
+  const archived = host.sessionsStatusFilter === "archived";
+  const presentation = (row: SidebarRecentSession) => {
+    const count = row.participantCount ?? row.participants?.length ?? 0;
+    const actor =
+      host.sessionOwnershipVisibility.avatars && visibleKeys.has(row.key) && count > 1
+        ? portrait(archived ? row.archivedBy : row.owner?.actor)
+        : undefined;
+    const state = sidebarSessionBadgeFacts(host.sessionPullRequests, row);
+    return {
+      owner: actor && !archived ? { actor, assignedAt: row.owner?.assignedAt } : undefined,
+      archivedBy: archived ? actor : undefined,
+      participantCount: actor ? count : undefined,
+      childrenDisplayMode: host.sessionProjection.children.capture(row.key),
+      snapshotSubtitle: row.snapshot
+        ? row.snapshotSubtitle
+        : resolveSidebarSessionRowSubtitle(host, row),
+      state: actor
+        ? {
+            ...state,
+            ownerViewing: profileIsViewingSession(
+              host.sessionData.presencePayload,
+              actor.identity,
+              row.key,
+            ),
+          }
+        : state,
+    };
+  };
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
@@ -204,7 +219,7 @@ export function captureSidebarSnapshotModel(
       const lastActivityAt = presenceViewerLastActivity(user);
       return {
         ...displayUser(user),
-        watchedSessions: user.watchedSessions.filter((key) => visibleKeys.has(key)),
+        watchedSessions: [],
         entries: [{ ts: 0, lastActivityAt }],
       };
     }),

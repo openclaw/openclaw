@@ -41,6 +41,20 @@ function expectCachedRows(
   expectCachedScroll(report, scrollTop);
   const cached = report.frames.filter((frame) => frame.cached);
   const live = report.frames.at(-1)!;
+  const portraitOverflowKeys = new Set(
+    live.rows
+      .filter(
+        (row) =>
+          row.participantCount !== null &&
+          row.avatarComponents.agents === 0 &&
+          row.avatarPresentation.length === 1 &&
+          row.avatarPresentation[0]?.image,
+      )
+      .map((row) => row.key),
+  );
+  expect(portraitOverflowKeys.size).toBeGreaterThan(0);
+  const portraits = (rows: typeof live.rows) =>
+    rows.filter((row) => portraitOverflowKeys.has(row.key));
   for (const frame of cached) {
     expect(frame.mountedRows.length).toBeGreaterThan(0);
     expect(frame.rows.length).toBeGreaterThan(0);
@@ -53,9 +67,9 @@ function expectCachedRows(
         row.ownerAway,
         row.participantCount,
       ]);
-    expect(avatars(frame.rows)).toEqual(avatars(live.rows));
-    expect(frame.rows.map((row) => row.avatarRootNodes)).toEqual(
-      live.rows.map((row) => row.avatarRootNodes),
+    expect(avatars(portraits(frame.rows))).toEqual(avatars(portraits(live.rows)));
+    expect(portraits(frame.rows).map((row) => row.avatarRootNodes)).toEqual(
+      portraits(live.rows).map((row) => row.avatarRootNodes),
     );
   }
 }

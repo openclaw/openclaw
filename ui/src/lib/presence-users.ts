@@ -116,6 +116,19 @@ export function presenceMatchesProfile(
   return identity?.type === "profile" && user.identity?.id === identity.id;
 }
 
+export function profileIsViewingSession(
+  value: unknown,
+  identity: SessionParticipantIdentity | undefined,
+  sessionKey: string,
+): boolean | undefined {
+  return identity?.type === "profile"
+    ? projectPresencePayload(value).users.some(
+        (user) =>
+          presenceMatchesProfile(user, identity) && user.watchedSessions.includes(sessionKey),
+      )
+    : undefined;
+}
+
 export function projectPresenceViewers(
   value: unknown,
   selfUser?: AuthenticatedUser | null,

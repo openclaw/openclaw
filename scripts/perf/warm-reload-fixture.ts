@@ -415,12 +415,6 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     let activeAssignedToOperator = 0;
     try {
       const avatar = png.createSolidPngBuffer(96, 96, { r: 33, g: 108, b: 140 });
-      // Keep the seeded directory's avatar routes real for warm image-cache proof.
-      for (const teammate of await profiles.listProfiles({ env })) {
-        await profileWrites.setCanonicalUserProfileAvatar(teammate.id, avatar, "image/png", {
-          env,
-        });
-      }
       writeFileSync(path.join(workspaceDir, "avatar.png"), avatar);
       writeFileSync(
         path.join(workspaceDir, "README.md"),

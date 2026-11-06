@@ -438,6 +438,22 @@ it.each(["owner", "icon"] as const)(
   },
 );
 
+it.each([false, true])(
+  "retains cached owner presence (%s) before live adoption",
+  (ownerViewing) => {
+    const { dom, current, setCurrent } = mountRow(
+      { owner: { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } } },
+      { snapshot: { ownerViewing } },
+    );
+    const chip = dom.query(".session-owner-chip");
+    expect(chip?.classList.contains("session-owner-chip--away")).toBe(!ownerViewing);
+    setCurrent({ ...current(), snapshot: undefined });
+    flush();
+    expect(dom.query(".session-owner-chip")).toBe(chip);
+    expect(chip?.classList.contains("session-owner-chip--away")).toBe(true);
+  },
+);
+
 it("materializes the archive hint on hover without changing the action name", () => {
   vi.useFakeTimers();
   onTestFinished(installTitleTooltips(document));

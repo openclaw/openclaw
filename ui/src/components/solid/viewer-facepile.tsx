@@ -275,21 +275,20 @@ export function ParticipantAvatar(props: {
           const rosterAgent = agents
             ?.read()
             .agentsList?.agents.find((entry) => entry.id === identity().id);
+          const hydrated = agentIdentity?.read().get(identity().id);
           const resolved = resolveAvatar({
             identity: identity(),
+            id: props.user.id,
+            name: props.user.name,
             profileAvatarUrl: props.user.avatarUrl,
           });
-          const hydrated = agentIdentity?.read().get(identity().id, resolved.kind !== "profile");
           return {
             id: identity().id,
             avatar: hydrated
               ? resolveAgentAvatarUrl(rosterAgent ?? {}, hydrated)
               : (resolveAgentAvatarUrl(rosterAgent ?? {}) ??
                 (resolved.kind === "profile" ? resolved.url : null)),
-            textAvatar: resolveAgentTextAvatar(
-              rosterAgent ?? {},
-              hydrated ?? agentIdentity?.read().get(identity().id),
-            ),
+            textAvatar: resolveAgentTextAvatar(rosterAgent ?? {}, hydrated),
           };
         });
         return (

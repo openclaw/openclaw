@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   hasSessionPresenceViewers,
   presenceUserLabel,
+  profileIsViewingSession,
   profilePresenceViewer,
   presenceViewerActivity,
   projectOnlinePresenceViewers,
@@ -56,6 +57,12 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
   ]);
   expect(forward.users[1]?.identity).toBeUndefined();
   expect(projectPresencePayload({ presence: presence.toReversed() })).toEqual(forward);
+  expect(profileIsViewingSession({ presence }, profile.identity, "profile-extra")).toBe(true);
+  expect(profileIsViewingSession({ presence }, profile.identity, "raw-session")).toBe(false);
+  expect(
+    profileIsViewingSession({ presence }, { type: "agent", id }, "profile-session"),
+  ).toBeUndefined();
+  expect(profileIsViewingSession({ presence }, undefined, "raw-session")).toBeUndefined();
 });
 
 it.each([true, false])(

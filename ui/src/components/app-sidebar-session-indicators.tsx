@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
+import { profileIsViewingSession } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
@@ -56,13 +56,14 @@ export function renderSidebarSessionIndicators(
   const ownerViewing = createMemo(() => {
     const ownerActorValue = ownerActor();
     const readSessionValue = readSession();
-    return ownerActorValue?.identity?.type === "profile"
-      ? projectPresencePayload(host().sidebarPresencePayload).users.some(
-          (user) =>
-            presenceMatchesProfile(user, ownerActorValue.identity) &&
-            user.watchedSessions.includes(readSessionValue.key),
-        )
-      : undefined;
+    return (
+      readSessionValue.snapshot?.ownerViewing ??
+      profileIsViewingSession(
+        host().sessionData.presencePayload,
+        ownerActorValue?.identity,
+        readSessionValue.key,
+      )
+    );
   });
   // Person sections already own durable attribution. Restore the row avatar
   // only for live presence; pinned and archive-attribution rows have no matching header.
@@ -76,11 +77,7 @@ export function renderSidebarSessionIndicators(
   // archive attribution visible; the participant count includes unshown faces.
   const selfUser = createMemo(() => {
     const gateway = host().sessionDataContext?.gateway;
-    return (
-      (gateway && gatewayPresentationScope(gateway).displayUser) ??
-      host().sidebarSnapshot?.footer ??
-      null
-    );
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
   });
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
@@ -236,7 +233,7 @@ export function renderSidebarSessionIndicators(
         {" "}
         <span class="sidebar-recent-session__details-endcap">
           <openclaw-viewer-facepile
-            prop:presencePayload={host().sidebarPresencePayload}
+            prop:presencePayload={host().sessionData.presencePayload}
             prop:selfUser={selfUser()}
             prop:selfInstanceId={host().sessionData.presenceInstanceId}
             prop:sessionKey={readSession().key}

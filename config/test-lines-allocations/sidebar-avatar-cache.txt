@@ -1,2 +1,2 @@
-99
-# Extend the existing warm sidebar regression/probe with avatar display and node-retention proof.
+133
+# Extend warm sidebar avatar regression; preserve scoped owner presence through live adoption.
