@@ -25,6 +25,7 @@ import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { IconButton, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -644,17 +645,16 @@ function JobRow(
       </span>
       {props.canManage ? (
         <span class="cron-table__actions" onClick={(e: Event) => e.stopPropagation()}>
-          <button
-            type="button"
-            class="btn btn--sm btn--ghost cron-row-run"
+          <IconButton
+            size={28}
+            glyph="row"
+            class="cron-row-run"
             data-test-id={`cron-row-run-${props.job.id}`}
-            title={t("cron.actions.runNowJob", { name: displayName() })}
-            aria-label={t("cron.actions.runNowJob", { name: displayName() })}
+            label={t("cron.actions.runNowJob", { name: displayName() })}
+            icon={sessionIcon("play", 12, ROW_GLYPH_STROKE)}
             disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
-          >
-            {sessionIcon("play", 12, 1.5)}
-          </button>
+          />
           <EnabledSwitch {...props} job={props.job} compact />
           <JobMenu
             {...props}

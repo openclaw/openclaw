@@ -57,11 +57,13 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Owner-approved #187742: retain scroll snapshots and native menu behavior.
-  // Matched Chat/New gzip is 1,288,561/796,552 B; each cap adds 64 B headroom.
-  // Paired-base Chat was 1,288,347 B, already 1,150 B above the prior cap.
-  chatBootJsGzipBytes: 1_288_625,
-  newBootJsGzipBytes: 796_616,
+  // Generated-name-normalized main measurement plus 64 B toolchain headroom.
+  // Coordinator accepted transcript mounting's minifier variance; complete build plus 64 B.
+  // Josh Lehman approved the OpenClaw ID sidebar mounts and sign-in callback check
+  // (#192352, 2026-11-06): on main 0a6590652dc this branch measures Chat 1,288,774 B
+  // and New Session 797,124 B; main's concurrent growth gets 256 B of headroom.
+  chatBootJsGzipBytes: 1_289_030,
+  newBootJsGzipBytes: 797_380,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -70,15 +72,18 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Owner-approved #187742: measured shared gzip 560,062 B plus 64 B headroom.
-  // Paired-base shared gzip was 559,828 B, already 284 B above the prior cap.
-  largestJsGzipBytes: 560_126,
+  // Normalized shared application chunk plus 64 B toolchain headroom.
+  // Josh Lehman approved the OpenClaw ID shared-chunk growth (#192352, 2026-11-06):
+  // measured 560,277 B; main's concurrent growth gets 256 B of headroom.
+  largestJsGzipBytes: 560_533,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  totalCssGzipBytes: 324_684,
-  totalCssRawBytes: 1_675_356,
+  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
+  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 325_109,
+  totalCssRawBytes: 1_675_754,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -58,7 +58,7 @@ export function createMergeOutcomeFixtureHarness() {
     wrapper.indexOf("\n# Keep dependency sourcing independent"),
   );
   const nodeExecutable = requireNodeTool("node");
-  const nodeArgs = resolveVitestNodeArgs();
+  const nodeArgs = resolveNodeCompilerArgs();
   const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
   const lockRef = "refs/openclaw/pr-operation-locks/123";
   const describePosix = process.platform === "win32" ? describe.skip : describe;

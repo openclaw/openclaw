@@ -2123,12 +2123,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(sdkSaveStep.uses).toBe(CACHE_SAVE_V5);
     expect(sdkSaveStep.with?.key).toBe("${{ steps.android-sdk-cache.outputs.cache-primary-key }}");
     expect(gradleCacheStep).toMatchObject({
-      if: "inputs.cache-mode != 'off'",
       uses: SETUP_GRADLE_V6,
       with: {
         "add-job-summary": "never",
         "cache-provider": "basic",
-        "cache-read-only": "${{ inputs.cache-mode != 'read-write' }}",
       },
     });
     expect(installStep.run).toContain(`"${packageId}"`);
@@ -2155,6 +2153,49 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       "sha256sum --check -",
     ]);
   });
+
+  it("restores release Gradle inputs without SDK caches or cache writes", () => {
+    const steps = readAndroidToolchainAction().runs.steps;
+    const gradle = requiredWorkflowStep(steps, "Setup Gradle cache");
+    const sdk = requiredWorkflowStep(steps, "Restore Android SDK cache");
+    const release = requiredWorkflowStep(
+      readWorkflow(".github/workflows/android-store-release.yml").jobs.release.steps,
+      "Setup Android toolchain",
+    );
+    expect(release.with).toMatchObject({ "cache-mode": "off", "gradle-cache-mode": "restore" });
+    for (const [inputs, restoreGradle, restoreSdk, readOnly] of [
+      [release.with, true, false, true],
+      [{ "cache-mode": "off" }, false, false, true],
+      [{ "cache-mode": "restore" }, true, true, true],
+      [{ "cache-mode": "read-write" }, true, true, false],
+      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, true, true],
+    ] as const) {
+      expect(evaluateWorkflowExpression(`\${{ ${gradle.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${sdk.if} }}`, { inputs })).toBe(restoreSdk);
+      expect(evaluateWorkflowExpression(gradle.with?.["cache-read-only"], { inputs })).toBe(
+        readOnly,
+      );
+    }
+  });
+
+  it.each(["CACHE_MODE", "GRADLE_CACHE_MODE"])(
+    "rejects invalid Android cache authority in %s",
+    (invalidInput) => {
+      const validation = requiredWorkflowStep(
+        readAndroidToolchainAction().runs.steps,
+        "Validate cache mode",
+      );
+      const result = runWorkflowShellScript(expectDefined(validation.run, "cache validation"), {
+        env: {
+          CACHE_MODE: "off",
+          GRADLE_CACHE_MODE: "restore",
+          INSTALL_SCREENSHOT_EMULATORS: "false",
+          [invalidInput]: "invalid",
+        },
+      });
+      expect(result.status).toBe(2);
+    },
+  );
 
   it("binds release targets to current authenticated ref evidence", () => {
     const workflow = readCiWorkflow();

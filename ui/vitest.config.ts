@@ -336,6 +336,7 @@ export default defineConfig({
   },
   test: {
     ...sharedUiTestConfig,
+    globalSetup: [path.join(repoRoot, "test/vitest/vitest.node-policy.global-setup.ts")],
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.

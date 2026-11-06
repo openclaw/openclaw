@@ -1,8 +1,18 @@
 import "../styles/sidebar-attention-floating.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createProjection, onCleanup, onSettled } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createProjection,
+  lazy,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -25,6 +35,10 @@ import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
+
+const OpenClawIdNotifications = lazy(() => import("./openclaw-id/notifications.tsx"), {
+  export: "OpenClawIdNotifications",
+});
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
@@ -199,6 +213,7 @@ function AppSidebarContent(
     },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
+  const applicationConfig = projectApplicationConfig(context.config);
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
@@ -354,7 +369,16 @@ function AppSidebarContent(
       disconnectSidebarOwner(host);
     };
   });
-  return content;
+  return (
+    <>
+      {content}
+      <Show when={applicationConfig.read().openclawIdEnabled}>
+        <Loading>
+          <OpenClawIdNotifications />
+        </Loading>
+      </Show>
+    </>
+  );
 }
 
 export type AppSidebarMethods = {

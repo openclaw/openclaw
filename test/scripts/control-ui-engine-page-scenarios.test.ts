@@ -5,11 +5,18 @@ import { createEnginePageScenarios } from "../../scripts/lib/control-ui-engine-p
 it.each([
   { id: "page-cron-visit", origin: "new-session" },
   { id: "page-cloud-workers-revisit", origin: "new-session" },
+  { id: "page-terminal-first-create-visit", origin: "new-session" },
+  { id: "page-terminal-first-attach-visit", origin: "new-session" },
+  { id: "page-terminal-first-output-revisit", origin: "new-session" },
+  { id: "page-terminal-cold-visit", origin: "new-session" },
+  { id: "page-terminal-cold-attach-visit", origin: "new-session" },
   { id: "page-cron-visit", origin: "chat" },
 ] as const)(
   "$id from $origin applies the selected Gateway latency once to each delivered frame",
   ({ id, origin }) => {
-    const scenario = createEnginePageScenarios(100, origin).find((entry) => entry.id === id);
+    const scenario = createEnginePageScenarios(100, origin, "http://127.0.0.1").find(
+      (entry) => entry.id === id,
+    );
     expect(scenario?.initScript).toBeDefined();
     const timers: Array<{ callback: () => void; delay: number }> = [];
     let now = 0;
