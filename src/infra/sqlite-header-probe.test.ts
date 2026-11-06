@@ -42,3 +42,35 @@ it.each(["ETIMEDOUT", "ENOENT"] as const)(
     );
   },
 );
+
+it("splits a batch that misses its deadline so slow storage still gets an answer", () => {
+  const timedOut = Object.assign(new Error("spawnSync node ETIMEDOUT"), { code: "ETIMEDOUT" });
+  const sizes: number[] = [];
+  vi.spyOn(childProcess, "spawnSync").mockImplementation(((_file, _argv, options) => {
+    const batch = JSON.parse(String(options?.input)) as string[];
+    sizes.push(batch.length);
+    return batch.length > 2
+      ? {
+          pid: 1,
+          output: [],
+          stdout: "",
+          stderr: "",
+          status: null,
+          signal: "SIGTERM",
+          error: timedOut,
+        }
+      : {
+          pid: 1,
+          output: [],
+          stdout: JSON.stringify(batch.map((pathname) => pathname.endsWith("db"))),
+          stderr: "",
+          status: 0,
+          signal: null,
+        };
+  }) as typeof childProcess.spawnSync);
+  const paths = ["/backup/a", "/backup/b.db", "/backup/c", "/backup/d", "/backup/e.db"];
+  expect([...probeSqliteDatabaseHeaders(paths)]).toEqual(
+    paths.map((pathname) => [pathname, pathname.endsWith("db")]),
+  );
+  expect(sizes).toEqual([5, 3, 2, 1, 2]);
+});
