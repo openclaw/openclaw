@@ -24,5 +24,5 @@ export function resolveSkillsPythonTargets(
     }
     owners.add(`skills/${match[1]}`);
   }
-  return [...owners].sort();
+  return [...owners].toSorted((left, right) => left.localeCompare(right));
 }
