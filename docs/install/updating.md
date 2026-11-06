@@ -45,6 +45,11 @@ backup.
 
 ## Update implementation contract
 
+Git-source and immutable updates probe support before passing `--no-lazy-fetch`.
+Older Git runs the same inspection commands without that option; partial clones
+may fetch promised objects. This fix must be present in the installed updater;
+a downloaded candidate cannot repair an older updater's preflight.
+
 When a CLI launcher forwards Ctrl-C or SIGTERM to `openclaw update` (including
 the root `--update` spelling), it allows up to 35 minutes for the updater to join
 its commands, release checkout ownership, and recover an interrupted activation

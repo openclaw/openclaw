@@ -32,6 +32,21 @@ export function createGitStepFactory(root: string, step: StepFactory) {
   return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
 }
 
+/** Older Git may lazily fetch promised objects; that must not block an update. */
+export async function resolveGitNoLazyFetchArgs(
+  runCommand: CommandRunner,
+  options: Parameters<CommandRunner>[1],
+): Promise<string[]> {
+  const probe = await runCommand(["git", "--no-lazy-fetch", "version"], options);
+  return probe.code === 0 &&
+    probe.stdout.startsWith("git version ") &&
+    !probe.killed &&
+    !probe.signal &&
+    (!probe.termination || probe.termination === "exit")
+    ? ["--no-lazy-fetch"]
+    : [];
+}
+
 export function resolveTagFetchRef(candidate: string): string | null {
   const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
   return ref.startsWith("refs/tags/") ? ref : null;

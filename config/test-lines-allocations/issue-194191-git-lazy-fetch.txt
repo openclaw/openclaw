@@ -1,0 +1,2 @@
+# Unsupported Git inspection and isolated capability-probe regressions; replay-only coverage omitted on this release.
+42
