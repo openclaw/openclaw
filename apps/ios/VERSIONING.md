@@ -90,6 +90,19 @@ overrides, never alternate release identities. No release arguments are required
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
+Store and TestFlight CI archives reuse Xcode's content-addressed compilation cache.
+Only compiler-cache storage is transferred; DerivedData, signed archives, IPAs,
+and signing material are excluded. Transfers are optional and time-limited, so a
+cache miss still compiles and validates the release normally. The cache is shared
+by both destinations and separated by Xcode build, runner OS, and architecture;
+the compiler invalidates entries when its inputs change.
+
+Local releases use the same archive path. To retain compiler results locally, set
+`OPENCLAW_IOS_COMPILATION_CACHE_DIR` to a dedicated directory, such as
+`$HOME/Library/Caches/openclaw/ios-release-cas`. Leave it unset to use the ordinary
+archive behavior. Deleting that dedicated directory discards only cached compiler
+results. Archive/export validation and upload behavior are unchanged.
+
 ## TestFlight distribution
 
 Run **iOS Store Release** with operation **testflight** from `main`:

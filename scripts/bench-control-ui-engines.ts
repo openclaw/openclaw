@@ -51,6 +51,12 @@ import {
   readEngineConfigurationObservation,
 } from "./lib/control-ui-engine-configuration-observer.ts";
 import { resolveEngineConfigurations } from "./lib/control-ui-engine-configurations.ts";
+import {
+  createEngineIdleScenarios,
+  isEngineIdleScenario,
+  readEngineIdleState,
+  verifyEngineIdleClocks,
+} from "./lib/control-ui-engine-idle-scenarios.ts";
 import { createEngineMemoryScenarios } from "./lib/control-ui-engine-memory-scenarios.ts";
 import { createEngineMemoryCollector } from "./lib/control-ui-engine-memory.ts";
 import {
@@ -94,6 +100,7 @@ import {
   type ControlUiPageObservation,
 } from "./lib/control-ui-page-observer.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
+import { launchTalkObservationBrowser } from "./lib/control-ui-talk-fixture.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -115,6 +122,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     pages: { type: "boolean", default: false },
     "page-phases": { type: "string", default: "visit,action,leave" },
+    "page-origin": { type: "string", default: "new-session" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
@@ -134,6 +142,10 @@ if (!Number.isInteger(memorySoakRounds) || memorySoakRounds < 1 || memorySoakRou
 }
 const pageBenchmark = values.pages || values.steps?.split(",").some((id) => id.startsWith("page-"));
 const pagePhases = values["page-phases"].split(",");
+const pageOrigin = values["page-origin"];
+if (pageOrigin !== "new-session" && pageOrigin !== "chat") {
+  throw new Error("page-origin must be new-session or chat");
+}
 if (pagePhases.some((phase) => !["visit", "revisit", "action", "leave"].includes(phase))) {
   throw new Error("page-phases must contain visit, revisit, action and/or leave");
 }
@@ -218,7 +230,7 @@ const needsWorkboard =
       (id) =>
         id.startsWith("workboard-") ||
         id.startsWith("noop-workboard-") ||
-        /^page-(?:workboard|plugin)-(?:visit|action|leave)$/u.test(id),
+        /^page-(?:workboard|plugin)-(?:visit|revisit|action|leave)$/u.test(id),
     );
 if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
   throw new Error("Workboard comparisons require a source root for each bundle");
@@ -302,6 +314,17 @@ type Observation = {
   pixels?: Awaited<ReturnType<typeof compareControlUiScreenshots>>;
   computedTheme?: Record<string, string>;
   layers?: ControlUiLayerAudit;
+  idle?: {
+    before: Awaited<ReturnType<typeof readEngineIdleState>>;
+    after?: Awaited<ReturnType<typeof readEngineIdleState>>;
+    revealed?: Awaited<ReturnType<typeof readEngineIdleState>>;
+    fixture: { sessions: number; transcriptMessages: number };
+    clockRecovery?: Awaited<ReturnType<typeof verifyEngineIdleClocks>>;
+    taskMsPerMinute?: number | null;
+    scriptMsPerMinute?: number | null;
+    resourceIntervalMs?: number;
+    layerIntervalMs?: number;
+  };
   requests?: Record<string, number>;
   evidence?: InteractionEvidence;
   navigationPreloads?: InteractionNavigationPreloads;
@@ -318,7 +341,7 @@ type Observation = {
   }>;
   error?: string;
   errorEvents?: Array<{ message: string; phase: string }>;
-  resizeErrorCount?: number;
+  resizeErrorCount: number;
   artifactPrefix: string;
 };
 const observations: Observation[] = [];
@@ -358,6 +381,7 @@ try {
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
     ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
+    ...createEngineIdleScenarios(),
     ...createChatComposerScenarios(),
     ...createChatMessageScenarios(),
     ...createChatPanelScenarios().map((scenario) =>
@@ -367,7 +391,7 @@ try {
     ...createEngineMemoryScenarios(memorySoakRounds),
     ...createEnginePluginMemoryScenarios(),
     ...createEngineStreamingScenarios(),
-    ...createEnginePageScenarios(),
+    ...createEnginePageScenarios(0, pageOrigin),
     ...interactionScenarios.filter(
       (scenario) =>
         requestedIds?.includes(scenario.id) ||
@@ -397,11 +421,19 @@ try {
   ) {
     throw new Error("Unknown or empty --steps selection");
   }
+  if (pageOrigin === "chat" && scenarios.some((scenario) => scenario.fixture?.workboardResources)) {
+    throw new Error("Workboard/plugin resource fixtures require --page-origin new-session");
+  }
   if (
     networkProfiles.some(({ name }) => name !== "localhost") &&
-    scenarios.some(({ id }) => id !== "cold-boot" && id !== "warm-boot")
+    scenarios.some(
+      ({ id }) =>
+        id !== "cold-boot" && id !== "warm-boot" && !/^page-.+-(?:visit|revisit)$/u.test(id),
+    )
   ) {
-    throw new Error("Nonlocal --network-profiles require --steps cold-boot,warm-boot");
+    throw new Error(
+      "Nonlocal --network-profiles require cold-boot, warm-boot or page-<route>-visit/revisit steps",
+    );
   }
   planned =
     scenarios.length *
@@ -425,6 +457,9 @@ try {
           "./lib/control-ui-cpu-census.ts",
           "./lib/control-ui-engine-boot-scenarios.ts",
           "./lib/control-ui-engine-completed-run-scenarios.ts",
+          "./lib/control-ui-engine-idle-scenarios.ts",
+          "./lib/control-ui-resource-counts.ts",
+          "./lib/control-ui-talk-fixture.ts",
           "./lib/control-ui-long-session-probe.ts",
           "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts",
           "./lib/control-ui-chat-composer-scenarios.ts",
@@ -471,6 +506,7 @@ try {
     pairs,
     viewports,
     networkProfiles,
+    pageOrigin,
     configurations,
     trace: values.trace,
     observerOrigins: values["observer-origins"],
@@ -543,6 +579,11 @@ try {
               createEngineCompletedRunScenarios(slot.server.baseUrl).find(
                 ({ id }) => id === item.id,
               ) ??
+              (item.id.startsWith("page-")
+                ? createEnginePageScenarios(networkProfile.gatewayLatencyMs, pageOrigin).find(
+                    ({ id }) => id === item.id,
+                  )
+                : undefined) ??
               item;
             const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}-${configuration.name.replaceAll(":", "-")}`;
             const observation: Observation = {
@@ -555,6 +596,7 @@ try {
               pair,
               position,
               status: "failed",
+              resizeErrorCount: 0,
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
             };
@@ -566,37 +608,83 @@ try {
               await writeJson("observations.json", observations);
               continue;
             }
+            if (scenario.visibility === "hidden" && engine === "webkit") {
+              observation.status = "skipped";
+              observation.skipReason =
+                "WebKit has no supported native headless hiding API; no simulated visibility proof.";
+              observations.push(observation);
+              await writeJson(`${artifactPrefix}.json`, observation);
+              await writeJson("observations.json", observations);
+              continue;
+            }
             if (scenario.memory || !browsers.get(engine)!.isConnected()) {
               await browsers.get(engine)!.close();
               browsers.set(engine, await launchEngine(engine));
             }
-            const observationBrowser = browsers.get(engine)!;
-            const context = await observationBrowser.newContext({
-              viewport: { width: viewport.width, height: viewport.height },
-              isMobile: viewport.name === "mobile",
-              hasTouch: viewport.name === "mobile",
-              serviceWorkers: "block",
-              colorScheme: configuration.colorScheme,
-              locale: configuration.locale,
-              deviceScaleFactor: configuration.deviceScaleFactor,
-              reducedMotion: configuration.reducedMotion,
-              forcedColors: configuration.forcedColors,
-            });
+            // Use the existing runner-owned full Chrome helper for both idle states.
+            // Normal Playwright contexts force visibility even after minimization.
+            const nativeBrowser =
+              (isEngineIdleScenario(scenario) || scenario.visibility === "hidden") &&
+              engine === "chromium"
+                ? await launchTalkObservationBrowser(artifactDir, false)
+                : undefined;
+            const observationBrowser = nativeBrowser?.browser ?? browsers.get(engine)!;
+            const context =
+              nativeBrowser?.context ??
+              (await observationBrowser.newContext({
+                viewport: { width: viewport.width, height: viewport.height },
+                isMobile: viewport.name === "mobile",
+                hasTouch: viewport.name === "mobile",
+                serviceWorkers: "block",
+                colorScheme: configuration.colorScheme,
+                locale: configuration.locale,
+                deviceScaleFactor: configuration.deviceScaleFactor,
+                reducedMotion: configuration.reducedMotion,
+                forcedColors: configuration.forcedColors,
+              }));
             const page = await context.newPage();
             page.setDefaultTimeout(scenario.id.startsWith("chat-actions-") ? 15_000 : 30_000);
             const traceAction = values.trace && !scenario.navigation;
             const errors: Array<{ message: string; phase: string }> = [];
             let phase = "setup";
-            page.on("pageerror", (error: Error) => errors.push({ message: error.message, phase }));
+            page.on("pageerror", (error: Error) => {
+              errors.push({ message: error.message, phase });
+              if (error.message.includes("ResizeObserver loop")) {
+                observation.resizeErrorCount++;
+              }
+            });
             let tracingStarted = false;
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             let cpuProfile: ColdLoadCpuProfile | undefined;
             let layerAudit: Awaited<ReturnType<typeof createControlUiLayerAudit>> | undefined;
             let memory: Awaited<ReturnType<typeof createEngineMemoryCollector>> | undefined;
             let throttle: Awaited<ReturnType<typeof context.newCDPSession>> | undefined;
+            let minimizedWindow: number | undefined;
             try {
-              if (cpuThrottle !== 1) {
+              if (nativeBrowser) {
+                await page.setViewportSize(viewport);
+                await page.emulateMedia({
+                  colorScheme: configuration.colorScheme,
+                  reducedMotion: configuration.reducedMotion,
+                  forcedColors: configuration.forcedColors,
+                });
                 throttle = await context.newCDPSession(page);
+                await throttle.send("Emulation.setDeviceMetricsOverride", {
+                  width: viewport.width,
+                  height: viewport.height,
+                  deviceScaleFactor: configuration.deviceScaleFactor,
+                  mobile: viewport.name === "mobile",
+                });
+                await throttle.send("Emulation.setLocaleOverride", {
+                  locale: configuration.locale,
+                });
+                await throttle.send("Network.setUserAgentOverride", {
+                  userAgent: await page.evaluate(() => navigator.userAgent),
+                  acceptLanguage: configuration.locale,
+                });
+              }
+              if (cpuThrottle !== 1) {
+                throttle ??= await context.newCDPSession(page);
                 await throttle.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
@@ -612,7 +700,7 @@ try {
                 !scenario.standaloneDocument,
               );
               await page.addInitScript(installInteractionNavigationPreloadObserver);
-              if (scenario.memory) {
+              if (scenario.memory || isEngineIdleScenario(scenario)) {
                 await page.addInitScript(installControlUiResourceCounts);
               }
               await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
@@ -769,7 +857,10 @@ try {
                 );
               }
               const actionTiming =
-                !scenario.navigation && !scenario.memory
+                !scenario.navigation &&
+                !scenario.memory &&
+                !isEngineIdleScenario(scenario) &&
+                scenario.visibility !== "hidden"
                   ? await page.evaluateHandle(createEngineActionTiming, traceAction)
                   : undefined;
               const beforePixels = values["mutation-audit"]
@@ -782,7 +873,48 @@ try {
               }
               if (values["native-audit"]) {
                 layerAudit = await createControlUiLayerAudit(page);
-                await layerAudit.capture();
+              }
+              if (scenario.visibility === "hidden") {
+                const visibility = await context.newCDPSession(page);
+                try {
+                  const { windowId } = await visibility.send("Browser.getWindowForTarget");
+                  minimizedWindow = windowId;
+                  await visibility.send("Browser.setWindowBounds", {
+                    windowId,
+                    bounds: { windowState: "minimized" },
+                  });
+                  await page.waitForFunction(
+                    () => document.visibilityState === "hidden",
+                    undefined,
+                    { polling: 50, timeout: 5_000 },
+                  );
+                } finally {
+                  await visibility.detach();
+                }
+              }
+              // Hide first so minimizing does not become part of hidden-idle paint counts.
+              // Creation above obtains the compositor inventory while a surface is visible.
+              await layerAudit?.capture();
+              if (isEngineIdleScenario(scenario)) {
+                const idleBefore = await readEngineIdleState(page);
+                if (
+                  idleBefore.document.visibility !== (scenario.visibility ?? "visible") ||
+                  idleBefore.document.gatewayPhase !== "connected"
+                ) {
+                  throw new Error(
+                    "Idle requires the requested native visibility and a connected Gateway",
+                  );
+                }
+                observation.idle = {
+                  before: idleBefore,
+                  fixture: {
+                    sessions: fixture.sessions.length,
+                    transcriptMessages: Object.values(fixture.sessionTranscripts ?? {}).reduce(
+                      (total, transcript) => total + transcript.messages.length,
+                      0,
+                    ),
+                  },
+                };
               }
               measurement = await startEngineMeasurement(page, engine, {
                 trace: values.trace,
@@ -798,7 +930,9 @@ try {
               }
               const timeOrigin = actionTiming
                 ? await actionTiming.evaluate((timing) => timing.start())
-                : await page.evaluate(() => performance.timeOrigin);
+                : isEngineIdleScenario(scenario)
+                  ? 0
+                  : await page.evaluate(() => performance.timeOrigin);
               if (memory) {
                 // Bind checkpoints to this document, independently of wall-clock adjustments.
                 await page.evaluate((identity) => {
@@ -859,7 +993,9 @@ try {
                 };
               }
               observation.scenarioMs = performance.now() - start;
-              observation.settleFrameIntervalMs = await frames(page);
+              if (!isEngineIdleScenario(scenario) && scenario.visibility !== "hidden") {
+                observation.settleFrameIntervalMs = await frames(page);
+              }
               observation.wallMs = performance.now() - start;
               observation.settleWaitMs = observation.wallMs - observation.scenarioMs;
               if (actionTiming) {
@@ -870,6 +1006,25 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
+              if (observation.idle) {
+                observation.idle.after = await readEngineIdleState(page);
+                const { before: idleBefore, after } = observation.idle;
+                if (
+                  after.document.visibility !== idleBefore.document.visibility ||
+                  after.document.gatewayPhase !== "connected" ||
+                  after.document.route !== idleBefore.document.route
+                ) {
+                  throw new Error("Idle changed route, Gateway connection, or native visibility");
+                }
+                const factor = 60_000 / observation.wallMs;
+                observation.idle.taskMsPerMinute =
+                  captured.metrics.taskMs === null ? null : captured.metrics.taskMs * factor;
+                observation.idle.scriptMsPerMinute =
+                  captured.metrics.scriptMs === null ? null : captured.metrics.scriptMs * factor;
+                // Counter endpoints include profiler draining; do not divide them by CPU's window.
+                observation.idle.resourceIntervalMs =
+                  after.document.atMs - idleBefore.document.atMs;
+              }
               if (values["mutation-audit"]) {
                 observation.mutations = await page.evaluate(() =>
                   window.openclawMutationAudit!.finish(),
@@ -895,14 +1050,41 @@ try {
               observation.pageMetrics = await readControlUiPageObserver(
                 page,
                 observation.actionTiming?.startMs,
+                typeof observation.evidence?.visitReadyAtMs === "number"
+                  ? observation.evidence.visitReadyAtMs
+                  : undefined,
+                typeof observation.evidence?.visitStartedAtMs === "number"
+                  ? observation.evidence.visitStartedAtMs
+                  : undefined,
               );
               if (values["native-audit"]) {
+                observation.layers = await layerAudit!.finish();
+                if (observation.idle) {
+                  observation.idle.layerIntervalMs =
+                    Date.parse(observation.layers.after.capturedAt) -
+                    Date.parse(observation.layers.before.capturedAt);
+                }
                 await writeJson(`${artifactPrefix}.native.json`, captured);
                 observation.native = summarizeControlUiNativeTrace(
                   captured.timeline ?? [],
                   captured.profile,
                 );
-                observation.layers = await layerAudit!.finish();
+              }
+              if (minimizedWindow !== undefined) {
+                const visibility = await context.newCDPSession(page);
+                try {
+                  await visibility.send("Browser.setWindowBounds", {
+                    windowId: minimizedWindow,
+                    bounds: { windowState: "normal" },
+                  });
+                  await page.waitForFunction(() => document.visibilityState === "visible");
+                  await frames(page);
+                  if (observation.idle) {
+                    observation.idle.revealed = await readEngineIdleState(page);
+                  }
+                } finally {
+                  await visibility.detach();
+                }
               }
               if (values["native-audit"] || scenario.id === "theme-switch-cycles") {
                 observation.computedTheme = await page.evaluate(() => {
@@ -913,6 +1095,20 @@ try {
                       .map((name) => [name, styles.getPropertyValue(name).trim()]),
                   );
                 });
+              }
+              if (scenario.id.startsWith("idle-sidebar-clock-") && observation.idle) {
+                if (pair === 0) {
+                  await page.screenshot({
+                    path: path.join(artifactDir, `${artifactPrefix}.before-scroll.png`),
+                  });
+                }
+                observation.idle.clockRecovery = await verifyEngineIdleClocks(page, gateway);
+              }
+              if (scenario.id === "sidebar-running-clock-scroll-resize") {
+                observation.evidence = {
+                  ...observation.evidence,
+                  clockRecoveryChecks: (await verifyEngineIdleClocks(page, gateway)).length,
+                };
               }
               if (values["cpu-profile"]) {
                 // SAFETY: This mode is Chromium-only; Profiler.stop returns V8's
@@ -936,8 +1132,6 @@ try {
                 );
               }
               if (scenario.id.startsWith("page-")) {
-                // The earlier reset counts initial DOM outside CPU collection. Exclude
-                // CDP/profiler setup from long tasks and shifts using the actual action boundary.
                 observation.evidence = {
                   ...observation.evidence,
                   ...(await collectEnginePageStructure(page)),
@@ -976,7 +1170,6 @@ try {
                   const resizeErrors: unknown[] = await page.evaluate(() =>
                     Reflect.get(window, "__engineResizeErrors"),
                   );
-                  observation.resizeErrorCount = resizeErrors.length;
                   await writeJson(`${artifactPrefix}.resize-errors.json`, resizeErrors);
                 }
                 if (measurement) {
@@ -1018,9 +1211,14 @@ try {
                   observation.retiredProcess = processMemory(observationBrowser);
                 }
               } finally {
+                await nativeBrowser?.close();
                 if (scenario.memory) {
                   await observationBrowser.close();
                 }
+              }
+              if (errors.length) {
+                observation.status = "failed";
+                observation.error ??= errors.map(({ message }) => message).join("\n");
               }
               // Capture/cleanup can also fail after the scenario assertions pass.
               if (observation.status === "passed" && cpuProfile) {
@@ -1120,6 +1318,8 @@ const summary = [...cells.values()].map((cell) => {
     failed: rows.filter((row) => row.status === "failed").length,
     skipped: rows.filter((row) => row.status === "skipped").length,
     measured: measured.length,
+    resizeErrorCount: rows.reduce((total, row) => total + row.resizeErrorCount, 0),
+    resizeErrorObservations: rows.filter((row) => row.resizeErrorCount > 0).length,
     targets: cell.step.startsWith("page-")
       ? {
           longTaskLimitMs: 50 * cpuThrottle,
@@ -1192,6 +1392,10 @@ const summary = [...cells.values()].map((cell) => {
           "allShiftSum",
           "elementsBefore",
           "elementsAfter",
+          "assetRequests",
+          "assetRequestsCompletedByReady",
+          "assetEncodedBytesCompletedByReady",
+          "http1AssetConnectionWavesByReady",
         ] as const
       ).map((metric) => [
         metric,
@@ -1329,6 +1533,15 @@ await writeFile(
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed; ${observations.filter(({ status }) => status === "skipped").length} unsupported-viewport cells skipped. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
     "",
+    "ResizeObserver loop errors are counted in every run, including without tracing or observer-origin diagnostics. Any browser error fails its observation and the command; completed timing intervals do not waive the zero-error requirement.",
+    "",
+    "| Configuration | Viewport | Scenario | Network | Bundle | Engine | ResizeObserver errors | Affected / attempted observations |",
+    "| --- | --- | --- | --- | --- | --- | ---: | ---: |",
+    ...summary.map(
+      (row) =>
+        `| ${row.configuration} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.engine} | ${row.resizeErrorCount} | ${row.resizeErrorObservations} / ${row.passed + row.failed} |`,
+    ),
+    "",
     `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
     "",
     "Application elapsed is first trusted native input (or an explicitly marked Gateway response delivery) to last observed DOM commit/native value edit before scenario return. Gateway marks run inside the page immediately before releasing the deferred response. It excludes the initial driver prefix and later assertion/settle tail, but includes intermediate driver gaps in compound actions; it is not CPU or paint latency. Navigation/memory and actions without both boundaries are unranked. The driver prefix may include application focus work. Browser-local phases do not include boundary RPC transport and do not sum to Node wall time.",
@@ -1366,15 +1579,15 @@ await writeFile(
               return `| ${chromium.configuration} | ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromiumReady)} | ${format(webkitReady)} | ${routeReadyRatio?.toFixed(2) ?? "—"} |`;
             }),
           "",
-          "| Engine | Viewport | Phase | Bundle | Passed/failed | Route ready median/p95 ms | Content complete median/p95 ms | Wall median/p95 ms | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| Engine | Viewport | Phase | Network | Bundle | Passed/failed | Route ready median/p95 ms | Content complete median/p95 ms | Wall median/p95 ms | Ready assets / HTTP/1.1 wave floor | Longest task p95 ms | Script/style/layout median ms | CLS max | All shifts max | Elements after |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
           ...summary
             .filter(({ step }) => step.startsWith("page-"))
             .map((row) => {
               const number = (value: number | undefined) => value?.toFixed(2) ?? "unavailable";
               const readyTiming = row.evidence.visitReadyMs ?? row.evidence.leaveReadyMs;
               const completeTiming = row.evidence.contentReadyMs;
-              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(readyTiming?.median)}/${number(readyTiming?.p95)} | ${number(completeTiming?.median)}/${number(completeTiming?.p95)} | ${number(row.wallMs?.median)}/${number(row.wallMs?.p95)} | ${number(row.pageMetrics.longestLongTaskMs?.p95)} | ${number(row.metrics.scriptMs?.median)}/${number(row.metrics.styleMs?.median)}/${number(row.metrics.layoutMs?.median)} | ${number(row.pageMetrics.cls?.max)} | ${number(row.pageMetrics.allShiftSum?.max)} | ${number(row.pageMetrics.elementsAfter?.median)} |`;
+              return `| ${row.engine} | ${row.viewport} | ${row.step} | ${row.networkProfile} | ${row.bundle} | ${row.passed}/${row.failed} | ${number(readyTiming?.median)}/${number(readyTiming?.p95)} | ${number(completeTiming?.median)}/${number(completeTiming?.p95)} | ${number(row.wallMs?.median)}/${number(row.wallMs?.p95)} | ${number(row.pageMetrics.assetRequestsCompletedByReady?.median)}/${number(row.pageMetrics.http1AssetConnectionWavesByReady?.median)} | ${number(row.pageMetrics.longestLongTaskMs?.p95)} | ${number(row.metrics.scriptMs?.median)}/${number(row.metrics.styleMs?.median)}/${number(row.metrics.layoutMs?.median)} | ${number(row.pageMetrics.cls?.max)} | ${number(row.pageMetrics.allShiftSum?.max)} | ${number(row.pageMetrics.elementsAfter?.median)} |`;
             }),
         ]
       : []),
