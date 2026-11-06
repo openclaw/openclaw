@@ -41,7 +41,15 @@ async function detectDevInstallGitBranch(packageRoot: string | null): Promise<st
   if (branchRes.code !== 0) {
     return null;
   }
-  const branch = branchRes.stdout.trim();
+  let branch = branchRes.stdout.trim();
+  // `rev-parse --abbrev-ref HEAD` returns a qualified ref when the checked-out
+  // branch shares a name with a tag (`heads/main`), so normalize before the
+  // mainline/detached check to avoid mislabeling a mainline checkout as dev.
+  if (branch.startsWith("refs/heads/")) {
+    branch = branch.slice("refs/heads/".length);
+  } else if (branch.startsWith("heads/")) {
+    branch = branch.slice("heads/".length);
+  }
   return branch && !HIDDEN_BRANCHES.has(branch) ? branch : null;
 }
 

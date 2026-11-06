@@ -74,6 +74,15 @@ describe("resolveDevInstallGitBranch", () => {
     expect(await resolveBranch(root, { code: 0, stdout: `${name}\n` })).toBeNull();
   });
 
+  // `rev-parse --abbrev-ref HEAD` qualifies the ref when the checked-out branch
+  // shares a name with a tag; the mainline check must still hide it.
+  it.each(["heads/main", "refs/heads/main", "heads/master"])(
+    "hides qualified mainline ref %j",
+    async (name) => {
+      expect(await resolveBranch(root, { code: 0, stdout: `${name}\n` })).toBeNull();
+    },
+  );
+
   it("returns null when git branch resolution fails", async () => {
     expect(await resolveBranch(root, { code: 128, stdout: "" })).toBeNull();
   });
