@@ -148,8 +148,8 @@ final class RemotePortTunnel: @unchecked Sendable {
                 hostKeyPolicy: configuration.hostKeyPolicy))
     }
 
-    /// Opens the widget sandbox forward in its own SSH process. ExitOnForwardFailure then only ends
-    /// this process, so a sandbox port conflict can never take the Gateway route down with it.
+    /// Opens the widget sandbox forward in its own SSH process, so a sandbox port conflict can never take
+    /// the Gateway route down with it.
     static func createSandboxForward(configuration: Configuration, port: UInt16) async throws -> RemotePortTunnel {
         try await self.spawn(
             configuration: configuration,
@@ -335,19 +335,29 @@ final class RemotePortTunnel: @unchecked Sendable {
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-L", "\(localPort):127.0.0.1:\(remotePort)"]
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy, exitOnForwardFailure: true)
+            + ["-L", "\(localPort):127.0.0.1:\(remotePort)"]
     }
 
     /// Command-line GatewayPorts=no wins over ssh_config and keeps the listener on loopback. The `-L`
     /// argument keeps the Gateway tunnel's shape without a bind address: v2026.11.1 shares the version 2
     /// PortGuardian ledger and drops receipts whose command it cannot match, even while their app runs.
+    ///
+    /// ExitOnForwardFailure stays off: this process reads the same ssh alias as the Gateway process, whose
+    /// LocalForward/RemoteForward/DynamicForward lines the Gateway already holds, so those copies always
+    /// fail here. ClearAllForwardings would also clear this -L. waitForListener decides success from this
+    /// pid listening on the sandbox port, so a failed own bind still ends the attempt, after its timeout.
     static func sandboxForwardOptions(port: UInt16, hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
-        self.baseOptions(hostKeyPolicy: hostKeyPolicy) + ["-o", "GatewayPorts=no", "-L", "\(port):127.0.0.1:\(port)"]
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy, exitOnForwardFailure: false)
+            + ["-o", "GatewayPorts=no", "-L", "\(port):127.0.0.1:\(port)"]
     }
 
-    private static func baseOptions(hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
+    private static func baseOptions(
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+        exitOnForwardFailure: Bool) -> [String]
+    {
         ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
-            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ExitOnForwardFailure=\(exitOnForwardFailure ? "yes" : "no")",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",

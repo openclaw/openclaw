@@ -37,7 +37,7 @@ struct RemotePortTunnelTests {
         // GatewayPorts=no on the command line wins over ssh_config and keeps the listener on loopback.
         #expect(sandboxOptions.count(where: { $0 == "-L" }) == 1)
         #expect(sandboxOptions.contains("GatewayPorts=no"))
-        #expect(sandboxOptions.contains("ExitOnForwardFailure=yes"))
+        #expect(sandboxOptions.contains("ExitOnForwardFailure=no"))
     }
 
     @Test func `widget sandbox forward receipt survives the shipped PortGuardian sweep`() {
@@ -56,6 +56,48 @@ struct RemotePortTunnelTests {
         #expect(PortGuardian.classifyTunnelRecord(
             record,
             process: .init(parentPid: 987, startedAt: 99, fullCommand: command)) == .keep)
+    }
+
+    @Test func `forwards inherited from the ssh alias cannot end the widget sandbox forward`() throws {
+        // Both processes read the alias. The Gateway process already holds its LocalForward, so the
+        // sandbox process's copy always fails to bind; only the sandbox's own -L may decide its fate.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-ssh-alias-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config")
+        try """
+        Host review-fixture
+            HostName 192.0.2.1
+            User fixture
+            LocalForward 127.0.0.1:25432 127.0.0.1:5432
+            ExitOnForwardFailure yes
+        """.write(to: config, atomically: true, encoding: .utf8)
+        let target = CommandResolver.SSHParsedTarget(user: nil, host: "review-fixture", port: 0)
+
+        func effective(_ options: [String]) throws -> [String] {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = ["-G", "-F", config.path]
+                + CommandResolver.sshArguments(target: target, identity: "", options: options)
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+                .filter { $0.hasPrefix("localforward ") || $0.hasPrefix("exitonforwardfailure ") }
+        }
+
+        let sandbox = try effective(RemotePortTunnel.sandboxForwardOptions(port: 18790, hostKeyPolicy: .strict))
+        let gateway = try effective(RemotePortTunnel.sshOptions(
+            localPort: 18789, remotePort: 18789, hostKeyPolicy: .strict))
+
+        #expect(sandbox.contains("localforward 18790 [127.0.0.1]:18790"))
+        #expect(sandbox.contains("exitonforwardfailure no"))
+        #expect(gateway.contains("localforward 18789 [127.0.0.1]:18789"))
+        #expect(gateway.contains("exitonforwardfailure yes"))
     }
 
     @Test func `occupied local sandbox port is unavailable until it is released`() throws {
