@@ -427,13 +427,12 @@ describe("plugins cli list", () => {
         signal,
       );
       const acquire = lifecycleLease.withPluginLifecycleLease;
-      using _admission = vi
-        .spyOn(lifecycleLease, "withPluginLifecycleLease")
-        .mockImplementation((options, run) => {
-          const pending = acquire(options, run);
-          secondStarted.resolve();
-          return pending;
-        });
+      using admission = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
+      admission.mockImplementation((options, run) => {
+        const pending = acquire(options, run);
+        secondStarted.resolve();
+        return pending;
+      });
       const second = plugins("registry", "--refresh", "--json");
       commands.push(second);
       await withinTest(
