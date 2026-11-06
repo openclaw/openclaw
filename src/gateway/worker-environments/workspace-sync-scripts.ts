@@ -85,7 +85,7 @@ const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] 
 const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
 const memoMode = process.argv.at(-1) === "memo-v1";
 const priorManifestDigests = [
-  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
+  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1" && !value.startsWith("memo:"))),
 ];
 const MAX_WORKSPACE_GIT_CANDIDATES = ${MAX_WORKSPACE_GIT_CANDIDATES};
 const MAX_WORKSPACE_INVENTORY_ENTRIES = ${MAX_WORKSPACE_INVENTORY_ENTRIES};
@@ -132,9 +132,13 @@ const hashMemo = readHashMemo();
 // seal against code that can rewrite the node's own files or process memory.
 // Block-level forks preserve inode/timestamps; a changed device or stat fact misses.
 // Accept same-size, same-mtime, same-ctime edits, as with the in-process memo.
-for (const digest of priorManifestDigests) {
+const memoFiles = [
+  ...priorManifestDigests.map((digest) => path.join(process.env.HOME, ".openclaw-worker", "manifests", digest + ".memo")),
+  ...process.argv.slice(4).filter((value) => value.startsWith("memo:")).map((value) => value.slice(5)),
+];
+for (const memoFile of memoFiles) {
   try {
-    const saved = JSON.parse(readManifestFile(path.join(process.env.HOME, ".openclaw-worker", "manifests", digest + ".memo")));
+    const saved = JSON.parse(readManifestFile(memoFile));
     if (!Array.isArray(saved) || saved.length > MAX_WORKSPACE_INVENTORY_ENTRIES || saved.some((entry) =>
       !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string" ||
       !/^worker:\d+:\d+:\d+:\d+:\d+$/.test(entry[0]) || typeof entry[1] !== "string" || !/^[a-f0-9]{64}$/.test(entry[1]))) continue;

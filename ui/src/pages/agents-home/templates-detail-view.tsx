@@ -347,48 +347,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                         </Errored>
                       )}
                     </For>
-                    <Show when={view().addError}>
-                      <div class="callout danger" role="alert">
-                        {view().addError}
-                        <Show when={view().addedAgentId}>
-                          <button
-                            type="button"
-                            class="btn btn--sm"
-                            onClick={() => void view().onRetryOpenChat()}
-                          >
-                            {t("templatesCatalog.openChat")}
-                          </button>
-                        </Show>
-                      </div>
-                    </Show>
-                    <Show when={!view().consentWarning}>
-                      <ReviewWarning view={view()} />
-                    </Show>
-                    <Show when={view().consentWarning}>
-                      <section
-                        class="templates-add-consent"
-                        aria-label={t("templatesCatalog.trustReview")}
-                      >
-                        {renderTemplateTrustWarning(view().consentWarning!)}
-                        <div class="templates-add-consent__actions">
-                          <button
-                            type="button"
-                            class="btn"
-                            onClick={() => view().onCancelConsent()}
-                          >
-                            {t("common.cancel")}
-                          </button>
-                          <button
-                            type="button"
-                            class="btn primary"
-                            disabled={view().applying}
-                            onClick={() => void view().onConfirmConsent()}
-                          >
-                            {t("templatesCatalog.addAnyway")}
-                          </button>
-                        </div>
-                      </section>
-                    </Show>
+                    <TemplateAddFeedback view={view()} />
                   </>
                 }
               />
@@ -406,4 +365,46 @@ declare module "@solidjs/web" {
       "openclaw-templates-detail-view": HTMLAttributes<HTMLElement>;
     }
   }
+}
+
+export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) {
+  return (
+    <>
+      <Show when={props.view.addError}>
+        <div class="callout danger" role="alert">
+          {props.view.addError}
+          <Show when={props.view.addedAgentId}>
+            <button
+              type="button"
+              class="btn btn--sm"
+              onClick={() => void props.view.onRetryOpenChat()}
+            >
+              {t("templatesCatalog.openChat")}
+            </button>
+          </Show>
+        </div>
+      </Show>
+      <Show when={!props.view.consentWarning}>
+        <ReviewWarning view={props.view} />
+      </Show>
+      <Show when={props.view.consentWarning}>
+        <section class="templates-add-consent" aria-label={t("templatesCatalog.trustReview")}>
+          {renderTemplateTrustWarning(props.view.consentWarning!)}
+          <div class="templates-add-consent__actions">
+            <button type="button" class="btn" onClick={() => props.view.onCancelConsent()}>
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              class="btn primary"
+              disabled={props.view.applying}
+              onClick={() => void props.view.onConfirmConsent()}
+            >
+              {t("templatesCatalog.addAnyway")}
+            </button>
+          </div>
+        </section>
+      </Show>
+    </>
+  );
 }

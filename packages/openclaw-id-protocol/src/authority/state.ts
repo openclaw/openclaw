@@ -82,7 +82,7 @@ export type InviteRecord = {
 /** The Gateway's membership state for one claw. */
 export type AuthorityState = {
   claw_id: string;
-  /** The root R pinned at linking. It never changes for a claw (owner reset is OCF-319). */
+  /** The root R pinned at linking. Only an owner reset on the machine replaces it (enrollment.md). */
   anchor: TrustAnchor;
   /** Monotonic membership seq; a MembershipChange must carry seq + 1. */
   seq: number;

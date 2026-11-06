@@ -304,6 +304,20 @@ restrictions, config examples, and recovery guidance.
 - <a id="when-to-leave-it-off" />[When to leave it off](/gateway/local-models#when-to-leave-it-off)
 - <a id="enable" />[Enable](/gateway/local-models#enable)
 
+## OpenClaw ID remote access
+
+`gateway.openclawId.enabled` is the Labs switch for OpenClaw ID remote access. It
+defaults to `false`. When it is on, the Gateway keeps its own record of who may
+reach this claw: the owner's devices and the members the owner approved. Owners
+manage that list through the `openclawId.*` Gateway methods. When a person or device
+is removed, the Gateway closes their connections, cancels their runs and revokes
+their device tokens before it tells Discovery.
+
+When the switch is off, nothing runs: no calls go to OpenClaw ID, Discovery or a
+relay, and the `openclawId.*` methods refuse every request. Turning the switch off
+also stops any Discovery request that was still being prepared. See the
+[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
+
 ## Experimental does not mean hidden
 
 An experimental feature should say so plainly in docs and in the config path itself, not hide behind a stable-looking default knob.

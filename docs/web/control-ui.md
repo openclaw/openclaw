@@ -33,6 +33,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
+Opening a transcript image or video shows a shared viewer for supported media in
+the loaded thread, including inline Markdown images, your own attachments, and
+earlier response turns.
+When more than one item is available, use the visible previous/next buttons,
+Left/Right arrow keys, or touch swipes to browse; the counter shows your position.
+Older messages that have not been loaded are not fetched just to fill the viewer.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
@@ -155,7 +162,10 @@ access to an unavailable conversation.
 
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
-state replaces them when the connection returns.
+state replaces them when the connection returns. If a temporary transcript or
+live-message subscription failure exhausted its retries, returning to that chat
+starts a fresh read attempt. Access denials are not retried automatically, and
+returning to a chat does not resend messages.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 

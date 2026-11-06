@@ -101,6 +101,7 @@ function remoteCommand(name: string, overrides: Partial<CommandEntry> = {}): Com
     source: "plugin",
     scope: "both",
     acceptsArgs: true,
+    ...(overrides.source === "skill" ? { skillReferenceable: true } : {}),
     ...overrides,
   };
 }
@@ -189,11 +190,13 @@ describe("parseSlashCommand", () => {
   });
 
   it.each([false, undefined])(
-    "keeps skills with visibility %j in slash commands but out of $ completions",
+    "offers user-invocable skills with model visibility %j in $ completions",
     (skillModelVisible) => {
       applyRemoteEntries(remoteCommand("hidden_skill", { source: "skill", skillModelVisible }));
       expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
-      expect(getSkillCommandCompletions("hidden")).toEqual([]);
+      expect(getSkillCommandCompletions("hidden").map((command) => command.name)).toEqual([
+        "hidden_skill",
+      ]);
     },
   );
 

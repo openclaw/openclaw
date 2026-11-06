@@ -130,10 +130,10 @@ it.each([
   expect(scanWikiSummary(markdown)).toMatchObject(expected);
 });
 
-it("keeps inline link filtering while parsing CommonMark destinations", () => {
+it("filters literal links while parsing CommonMark destinations", () => {
   const markdown = [
-    '[[Wiki target|Alias]]\n\n[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")\n\n[Escaped](../syntheses/plan\\(v3\\).md)\n\n![Image](../assets/diagram.png)',
-    "[External](https://example.com/page.md)\n\n[Anchor](#details)\n\n`[Inline code](inline.md)`\n\n```markdown\n[Fenced code](fenced.md)\n```",
+    '\\\\[[Wiki target|Alias]]\n\n[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")\n\n[Escaped](../syntheses/plan\\(v3\\).md)\n\n![Image](../assets/diagram.png)',
+    "[External](https://example.com/page.md)\n\n[Anchor](#details)\n\n`[Inline code](inline.md)`\n\n```markdown\n[Fenced code](fenced.md)\n```\n\n<!-- [[missing-comment]] [[Literal]] -->\n<!--\n[[missing-multiline]]\n-->\n\\[[missing-escape]] and \\[[Literal]]\n\\\\\\[[missing-odd-run]]",
     "<!-- openclaw:wiki:related:start -->\n\n[Generated](generated.md)\n\n<!-- openclaw:wiki:related:end -->",
     "[Reference][ref]\n\n[ref]: reference.md\n\n[Notes](../syntheses/plan%20notes.md)\n\n[Cafe](../syntheses/caf%C3%A9.md#menu)\n\n[Malformed](../syntheses/100%.md)",
   ].join("\n\n");
