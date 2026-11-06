@@ -588,6 +588,22 @@ describe("Control UI build chunking", () => {
       [optionalStyle, ".optional-fixture { color: orange; }"],
       [inlineStyle, ".optional-fixture { color: orange; }"],
     ]);
+    const sharedHelpers = ["../components/solid/markdown-html.tsx", "../lib/text-diff.ts"].map(
+      modulePath,
+    );
+    const helperPage = "\0helper-only-route";
+    const helperImports = sharedHelpers
+      .map((id, index) => `export { helper as helper${index} } from ${JSON.stringify(id)};`)
+      .join("\n");
+    for (const id of sharedHelpers) {
+      sources.set(id, "export const helper = 'shared';");
+    }
+    sources.set(helperPage, helperImports);
+    sources.set(chat, sources.get(chat)! + helperImports);
+    sources.set(
+      entry,
+      sources.get(entry)! + `export const helpers = () => import(${JSON.stringify(helperPage)});`,
+    );
     const result = await buildFixture(entry, sources, {
       ...controlUiCodeSplitting,
       // A stale capture must not pull a lazy page into the shared boot chunk.
@@ -595,6 +611,9 @@ describe("Control UI build chunking", () => {
         ...group,
         // Exercise grouping below the production chunk-size floor.
         minSize: 0,
+        ...(group.name === "control-ui-boot-chat"
+          ? { test: (id: string) => sharedHelpers.includes(id) || group.test(id) }
+          : {}),
         ...(group.name === "control-ui-boot-shared"
           ? {
               // Fixture sharing is independent of changing production captures.
@@ -673,6 +692,15 @@ describe("Control UI build chunking", () => {
         expect(imports).toContain(chunk.fileName);
         expect(startup).not.toContain(chunk.fileName);
       }
+    }
+    const helperPageChunk = chunks.find((chunk) => helperPage in chunk.modules)!;
+    const helperClosure = staticImports(helperPageChunk.fileName);
+    expect(helperClosure).not.toContain(chatChunk.fileName);
+    expect(helperClosure).not.toContain(newSessionChunk.fileName);
+    for (const helper of sharedHelpers) {
+      const helperChunk = chunks.find((chunk) => helper in chunk.modules)!;
+      expect(helperClosure).toContain(helperChunk.fileName);
+      expect(startup).not.toContain(helperChunk.fileName);
     }
     const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;
     expect(staticImports(sessionsChunk.fileName)).not.toContain(chatChunk.fileName);
@@ -806,6 +834,8 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
       [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
+      [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
+      [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],

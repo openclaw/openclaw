@@ -182,6 +182,7 @@ async function compileVitestWorkerArtifacts(
   const commonPlugins = createInputPlugins("");
   const sourceHostWorkerEntries = new Set(
     [
+      runtimeProcessEntrypoints.preparedModelCatalog,
       runtimeProcessEntrypoints.sqliteStore,
       runtimeProcessEntrypoints.sharedStateStore,
       runtimeProcessEntrypoints.doctorDatabaseEngineInspection,
