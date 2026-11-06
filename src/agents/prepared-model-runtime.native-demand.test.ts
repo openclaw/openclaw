@@ -143,7 +143,12 @@ it("serves published models while single-flight native discovery is pending", as
 
 function createPicker(
   config: OpenClawConfig,
-  pickerParams: { sessionKey?: string; view?: "all" | "configured"; preparedOnly?: boolean } = {},
+  pickerParams: {
+    sessionKey?: string;
+    view?: "all" | "configured";
+    preparedOnly?: boolean;
+    provider?: string;
+  } = {},
 ) {
   const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
   registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
@@ -195,10 +200,15 @@ it("starts headless provider discovery on picker demand after native-only discov
   await createPicker(config, { preparedOnly: true })();
   expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
 
+  await createPicker(config, { provider: "custom" })();
+  await vi.waitFor(() =>
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(["custom"]),
+  );
+
   const pick = createPicker(config);
   await pick();
   await vi.waitFor(() =>
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined),
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenLastCalledWith(undefined),
   );
   await vi.waitFor(() =>
     expect(owner.readFullModelCatalog!()?.entries).toContainEqual(
@@ -206,7 +216,7 @@ it("starts headless provider discovery on picker demand after native-only discov
     ),
   );
   await pick();
-  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
 });
 
 it("defers native discovery until agent catalog demand and reacquires retired observations", async () => {
