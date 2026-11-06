@@ -1098,6 +1098,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["open twin", [2, "A. X.", ["A.", 1], 2, ["X.", 1], "X. Y.", ["X.", 1]], ["A. X.\n\nX. Y.X."]],
     ["pair", [2, "A. B. X.", ["A.", 1], 2, "B. X.", ["B.", 1], ["X.", 1]], ["A. B. X.\n\nB. X."]],
     ["used", [2, "X.", null, 2, "X. Y.", ["X.", 1], ["X.", 2]], ["X.", "X. Y.", "X."]],
+    ["fence head", ["~~~py", null, "~~~python\nx\n~~~"], ["~~~py", "~~~python\nx\n~~~"]],
+    ["fence tick", ["```", null, "```python\nx\n```"], ["```", "```python\nx\n```"]],
+    ["fence tail", ["A.\n```pytho", null, "A.\n```python\nx"], ["A.\n```pytho", "```python\nx"]],
+    ["fence sp", ["  ~~~", null, "  ~~~ py\nx\n~~~"], ["  ~~~", "  ~~~ py\nx\n~~~"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1305,16 +1309,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         const error = delivery.catch((caught: unknown) => caught);
         await media.started;
         expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-        stream(0).closeWithResult.mockResolvedValueOnce({
-          visibleReplySent: false,
-        });
+        stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
         media.reject(new Error("media failed"));
         await expect(error).resolves.toMatchObject(partialDelivery("first", ["om-first-static"]));
       } else {
         const delivered = await delivery;
-        stream(0).closeWithResult.mockResolvedValueOnce({
-          visibleReplySent: false,
-        });
+        stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
         await options.onIdle?.();
         await expect(delivered?.finalization).rejects.toMatchObject(
           partialDelivery("first", ["om-first-static"]),
