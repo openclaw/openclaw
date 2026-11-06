@@ -116,6 +116,11 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
 
   defineMissing(globalThis, "CSS", { value: {} });
   defineMissing(CSS, "highlights", { value: new Map<string, Highlight>() });
+  // JSDOM ranges have no layout; geometry-specific tests supply their own bounds.
+  defineMissing(Range.prototype, "getBoundingClientRect", {
+    writable: true,
+    value: () => new DOMRect(),
+  });
 
   // Synthetic pointer events have no browser capture owner. Keep capture and
   // release observable to drag lifecycles and the unit leak guard.
@@ -128,11 +133,8 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   defineMissing(Element.prototype, "setPointerCapture", {
     writable: true,
     value(this: Element, pointerId: number) {
-      let captures = pointerCaptures.get(this);
-      if (!captures) {
-        captures = new Set();
-        pointerCaptures.set(this, captures);
-      }
+      const captures = pointerCaptures.get(this) ?? new Set<number>();
+      pointerCaptures.set(this, captures);
       if (!captures.has(pointerId)) {
         captures.add(pointerId);
         dispatchCapture(this, "gotpointercapture", pointerId);
