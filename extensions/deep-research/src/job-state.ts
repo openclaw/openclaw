@@ -24,11 +24,20 @@ export type ResearchJob = {
     | "cancelled"
     | "failed";
   progress: string;
+  lifecycleRevision?: string;
+  recovery?: "ready" | "unavailable" | "deferred";
+  nextWakeAt?: number;
   publicationId?: string;
   publishedAt?: number;
   handle?: ResearchAdapterSnapshot["handle"];
   result?: ResearchResult;
   cancelRequested?: boolean;
+  pollFailures?: number;
+  /** Total interrupted authority borrows; bounded across restarts. */
+  wakeFailures?: number;
+};
+export type RecoveryWake = Pick<ResearchJob, "id" | "agentId" | "sessionKey" | "sessionId"> & {
+  nextWakeAt: number;
 };
 export type Step = { state: "started" } | { state: "done"; value: unknown } | { state: "failed" };
 export const retentionMs = 7 * 24 * 60 * 60_000;
@@ -47,6 +56,12 @@ export class ResearchState {
     private readonly api: OpenClawPluginApi,
     private readonly scheduler: PluginServiceSchedulerV1,
   ) {}
+  wakes(assertCurrent = () => this.scheduler.signal.throwIfAborted()) {
+    return this.api.runtime.state.openKeyedStoreV2<RecoveryWake>(
+      { namespace: "research-wakes-v1", maxEntries: 4096, overflowPolicy: "reject-new" },
+      { assertCurrent },
+    );
+  }
   open<T>(
     kind: "jobs" | "steps" | "cancellations",
     context: ResearchExecution,
@@ -67,6 +82,34 @@ export class ResearchState {
   private namespace(kind: "jobs" | "steps" | "cancellations", context: ResearchExecution) {
     return `research-${kind}-v1-${hash(`${context.agentId}\n${context.sessionKey}\n${context.sessionId}`)}`;
   }
+  async pruneWake(id: string, assertCurrent = () => this.scheduler.signal.throwIfAborted()) {
+    const wakes = this.wakes(assertCurrent);
+    const observed = await wakes.observe(id);
+    assertCurrent();
+    if (!observed.value) {
+      return;
+    }
+    const context = { ...observed.value, assertInvocationCurrent: assertCurrent };
+    const job = await this.open<ResearchJob>("jobs", context).observe(id);
+    assertCurrent();
+    if (job.value && !terminal(job.value) && job.value.recovery === "ready") {
+      return;
+    }
+    // A newer job/wake may appear across either read. Compare both records in
+    // one native transaction; cleanup must never erase a renewed execution.
+    await wakes.compareAndApply(
+      id,
+      observed.comparison,
+      { operation: "delete", action: "delete" },
+      {
+        conditions: [
+          { namespace: this.namespace("jobs", context), key: id, comparison: job.comparison },
+        ],
+      },
+    );
+    assertCurrent();
+  }
+
   async retainStartOutcome(job: ResearchJob, handle?: ResearchAdapterSnapshot["handle"]) {
     const assertCurrent = () => this.scheduler.signal.throwIfAborted();
     const context = { ...job, assertInvocationCurrent: assertCurrent };
@@ -80,6 +123,7 @@ export class ResearchState {
       latest.agentId !== job.agentId ||
       latest.sessionKey !== job.sessionKey ||
       latest.sessionId !== job.sessionId ||
+      latest.lifecycleRevision !== job.lifecycleRevision ||
       latest.state !== "submitting" ||
       latest.handle ||
       latest.result ||
@@ -107,6 +151,90 @@ export class ResearchState {
     if (result.status === "conflict") {
       throw new Error("Research receipt raced with newer job state.");
     }
+    await this.prepareWake(latest, assertCurrent);
     return latest;
+  }
+
+  async settleUnavailable(
+    id: string,
+    context: ResearchExecution,
+    reason: string,
+    retryAfterMs?: number,
+  ) {
+    const store = this.open<ResearchJob>("jobs", context);
+    const observed = await store.observe(id);
+    context.assertInvocationCurrent();
+    const latest = observed.value;
+    if (!latest || terminal(latest) || latest.recovery !== "ready") {
+      return latest;
+    }
+    if (latest.state === "submitting" && !latest.handle) {
+      latest.state = "indeterminate";
+      latest.progress = "Submission outcome is unknown; not resubmitted.";
+      delete latest.nextWakeAt;
+    } else {
+      recordWakeFailure(latest, this.scheduler.now(), reason, retryAfterMs);
+    }
+    const result = await store.compareAndApply(id, observed.comparison, {
+      operation: "update",
+      action: "set",
+      value: latest,
+      ttlMs: retentionMs,
+    });
+    context.assertInvocationCurrent();
+    if (result.status === "conflict") {
+      return result.current.value;
+    }
+    // A stale index remains safe across a crash: wake checks the job's due time.
+    await this.prepareWake(latest, context.assertInvocationCurrent);
+    await this.pruneWake(id, context.assertInvocationCurrent);
+    return latest;
+  }
+
+  async prepareWake(job: ResearchJob, assertCurrent: () => void) {
+    if (terminal(job) || job.recovery !== "ready") {
+      return;
+    }
+    // Persist the wake before the job can accept external work. A crash between
+    // these writes leaves only a harmless reference to a nonexistent/local job.
+    await this.wakes(assertCurrent).register(
+      job.id,
+      {
+        id: job.id,
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+        sessionId: job.sessionId,
+        nextWakeAt: job.nextWakeAt ?? this.scheduler.now(),
+      },
+      { ttlMs: retentionMs },
+    );
+    assertCurrent();
+  }
+  async retireWake(job: ResearchJob, assertCurrent: () => void) {
+    if (terminal(job) || job.recovery !== "ready") {
+      // Result/terminal state is committed first. A crash before this cleanup
+      // can cause a local lookup, never a second submission/publication.
+      await this.pruneWake(job.id, assertCurrent);
+      assertCurrent();
+    }
+  }
+}
+
+/** Both an unavailable borrow and a definite start refusal consume the same retry budget. */
+export function recordWakeFailure(
+  job: ResearchJob,
+  now: number,
+  reason: string,
+  retryAfterMs?: number,
+) {
+  job.wakeFailures = (job.wakeFailures ?? 0) + 1;
+  job.state = "paused";
+  if (retryAfterMs !== undefined && job.wakeFailures < 5) {
+    job.nextWakeAt = now + Math.max(retryAfterMs, 5000 * 2 ** (job.wakeFailures - 1));
+    job.progress = `Recovery awaiting fresh authority: ${reason}`;
+  } else {
+    job.recovery = "deferred";
+    job.progress = `Recovery deferred: ${reason}`;
+    delete job.nextWakeAt;
   }
 }
